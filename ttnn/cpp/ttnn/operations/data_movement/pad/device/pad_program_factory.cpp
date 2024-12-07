@@ -1461,7 +1461,9 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
             .set_page_size(input_shard_cb_index, unpadded_stick_bytes)
             .set_globally_allocated_address(*input_tensor.buffer());
     auto input_shard_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, input_shard_cb_config);
+
     std::cout << "input_shard_cb address: " << input_tensor.buffer()->address() << std::endl;
+    std::cout << "input_shard_cb size: " << input_tensor.buffer()->size() << std::endl;
 
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_shard_cb_index = tt::CBIndex::c_16;
@@ -1473,6 +1475,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
     auto output_shard_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, output_shard_cb_config);
 
     std::cout << "output_shard_cb address: " << output.buffer()->address() << std::endl;
+    std::cout << "output_shard_cb size: " << output.buffer()->size() << std::endl;
 
     // construct const buffer with the pad_value
     tt::DataFormat pad_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
@@ -1485,33 +1488,42 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
     uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
     uint32_t W_padding_back_bytes = (W_padded - W - input_tensor_start[-3]) * input_tensor.element_size();
 
-    std::vector<uint32_t> reader_ct_args = {(std::uint32_t) unpadded_stick_bytes,
-                                            (std::uint32_t) padded_stick_bytes,
-                                            (std::uint32_t) shard_height_unpadded,
-                                            (std::uint32_t) shard_height_padded,
-                                            (std::uint32_t) W_padding_front_bytes,
-                                            (std::uint32_t) W_padding_back_bytes};
+    std::vector<uint32_t> reader_ct_args = {
+        (std::uint32_t)unpadded_stick_bytes,
+        (std::uint32_t)padded_stick_bytes,
+        (std::uint32_t)shard_height_unpadded,
+        (std::uint32_t)shard_height_padded,
+        (std::uint32_t)W_padding_front_bytes,
+        (std::uint32_t)W_padding_back_bytes,
+        (std::uint32_t)input_shard_cb_index,
+        (std::uint32_t)output_shard_cb_index,
+    };
 
     uint32_t padding_value_as_u32;
+    std::cout << "pad_value: " << pad_value << std::endl;
     if (input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16) {
         uint16_t bfloat_pad_value_bits = bfloat16(pad_value).to_uint16();
         padding_value_as_u32 = static_cast<uint32_t>(bfloat_pad_value_bits);
     } else if (input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32) {
-        padding_value_as_u32 = std::bit_cast<uint32_t>(pad_value);
+        padding_value_as_u32 = static_cast<uint32_t>(pad_value);
     } else {
         // FIXME: what to do for other dtypes?
         // for int types we need to convert the padding value to the nearest uint{sz}_t first -> probably should be a pad api change
         // for bf8 I have no idea.
         TT_FATAL(false, "ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
-        padding_value_as_u32 = std::bit_cast<uint32_t>(pad_value);
+        padding_value_as_u32 = static_cast<uint32_t>(pad_value);
     }
 
+    std::cout << "padding_value_as_u32: " << padding_value_as_u32 << std::endl;
+
     std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t) padded_stick_bytes,
-        (std::uint32_t) shard_height_padded,
-        (std::uint32_t) padding_value_as_u32,
-        (std::uint32_t) output.element_size()
-    };
+        (std::uint32_t)padded_stick_bytes,
+        (std::uint32_t)shard_height_padded,
+        (std::uint32_t)padding_value_as_u32,
+        (std::uint32_t)output.element_size(),
+        (std::uint32_t)input_shard_cb_index,
+        (std::uint32_t)output_shard_cb_index,
+        (std::uint32_t)pad_val_cb_index};
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,

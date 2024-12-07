@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/debug.hpp"
 
 inline __attribute__((always_inline))
 void fill_pad_cb_with_val(const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {

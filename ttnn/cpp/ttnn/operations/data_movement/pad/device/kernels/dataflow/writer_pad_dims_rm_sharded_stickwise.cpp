@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <cstring>
 #include "dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/debug.hpp"
 
 #define DEBUG 1
 
@@ -20,7 +21,7 @@
 
 template <uint32_t padding_value_num_bytes>
 inline __attribute__((always_inline)) void fill_cb_with_padding_value(
-    tt::CBIndex cb, uint32_t num_bytes, uint32_t padding_value_as_u32) {
+    const uint32_t cb, const uint32_t num_bytes, const uint32_t padding_value_as_u32) {
     uint32_t cb_write_addr = get_write_ptr(cb);
 
     if constexpr (padding_value_num_bytes == 4) {
@@ -55,9 +56,9 @@ void kernel_main() {
     constexpr uint32_t padding_value_as_u32         = get_compile_time_arg_val(2);
     constexpr uint32_t padding_value_num_bytes      = get_compile_time_arg_val(3);
 
-    constexpr auto input_shard_cb = tt::CBIndex::c_0;
-    constexpr auto padding_value_cb = tt::CBIndex::c_1;
-    constexpr auto output_shard_cb = tt::CBIndex::c_16;
+    constexpr auto input_shard_cb = get_compile_time_arg_val(4);
+    constexpr auto output_shard_cb = get_compile_time_arg_val(5);
+    constexpr auto padding_value_cb = get_compile_time_arg_val(6);
 
     cb_reserve_back(output_shard_cb, padded_shard_height); // each page is a padded stick
     uint32_t input_shard_base_addr = get_write_ptr(input_shard_cb);
@@ -65,21 +66,47 @@ void kernel_main() {
 
     fill_cb_with_padding_value<padding_value_num_bytes>(padding_value_cb, padded_stick_bytes, padding_value_as_u32);
     uint32_t padding_value_base_addr = get_read_ptr(padding_value_cb);
-    auto padding_value_noc_addr = get_noc_addr(padding_value_base_addr);
+
+    DPRINT << "padding value: " << F32(padding_value_as_u32) << ENDL();
+
+    DPRINT << "padding_value_base_addr: " << padding_value_base_addr << ENDL();
+    DPRINT << "padding value f32s: " << ENDL();
+    tt::data_movement::common::print_f32_pages(
+        padding_value_base_addr, padded_stick_bytes / padding_value_num_bytes, 1);
+    DPRINT << ENDL();
 
     DPRINT << "filled padding value cb" << ENDL();
 
     for (uint32_t h = 0; h < padded_shard_height; h++) {
         uint32_t output_stick_addr = output_shard_base_addr + h * padded_stick_bytes;
+        auto output_stick_ptr = reinterpret_cast<u8_ptr>(output_stick_addr - 16);
+        auto padding_value_ptr = reinterpret_cast<u8_ptr>(padding_value_base_addr);
         DPRINT << "writing padding val to stick " << h << ENDL();
         DPRINT << "output_stick_addr: " << output_stick_addr << ENDL();
-        DPRINT << "padding_value_noc_addr: " << padding_value_noc_addr << ENDL();
+        DPRINT << "padding_value_base_addr: " << padding_value_base_addr << ENDL();
         DPRINT << "padded_stick_bytes: " << padded_stick_bytes << ENDL();
-        memcpy(
-            reinterpret_cast<u8_ptr>(output_stick_addr),
-            reinterpret_cast<u8_ptr>(padding_value_noc_addr),
-            padded_stick_bytes);
+
+        DPRINT << "output stick f32s before memcpy: " << ENDL();
+        tt::data_movement::common::print_f32_pages(output_stick_addr, padded_stick_bytes / padding_value_num_bytes, 1);
+        DPRINT << ENDL();
+
+        DPRINT << "output stick u8s before memcpy: " << ENDL();
+        tt::data_movement::common::print_u8_pages(output_stick_addr, padded_stick_bytes, 1);
+        DPRINT << ENDL();
+
+        for (uint32_t i = 0; i < padded_stick_bytes; i++) {
+            output_stick_ptr[i] = padding_value_ptr[i];
+        }
         DPRINT << "wrote padding val to stick " << h << ENDL();
+
+        DPRINT << "output stick f32s after memcpy: " << ENDL();
+        tt::data_movement::common::print_f32_pages(output_stick_addr, padded_stick_bytes / padding_value_num_bytes, 1);
+        DPRINT << ENDL();
+
+        DPRINT << "output stick u8s after memcpy: " << ENDL();
+        tt::data_movement::common::print_u8_pages(output_stick_addr, padded_stick_bytes, 1);
+        DPRINT << ENDL();
+
         cb_push_back(output_shard_cb, 1);
     }
 }

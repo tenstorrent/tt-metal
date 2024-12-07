@@ -170,7 +170,7 @@ def test_pad_rm_sharded_stickwise_first(device, input_shape, padding, torch_padd
     a = torch.ones(1, 1, 12, 8)
     b = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     b = to_wh_sharded(b, device)
-    c = ttnn.pad(b, [1, 1, 12, 64], [0, 0, 0, 0], 3)
+    c = ttnn.pad(b, [1, 1, 12, 64], [0, 0, 0, 0], 3.0)
     print(c)
     assert 3.0 in ttnn.to_torch(c.cpu()).flatten().tolist()
 
@@ -180,7 +180,7 @@ def test_pad_rm_sharded_stickwise_second(device):
     a = torch.ones(input_shape)
     b = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     b = to_wh_sharded(b, device)
-    c = ttnn.pad(b, [1, 2, 32, 32], [0, 0, 0, 0], value=3)
+    c = ttnn.pad(b, [1, 2, 32, 32], [0, 0, 0, 0], value=3.0)
     print(c)
     assert 3.0 in ttnn.to_torch(c.cpu()).flatten().tolist()
 
