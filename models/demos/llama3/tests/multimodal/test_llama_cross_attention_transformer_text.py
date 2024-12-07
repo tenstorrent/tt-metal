@@ -75,7 +75,6 @@ def test_llama_cross_attention_transformer_text_inference(
     dim = model_args.dim
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
-    n_kv_heads = model_args.n_kv_heads
     reference_model = llama_reference_mod.CrossAttentionTransformerText(args=model_args)
     reference_model.setup_cache(model_args.max_batch_size, torch.float32)
     reference_model.load_state_dict(partial_state_dict)
@@ -108,18 +107,15 @@ def test_llama_cross_attention_transformer_text_inference(
     # unstack k/v
     pt_xattn_cache_chunks = [torch.chunk(x, 2, dim=1) for x in pt_xattn_cache_chunks]
     pt_xattn_cache_chunks = [x for xx in pt_xattn_cache_chunks for x in xx]
-    pt_xattn_cache_chunks = [
-        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache_chunks
-    ]
+    pt_xattn_cache_chunks = [x.view(batch, n_heads, vision_seq_len, head_dim) for x in pt_xattn_cache_chunks]
 
     # Iterate over batch
     # Preallocate K and V caches
     tt_xattn_cache = tt_model.setup_cache(max_batch_size=batch)
 
     # Test forward pass of the model
-
-    prev_pos = 0
     n_iter = 10
+    prev_pos = 0
     # tokens = torch.randint(100, 1000, (batch, text_seq_len+n_iter), dtype=torch.long)#, device="cuda"
     tokens = torch.randint(0, model_args.vocab_size, (batch, text_seq_len + n_iter), dtype=torch.long)
     for i in range(n_iter):
@@ -181,17 +177,17 @@ def test_llama_cross_attention_transformer_text_inference(
         if mode == "prefill":
             outputs = []
             for b in range(batch):
-                tt_tensor_vision_tokens = model_args.prepare_residual_tensor_prefill(
+                tt_tensor_vision_tokens = model_args.prepare_inputs_ttnn_prefill(
                     tt_vision_tokens[b : b + 1],
                     force_replicated=True,
                 )
-                tt_h = model_args.prepare_residual_tensor_prefill(
+                tt_h = model_args.prepare_inputs_ttnn_prefill(
                     h[b : b + 1],
                 )
                 tt_xattn_mask = ttnn.from_torch(
-                    xattn_mask[b : b + 1],
+                    xattn_mask_expand[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat4_b,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -199,7 +195,7 @@ def test_llama_cross_attention_transformer_text_inference(
                 tt_full_text_mask_expand_1NSH = ttnn.from_torch(
                     full_text_mask_expand_1NSH[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat4_b,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -207,7 +203,7 @@ def test_llama_cross_attention_transformer_text_inference(
                 tt_full_text_mask_expand_11SD = ttnn.from_torch(
                     full_text_mask_expand_11SD[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat4_b,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
@@ -216,6 +212,16 @@ def test_llama_cross_attention_transformer_text_inference(
                 rot_mats = get_prefill_rot_mat(
                     model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len
                 )
+                transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+                transformation_mats = ttnn.as_tensor(
+                    transformation_mat_torch,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+
                 tt_out = tt_model(
                     tt_h,
                     xattn_mask=tt_xattn_mask,
@@ -223,7 +229,8 @@ def test_llama_cross_attention_transformer_text_inference(
                     full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
                     xattn_caches=tt_xattn_cache,
                     current_pos=None,
-                    rot_mats=rot_mats,
+                    rot_mat=rot_mats,
+                    transformation_mats=transformation_mats,
                     user_id=b,
                     mode=mode,
                     text_only_inference=TEXT_ONLY,
@@ -238,7 +245,7 @@ def test_llama_cross_attention_transformer_text_inference(
             pcc_required = prefill_pcc_required
 
         else:
-            tt_h = model_args.prepare_residual_tensor_decode(
+            tt_h = model_args.prepare_inputs_ttnn_decode(
                 h,
                 model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
@@ -258,14 +265,14 @@ def test_llama_cross_attention_transformer_text_inference(
                 model_args.num_devices,
                 start_pos=cur_pos - 1,
             )
-            tt_rope_id = tt_model.rope_setup.get_rot_idxs(position_ids)
-            rot_mats = tt_model.rope_setup.get_rot_mats(tt_rope_id)
+
+            transformation_mats = None
 
             xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
             tt_xattn_mask = ttnn.from_torch(
                 xattn_mask_expand,
                 device=mesh_device,
-                dtype=ttnn.bfloat4_b,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -282,7 +289,7 @@ def test_llama_cross_attention_transformer_text_inference(
             tt_full_text_mask_expand_1NSH = ttnn.from_torch(
                 full_text_mask_expand_1NSH,
                 device=mesh_device,
-                dtype=ttnn.bfloat4_b,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -304,7 +311,8 @@ def test_llama_cross_attention_transformer_text_inference(
                 full_text_row_masked_out_mask_11SD=None,
                 xattn_caches=tt_xattn_cache,
                 current_pos=tt_position_id,
-                rot_mats=rot_mats,
+                rot_mat=rot_mats,
+                transformation_mats=transformation_mats,
                 mode=mode,
                 text_only_inference=TEXT_ONLY,
             )
@@ -324,7 +332,7 @@ def test_llama_cross_attention_transformer_text_inference(
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,
-                    n_kv_heads,
+                    n_heads,
                     vision_seq_len,
                     head_dim,
                 )
