@@ -60,13 +60,13 @@ class upsample_nearest2d:
         shard_width = math.ceil(in_channels / ncores[1])
 
         shard_shape = (shard_height, shard_width)
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
         self.in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
 
         ## output shard
         shard_height = shard_height * scale_factor * scale_factor
         shard_shape = (shard_height, shard_width)
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
         self.out_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
 
     def __call__(self, input):

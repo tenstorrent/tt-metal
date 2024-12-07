@@ -549,14 +549,12 @@ tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann:
             from_json<CoreRangeSet>(json_object.at("grid")),
             from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
             physical_shard_shape.value(),
-            from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
-            from_json<bool>(json_object.at("halo"))};
+            from_json<tt_metal::ShardOrientation>(json_object.at("orientation"))};
     }
     return tt_metal::ShardSpec{
         from_json<CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
-        from_json<bool>(json_object.at("halo")),
         shard_mode};
 }
 }
