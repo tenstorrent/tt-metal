@@ -27,11 +27,14 @@ random.seed(0)
 parameters = {
     "xfail": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
-        + gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 2),
-        "dim": [0, 1, 2, 3],
-        "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        + gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 2)
+        + gen_shapes([1, 32, 64], [6, 48, 128], [1, 1, 1], 2)
+        + gen_shapes([1, 1], [6, 6], [1, 1], 2)
+        + gen_shapes([1], [4], [1], 2),
+        "dim": [0, 1, 2, 3, None],
+        "grad_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16],
-        "input_layout": [ttnn.TILE_LAYOUT],
+        "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
