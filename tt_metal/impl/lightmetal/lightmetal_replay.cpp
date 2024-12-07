@@ -420,6 +420,10 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
     execute(command->cmd_as_CreateKernelCommand());
     break;
   }
+  case ::tt::target::CommandType::SetRuntimeArgsCommand: {
+    execute(command->cmd_as_SetRuntimeArgsCommand());
+    break;
+  }
   default:
     throw std::runtime_error("Unsupported type: " + std::string(EnumNameCommandType(command->cmd_type())));
     break;
@@ -556,6 +560,21 @@ void LightMetalReplay::execute(tt::target::CreateKernelCommand const *cmd) {
     auto kernel_config = fromFlatbuffer(cmd->config_type(), cmd->config());
     auto kernel_id = CreateKernel(*program, cmd->file_name()->c_str(), core_spec, kernel_config);
     addKernelHandleToMap(cmd->global_id(), kernel_id);
+}
+
+void LightMetalReplay::execute(tt::target::SetRuntimeArgsCommand const *cmd) {
+    log_info(tt::LogMetalTrace, "LightMetalReplay SetRuntimeArgsCommand(). program_global_id: {} kernel_global_id: {}", cmd->program_global_id(), cmd->kernel_global_id());
+    auto program = getProgramFromMap(cmd->program_global_id());
+    auto kernel_id = getKernelHandleFromMap(cmd->kernel_global_id());
+
+    if (!program) {
+        throw std::runtime_error("Program with global_id: " + std::to_string(cmd->program_global_id()) + " not previously created");
+    }
+
+    // API expects a span so create from flatbuffer vector.
+    stl::Span<const uint32_t> args_span(cmd->args()->data(), cmd->args()->size());
+    auto core_spec = fromFlatbuffer(cmd->core_spec_type(), cmd->core_spec());
+    SetRuntimeArgs(*program, kernel_id, core_spec, args_span);
 }
 
 
