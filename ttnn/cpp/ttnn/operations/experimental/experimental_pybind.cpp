@@ -36,6 +36,7 @@
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce/all_reduce_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
+#include "ttnn/operations/experimental/transformer/speculative_sdpa_decode/speculative_sdpa_decode_pybind.hpp"
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
@@ -80,6 +81,8 @@ void py_module(py::module& module) {
     auto m_experimental_ccl = module.def_submodule("ccl", "experiemental collective communication operations");
     ccl::py_bind_all_gather_matmul(m_experimental_ccl);
     ccl::py_bind_all_reduce(m_experimental_ccl);
+
+    transformer::py_bind_speculative_sdpa_decode(module);
 }
 
 }  // namespace ttnn::operations::experimental
