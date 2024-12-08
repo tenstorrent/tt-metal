@@ -2111,6 +2111,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     tt::tt_metal::GlobalSemaphore const& teardown_sem) {
     auto program = tt::tt_metal::Program();
 
+    bool persistent_fabric = true;
     // Sleep for 5s * line_index
     std::this_thread::sleep_for(std::chrono::seconds(2 * line_index));
 
@@ -2118,7 +2119,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
 
     // We only build the local chip's part of the fabric
     auto line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        device, forward_device, backward_device, &program, num_links_preferred.value_or(line_size));
+        device, forward_device, backward_device, &program, persistent_fabric, num_links_preferred.value_or(line_size));
 
     // const auto num_links = resolve_num_links(num_links_preferred, line_fabric);
 
