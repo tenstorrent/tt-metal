@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "umd/device/tt_cluster_descriptor_types.h"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/device/device.hpp"
