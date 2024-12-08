@@ -780,6 +780,33 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     }
 }
 
+std::tuple<uint32_t, uint32_t> get_padded_subblock_h_ntiles(
+    uint32_t out_subblock_w_ntiles, uint32_t out_subblock_h_ntiles,
+    uint32_t max_num_subblock, uint32_t act_block_h_ntiles, uint32_t act_block_h_ntiles_padded,
+    uint32_t weight_block_w_ntiles, uint32_t out_block_h_ntiles, uint32_t max_subblock_h)
+{
+    if ((out_subblock_w_ntiles * out_subblock_h_ntiles <= max_num_subblock / 2) and
+        (out_subblock_w_ntiles == weight_block_w_ntiles) and (act_block_h_ntiles == out_block_h_ntiles)) {
+        uint32_t num_subblock_h = act_block_h_ntiles / out_subblock_h_ntiles;
+        uint32_t num_iter = max_subblock_h - out_subblock_h_ntiles;
+        uint32_t new_out_subblock_h = out_subblock_h_ntiles;
+        uint32_t preferred_out_subblock_h = out_subblock_h_ntiles;
+
+        for (uint32_t i = 0; i < num_iter; ++i) {
+            new_out_subblock_h += 1;
+            uint32_t new_num_subblock_h = (act_block_h_ntiles + new_out_subblock_h - 1) / new_out_subblock_h;
+
+            if (new_num_subblock_h < num_subblock_h and
+                (out_subblock_w_ntiles * new_out_subblock_h <= max_num_subblock)) {
+                num_subblock_h = new_num_subblock_h;
+                preferred_out_subblock_h = new_out_subblock_h;
+            }
+        }
+        return {preferred_out_subblock_h, preferred_out_subblock_h * num_subblock_h};
+    }
+    return {out_subblock_h_ntiles, act_block_h_ntiles};
+}
+
 void adjust_conv_op_config_for_auto_shard_if_necessary(
     bool is_mm_conv,
     uint32_t batch_size,
