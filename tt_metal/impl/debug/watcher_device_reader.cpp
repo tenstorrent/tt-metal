@@ -18,8 +18,8 @@
 #include "eth_l1_address_map.h"  // for address_map
 #include "hw/inc/dev_msgs.h"
 
-#include "umd/device/tt_arch_types.h"
-#include "umd/device/xy_pair.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"

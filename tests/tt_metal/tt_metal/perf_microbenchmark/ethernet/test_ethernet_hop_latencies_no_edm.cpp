@@ -10,7 +10,7 @@
 
 #include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/common/logger.hpp"
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "impl/device/device.hpp"
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"

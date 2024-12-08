@@ -26,13 +26,13 @@
 #include "tt_metal/common/metal_soc_descriptor.h"
 #include "tt_metal/common/test_common.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "umd/device/tt_cluster_descriptor.h"
-#include "umd/device/tt_cluster_descriptor_types.h"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "umd/device/cluster.h"
 #include "umd/device/tt_soc_descriptor.h"
 #include "umd/device/tt_xy_pair.h"
-#include "umd/device/xy_pair.h"
+#include "umd/device/types/xy_pair.h"
 #include "umd/device/hugepage.h"
 
 // TODO: ARCH_NAME specific, must remove

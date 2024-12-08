@@ -22,7 +22,7 @@
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "umd/device/tt_soc_descriptor.h"
-#include "umd/device/xy_pair.h"
+#include "umd/device/types/xy_pair.h"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "third_party/json/json.hpp"

@@ -11,7 +11,7 @@
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "impl/program/program.hpp"
-#include "umd/device/tt_cluster_descriptor_types.h"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "program_with_kernel_created_from_string_fixture.hpp"
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
