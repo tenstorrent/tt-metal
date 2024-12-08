@@ -352,6 +352,16 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     if (tensor_shape == shape) {
         return tensor;
     }
+
+    // Just edit shape if shape has a 0 dimension
+    if (tensor.volume() == 0) {
+        TT_FATAL(shape.volume() == 0 , "Tensor volume is 0, but shape's volume is not");
+        TT_FATAL((tensor.storage_type() != StorageType::MULTI_DEVICE &&
+                  tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
+                  "Reshaping a multi-device tensor with 0 volume is not supported");
+        return tensor.reshape(shape);
+    }
+    TT_FATAL(shape.volume() != 0, "Tensor volume is not 0, but shape volume is 0");
     PadValue default_pad_value;
     if (tensor.get_dtype() == DataType::BFLOAT8_B or tensor.get_dtype() == DataType::BFLOAT16 or
         tensor.get_dtype() == DataType::FLOAT32) {
@@ -368,8 +378,9 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     //for issue 15317
 
 
-    const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2]:1;
-    const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2]:1;
+    const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2] : 1;
+    const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
+
     bool this_is_view =
         (tensor_shape[-1] == shape[-1]) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
