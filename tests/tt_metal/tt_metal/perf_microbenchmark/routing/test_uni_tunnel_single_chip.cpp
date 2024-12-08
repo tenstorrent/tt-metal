@@ -207,28 +207,29 @@ int main(int argc, char** argv) {
 
         std::vector<CoreCoord> tx_phys_core;
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
-            CoreCoord core = {tx_x + i, tx_y};
+            CoreCoord core = {tx_x+i, tx_y};
             tx_phys_core.push_back(device->worker_core_from_logical_core(core));
-            std::vector<uint32_t> compile_args = {
-                src_endpoint_start_id + i,                                 // 0: src_endpoint_id
-                num_dest_endpoints,                                        // 1: num_dest_endpoints
-                (tx_queue_start_addr >> 4),                                // 2: queue_start_addr_words
-                (tx_queue_size_bytes >> 4),                                // 3: queue_size_words
-                ((mux_queue_start_addr + i * mux_queue_size_bytes) >> 4),  // 4: remote_rx_queue_start_addr_words
-                (mux_queue_size_bytes >> 4),                               // 5: remote_rx_queue_size_words
-                (uint32_t)mux_phys_core.x,                                 // 6: remote_rx_x
-                (uint32_t)mux_phys_core.y,                                 // 7: remote_rx_y
-                i,                                                         // 8: remote_rx_queue_id
-                (uint32_t)DispatchRemoteNetworkType::NOC0,                 // 9: tx_network_type
-                test_results_addr,                                         // 10: test_results_addr
-                test_results_size,                                         // 11: test_results_size
-                prng_seed,                                                 // 12: prng_seed
-                data_kb_per_tx,                                            // 13: total_data_kb
-                max_packet_size_words,                                     // 14: max_packet_size_words
-                src_endpoint_start_id,                                     // 15: src_endpoint_start_id
-                dest_endpoint_start_id,                                    // 16: dest_endpoint_start_id
-                timeout_mcycles * 1000 * 1000,                             // 17: timeout_cycles
-            };
+            std::vector<uint32_t> compile_args =
+                {
+                    src_endpoint_start_id + i, // 0: src_endpoint_id
+                    num_dest_endpoints, // 1: num_dest_endpoints
+                    (tx_queue_start_addr >> 4), // 2: queue_start_addr_words
+                    (tx_queue_size_bytes >> 4), // 3: queue_size_words
+                    ((mux_queue_start_addr + i*mux_queue_size_bytes) >> 4), // 4: remote_rx_queue_start_addr_words
+                    (mux_queue_size_bytes >> 4), // 5: remote_rx_queue_size_words
+                    (uint32_t)mux_phys_core.x, // 6: remote_rx_x
+                    (uint32_t)mux_phys_core.y, // 7: remote_rx_y
+                    i, // 8: remote_rx_queue_id
+                    (uint32_t)DispatchRemoteNetworkType::NOC0, // 9: tx_network_type
+                    test_results_addr, // 10: test_results_addr
+                    test_results_size, // 11: test_results_size
+                    prng_seed, // 12: prng_seed
+                    data_kb_per_tx, // 13: total_data_kb
+                    max_packet_size_words, // 14: max_packet_size_words
+                    src_endpoint_start_id, // 15: src_endpoint_start_id
+                    dest_endpoint_start_id, // 16: dest_endpoint_start_id
+                    timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
+                };
 
             log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
@@ -366,28 +367,29 @@ int main(int argc, char** argv) {
 
         std::vector<CoreCoord> rx_phys_core;
         for (uint32_t i = 0; i < num_dest_endpoints; i++) {
-            CoreCoord core = {rx_x + i, rx_y};
+            CoreCoord core = {rx_x+i, rx_y};
             rx_phys_core.push_back(device->worker_core_from_logical_core(core));
-            std::vector<uint32_t> compile_args = {
-                dest_endpoint_start_id + i,                 // 0: dest_endpoint_id
-                num_src_endpoints,                          // 1: num_src_endpoints
-                num_dest_endpoints,                         // 2: num_dest_endpoints
-                (rx_queue_start_addr >> 4),                 // 3: queue_start_addr_words
-                (rx_queue_size_bytes >> 4),                 // 4: queue_size_words
-                (uint32_t)demux_phys_core.x,                // 5: remote_tx_x
-                (uint32_t)demux_phys_core.y,                // 6: remote_tx_y
-                i,                                          // 7: remote_tx_queue_id
-                (uint32_t)DispatchRemoteNetworkType::NOC0,  // 8: rx_rptr_update_network_type
-                test_results_addr,                          // 9: test_results_addr
-                test_results_size,                          // 10: test_results_size
-                prng_seed,                                  // 11: prng_seed
-                0,                                          // 12: reserved
-                max_packet_size_words,                      // 13: max_packet_size_words
-                rx_disable_data_check,                      // 14: disable data check
-                src_endpoint_start_id,                      // 15: src_endpoint_start_id
-                dest_endpoint_start_id,                     // 16: dest_endpoint_start_id
-                timeout_mcycles * 1000 * 1000,              // 17: timeout_cycles
-            };
+            std::vector<uint32_t> compile_args =
+                {
+                    dest_endpoint_start_id + i, // 0: dest_endpoint_id
+                    num_src_endpoints, // 1: num_src_endpoints
+                    num_dest_endpoints, // 2: num_dest_endpoints
+                    (rx_queue_start_addr >> 4), // 3: queue_start_addr_words
+                    (rx_queue_size_bytes >> 4), // 4: queue_size_words
+                    (uint32_t)demux_phys_core.x, // 5: remote_tx_x
+                    (uint32_t)demux_phys_core.y, // 6: remote_tx_y
+                    i, // 7: remote_tx_queue_id
+                    (uint32_t)DispatchRemoteNetworkType::NOC0, // 8: rx_rptr_update_network_type
+                    test_results_addr, // 9: test_results_addr
+                    test_results_size, // 10: test_results_size
+                    prng_seed, // 11: prng_seed
+                    0, // 12: reserved
+                    max_packet_size_words, // 13: max_packet_size_words
+                    rx_disable_data_check, // 14: disable data check
+                    src_endpoint_start_id, // 15: src_endpoint_start_id
+                    dest_endpoint_start_id, // 16: dest_endpoint_start_id
+                    timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
+                };
 
             log_info(LogTest, "run traffic_gen_rx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(

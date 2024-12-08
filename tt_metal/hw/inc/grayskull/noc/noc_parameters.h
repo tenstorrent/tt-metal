@@ -13,6 +13,11 @@
 #define NOC_Y_SIZE 1
 #endif
 
+// Coordinate Virtualization is not supported on GS (feature does not exist in NOC Hardware).
+#define VIRTUAL_TENSIX_START_X 0
+#define VIRTUAL_TENSIX_START_Y 0
+#define COORDINATE_VIRTUALIZATION_ENABLED 0
+
 #define NUM_NOCS 2
 #define NUM_TENSIXES 120
 

@@ -8,13 +8,11 @@
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t src0_dram_noc_x = get_arg_val<uint32_t>(2);
-    uint32_t src0_dram_noc_y = get_arg_val<uint32_t>(3);
-    uint32_t src1_dram_noc_x = get_arg_val<uint32_t>(4);
-    uint32_t src1_dram_noc_y = get_arg_val<uint32_t>(5);
+    uint32_t src0_bank_id = get_arg_val<uint32_t>(2);
+    uint32_t src1_bank_id = get_arg_val<uint32_t>(3);
 
-    uint64_t src0_noc_addr = get_noc_addr(src0_dram_noc_x, src0_dram_noc_y, src0_addr);
-    uint64_t src1_noc_addr = get_noc_addr(src1_dram_noc_x, src1_dram_noc_y, src1_addr);
+    uint64_t src0_noc_addr = get_noc_addr_from_bank_id<true>(src0_bank_id, src0_addr);
+    uint64_t src1_noc_addr = get_noc_addr_from_bank_id<true>(src1_bank_id, src1_addr);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;

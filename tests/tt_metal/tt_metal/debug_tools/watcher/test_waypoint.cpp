@@ -145,7 +145,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} ethnet core(x={:2},y={:2}) phys(x={:2},y={:2}): {},   X,   X,   X,   X  rmsg:* h_id:0 "
+                    "Device {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},   X,   X,   X,   X  rmsg:* "
+                    "h_id:0 "
                     "k_id:{}",
                     device->id(),
                     logical_core.x,
@@ -165,7 +166,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} worker core(x={:2},y={:2}) phys(x={:2},y={:2}): {},{},{},{},{}  rmsg:***|*** h_id:0 "
+                    "Device {} worker core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},{},{},{}  rmsg:***|*** h_id:0 "
                     "smsg:**** k_ids:{}",
                     device->id(),
                     logical_core.x,
