@@ -105,6 +105,8 @@ private:
     void insert_block_to_alloc_table(DeviceAddr address, size_t block_index);
     bool is_address_in_alloc_table(DeviceAddr address) const;
     std::optional<size_t> get_and_remove_from_alloc_table(DeviceAddr address);
+
+    void update_lowest_occupied_address(DeviceAddr address);
 };
 
 }  // namespace allocator
