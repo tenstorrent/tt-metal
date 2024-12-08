@@ -260,3 +260,39 @@ TEST(FreeListOptTest, AvailableAddresses) {
     ASSERT_EQ(aval[0].first, 3_KiB); // Start address
     ASSERT_EQ(aval[0].second, 1_GiB); // End address
 }
+
+TEST(FreeListOptTest, LowestOccupiedAddress) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+    auto a = allocator.allocate(1_KiB);
+    auto b = allocator.allocate(1_KiB);
+    auto c = allocator.allocate(1_KiB);
+    ASSERT_TRUE(a.has_value());
+    ASSERT_EQ(a.value(), 0);
+    ASSERT_TRUE(b.has_value());
+    ASSERT_EQ(b.value(), 1_KiB);
+    ASSERT_TRUE(c.has_value());
+    ASSERT_EQ(c.value(), 2_KiB);
+    auto loa = allocator.lowest_occupied_address();
+    ASSERT_EQ(loa.value(), 0);
+    allocator.deallocate(a.value());
+    loa = allocator.lowest_occupied_address();
+    ASSERT_EQ(loa.value(), 1_KiB);
+    allocator.deallocate(b.value());
+    loa = allocator.lowest_occupied_address();
+    ASSERT_EQ(loa.value(), 2_KiB);
+    allocator.deallocate(c.value());
+    loa = allocator.lowest_occupied_address();
+    ASSERT_FALSE(loa.has_value());
+}
+
+TEST(FreeListOptTest, LowestOccupiedAddressWithAllocateAt) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+    auto a = allocator.allocate_at_address(1_KiB, 1_KiB);
+    ASSERT_TRUE(a.has_value());
+    ASSERT_EQ(a.value(), 1_KiB);
+    auto loa = allocator.lowest_occupied_address();
+    ASSERT_EQ(loa.value(), 1_KiB);
+    allocator.deallocate(a.value());
+    loa = allocator.lowest_occupied_address();
+    ASSERT_FALSE(loa.has_value());
+}
