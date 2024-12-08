@@ -166,7 +166,15 @@ class Program {
 
     const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
 
+    void set_pre_exec_callback(std::function<void(Program*)> callback);
+    void call_pre_exec_callback();
+    uint32_t get_max_cb_memory_usage(const Device *device);
+
+
    private:
+
+    std::function<void(Program*)> pre_exec_callback_;
+
     std::unique_ptr<detail::Program_> pimpl_;
 
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
