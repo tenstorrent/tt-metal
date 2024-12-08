@@ -79,7 +79,7 @@ void kernel_main() {
 
     for (uint32_t h = 0; h < padded_shard_height; h++) {
         uint32_t output_stick_addr = output_shard_base_addr + h * padded_stick_bytes;
-        auto output_stick_ptr = reinterpret_cast<u8_ptr>(output_stick_addr - 16);
+        auto output_stick_ptr = reinterpret_cast<u8_ptr>(output_stick_addr);
         auto padding_value_ptr = reinterpret_cast<u8_ptr>(padding_value_base_addr);
         DPRINT << "writing padding val to stick " << h << ENDL();
         DPRINT << "output_stick_addr: " << output_stick_addr << ENDL();
