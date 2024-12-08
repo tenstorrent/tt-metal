@@ -43,10 +43,6 @@ CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, 
     if (this->total_size_ % page_size != 0) {
         TT_THROW("Total circular buffer size {} B must be divisible by page size {} B", this->total_size_, page_size);
     }
-    // TODO: Should use CIRCULAR_BUFFER_WORD_SIZE_BYTES here
-    if (page_size % sizeof(uint32_t) != 0) {
-        TT_THROW("Page size must be divisible by sizeof(uint32_t) because buffers holds uint32_t values");
-    }
 
     this->page_sizes_[buffer_index] = page_size;
     return *this;
