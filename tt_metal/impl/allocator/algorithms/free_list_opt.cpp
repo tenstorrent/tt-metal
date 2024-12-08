@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
+#include "common/assert.hpp"
 #include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -148,6 +149,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
             address_limit,
             start_address + offset_bytes_);
     }
+    update_lowest_occupied_address(start_address);
     return start_address + offset_bytes_;
 }
 
@@ -178,6 +180,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
 
     size_t offset = start_address - block_address_[target_block_index];
     size_t alloc_block_index = allocate_in_block(target_block_index, alloc_size, offset);
+    update_lowest_occupied_address(start_address);
     return absolute_start_address;
 }
 
@@ -285,6 +288,18 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
         free_meta_block(next_block);
     }
 
+    TT_ASSERT(lowest_occupied_address_.has_value(), "Lowest occupied address should have a value");
+    if (addr <= *lowest_occupied_address_) {
+        lowest_occupied_address_ = std::nullopt;
+        ssize_t curr_block_index = block_next_block_[block_index];
+        while (curr_block_index != -1) {
+            if (block_is_allocated_[curr_block_index]) {
+                lowest_occupied_address_ = block_address_[curr_block_index];
+                break;
+            }
+            curr_block_index = block_next_block_[curr_block_index];
+        }
+    }
     // Update the segregated list
     insert_block_to_segregated_list(block_index);
 }
@@ -579,6 +594,12 @@ std::optional<size_t> FreeListOpt::get_and_remove_from_alloc_table(DeviceAddr ad
         }
     }
     return std::nullopt;
+}
+
+void FreeListOpt::update_lowest_occupied_address(DeviceAddr address) {
+    if (!lowest_occupied_address_.has_value() || address < lowest_occupied_address_.value()) {
+        lowest_occupied_address_ = address;
+    }
 }
 
 }  // namespace allocator
