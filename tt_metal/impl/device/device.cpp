@@ -3372,6 +3372,8 @@ std::vector<uint8_t> Device::light_metal_end_capture() {
     TT_ASSERT(lm_capture_ctx.isTracing(), "Light Metal Capture was not enabled.");
     lm_capture_ctx.setTracing(false); // Disable tracing
     auto blob = lm_capture_ctx.createLightMetalBinary();
+    // Capture is done, reset the context in case fresh capture begins.
+    lm_capture_ctx.reset();
     return blob;
 }
 
