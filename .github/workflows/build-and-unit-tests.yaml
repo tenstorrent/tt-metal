@@ -13,6 +13,10 @@ on:
         required: false
         type: number
         default: 35
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
   workflow_dispatch:
     inputs:
       arch:
@@ -34,6 +38,11 @@ on:
         required: false
         type: number
         default: 35
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
+
 jobs:
   unit-tests-slow-dispatch:
     name: ${{ inputs.arch }} ${{ inputs.runner-label }}
@@ -42,24 +51,27 @@ jobs:
       - cloud-virtual-machine
       - in-service
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ inputs.arch}}
-      TT_METAL_SLOW_DISPATCH_MODE: 1
+      ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/prepare-metal-run
         with:
           arch: ${{ inputs.arch }}
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Run pre/post regression tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
+        uses: ./.github/actions/docker-run
+        with:
+          docker_os_arch: ${{ inputs.os }}-amd64
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          prepare_metal_run: true
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch}}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_SLOW_DISPATCH_MODE=1
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+          run_args: |
+            ./tests/scripts/run_tests.sh --tt-arch ${{ inputs.arch }} --pipeline-type post_commit --dispatch-mode slow
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

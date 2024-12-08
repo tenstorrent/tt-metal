@@ -13,6 +13,10 @@ on:
         required: false
         type: number
         default: 45
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
   workflow_dispatch:
     inputs:
       arch:
@@ -34,6 +38,10 @@ on:
         required: false
         type: number
         default: 45
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
 
 jobs:
   fd-tests:
@@ -42,7 +50,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
+        os: ["${{ inputs.os }}"]
         test-group: [
           {name: eager unit tests 1, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },
           {name: eager unit tests 2, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 },
@@ -70,6 +78,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
+          docker_os_arch: ${{ inputs.os }}-amd64
           install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           run_args: |

@@ -26,6 +26,11 @@ inputs:
     default: |
       -v /dev/hugepages-1G:/dev/hugepages-1G
       --device /dev/tenstorrent
+  prepare_metal_run:
+    description: "Prepare the environment for running Metalium"
+    type: boolean
+    required: false
+    default: false
   install_wheel:
     description: "Install the wheel that contains all of the Python environment. The artifact needs to be present."
     type: boolean
@@ -79,6 +84,7 @@ runs:
           --net=host
           --log-driver local
           --log-opt max-size=50m
+          -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
           -e PYTHONPATH=${{ github.workspace }}
@@ -87,6 +93,13 @@ runs:
           -w ${{ github.workspace }}
         run: |
           set -eu
+
+          prepare_metal_run=${{ inputs.prepare_metal_run }}
+          if [[ "${prepare_metal_run,,}" == "true" ]]; then
+            rm -rf ${PYTHON_ENV_DIR}
+            ./create_venv.sh
+            source python_env/bin/activate
+          fi
 
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then

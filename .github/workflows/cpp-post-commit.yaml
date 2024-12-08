@@ -13,6 +13,10 @@ on:
         required: false
         type: number
         default: 80
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
   workflow_dispatch:
     inputs:
       arch:
@@ -34,6 +38,10 @@ on:
         required: false
         type: number
         default: 60
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
 
 jobs:
   models:
@@ -67,11 +75,17 @@ jobs:
           arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_os_arch: ${{ inputs.os }}-amd64
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          prepare_metal_run: true
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ inputs.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+          run_args: |
+            ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
