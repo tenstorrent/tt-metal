@@ -180,13 +180,15 @@ class resnet50Bottleneck:
                 conv_config=ttnn.Conv2dConfig(
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                    math_fidelity=self.model_config["MATH_FIDELITY"],
                     shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                     if height_sharding
                     else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     deallocate_activation=True,
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
+                ),
+                compute_config=ttnn.init_device_compute_kernel_config(
+                    device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
                 ),
                 conv_op_cache=conv_op_cache,
             )
@@ -227,12 +229,14 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+            ),
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -289,7 +293,6 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
                 deallocate_activation=True,
                 reallocate_halo_output=reallocate_halo_output,
@@ -298,6 +301,9 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+            ),
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -320,11 +326,13 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+            ),
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -557,11 +565,13 @@ class resnet50:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
                 deallocate_activation=True,
                 input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
+            ),
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
             conv_op_cache=conv_op_cache,
         )
@@ -888,11 +898,13 @@ class resnet50:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
                 deallocate_activation=True,
                 input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
+            ),
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
             conv_op_cache=conv_op_cache,
         )

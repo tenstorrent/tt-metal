@@ -187,6 +187,7 @@ from ttnn.device import (
     pad_to_tile_shape,
     SubDevice,
     SubDeviceManagerId,
+    init_device_compute_kernel_config,
 )
 
 from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame

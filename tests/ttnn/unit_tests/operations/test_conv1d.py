@@ -88,12 +88,15 @@ def run_conv(
     conv_config = ttnn.Conv1dConfig(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
         shard_layout=shard_layout,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -117,6 +120,7 @@ def run_conv(
         batch_size=batch_size,
         input_length=input_length,
         conv_config=conv_config,
+        compute_config=compute_config,
         conv_op_cache=reader_patterns_cache,
         debug=debug,
         groups=groups,

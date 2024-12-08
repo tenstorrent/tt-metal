@@ -6,6 +6,7 @@ import contextlib
 from typing import Optional, List
 
 import ttnn
+import os
 
 
 def get_device_core_grid(device):
@@ -27,6 +28,7 @@ DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
 
 open_device = ttnn._ttnn.device.open_device
+init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config
 
 
 def close_device(device: "ttnn.device.Device"):
@@ -132,12 +134,25 @@ def dump_device_memory_state(device, prefix=""):
     ttnn._ttnn.device.DumpDeviceMemoryState(device, prefix)
 
 
-def is_wormhole_b0(device):
-    return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
+def is_wormhole_b0(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "wormhole_b0" in ARCH_NAME
 
 
-def is_grayskull(device):
-    return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
+def is_grayskull(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "grayskull" in ARCH_NAME
+
+
+def is_blackhole(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "blackhole" in ARCH_NAME
 
 
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
