@@ -919,9 +919,12 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<Device*, const MemoryConfig&>(&Tensor::to, py::const_),
+            py::overload_cast<Device*, const MemoryConfig&, uint8_t, const std::vector<SubDeviceId>&>(
+                &Tensor::to, py::const_),
             py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
+            py::arg("cq_id") = ttnn::DefaultQueueId,
+            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
             py::keep_alive<0, 2>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
@@ -937,6 +940,10 @@ void pytensor_module(py::module& m_tensor) {
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
             | arg1      | MemoryConfig of tensor of TT accelerator device | ttnn.MemoryConfig          |                       | No       |
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+            | arg2      | CQ ID of TT accelerator device to use           | uint8_t                    |                       | No       |
+            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+            | arg3      | Sub device IDs to wait before writing tensor    | List[ttnn.SubDeviceId]     |                       | No       |
+            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
 
             .. code-block:: python
 
@@ -950,9 +957,12 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<MeshDevice*, const MemoryConfig&>(&Tensor::to, py::const_),
+            py::overload_cast<MeshDevice*, const MemoryConfig&, uint8_t, const std::vector<SubDeviceId>&>(
+                &Tensor::to, py::const_),
             py::arg("mesh_device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
+            py::arg("cq_id") = ttnn::DefaultQueueId,
+            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
             py::keep_alive<0, 2>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
@@ -967,6 +977,10 @@ void pytensor_module(py::module& m_tensor) {
             | arg0      | MeshDevice to which tensor will be moved        | ttnn.MeshDevice            | TT accelerator device | Yes      |
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
             | arg1      | MemoryConfig of tensor of TT accelerator device | ttnn.MemoryConfig          |                       | No       |
+            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+            | arg2      | CQ ID of TT accelerator device to use           | uint8_t                    |                       | No       |
+            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+            | arg3      | Sub device IDs to wait before writing tensor    | List[ttnn.SubDeviceId]     |                       | No       |
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
 
             .. code-block:: python
@@ -1022,9 +1036,12 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "cpu",
-            [](const Tensor& self, bool blocking, uint8_t cq_id) { return self.cpu(blocking, cq_id); },
+            [](const Tensor& self, bool blocking, uint8_t cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+                return self.cpu(blocking, cq_id, sub_device_ids);
+            },
             py::arg("blocking") = true,
             py::arg("cq_id") = ttnn::DefaultQueueId,
+            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
 
