@@ -186,7 +186,9 @@ from ttnn.device import (
     format_output_tensor,
     pad_to_tile_shape,
     SubDevice,
+    SubDeviceId,
     SubDeviceManagerId,
+    DefaultQueueId,
     init_device_compute_kernel_config,
 )
 

@@ -29,9 +29,11 @@ std::shared_ptr<Event> create_event(Device* device) {
     return event;
 }
 
-void record_event(uint8_t cq_id, const std::shared_ptr<Event>& event) {
+void record_event(uint8_t cq_id, const std::shared_ptr<Event>& event, const std::vector<SubDeviceId>& sub_device_ids) {
     Device* device = event->device;
-    device->push_work([device, event, cq_id] { EnqueueRecordEvent(device->command_queue(cq_id), event); });
+    device->push_work([device, event, cq_id, sub_device_ids] {
+        EnqueueRecordEvent(device->command_queue(cq_id), event, sub_device_ids);
+    });
 }
 
 void wait_for_event(uint8_t cq_id, const std::shared_ptr<Event>& event) {
@@ -41,9 +43,10 @@ void wait_for_event(uint8_t cq_id, const std::shared_ptr<Event>& event) {
 
 MultiDeviceEvent create_event(MeshDevice* mesh_device) { return MultiDeviceEvent(mesh_device); }
 
-void record_event(uint8_t cq_id, const MultiDeviceEvent& multi_device_event) {
+void record_event(
+    uint8_t cq_id, const MultiDeviceEvent& multi_device_event, const std::vector<SubDeviceId>& sub_device_ids) {
     for (auto& event : multi_device_event.events) {
-        record_event(cq_id, event);
+        record_event(cq_id, event, sub_device_ids);
     }
 }
 

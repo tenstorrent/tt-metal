@@ -39,9 +39,8 @@ auto MoeOperation::invoke(
     const uint16_t k,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    constexpr uint8_t DefaultQueueId = 0;
     return invoke(
-        DefaultQueueId,
+        ttnn::DefaultQueueId,
         input_tensor,
         expert_mask_tensor,
         topk_mask_tensor,
