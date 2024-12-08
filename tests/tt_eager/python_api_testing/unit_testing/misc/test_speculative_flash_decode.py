@@ -86,7 +86,7 @@ def run_test_sdpa_decode_single_iter_single_device(
     q_dtype=ttnn.bfloat16,
     cur_pos_tensor=False,
     speculation_length=128,
-    threshold=0.2,
+    lambda_=0.2,
     sharded_in=False,
     sharded_out=False,
     start_indices=None,
@@ -178,10 +178,12 @@ def run_test_sdpa_decode_single_iter_single_device(
                 tt_back_spec,
                 tt_back_spec_lp_distance,
                 tt_back_lp_norm_x,
-            ) = ttnn.transformer.speculative_scaled_dot_product_attention_decode(
+            ) = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
                 tt_Q,
                 tt_K,
                 tt_V,
+                lambda_=lambda_,
+                speculative_chunk_size=speculation_length,
                 cur_pos_tensor=start_indices_tt,
                 scale=scale,
                 program_config=program_config,
@@ -194,10 +196,12 @@ def run_test_sdpa_decode_single_iter_single_device(
                 tt_back_spec,
                 tt_back_spec_lp_distance,
                 tt_back_lp_norm_x,
-            ) = ttnn.transformer.speculative_scaled_dot_product_attention_decode(
+            ) = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
                 tt_Q,
                 tt_K,
                 tt_V,
+                lambda_=lambda_,
+                speculative_chunk_size=speculation_length,
                 cur_pos=start_indices,
                 scale=scale,
                 program_config=program_config,
@@ -209,6 +213,10 @@ def run_test_sdpa_decode_single_iter_single_device(
 
     tt_back_gt = ttnn.to_torch(tt_back_gt)
     tt_back_gt = tt_back_gt[:, :, :nh, :]
+    tt_back_spec = ttnn.to_torch(tt_back_spec)
+    tt_back_spec = tt_back_spec[:, :, :nh, :]
+    tt_back_spec_lp_distance = ttnn.to_torch(tt_back_spec_lp_distance)
+    tt_back_lp_norm_x = ttnn.to_torch(tt_back_lp_norm_x)
 
     ##########################################
     #### Expected Calculation ####
@@ -258,7 +266,7 @@ def run_test_sdpa_decode_single_iter_single_device(
     # checking speculation error using expected values from torch
     lp_distance = torch.linalg.vector_norm(expected_gt - expected_spec, ord=2, dim=(-2, -1))
     lp_norm_x = torch.linalg.vector_norm(expected_gt, ord=2, dim=(-2, -1))  # Calculate the Lp norm of x
-    passing = torch.all(lp_distance < threshold * lp_norm_x)
+    passing = torch.all(lp_distance < lambda_ * lp_norm_x)
     logger.debug(f"gt speculation passing: {passing}")
 
     ##########################################
