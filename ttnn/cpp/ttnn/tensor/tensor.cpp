@@ -559,24 +559,28 @@ const Storage& Tensor::get_storage() const {
     return this->tensor_attributes->storage;
 }
 
-Tensor Tensor::to(CommandQueue& queue, const MemoryConfig& mem_config) const {
-    return tensor_ops::tensor_to(*this, queue.device(), mem_config);
+Tensor Tensor::to(Device* target_device, const MemoryConfig& mem_config,uint8_t cq_id,
+    const std::vector<SubDeviceId>& sub_device_ids) const {
+    return tensor_ops::tensor_to(*this, target_device, mem_config, cq_id, sub_device_ids);
 }
 
-Tensor Tensor::to(Device* target_device, const MemoryConfig& mem_config) const {
-    return tensor_ops::tensor_to(*this, target_device, mem_config);
-}
-
-Tensor Tensor::to(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config) const {
+Tensor Tensor::to(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config,uint8_t cq_id,
+    const std::vector<SubDeviceId>& sub_device_ids) const {
     std::vector<Device*> workers_to_use = ttnn::distributed::get_mapped_devices(*this, *mesh_device);
-    return tensor_ops::tensor_to(*this, workers_to_use, mem_config);
+    return tensor_ops::tensor_to(*this, workers_to_use, mem_config, cq_id, sub_device_ids);
 }
 
-Tensor Tensor::to(const std::vector<Device*>& workers, const MemoryConfig& mem_config) const {
-    return tensor_ops::tensor_to(*this, workers, mem_config);
+Tensor Tensor::to(
+    const std::vector<Device*>& workers,
+    const MemoryConfig& mem_config,
+    uint8_t cq_id,
+    const std::vector<SubDeviceId>& sub_device_ids) const {
+    return tensor_ops::tensor_to(*this, workers, mem_config, cq_id, sub_device_ids);
 }
 
-Tensor Tensor::cpu(bool blocking, uint8_t cq_id) const { return tensor_ops::tensor_cpu(*this, blocking, cq_id); }
+Tensor Tensor::cpu(bool blocking, uint8_t cq_id, const std::vector<SubDeviceId>& sub_device_ids) const {
+    return tensor_ops::tensor_cpu(*this, blocking, cq_id, sub_device_ids);
+}
 
 Tensor Tensor::cpu_sharded() const { return tensor_ops::tensor_cpu_sharded(*this); }
 
@@ -861,7 +865,8 @@ Tensor allocate_tensor_on_devices(
     return device_tensor;
 }
 
-void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id) {
+void write_tensor(
+    const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
     // Top level wrapper to copy a host tensor to a preallocated device tensor
     TT_ASSERT(device_tensor.workers.size(), "Workers must be specified for device_tensor in write_tensor");
 
@@ -877,7 +882,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id
 
     for (int worker_index = 0; worker_index < device_tensor.workers.size(); ++worker_index) {
         auto& worker = device_tensor.workers[worker_index];
-        worker->push_work([cq_id, worker, worker_index, async_safe_tensor, device_tensor]() mutable {
+        worker->push_work([cq_id, worker, worker_index, async_safe_tensor, device_tensor, sub_device_ids]() mutable {
             TT_FATAL(
                 device_tensor.storage_type() == StorageType::DEVICE or
                     device_tensor.storage_type() == StorageType::MULTI_DEVICE,
@@ -889,7 +894,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id
                 "Error");
             std::visit(
                 tt::stl::overloaded{
-                    [worker, worker_index, cq_id, &async_safe_tensor](const DeviceStorage& device_storage) {
+                    [worker, worker_index, cq_id, &async_safe_tensor, sub_device_ids](const DeviceStorage& device_storage) {
                         // Copying from host to a single device.
                         void* host_data = std::visit(
                             tt::stl::overloaded{
@@ -913,9 +918,10 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id
                             worker->command_queue(cq_id),
                             device_storage.get_buffer(),
                             host_data,
-                            /*blocking=*/false);
+                            /*blocking=*/false,
+                            sub_device_ids);
                     },
-                    [worker, worker_index, cq_id, &async_safe_tensor](const MultiDeviceStorage& device_storage) {
+                    [worker, worker_index, cq_id, &async_safe_tensor, sub_device_ids](const MultiDeviceStorage& device_storage) {
                         // Copying from host to multi-device.
                         TT_ASSERT(
                             std::holds_alternative<MultiDeviceHostStorage>(async_safe_tensor.get_storage()),
@@ -928,7 +934,8 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id
                             worker->command_queue(cq_id),
                             device_storage.get_buffer_for_device(worker),
                             host_data,
-                            /*blocking=*/false);
+                            /*blocking=*/false,
+                            sub_device_ids);
                     },
                     [](auto&& s) { TT_THROW("Unreachable"); }},
                 device_tensor.get_storage());

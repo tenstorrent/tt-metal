@@ -167,8 +167,12 @@ DeviceBuffer allocate_buffer_on_device(Device* device, const TensorSpec& tensor_
 
 template <typename T>
 inline void read_data_from_device_buffer(
-    CommandQueue& cq, DeviceBuffer device_buffer, void* host_buffer_data, bool blocking) {
-    EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
+    CommandQueue& cq,
+    DeviceBuffer device_buffer,
+    void* host_buffer_data,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
+    EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking, sub_device_ids);
 }
 
 template <typename T>
@@ -181,7 +185,11 @@ inline void read_data_from_device_buffer(DeviceBuffer device_buffer, std::vector
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
+Tensor to_host(
+    const Tensor& tensor,
+    bool blocking = true,
+    uint8_t cq_id = ttnn::DefaultQueueId,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 template <typename T>
 Tensor to_host_sharded(const Tensor& tensor);
@@ -191,7 +199,8 @@ Tensor to_device(
     const Tensor& tensor,
     Device* target_device,
     const MemoryConfig& memory_config,
-    std::optional<std::reference_wrapper<CommandQueue>> queue);
+    uint8_t cq_id = ttnn::DefaultQueueId,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
