@@ -8,6 +8,7 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/run_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_tensor_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_processor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_trace_utils.cpp
