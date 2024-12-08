@@ -28,6 +28,7 @@ mem_configs = [
         (torch.float16, ttnn.float32),
         (torch.float32, ttnn.bfloat8_b),
         (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat4_b),
         (torch.int, ttnn.uint32),
     ),
 )
@@ -35,6 +36,7 @@ mem_configs = [
     "pt_output_dtype, tt_output_dtype",
     (
         (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat4_b),
         (torch.float32, ttnn.bfloat8_b),
     ),
 )
@@ -85,6 +87,8 @@ class TestTypecast:
         test_args["input_mem_config"] = [input_mem_config]
         test_args.update({"output_mem_config": dst_mem_config})
         comparison_func = comparison_funcs.comp_pcc
+        if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b:
+            comparison_func = partial(comparison_funcs.comp_pcc, pcc=0.97)
 
         run_single_pytorch_test(
             "typecast",
