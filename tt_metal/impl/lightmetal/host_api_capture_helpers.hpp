@@ -358,6 +358,14 @@ inline void captureCreateBuffer(std::shared_ptr<Buffer> buffer, const Interleave
 inline void captureDeallocateBuffer(Buffer *buffer) {
     auto& ctx = LightMetalCaptureContext::getInstance();
     if (!ctx.isTracing()) return;
+
+    // TODO (kmabee) - Workaround for now. Program Binaries buffer is created via Buffer::create() but can be deallocated
+    // on Program destruction while capturing is still enabled depending on test structure (scope).
+    if (!ctx.isInMap(buffer)) {
+        log_warning(tt::LogMetalTrace, "Trying to capture DeallocateBuffer for buffer that wasn't previously captured, ignoring it.");
+        return;
+    }
+
     auto buffer_global_id = ctx.getGlobalId(buffer);
     log_info(tt::LogMetalTrace, "{} : buffer_global_id: {} size: {} address: {}", __FUNCTION__, buffer_global_id, buffer->size(), buffer->address());
     captureCommand(tt::target::CommandType::DeallocateBufferCommand,
