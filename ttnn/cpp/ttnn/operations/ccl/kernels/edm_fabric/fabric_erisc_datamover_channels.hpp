@@ -158,11 +158,11 @@ class EthChannelBuffer final {
         return drained;
     }
 
-   private:
     FORCE_INLINE auto buffer_index() const {
         ASSERT(this->buff_idx < NUM_BUFFERS);
         return buff_idx;
     }
+   private:
 
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
     std::array<volatile tt_l1_ptr size_t *, NUM_BUFFERS> channel_bytes_sent_addresses;
