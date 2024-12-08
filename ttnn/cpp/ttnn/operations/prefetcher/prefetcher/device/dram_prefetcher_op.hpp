@@ -17,22 +17,20 @@ namespace ttnn::operations::dram_prefetcher {
 
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& tensors,
+    const Tensor& tensor_addrs,
     const std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     Tensor& output_tensor);
 
 struct DramPrefetcher {
-    const std::vector<Tensor> tensors;
+    const Tensor tensor_addrs = Tensor();
     const std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
 
-    void validate(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
 }  // namespace ttnn::operations::dram_prefetcher
