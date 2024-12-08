@@ -28,7 +28,10 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     std::optional<const Tensor> cur_pos_tensor,
     std::optional<const Tensor> page_table_tensor,
     std::optional<const Tensor> attn_mask,
-    const Tensor& output_tensor,
+    const Tensor& full_output_tensor,
+    const Tensor& speculated_output_tensor,
+    const Tensor& l2_dist_tensor,
+    const Tensor& l2_norm_tensor,
     bool is_causal,
     const std::vector<uint32_t>& cur_pos_ids,
     std::optional<float> scale,
@@ -72,7 +75,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     uint32_t PNHt = PNH / TILE_HEIGHT;
     uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
     bool is_q_sharded = input_tensor_q.is_sharded();
-    bool is_output_sharded = output_tensor.is_sharded();
+    bool is_output_sharded = full_output_tensor.is_sharded();
     if (!share_cache.has_value()) {
         // default share_cache to false
         share_cache = false;
@@ -108,7 +111,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     auto q_buffer = input_tensor_q.buffer();
     auto k_buffer = input_tensor_k.buffer();
     auto v_buffer = input_tensor_v.buffer();
-    auto out0_buffer = output_tensor.buffer();
+    auto out0_buffer = full_output_tensor.buffer();
 
     bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     bool use_attention_mask = attn_mask.has_value();
@@ -119,17 +122,24 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     // Parallelization scheme
     // We will assign cores to batches
     // Split to cores
+    CoreCoord device_grid_size = device->compute_with_storage_grid_size();
+    TT_FATAL(device_grid_size.y >= 2, "Speculative SDPA decode requires at least 2 columns in devicecompute grid size");
+    CoreCoord ccl_core = CoreCoord(device_grid_size.x, device_grid_size.y);  // dedicate the last column for ccl
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
-                                                     : device->compute_with_storage_grid_size();
+                                                     : CoreCoord(device_grid_size.x, device_grid_size.y - 1);
+    log_info("device_grid_size: {}", device_grid_size);
+    log_info("grid_size: {}", grid_size);
+    log_info("ccl_core: {}", ccl_core);
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores_available = grid_size.x * grid_size.y;
 
     uint32_t num_cores_in_grid =
-        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+        device->compute_with_storage_grid_size().x * (device->compute_with_storage_grid_size().y - 1);
     TT_FATAL(
         num_cores_available <= num_cores_in_grid,
-        "Expected number of cores available to be less than or equal to the number of cores in the grid, got {} and {}",
+        "Expected number of cores available to be less than or equal to the number of cores in the available compute "
+        "grid (note that the last column is dedicated for ccl), got {} and {}",
         num_cores_available,
         num_cores_in_grid);
     TT_FATAL(
@@ -141,12 +151,14 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     // balance the number of cores to use based on batch
     uint32_t max_num_cores_for_compute = program_config->max_cores_per_head_batch * B * num_kv_heads;
     uint32_t num_cores_per_batch = std::min(num_cores_available, max_num_cores_for_compute) / B;
-    uint32_t num_active_cores = num_cores_per_batch * B;
     //// for core assignment, it is the same whether there's 1 core for head or 1 core for many heads
     uint32_t num_cores_per_head = std::max((uint32_t)1, num_cores_per_batch / num_kv_heads);
     uint32_t num_heads_per_core = std::max((uint32_t)1, num_kv_heads / num_cores_per_batch);
     uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     uint32_t num_output_cores = B;
+    uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
+    //// recalculate num_cores_per_batch based on num_active_cores
+    num_cores_per_batch = num_active_cores / B;
 
     TT_FATAL(
         ((num_cores_per_head >= 1) && (num_heads_per_core == 1)) ||
@@ -155,10 +167,10 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
 
     // create core group, assume n batch and k_heads:
     // this is a 1D list of cores sorted by batch_output1, worker, ..., batch_output2, worker, ..., batch_output n,
-    // worker, ... Within each batch, we will assign head reducers. e.g. the following mapping: (batch_output1, worker1,
-    // worker2),   (worker3,       worker4,   worker5),   ..., (... worker3*k-1, worker3*k) (head_reducer1,  h_worker1,
-    // h_worker2), (head_reducer2, h_worker1, h_worker2), ..., (head_reducerk, h_worker1, h_worker2) head_reducer2 to
-    // head_reducerk then send the result to head_reducer1, which is also the batch_output1
+    // worker, ... Within each batch, we will assign head reducers. e.g. the following mapping:
+    // (batch_output1, worker1,   worker2),   (worker3,       worker4,   worker5),   ..., (... worker3*k-1, worker3*k)
+    // (head_reducer1, h_worker1, h_worker2), (head_reducer2, h_worker1, h_worker2), ..., (head_reducerk, h_worker1,
+    // h_worker2) head_reducer2 to head_reducerk then send the result to head_reducer1, which is also the batch_output1
     std::vector<CoreCoord> core_group;
     std::vector<CoreCoord> core_group_idle;
     if (is_q_sharded || is_output_sharded) {
@@ -191,16 +203,16 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         }
     }
 
-    log_debug("Parallelization scheme:");
-    log_debug("num_cores_available: {}", num_cores_available);
-    log_debug("num_cores_per_batch: {}", num_cores_per_batch);
-    log_debug("num_cores_per_head: {}", num_cores_per_head);
-    log_debug("num_heads_per_core: {}", num_heads_per_core);
-    log_debug("num_active_cores: {}", num_active_cores);
-    log_debug("num_reducer_cores: {}", num_reducer_cores);
-    log_debug("num_output_cores: {}", num_output_cores);
-    log_debug("core_group: {}", core_group);
-    log_debug("core_group_idle: {}", core_group_idle);
+    log_info("Parallelization scheme:");
+    log_info("num_cores_available: {}", num_cores_available);
+    log_info("num_cores_per_batch: {}", num_cores_per_batch);
+    log_info("num_cores_per_head: {}", num_cores_per_head);
+    log_info("num_heads_per_core: {}", num_heads_per_core);
+    log_info("num_active_cores: {}", num_active_cores);
+    log_info("num_reducer_cores: {}", num_reducer_cores);
+    log_info("num_output_cores: {}", num_output_cores);
+    log_info("core_group: {}", core_group);
+    log_info("core_group_idle: {}", core_group_idle);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = PNHt * DHt;
@@ -296,7 +308,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     tt::DataFormat mask_df = use_attention_mask
                                  ? tt_metal::datatype_to_dataformat_converter(attn_mask.value().get_dtype())
                                  : tt::DataFormat::Float16_b;
-    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(full_output_tensor.get_dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;
     // tt::DataFormat im_df = tt::DataFormat::Float16_b;
@@ -587,7 +599,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         num_heads_per_core,
         num_reducer_cores,
         num_output_cores,
-        output_tensor.element_size(),
+        full_output_tensor.element_size(),
         is_causal,
     };
 
@@ -630,7 +642,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     // Compute
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/compute/"
+        "speculative_sdpa_flash_decode.cpp",
         core_grid,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -642,14 +655,16 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     // Reader
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/dataflow/"
+        "speculative_reader_decode_all.cpp",
         core_grid,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common, defines));
 
     // Writer
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/dataflow/"
+        "speculative_writer_decode_all.cpp",
         core_grid,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args_common, defines));
 

@@ -239,7 +239,10 @@ operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::crea
     auto& page_table_tensor = optional_input_tensors.at(1);
     auto& attn_mask = optional_input_tensors.at(2);
 
-    auto& output_tensor = output_tensors.at(0);
+    auto& full_output_tensor = output_tensors.at(0);
+    auto& speculated_output_tensor = output_tensors.at(1);
+    auto& l2_dist_tensor = output_tensors.at(2);
+    auto& l2_norm_tensor = output_tensors.at(3);
 
     // set default values for scale, lambda, and speculative_chunk_size if not provided
     auto scale = this->scale;
@@ -264,7 +267,10 @@ operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::crea
         cur_pos_tensor,
         page_table_tensor,
         attn_mask,
-        output_tensor,
+        full_output_tensor,
+        speculated_output_tensor,
+        l2_dist_tensor,
+        l2_norm_tensor,
         this->is_causal,
         this->cur_pos,
         scale,
