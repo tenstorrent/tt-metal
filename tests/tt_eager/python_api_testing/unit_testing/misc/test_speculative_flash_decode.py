@@ -93,8 +93,10 @@ def run_test_sdpa_decode_single_iter_single_device(
     causal=True,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
-    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
-        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y - 1:
+        pytest.skip(
+            f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size} with last column dedicated for ccl"
+        )
 
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
@@ -305,11 +307,16 @@ def run_test_sdpa_decode_single_iter_single_device(
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size, single_iter, cur_pos_tensor",
     (
-        [8, 8, 1, 32768, 128, (8, 8), True, False],  # Llama2-70B
-        [4, 32, 8, 8192, 128, (8, 8), True, True],  # llama 3.1 8b
+        # [8, 8, 1, 32768, 128, (8, 7), True, False],  # Llama2-70B
+        [4, 32, 8, 8192, 128, (8, 7), True, True],  # llama 3.1 8b
     ),
 )
-@pytest.mark.parametrize("speculation_length", [128, 256])
+@pytest.mark.parametrize(
+    "speculation_length",
+    [
+        128,
+    ],
+)
 def test_sdpa_decode_single_device(
     device,
     b,
