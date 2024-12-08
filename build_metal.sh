@@ -31,6 +31,7 @@ show_help() {
     echo "  --disable-unity-builds           Disable Unity builds"
     echo "  --cxx-compiler-path              Set path to C++ compiler."
     echo "  --c-compiler-path                Set path to C++ compiler."
+    echo "  --skip-build                     Run configuration, but skip the build."
 }
 
 clean() {
@@ -59,11 +60,12 @@ unity_builds="ON"
 build_all="OFF"
 cxx_compiler_path=""
 c_compiler_path=""
+skip_build="OFF"
 
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,build-all,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,build-tt-train,build-static-libs,disable-unity-builds,release,development,debug,clean,cxx-compiler-path:,c-compiler-path:
+LONGOPTIONS=help,build-all,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,build-tt-train,build-static-libs,disable-unity-builds,release,development,debug,clean,cxx-compiler-path:,c-compiler-path:,skip-build
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -115,6 +117,8 @@ while true; do
             build_static_libs="ON";;
         --build-all)
             build_all="ON";;
+        --skip-build)
+            skip_build="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --cxx-compiler-path)
@@ -280,6 +284,9 @@ echo "INFO: Configuring Project"
 echo "INFO: Running: cmake "${cmake_args[@]}""
 cmake "${cmake_args[@]}"
 
-# Build libraries and cpp tests
-echo "INFO: Building Project"
-cmake --build $build_dir --target install
+
+if [ "$skip_build" = "OFF" ]; then
+    # Build libraries and cpp tests
+    echo "INFO: Building Project"
+    cmake --build $build_dir --target install
+fi
