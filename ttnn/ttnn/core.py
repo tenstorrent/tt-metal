@@ -103,7 +103,7 @@ def create_sharded_memory_config(
         Currently sharding only supports L1 tensors.
 
     Example:
-        >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, False)
+        >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
 
     """
 
@@ -231,7 +231,7 @@ def create_sharded_memory_config_(
 
 
     Example::
-        >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, False)
+        >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
     """
 
     if not isinstance(shape, (list, tuple, ttnn.Shape)):
