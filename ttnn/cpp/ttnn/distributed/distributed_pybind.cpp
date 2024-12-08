@@ -190,6 +190,26 @@ void py_module(py::module& module) {
 
                 Args:
                     sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager.
+                    This configuration will be used for each device in the MeshDevice.
+                    local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
+
+                Returns:
+                    MeshSubDeviceManagerId: The ID of the created sub-device manager.
+            )doc")
+        .def(
+            "create_sub_device_manager",
+            [](MeshDevice& self,
+               const std::vector<std::vector<SubDevice>>& mesh_sub_devices,
+               DeviceAddr local_l1_size) { return self.create_sub_device_manager(mesh_sub_devices, local_l1_size); },
+            py::arg("sub_devices"),
+            py::arg("local_l1_size"),
+            R"doc(
+                Creates a sub-device manager for the given mesh device.
+
+                Args:
+                    mesh_sub_devices (List[List[ttnn.SubDevice]]): The sub-devices to include in the sub-device manager.
+                    Each element of the outer list will be used to configure the corresponding device in the MeshDevice.
+                    This means that the individual devices in the MeshDevice may have different configurations.
                     local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
 
                 Returns:
