@@ -39,6 +39,9 @@ run_common_func_tests() {
   # Mnist
   pytest --disable-warnings models/demos/mnist/demo/demo.py --timeout 600; fail+=$?
 
+  # RoBERTa
+  pytest --disable-warnings models/demos/wormhole/roberta/demo/demo.py --timeout 600; fail+=$?
+
   return $fail
 }
 
