@@ -161,6 +161,18 @@ struct Floor {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Ceil {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
 struct Dropout {
     static Tensor invoke(
         const Tensor& input,
@@ -294,7 +306,6 @@ REGISTER_UNARY_OPERATION(erfinv, ERFINV);
 REGISTER_UNARY_OPERATION(exp2, EXP2);
 REGISTER_UNARY_OPERATION(expm1, EXPM1);
 REGISTER_UNARY_OPERATION(eqz, EQZ);
-REGISTER_UNARY_OPERATION(ceil, CEIL);
 REGISTER_UNARY_OPERATION(gez, GEZ);
 REGISTER_UNARY_OPERATION(gtz, GTZ);
 REGISTER_UNARY_OPERATION(i0, I0);
@@ -368,6 +379,7 @@ constexpr auto identity =
     ttnn::register_operation_with_auto_launch_op<"ttnn::identity", ttnn::operations::unary::Identity>();
 constexpr auto floor =
     ttnn::register_operation_with_auto_launch_op<"ttnn::floor", ttnn::operations::unary::Floor>();
+constexpr auto ceil = ttnn::register_operation_with_auto_launch_op<"ttnn::ceil", ttnn::operations::unary::Ceil>();
 constexpr auto softplus =
     ttnn::register_operation_with_auto_launch_op<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto prelu_sfpu =
