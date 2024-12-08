@@ -65,7 +65,7 @@ void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
 
     control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
 
-    for (auto& core : tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id()) {
+    for (auto& core : tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id)) {
         profiler_msg_t* profiler_msg;
         if (tt::Cluster::instance().is_worker_core(core.first, device_id)) {
             profiler_msg =

@@ -45,7 +45,7 @@ void DeviceProfiler::readRiscProfilerResults(
         riscCount = 1;
     }
 
-    uint32_t coreFlatID = tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id().at(worker_core);
+    uint32_t coreFlatID = tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(

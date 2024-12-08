@@ -214,8 +214,8 @@ void Cluster::get_metal_desc_from_tt_desc(
     }
 }
 
-const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_profiler_flat_id() const {
-    return this->virtual_routing_to_profiler_flat_id_;
+const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const {
+    return this->virtual_routing_to_profiler_flat_id_.at(this->get_board_type(chip_id));
 }
 
 void Cluster::open_driver(const bool &skip_driver_allocs) {
@@ -336,37 +336,48 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
 }
 
 void Cluster::generate_logical_to_virtual_coord_mapping() {
-    auto chip_id_to_sdesc = this->sdesc_per_chip_.begin();
-    auto chip_id = chip_id_to_sdesc->first;
-    auto soc_desc = chip_id_to_sdesc->second;
-    for (auto x_coords : soc_desc.worker_log_to_routing_x) {
-        CoreCoord phys_core = soc_desc.get_physical_core_from_logical_core(CoreCoord(x_coords.first, 0), CoreType::WORKER);
-        CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(chip_id, phys_core, CoreType::WORKER);
-        this->worker_logical_to_virtual_x_.insert({x_coords.first, virtual_coords.x});
+    for (auto chip_id : this->cluster_desc_->get_all_chips()) {
+        auto board_type = this->get_board_type(chip_id);
+        if (this->worker_logical_to_virtual_x_.find(board_type) != this->worker_logical_to_virtual_x_.end()) {
+            continue;
+        }
+        auto& soc_desc = this->get_soc_desc(chip_id);
+        this->worker_logical_to_virtual_x_.insert({board_type, {}});
+        this->worker_logical_to_virtual_y_.insert({board_type, {}});
+        this->eth_logical_to_virtual_.insert({board_type, {}});
+        for (auto x_coords : soc_desc.worker_log_to_routing_x) {
+            CoreCoord phys_core = soc_desc.get_physical_core_from_logical_core(CoreCoord(x_coords.first, 0), CoreType::WORKER);
+            CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(chip_id, phys_core, CoreType::WORKER);
+            this->worker_logical_to_virtual_x_.at(board_type).insert({x_coords.first, virtual_coords.x});
+        }
+        for (auto y_coords : soc_desc.worker_log_to_routing_y) {
+            CoreCoord phys_core = soc_desc.get_physical_core_from_logical_core(CoreCoord(0, y_coords.first), CoreType::WORKER);
+            CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(chip_id, phys_core, CoreType::WORKER);
+            this->worker_logical_to_virtual_y_.at(board_type).insert({y_coords.first, virtual_coords.y});
+        }
+        for (std::size_t log_eth_core_y = 0; log_eth_core_y < soc_desc.physical_ethernet_cores.size(); log_eth_core_y++) {
+            CoreCoord logical_eth_core = {0, log_eth_core_y};
+            CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(chip_id, soc_desc.physical_ethernet_cores.at(log_eth_core_y), CoreType::ETH);
+            this->eth_logical_to_virtual_.at(board_type).insert({logical_eth_core, virtual_coords});
+        }
     }
-    for (auto y_coords : soc_desc.worker_log_to_routing_y) {
-        CoreCoord phys_core = soc_desc.get_physical_core_from_logical_core(CoreCoord(0, y_coords.first), CoreType::WORKER);
-        CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(chip_id, phys_core, CoreType::WORKER);
-        this->worker_logical_to_virtual_y_.insert({y_coords.first, virtual_coords.y});
-    }
-    for (std::size_t log_eth_core_y = 0; log_eth_core_y < soc_desc.physical_ethernet_cores.size(); log_eth_core_y++) {
-        CoreCoord logical_eth_core = {0, log_eth_core_y};
-        CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(chip_id, soc_desc.physical_ethernet_cores.at(log_eth_core_y), CoreType::ETH);
-        this->eth_logical_to_virtual_.insert({logical_eth_core, virtual_coords});
-    }
+
 }
 
 void Cluster::generate_virtual_to_profiler_flat_id_mapping() {
-    auto chip_id_to_sdesc = this->sdesc_per_chip_.begin();
-    auto chip_id = chip_id_to_sdesc->first;
-    auto soc_desc = chip_id_to_sdesc->second;
-    for (const auto& core_to_profiler_id : soc_desc.physical_routing_to_profiler_flat_id) {
-        if (std::find(soc_desc.physical_workers.begin(), soc_desc.physical_workers.end(), core_to_profiler_id.first) != soc_desc.physical_workers.end()) {
-            this->virtual_routing_to_profiler_flat_id_.insert({this->get_virtual_coordinate_from_physical_coordinates(chip_id, core_to_profiler_id.first, CoreType::WORKER), core_to_profiler_id.second});
-        } else {
-            this->virtual_routing_to_profiler_flat_id_.insert({this->get_virtual_coordinate_from_physical_coordinates(chip_id, core_to_profiler_id.first, CoreType::ETH), core_to_profiler_id.second});
+    for (auto chip_id : this->cluster_desc_->get_all_chips()) {
+        auto board_type = this->get_board_type(chip_id);
+        if (this->virtual_routing_to_profiler_flat_id_.find(board_type) != this->virtual_routing_to_profiler_flat_id_.end()) {
+            continue;
         }
-
+        auto& soc_desc = this->get_soc_desc(chip_id);
+        for (const auto& core_to_profiler_id : soc_desc.physical_routing_to_profiler_flat_id) {
+            if (std::find(soc_desc.physical_workers.begin(), soc_desc.physical_workers.end(), core_to_profiler_id.first) != soc_desc.physical_workers.end()) {
+                this->virtual_routing_to_profiler_flat_id_.at(board_type).insert({this->get_virtual_coordinate_from_physical_coordinates(chip_id, core_to_profiler_id.first, CoreType::WORKER), core_to_profiler_id.second});
+            } else {
+                this->virtual_routing_to_profiler_flat_id_.at(board_type).insert({this->get_virtual_coordinate_from_physical_coordinates(chip_id, core_to_profiler_id.first, CoreType::ETH), core_to_profiler_id.second});
+            }
+        }
     }
 }
 
@@ -389,10 +400,11 @@ const std::unordered_set<CoreCoord>& Cluster::get_virtual_eth_cores(chip_id_t ch
 }
 
 CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const {
+    auto board_type = this->get_board_type(chip_id);
     if (core_type == CoreType::WORKER) {
-        return CoreCoord(this->worker_logical_to_virtual_x_.at(logical_coord.x), this->worker_logical_to_virtual_y_.at(logical_coord.y));
+        return CoreCoord(this->worker_logical_to_virtual_x_.at(board_type).at(logical_coord.x), this->worker_logical_to_virtual_y_.at(board_type).at(logical_coord.y));
     } else if (core_type == CoreType::ETH) {
-        return this->eth_logical_to_virtual_.at(logical_coord);
+        return this->eth_logical_to_virtual_.at(board_type).at(logical_coord);
     }
     auto& soc_desc = this->get_soc_desc(chip_id);
     return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);

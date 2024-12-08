@@ -239,8 +239,8 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::L1)),
          .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
-         .worker_log_to_physical_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(),
-         .worker_log_to_physical_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(),
+         .worker_log_to_physical_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(this->id()),
+         .worker_log_to_physical_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(this->id()),
          .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
          .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1)),
