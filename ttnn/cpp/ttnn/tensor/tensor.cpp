@@ -180,6 +180,22 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
     tensor_attributes->num_workers_completed = this->tensor_attributes->num_shards_to_be_populated;
 }
 
+Tensor::Tensor(Device* worker) : tensor_attributes(std::make_shared<TensorAttributes>()), workers({worker}) {
+    if (worker == nullptr) {
+        return;
+    }
+
+    tensor_attributes->storage = Storage(DeviceStorage());
+    tensor_attributes->num_shards_to_be_populated = 1;
+    if (!tt::tt_metal::detail::InWorkerThread()) {
+        tensor_attributes->increment_main_thread_ref_count(worker);
+    } else {
+        // This tensor is being created from scratch in a worker. Track this and allow it to be explicitly
+        // deallocated inside the worker (composite ops do this).
+        tensor_attributes->main_thread_tensor = false;
+    }
+}
+
 Tensor::Tensor(const std::vector<Device*>& workers) :
     tensor_attributes(std::make_shared<TensorAttributes>()), workers(workers) {
     if (workers.empty()) {
@@ -187,9 +203,6 @@ Tensor::Tensor(const std::vector<Device*>& workers) :
     }
 
     tensor_attributes->storage = [&]() {
-        if (workers.size() == 1) {
-            return Storage(DeviceStorage());
-        }
         MultiDeviceStorage storage;
         std::transform(
             workers.cbegin(), workers.cend(), std::back_inserter(storage.ordered_device_ids), [](const Device* worker) {

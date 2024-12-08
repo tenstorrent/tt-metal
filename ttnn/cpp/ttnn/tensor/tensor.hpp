@@ -103,6 +103,7 @@ struct Tensor {
     // handles in async mode.
     explicit Tensor(
         uint32_t num_buffers, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
+    explicit Tensor(Device* worker);
     explicit Tensor(const std::vector<Device*>& workers);
 
     Tensor(const Tensor& other);

@@ -36,7 +36,7 @@ Tensor tensor_to(
     Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(target_device, input_tensor);
     // Populate device storage outside of thread, so that downstream
     // functions running in main can get storage type without blocking
-    Tensor device_tensor({target_device});
+    Tensor device_tensor(target_device);
     // Record main thread ref count for tensors before pushing to queue.
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     uint32_t original_tensor_ref_count = async_safe_tensor.tensor_attributes->record_main_thread_ref_count();
