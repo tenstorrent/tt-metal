@@ -2323,8 +2323,7 @@ def test_sharded_to_from_l1(device, input_shape, shard_scheme, shard_orientation
         assert False, f"Unsupported {shard_scheme}"
 
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
-    shard_halo = False
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     mem_config = ttnn.MemoryConfig(shard_scheme, ttnn.BufferType.L1, shard_spec)
 
     volume = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]

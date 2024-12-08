@@ -283,8 +283,7 @@ def test_tensor_conversion_between_torch_and_tt_tile(
     else:
         shard_grid = grid_override
 
-    shard_halo = False
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
 
     two_d_shape = (tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3])
     num_tiles_width = (two_d_shape[1]) / TILE_WIDTH
