@@ -151,7 +151,6 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
                     llama_decoder_model.head_dim,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         rot_mats = ttnn.as_tensor(

@@ -271,9 +271,8 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def(py::init<>([](const CoreRangeSet& core_sets,
                            const std::array<uint32_t, 2>& shard_shape,
                            const ShardOrientation& shard_orientation,
-                           const bool& halo,
-                           const ShardMode& shard_mode) { return ShardSpec(core_sets, shard_shape, shard_orientation, halo, shard_mode); }),
-            py::arg("grid"), py::arg("shard_shape"), py::arg("shard_orientation"), py::arg("halo"), py::arg("shard_mode") = ShardMode::PHYSICAL)
+                           const ShardMode& shard_mode) { return ShardSpec(core_sets, shard_shape, shard_orientation, shard_mode); }),
+            py::arg("grid"), py::arg("shard_shape"), py::arg("shard_orientation"), py::arg("shard_mode") = ShardMode::PHYSICAL)
         .def_readwrite("shape", &ShardSpec::shape, "Shape of shard.")
         .def_readwrite("grid", &ShardSpec::grid, "Grid to layout shards.")
         .def_readwrite("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")

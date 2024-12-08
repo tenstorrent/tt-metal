@@ -56,7 +56,6 @@ struct ShardSpec {
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
         const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
-        const bool &halo_ = false,
         const ShardMode &shard_mode_ = ShardMode::PHYSICAL) :
         grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), mode(shard_mode_), physical_shard_shape(std::nullopt) {
     }
@@ -65,8 +64,7 @@ struct ShardSpec {
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
         const std::array<uint32_t, 2> &physical_shard_shape_,
-        const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
-        const bool &halo_ = false) :
+        const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR) :
         grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), mode(ShardMode::LOGICAL), physical_shard_shape(physical_shard_shape_) {
         TT_FATAL(physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1], "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!", physical_shard_shape_[0], physical_shard_shape_[1], shard_shape_[0], shard_shape_[1]);
     }
@@ -93,10 +91,9 @@ struct ShardSpecBuffer {
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
         const ShardOrientation &shard_orientation_,
-        const bool &halo_,
         const std::array<uint32_t, 2> &page_shape,
         const std::array<uint32_t, 2> &tensor2d_shape) :
-        tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_, halo_) {
+        tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_) {
         this->page_shape = page_shape;
         this->tensor2d_shape = tensor2d_shape;
     }
