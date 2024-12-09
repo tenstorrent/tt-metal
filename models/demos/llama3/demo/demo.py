@@ -387,7 +387,7 @@ def run_llama3_demo(
             # [PROFILER-ONLY] In runs where there is only one user, run the prefill twice to measure compile and inference prefill times
             if batch_size == 1:
                 ttnn.deallocate(tt_out)
-                prefill_input = model_args.prepare_inputs_ttnn_prefill(
+                prefill_input = model_args.prepare_residual_tensor_prefill(
                     pt_prefill_input[batch_id],
                 )
                 tt_out = tt_model(
@@ -924,7 +924,7 @@ def run_llama3_demo(
 @pytest.mark.parametrize(
     "optimizations",
     [
-        # LlamaOptimizations.performance,
+        LlamaOptimizations.performance,
         LlamaOptimizations.accuracy,
     ],
 )

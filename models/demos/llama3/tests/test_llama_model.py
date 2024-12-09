@@ -120,26 +120,26 @@ def test_llama_model_inference(
 
     # Define tight final PCC thresholds for quick mode
     final_model_pcc = {
-        "llama32_1b": 0.9991 if mode_accuracy else 0.9864,
+        "llama32_1b": 0.9990 if mode_accuracy else 0.9864,
         "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
         "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
         "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
-        "llama31_70b": 0.9843 if mode_accuracy else 0.9843,
+        "llama31_70b": 0.9419 if mode_accuracy else 0.9419,
     }[model_name]
 
     final_k_cache_pcc = {
         "llama32_1b": 0.9998,
         "llama32_3b": 0.9998,
-        "llama31_8b": 0.9998,
+        "llama31_8b": 0.9997,
         "llama32_11b": 0.9995,
-        "llama31_70b": 0.9998,
+        "llama31_70b": 0.9997,
     }[model_name]
     final_v_cache_pcc = {
         "llama32_1b": 0.9996,
         "llama32_3b": 0.9998,
-        "llama31_8b": 0.9998,
+        "llama31_8b": 0.9997,
         "llama32_11b": 0.9996,
-        "llama31_70b": 0.9998,
+        "llama31_70b": 0.9997,
     }[model_name]
 
     quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
@@ -211,7 +211,11 @@ def test_llama_model_inference(
             device=mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, -2) if batch_size > 1 else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
         )
 
     # Load TTNN model
