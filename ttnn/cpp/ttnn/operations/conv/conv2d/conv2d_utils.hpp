@@ -4,22 +4,12 @@
 
 #pragma once
 #include <optional>
-#include <unordered_set>
 
-#include "ttnn/core.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/common/math.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include "tt_metal/common/core_coord.hpp"
 
 namespace ttnn {
 
@@ -41,7 +31,7 @@ struct Conv2dConfig {
                                   // Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
-    std::optional<TensorMemoryLayout> shard_layout;
+    std::optional<TensorMemoryLayout> shard_layout = std::nullopt;
     std::optional<CoreRangeSet> core_grid = std::nullopt; // used only if override_sharding_config is true
     bool transpose_shards = true; // used only if override_sharding_config is true and if height sharding is false
     Layout output_layout = Layout::TILE;
@@ -127,8 +117,6 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(const ttnn::Shape
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
 
-std::pair<uint32_t, uint32_t> determine_largest_subblock_size(uint32_t block_height, uint32_t block_width, bool fp32_accum);
-
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
@@ -149,19 +137,6 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     bool fp32_accum,
     bool split_reader_enabled);
 
-template<typename T>
-std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
-    T * device,
-    const ttnn::Tensor& input_tensor_,
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    uint32_t height,
-    uint32_t width,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    bool is_mm_conv,
-    bool is_non_tile_mul_width=false);
-
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
 
@@ -180,7 +155,8 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
     std::optional<const MemoryConfig> input_memory_config);
 
 template <typename T>
-std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig, bool, bool> shard_or_reshard_tensor_if_required(
+std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig, bool, bool>
+shard_or_reshard_tensor_if_required(
     T* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -190,6 +166,7 @@ std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::Paralle
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv,
+    bool auto_shard,
     bool is_non_tile_mul_width=false);
 
 // Converts convolution weights to tilized 2d matrix layout.
@@ -210,21 +187,6 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
 
 // Converts convolution weights to grouped layout with padded zeros
 Tensor convert_conv_weight_tensor_to_grouped_layout(const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
-
-template <typename T>
-OptimizedConvBlockConfig get_opt_block_config(
-    bool mm_conv,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t output_height,
-    uint32_t output_width,
-    uint32_t batch_size,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    T *device,
-    Layout input_tensor_layout,
-    Conv2dConfig& conv_config);
 
 } // namespace operations::conv
 } // namespace ttnn
