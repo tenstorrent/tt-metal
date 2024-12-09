@@ -57,6 +57,66 @@ Program create_simple_datamovement_program(Buffer& input, Buffer& output, Buffer
     return program;
 }
 
+// Copied from test_EnqueueTrace.cpp
+Program create_simple_unary_program(Buffer& input, Buffer& output) {
+    Program program = CreateProgram();
+    Device* device = input.device();
+    CoreCoord worker = {0, 0};
+    auto reader_kernel = CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_unary.cpp",
+        worker,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    auto writer_kernel = CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        worker,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    auto sfpu_kernel = CreateKernel(
+        program,
+        "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        worker,
+        ComputeConfig{
+            .math_approx_mode = true,
+            .compile_args = {1, 1},
+            .defines = {{"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}});
+
+    CircularBufferConfig input_cb_config = CircularBufferConfig(2048, {{0, tt::DataFormat::Float16_b}})
+            .set_page_size(0, 2048);
+
+    CoreRange core_range({0, 0});
+    CreateCircularBuffer(program, core_range, input_cb_config);
+    std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
+    std::shared_ptr<RuntimeArgs> reader_runtime_args = std::make_shared<RuntimeArgs>();
+
+    *writer_runtime_args = {
+        &output,
+        (uint32_t)output.noc_coordinates().x,
+        (uint32_t)output.noc_coordinates().y,
+        output.num_pages()
+    };
+
+    *reader_runtime_args = {
+        &input,
+        (uint32_t)input.noc_coordinates().x,
+        (uint32_t)input.noc_coordinates().y,
+        input.num_pages()
+    };
+
+    SetRuntimeArgs(device, detail::GetKernel(program, writer_kernel), worker, writer_runtime_args);
+    SetRuntimeArgs(device, detail::GetKernel(program, reader_kernel), worker, reader_runtime_args);
+
+    CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{16, tt::DataFormat::Float16_b}})
+            .set_page_size(16, 2048);
+
+    CreateCircularBuffer(program, core_range, output_cb_config);
+    return program;
+}
+
 }
 
 namespace lightmetal_basic_tests {
@@ -148,5 +208,48 @@ TEST_F(SingleDeviceLightMetalFixture, SingleRISCDataMovementSanity) {
     Finish(command_queue);
 }
 
+
+// Test simple case of 3 riscs used for datamovement and compute works for trace + replay.
+TEST_F(SingleDeviceLightMetalFixture, ThreeRISCDataMovementComputeSanity) {
+    Setup(2048);
+
+    uint32_t size_bytes = 64; // 16 elements.
+    auto input = CreateBuffer(InterleavedBufferConfig{this->device_, size_bytes, size_bytes, BufferType::DRAM});
+    auto output = CreateBuffer(InterleavedBufferConfig{this->device_, size_bytes, size_bytes, BufferType::DRAM});
+    log_info(tt::LogTest, "Created 2 Buffers. input: 0x{:x} output: 0x{:x}", input->address(), output->address());
+
+    CommandQueue& command_queue = this->device_->command_queue();
+
+    // KCM FIXME - There is issue with using make_shared
+    // auto simple_program = std::make_shared<Program>(lightmetal_test_helpers::create_simple_unary_program(*input, *output));
+    auto simple_program = lightmetal_test_helpers::create_simple_unary_program(*input, *output);
+
+    vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
+    for (uint32_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = i;
+    }
+
+    vector<uint32_t> eager_output_data;
+    eager_output_data.resize(input_data.size());
+
+    log_info(tt::LogTest, "About to EnqueueWriteBuffer");
+
+    // Write data to buffer, enqueue program, then readback and verify.
+    EnqueueWriteBuffer(command_queue, *input, input_data.data(), true);
+    log_info(tt::LogTest, "About to EnqueueProgram");
+    EnqueueProgram(command_queue, simple_program, true);
+    log_info(tt::LogTest, "Done EnqueueProgram");
+    EnqueueReadBuffer(command_queue, *output, eager_output_data.data(), true);
+
+    // FIXME - This isn't true with SFPU.
+    EXPECT_TRUE(eager_output_data == input_data);
+
+    // For dev/debug go ahead and print the results
+    for (size_t i = 0; i < eager_output_data.size(); i++) {
+        log_info(tt::LogMetalTrace, "i: {:3d} input: {} output: {}", i, input_data[i], eager_output_data[i]);
+    }
+
+    Finish(command_queue);
+}
 
 } // end namespace basic_tests
