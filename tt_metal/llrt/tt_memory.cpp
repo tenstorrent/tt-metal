@@ -168,6 +168,9 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
         }
         TT_ASSERT(new_span == new_span2);
         TT_ASSERT(new_data == new_data2);
+        if (!(new_span == new_span2 && new_data == new_data2)) {
+            std::abort();
+        }
     }
 
     this->link_spans_.resize(1);
