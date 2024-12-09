@@ -335,7 +335,6 @@ void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
 
 void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
     jit_build_genfiles_kernel_include(device->build_env(), *this, this->kernel_src_);
-    device->generate_device_headers(build_options.path);
     uint32_t tensix_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
@@ -344,7 +343,6 @@ void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions &buil
 
 void EthernetKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
     jit_build_genfiles_kernel_include(device->build_env(), *this, this->kernel_src_);
-    device->generate_device_headers(build_options.path);
     uint32_t erisc_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
     int erisc_id = magic_enum::enum_integer(this->config_.processor);

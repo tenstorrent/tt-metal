@@ -71,9 +71,6 @@ def ttnn_conv1d(
     conv_config = ttnn.Conv1dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
-        math_approx_mode_enabled=math_approx,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
         activation=activation,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
@@ -84,10 +81,16 @@ def ttnn_conv1d(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         ),
         core_grid=get_shard_grid_from_num_cores(56, device),
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=math_fidelity,
+        math_approx_mode=math_approx,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
     )
 
-    [tt_output_tensor_on_device, out_length, weights_device, bias_device] = ttnn.Conv1d(
+    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.Conv1d(
         input_tensor=tt_input_tensor,
         weight_tensor=weights,
         in_channels=tt_input_tensor.shape[-1],
@@ -100,9 +103,12 @@ def ttnn_conv1d(
         batch_size=tt_input_tensor.shape[0],
         input_length=tt_input_tensor.shape[1],
         conv_config=conv_config,
+        compute_config=compute_config,
         conv_op_cache={},
         debug=debug,
         groups=groups,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor_on_device = ttnn.squeeze(tt_output_tensor_on_device, 0)

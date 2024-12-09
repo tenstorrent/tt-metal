@@ -163,7 +163,7 @@ class resnet50Bottleneck:
         height_sharding=None,
     ):
         if self.downsample:
-            ds_out, _, _, self.ds_conv_weight_tensor, self.ds_conv_bias_tensor = ttnn.conv2d(
+            ds_out, [self.ds_conv_weight_tensor, self.ds_conv_bias_tensor] = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.ds_conv_weight_tensor,
                 in_channels=self.ds_conv_input_channels,
@@ -191,6 +191,8 @@ class resnet50Bottleneck:
                     device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
                 ),
                 conv_op_cache=conv_op_cache,
+                return_output_dim=False,
+                return_weights_and_bias=True,
             )
             ttnn.deallocate(x)
             ds_out = ttnn.reallocate(ds_out)
@@ -218,7 +220,7 @@ class resnet50Bottleneck:
         # conv1 is 1x1 conv
         # print("Running conv1")
         module_input_height = input_height
-        out, input_height, input_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
+        out, [input_height, input_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
@@ -245,6 +247,8 @@ class resnet50Bottleneck:
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
 
         if is_wormhole_b0():
@@ -325,7 +329,7 @@ class resnet50Bottleneck:
             # self.conv1_input_channels == 256 and
             # self.downsample
         )
-        out, input_height, input_width, self.conv2_weight_tensor, self.conv2_bias_tensor = ttnn.conv2d(
+        out, [input_height, input_width], [self.conv2_weight_tensor, self.conv2_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
             in_channels=self.conv2_input_channels,
@@ -355,11 +359,13 @@ class resnet50Bottleneck:
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
 
         # conv3 is 1x1 conv
         # print("Running conv3")
-        out, _, _, self.conv3_weight_tensor, self.conv3_bias_tensor = ttnn.conv2d(
+        out, [self.conv3_weight_tensor, self.conv3_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
             in_channels=self.conv3_input_channels,
@@ -385,6 +391,8 @@ class resnet50Bottleneck:
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=False,
+            return_weights_and_bias=True,
         )
 
         if not self.run_downsample_before_conv2:
@@ -589,7 +597,7 @@ class resnet50:
         else:
             act_block_h_override = 0
 
-        x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
+        x, [x_height, x_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
@@ -615,6 +623,8 @@ class resnet50:
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
         # Relu is fused with conv1
 
@@ -925,7 +935,7 @@ class resnet50:
             elif batch_size == 1:
                 act_block_h_override = 256
 
-        x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
+        x, [x_height, x_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
@@ -950,6 +960,8 @@ class resnet50:
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
         # Relu is fused with conv1
 
