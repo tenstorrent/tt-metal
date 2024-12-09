@@ -292,8 +292,6 @@ void peekDeviceData(Device* device, std::vector<CoreCoord>& worker_cores) {
                 }
             }
         }
-    } else {
-        std::cout << "NOT FOUND: " << device_id << std::endl;
     }
 }
 
@@ -386,11 +384,6 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         peekDeviceData(device_sender, sender_cores);
         peekDeviceData(device_receiver, receiver_cores);
 
-        std::cout << "CON DEV:" << device_id_sender << "->" << device_id_receiver << std::endl;
-        std::cout << "ASSERT : " << tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.size();
-        std::cout << " , " << tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.size()
-                  << std::endl;
-
         TT_ASSERT(
             tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.size() ==
             tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.size());
@@ -417,9 +410,7 @@ void setSyncInfo(
     if (sync_set_devices.find(device_id) == sync_set_devices.end()) {
         sync_set_devices.insert(device_id);
         if (deviceDeviceSyncInfo.find(device_id) != deviceDeviceSyncInfo.end()) {
-            std::cout << "PARENT " << device_id << std::endl;
             for (auto child_device : deviceDeviceSyncInfo.at(device_id)) {
-                std::cout << "   CHILD " << child_device.first << std::endl;
                 std::pair<double, uint64_t> childSyncInfo = child_device.second;
                 childSyncInfo.first *= syncInfo.first;
                 childSyncInfo.second += syncInfo.second;
@@ -473,8 +464,6 @@ void ProfilerSync(ProfilerSyncState state) {
                         uint64_t senderTime = (receiver.second[i].first + receiver.second[i + 1].first) / 2;
                         timePairs.push_back({senderTime, receiver.second[i].second});
                     }
-                    std::cout << sender.first << "->" << receiver.first << ":" << timePairs.size() << std::endl;
-
                     double senderSum = 0;
                     double receiverSum = 0;
                     double receiverSquareSum = 0;
@@ -604,74 +593,6 @@ void DumpDeviceProfileResults(Device* device, ProfilerDumpState state) {
                 detail::syncDeviceDevice(sender_id, receiver_id);
             }
         }
-        // std::vector<tracy::TTDeviceEvent> sync_data_sender = getSyncDeviceData(device->id());
-        // auto device_id = device->id();
-        //{
-        // auto device_0 = tt::DevicePool::instance().get_active_device(0);
-        // DumpDeviceProfileResults(device_0);
-        // std::vector<tracy::TTDeviceEvent> sync_data_sender;
-        // std::vector<tracy::TTDeviceEvent> sync_data_receiver;
-        // for (int dev_id = 0; dev_id < 2; dev_id ++) {
-        // ZoneScopedN("Fetching_device_sync_event");
-        // std::set<tracy::TTDeviceEvent>& sync_data = detail::getSyncDeviceData (dev_id);
-        // for (auto& event: sync_data){
-        // if (event.zone_name.find("SENDER") != std::string::npos)
-        //{
-        // sync_data_sender.push_back(event);
-        //}
-        // else if (event.zone_name.find("RECEIVER") != std::string::npos)
-        //{
-        // sync_data_receiver.push_back(event);
-        //}
-        //}
-        //}
-
-        // TT_ASSERT (sync_data_sender.size () == 120 * 2 * 2, "Wrong sync data sample count.");
-        // TT_ASSERT (sync_data_receiver.size () == 120 * 2 * 2, "Wrong sync data sample count.");
-        // double total_delta = 0;
-        // double total = 0.0;
-        // for ( int index = 0 ; index < 120 * 2 ; index += 2){
-
-        // ZoneScopedN("TESTS");
-        // int64_t sender_point_0 = (int64_t) (sync_data_sender[index].timestamp+ sync_data_sender[index+1].timestamp)/2
-        // ; int64_t receiver_point_0 = (int64_t)sync_data_receiver[index].timestamp;
-
-        // int64_t sender_point_1 = (int64_t) (sync_data_sender[index + 240].timestamp+ sync_data_sender[index +
-        // 241].timestamp)/2 ; int64_t receiver_point_1 = (int64_t)sync_data_receiver[index + 240].timestamp;
-
-        // double diff_0 = receiver_point_0 - sender_point_0;
-        // double diff_1 = sender_point_1 - receiver_point_1;
-        // double scale = diff_0/diff_1;
-
-        // std::cout << "Sync points: ";
-        // std::cout << sender_point_0 << ",";
-        // std::cout << receiver_point_0 << ",";
-        // std::cout << sender_point_1 << ",";
-        // std::cout << receiver_point_1 << std::endl;
-        // total += scale;
-        //}
-        // double freqScale = total/120;
-
-        // std::cout << std::fixed;
-        // std::cout << std::setprecision(20);
-        // std::cout << "FreqScale";
-        // std::cout << freqScale << std::endl;
-
-        // for ( int index = 0 ; index < 120 * 2 ; index += 2){
-        // double sender_point_0 = (double) (sync_data_sender[index].timestamp+ sync_data_sender[index+1].timestamp)/2 ;
-        // double receiver_point_0 = (double)sync_data_receiver[index].timestamp;
-
-        // double sender_point_1 = (double)(sync_data_sender[index + 240].timestamp+ sync_data_sender[index +
-        // 241].timestamp)/2 ; double receiver_point_1 = (double)sync_data_receiver[index + 240].timestamp;
-
-        // double midpoint = ((receiver_point_0 + sender_point_0) - freqScale * (receiver_point_1 + sender_point_1))/2;
-        // std::cout << midpoint << std::endl;
-        // total_delta += midpoint;
-        //}
-        // double shift = total_delta/120;
-        // std::cout << shift << " , " << freqScale << std::endl;
-        // detail::setShift(1,int(shift), freqScale);
-        //}
     });
 
 #endif
