@@ -14,21 +14,17 @@
 #include "common/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include "tt_metal/tt_stl/reflection.hpp"
 
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/sharding_utilities.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "umd/device/tt_arch_types.h"
 using namespace tt::constants;
 namespace optimized_conv_op_utils {
 using namespace tt;
@@ -285,6 +281,7 @@ std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(tt::ARCH arch, 
 
     auto filter_hw = sliding_window_config.window_hw;
     uint32_t input_channels = this->input_tensor_shape[3];
+    bool is_depthwise_conv = this->groups == input_channels && groups == output_channels;
 
     uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_dtype));
     uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
@@ -392,7 +389,7 @@ std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(tt::ARCH arch, 
 
         TT_FATAL(conv_act_c_blocks == 1, "Error: conv_act_c_blocks should be 1 for height sharding");
         uint32_t weight_block_w_ntiles = per_core_out_matrix_width_ntiles;
-        uint32_t weight_block_h_ntiles = act_block_w_ntiles;
+        uint32_t weight_block_h_ntiles = is_depthwise_conv ? act_block_h_ntiles : act_block_w_ntiles;
 
 
         uint32_t act_block_cb_ntiles =  act_block_h_ntiles * act_block_w_ntiles;
@@ -453,7 +450,11 @@ std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(tt::ARCH arch, 
         uint32_t cb24_size = output_block_ntiles * partial_tile_size;
         if(this->untilize_out==false && interm_dtype == output_dtype) {
             cb24_size = 0;
-        } else {
+        }
+        if(is_depthwise_conv) {
+            cb24_size = output_tile_size;
+        }
+        if(cb24_size == 0) {
             tt::log_debug(tt::LogOp, "CB24 Size: {}", cb24_size);
         }
         //CB 25
@@ -466,7 +467,12 @@ std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(tt::ARCH arch, 
             cb26_size = weight_block_w_ntiles * output_tile_size; tt::log_debug(tt::LogOp, "CB26 Size: {}", cb26_size);
         }
 
-        return {output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb7_size + cb24_size + cb25_size + cb26_size};
+        uint32_t cb27_size = 0;
+        if(is_depthwise_conv) {
+            cb27_size = output_tile_size;
+        }
+
+        return {output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb7_size + cb24_size + cb25_size + cb26_size + cb27_size};
     } else if(this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
 
