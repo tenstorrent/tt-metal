@@ -355,6 +355,8 @@ on:
           - data_movement.squeeze.squeeze_pytorch2
           - data_movement.embedding.embedding_pytorch2
           - data_movement.view.view_pytorch2
+          - eltwise.binary_backward.min_bw.min_bw
+          - eltwise.binary_backward.max_bw.max_bw
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
