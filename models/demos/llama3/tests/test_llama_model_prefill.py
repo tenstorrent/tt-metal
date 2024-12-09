@@ -98,7 +98,6 @@ def test_llama_model_inference(
     instruct = True
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
-
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
@@ -187,6 +186,7 @@ def test_llama_model_inference(
 
     tt_prefill_input = model_args.prepare_residual_tensor_prefill(
         pt_prefill_input,
+        force_replicated=False if model_args.is_galaxy else True,
     )
     for i in range(1):
         start_pos = 0
@@ -203,13 +203,13 @@ def test_llama_model_inference(
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, 3), mesh_shape=model_args.cluster_shape
+                mesh_device, dims=(1, 3) if model_args.is_galaxy else (1, 3), mesh_shape=model_args.cluster_shape
             ),
         )
-        tt_output_torch = tt_out[:, 0:1, -1, : model_args.vocab_size].view(batch_size, -1)  # [ batch, seq, hidden_dim]
+        tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [ batch, seq, hidden_dim]
 
         if run_ref_pt:  # Run reference model
-            ref_output = reference_model(pt_prefill_input, start_pos, mode="prefill")[:, -1, :]
+            ref_output = reference_model(pt_prefill_input, start_pos, mode="prefill")
 
         # Measure PCC if also running reference model
         if run_ref_pt:

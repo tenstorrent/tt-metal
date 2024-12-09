@@ -231,7 +231,11 @@ def test_tt_model_accuracy(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            mesh_shape=model_args.cluster_shape,
+        ),
     )
 
     # Get cos/sin matrices for the current position of each user
@@ -269,14 +273,17 @@ def test_tt_model_accuracy(
         )
 
         if tt_model.args.num_devices > 1:
-            tt_out_gathered = ttnn.all_gather(
-                tt_out,
-                dim=3,
-                num_links=tt_model.args.num_all_gather_links,
-                cluster_axis=0,
-                mesh_device=mesh_device,
-                topology=tt_model.args.ccl_topology(),
-            )
+            if tt_model.args.is_galaxy:
+                tt_out_gathered = ttnn.all_gather(
+                    tt_out,
+                    dim=3,
+                    num_links=tt_model.args.num_all_gather_links,
+                    cluster_axis=0,
+                    mesh_device=mesh_device,
+                    topology=tt_model.args.ccl_topology(),
+                )
+            else:
+                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out
