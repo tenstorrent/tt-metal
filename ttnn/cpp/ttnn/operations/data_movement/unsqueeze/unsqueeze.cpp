@@ -12,14 +12,13 @@ ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const 
     const auto rank = tensor_shape.rank();
     SmallVector<uint32_t> output_shape_vector;
 
-    TT_FATAL(
-        input_tensor.get_layout() == Layout::ROW_MAJOR or (!tensor_shape.has_tile_padding()),
-        "Currently supporing ROW-MAJOR tensors or TILE tensors with no padding");
-
-    int normal_dim = dim;
+    int normal_dim;
     // Handle negative dimension by converting it to positive
+    TT_FATAL((dim < -rank - 1) || (dim > rank), "Dimension out of range");
     if (dim < 0) {
-        normal_dim += rank + 1;
+        normal_dim = rank + 1 + dim;
+    } else {
+        normal_dim = dim;
     }
 
     // Insert new dimension
@@ -31,11 +30,11 @@ ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const 
     }
 
     // If the dimension is at the end, append it
-    if (normal_dim >= tensor_shape.size()) {
+    if (normal_dim == rank) {
         output_shape_vector.push_back(1);
     }
 
-    return ttnn::reshape(input_tensor, ttnn::SimpleShape(std::move(output_shape_vector)));
+    return ttnn::reshape(input_tensor, ttnn::Shape(output_shape_vector));
 }
 
 }  // namespace ttnn::operations::data_movement
