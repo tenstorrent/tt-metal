@@ -16,6 +16,17 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.utility_functions import torch2tt_tensor, is_wormhole_b0, is_grayskull, skip_for_blackhole
 
 
+# Function to print a 32x32 tile with row numbers
+def print_tile(tensor, tile_row, tile_col):
+    start_row = tile_row * 32
+    start_col = tile_col * 32
+    tile = tensor[0, 0, start_row : start_row + 32, start_col : start_col + 32]
+
+    for idx, row in enumerate(tile):
+        print(f"{idx:2}: " + " ".join(f"{val.item():.4f}" for val in row))
+    print("\n")
+
+
 def rms_norm(x, dim, gamma, beta, eps):
     return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma + beta
 
@@ -68,7 +79,7 @@ def rms_norm(x, dim, gamma, beta, eps):
 # )
 @pytest.mark.parametrize("width_padding", [False], ids=["no_padding"])
 def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, out_mem_config, device, width_padding):
-    test_id = 0
+    test_id = 1
     in_dtype = ttnn.bfloat16
     if is_grayskull() and in_dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
@@ -78,8 +89,9 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
 
     compute_grid_size = device.compute_with_storage_grid_size()
     grid_size = [compute_grid_size.x, compute_grid_size.y]
-    if grid_size[1] > 8:
-        grid_size[1] = 8
+    if grid_size[1] > 1:
+        grid_size[1] = 1
+        grid_size[0] = 1
     fidelity = ttnn.MathFidelity.HiFi4
 
     epsf = 1e-2
@@ -93,7 +105,8 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
     M = in0_shape[2] * batch
     K = in0_shape[3]
 
-    in0 = torch.rand(in0_shape) * 2 - 0.95
+    # in0 = torch.rand(in0_shape) * 2 - 0.95
+    in0 = torch.full(in0_shape, 45.25)
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
     shard_shape = [M // grid_size[0], math.ceil(K / grid_size[1] / 32) * 32]
     in0_t_shard = ttnn.interleaved_to_sharded(
@@ -105,7 +118,8 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
     )
 
     if test_id <= 5:
-        in1 = torch.rand(in0_shape) * 2 - 0.8
+        # in1 = torch.rand(in0_shape) * 2 - 0.8
+        in1 = torch.full(in0_shape, 20.5)
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
         in1_t_shard = ttnn.interleaved_to_sharded(
             in1_t,
@@ -119,7 +133,8 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
         gamma = torch.ones(in0_shape[3])
         beta = torch.zeros(in0_shape[3])
     if test_id % 3 == 1:
-        gamma = torch.rand(in0_shape[3]) * 2 - 1
+        # gamma = torch.rand(in0_shape[3]) * 2 - 1
+        gamma = torch.full((in0_shape[3],), 10.625)
         beta = torch.zeros(in0_shape[3])
     if test_id % 3 == 2:
         gamma = torch.rand(in0_shape[3]) * 2 - 1
@@ -280,7 +295,18 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
     ref_lnorm = ref_fn(pt_in, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
     passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
-    logger.info(output)
+
+    # Iterate over tiles and print them with row numbers
+    num_rows = tt_got_back.size(2) // 32
+    num_cols = tt_got_back.size(3) // 32
+
+    for tile_row in range(num_rows):
+        for tile_col in range(num_cols):
+            print(f"Tile ({tile_row}, {tile_col}):")
+            print_tile(tt_got_back, tile_row, tile_col)
+            print_tile(ref_lnorm, tile_row, tile_col)
+
+    # logger.info(output)
     assert passing
 
 

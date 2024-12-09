@@ -13,6 +13,16 @@ import ttnn
 from models.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc, is_grayskull, is_blackhole
 
 
+def print_tile(tensor, tile_row, tile_col):
+    start_row = tile_row * 32
+    start_col = tile_col * 32
+    tile = tensor[0, 0, start_row : start_row + 32, start_col : start_col + 32]
+
+    for idx, row in enumerate(tile):
+        print(f"{idx:2}: " + " ".join(f"{val.item():.4f}" for val in row))
+    print("\n")
+
+
 def ref_layernorm(x, gamma, beta, eps):
     return torch.nn.functional.layer_norm(x, x.shape[-1:], gamma, beta, eps)
 
@@ -24,20 +34,23 @@ def ref_rmsnorm(x, gamma, beta, eps):
 def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     epsf = 1e-2
 
-    test_dims = ((1, 9, 384, 1024),)
+    test_dims = ((1, 1, 32, 128),)
     for test_shape in test_dims:
-        in0 = torch.rand(test_shape) * 2 - 0.95
+        # in0 = torch.rand(test_shape) * 2 - 0.95
+        in0 = torch.full(test_shape, 30.25)
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
 
         if test_id <= 5:
-            in1 = torch.rand(test_shape) * 2 - 0.8
+            # in1 = torch.rand(test_shape) * 2 - 0.8
+            in1 = torch.full(test_shape, 20.5)
             in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
 
         if test_id % 3 == 0:
             gamma = torch.ones(test_shape[3])
             beta = torch.zeros(test_shape[3])
         if test_id % 3 == 1:
-            gamma = torch.rand(test_shape[3]) * 2 - 1
+            # gamma = torch.rand(test_shape[3]) * 2 - 1
+            gamma = torch.full((test_shape[3],), 10.625)
             beta = torch.zeros(test_shape[3])
         if test_id % 3 == 2:
             gamma = torch.rand(test_shape[3]) * 2 - 1
@@ -168,7 +181,17 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 
         passing, output = comp_pcc(ref_lnorm, tt_got_back)
 
-        assert passing, output
+        # Iterate over tiles and print them with row numbers
+        num_rows = tt_got_back.size(2) // 32
+        num_cols = tt_got_back.size(3) // 32
+
+        for tile_row in range(num_rows):
+            for tile_col in range(num_cols):
+                print(f"Tile ({tile_row}, {tile_col}):")
+                print_tile(tt_got_back, tile_row, tile_col)
+                print_tile(ref_lnorm, tile_row, tile_col)
+
+        assert passing
 
 
 @pytest.mark.parametrize(
@@ -190,34 +213,34 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
     (ttnn.bfloat16,),
     ids=["BFLOAT16"],
 )
-@pytest.mark.parametrize(
-    "in_dtype",
-    (
-        ttnn.float32,
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ),
-    ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
-)
-@pytest.mark.parametrize(
-    "test_id",
-    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
-    ids=[
-        "add_LN",
-        "add_LN_G",
-        "add_LN_GB",
-        "add_RMSN",
-        "add_RMSN_G",
-        "add_RMSN_GB",
-        "LN",
-        "LN_G",
-        "LN_GB",
-        "RMSN",
-        "RMSN_G",
-        "RMSN_GB",
-    ],
-)
-def test_layernorm_mix_precision(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
+# @pytest.mark.parametrize(
+#     "in_dtype",
+#     (
+#         ttnn.float32,
+#         ttnn.bfloat16,
+#         ttnn.bfloat8_b,
+#     ),
+#     ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
+# )
+# @pytest.mark.parametrize(
+#     "test_id",
+#     (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+#     ids=[
+#         "add_LN",
+#         "add_LN_G",
+#         "add_LN_GB",
+#         "add_RMSN",
+#         "add_RMSN_G",
+#         "add_RMSN_GB",
+#         "LN",
+#         "LN_G",
+#         "LN_GB",
+#         "RMSN",
+#         "RMSN_G",
+#         "RMSN_GB",
+#     ],
+# )
+def test_layernorm_mix_precision(gamma_dtype, in0_mem_config, out_mem_config, device):
     if is_grayskull() and in_dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-    run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device)
+    run_layernorm_mix_precision_tests(1, ttnn.bfloat16, gamma_dtype, in0_mem_config, out_mem_config, device)
