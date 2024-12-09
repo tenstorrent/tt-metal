@@ -298,6 +298,39 @@ def test_arange(device, start, end, step):
 
 
 @pytest.mark.parametrize(
+    "start",
+    [4, 8, 16, 32],
+)
+@pytest.mark.parametrize(
+    "end",
+    [100, 200, 300],
+)
+@pytest.mark.parametrize(
+    "step",
+    [1, 2, 3, 4, 5],
+)
+def test_arange_multi_device(mesh_device, start, end, step):
+    torch_input_tensor = torch.rand((start, end, step), dtype=torch.bfloat16)
+    torch_output_tensor = torch.arange(start, end, step)
+
+    output_tensor = ttnn.arange(
+        torch_input_tensor.shape[0],
+        torch_input_tensor.shape[1],
+        torch_input_tensor.shape[2],
+        ttnn.bfloat16,
+        mesh_device,
+    )
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensors = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ListMeshToTensor(mesh_device))
+    for output_tensor in output_tensors:
+        output_tensor = output_tensor[-1, -1, -1, :]
+        if divup((end - start), step) % 2 != 0:
+            output_tensor = output_tensor[:-1]
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize(
     "input_shapes",
     [
         [1, 1, 32, 32],
