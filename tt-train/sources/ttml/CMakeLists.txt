@@ -96,6 +96,7 @@ target_link_libraries(
         magic_enum
         yaml-cpp::yaml-cpp
         xtensor
+        xtensor-blas
         xtl
         tokenizers_cpp
         wandbcpp
