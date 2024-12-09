@@ -67,11 +67,6 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
         GTEST_SKIP();
     }
 
-    // see issue #9594
-    if (arch == tt::ARCH::WORMHOLE_B0 && num_devices > 1) {
-        GTEST_SKIP();
-    }
-
     ASSERT_TRUE(num_devices > 0);
     vector<chip_id_t> ids;
     for (unsigned int id = 0; id < num_devices; id++) {
