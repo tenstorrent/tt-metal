@@ -1071,7 +1071,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
     }
     if (stick_size_padded_front != 0) {
-        uint32_t src2_cb_index = tt::CBIndex::c_16;
+        uint32_t src2_cb_index = tt::CBIndex::c_2;
         tt::tt_metal::CircularBufferConfig cb_src2_config =
             tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src2_cb_index, cb_data_format}})
                 .set_page_size(src2_cb_index, stick_size_padded_aligned);

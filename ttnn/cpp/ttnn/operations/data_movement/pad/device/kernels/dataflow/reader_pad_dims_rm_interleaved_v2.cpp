@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 #define ENABLE_DEBUG 1
 
@@ -84,6 +85,7 @@ void kernel_main() {
     DPRINT << "last_zero_stick_size= " << last_zero_stick_size << ENDL();
 
 #define not_pad_by_zero get_compile_time_arg_val(13) == 1
+#define front_padding get_compile_time_arg_val(9)
 #if (not_pad_by_zero)
     constexpr uint32_t packed_pad_value = get_compile_time_arg_val(14);
     constexpr uint32_t row_major_min_bytes = get_compile_time_arg_val(15);
@@ -98,8 +100,9 @@ void kernel_main() {
     DPRINT << "num_sticks_padded_read= " << num_sticks_padded_read << ENDL();
 #endif
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_pad = tt::CBIndex::c_1;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_pad = tt::CBIndex::c_1;
+    constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
 
 #define stick_size_is_pow2 get_compile_time_arg_val(19) == 1
 #if (stick_size_is_pow2)
@@ -119,8 +122,12 @@ void kernel_main() {
     uint64_t pad_val_addr = get_read_ptr(cb_pad);
     uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
 
+    uint64_t pad_align_addr = get_read_ptr(cb_pad_align);
+    uint64_t pad_align_write_addr = get_write_ptr(cb_pad_align);
+    uint64_t pad_align_noc_addr = get_noc_addr(pad_align_addr);
+
 #if (not_pad_by_zero)
-    fill_pad_cb_with_val(cb_pad, row_major_min_bytes, packed_pad_value);
+    fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);
 #endif
 
     uint32_t i_stick = start_id;
@@ -134,54 +141,84 @@ void kernel_main() {
                               (curr_n >= front_pad_n and curr_n < N);
             uint64_t read_noc_addr = get_noc_addr(i_stick, s);
 
+            // fill l1_write_addr with pad values
+#if (not_pad_by_zero)
+            noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_padded);
+            noc_async_read_barrier();
+#else
+            noc_async_read(zeros_noc_addr, l1_write_addr, stick_size_padded);
+            noc_async_read_barrier();
+#endif
+            DPRINT << "check memory right after read it to l1 write addr" << ENDL();
+            print_pages(l1_write_addr, (stick_size_padded) / sizeof(uint16_t), 1);
             if (read_stick) {
-                DPRINT << "into read stick" << ENDL();
-#if (not_pad_by_zero)
-                if constexpr (stick_size_padded_front != 0) {
-                    for (uint32_t j = 0; j < num_front_pad_sticks_read; ++j) {
-                        noc_async_read(pad_val_noc_addr, l1_write_addr, row_major_min_bytes);
-                        l1_write_addr += row_major_min_bytes;
-                    }
-                }
-#else
-                if constexpr (stick_size_padded_front != 0) {
-                    noc_async_read(zeros_noc_addr, l1_write_addr, stick_size_padded_front);
-                    l1_write_addr += stick_size_padded_front;
-                }
-#endif
+                DPRINT << "into read stick with stick_size_padded_front = " << stick_size_padded_front << ENDL();
+#if (front_padding)
+                // Read noc into cb_pad_align l1
+                noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
+                noc_async_read_barrier();
+                DPRINT << "check memory right after read it to pad align write addr" << ENDL();
+                print_pages(get_read_ptr(cb_pad_align), (stick_size_bytes) / sizeof(uint16_t), 1);
+                // noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
+                // noc_async_read_barrier();
 
+                // move data from cb_pad_align to l1_write_addr
+                memmove(
+                    (void*)(l1_write_addr + stick_size_padded_front),
+                    (void*)(get_read_ptr(cb_pad_align)),
+                    (size_t)(stick_size_bytes));
+                // tt::data_movement::common::tt_memmove<false, true, false, stick_size_padded>(pad_align_noc_addr,
+                // l1_write_addr, stick_size_padded_front); noc_async_read(zeros_noc_addr, l1_write_addr,
+                // stick_size_padded_front);
+#else
                 noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
-                l1_write_addr += stick_size_bytes;
-                i_stick++;
-
-#if (not_pad_by_zero)
-                if constexpr (stick_size_padded_end != 0) {
-                    for (uint32_t j = 0; j < num_end_pad_sticks_read; ++j) {
-                        noc_async_read(pad_val_noc_addr, l1_write_addr, row_major_min_bytes);
-                        l1_write_addr += row_major_min_bytes;
-                    }
-                }
-#else
-                if constexpr (stick_size_padded_end != 0) {
-                    noc_async_read(zeros_noc_addr, l1_write_addr, stick_size_padded_end);
-                    l1_write_addr += stick_size_padded_end;
-                }
 #endif
+                /* #if (not_pad_by_zero)
+                                if constexpr (stick_size_padded_front != 0) {
+                                    for (uint32_t j = 0; j < num_front_pad_sticks_read; ++j) {
+                                        noc_async_read(pad_val_noc_addr, l1_write_addr, row_major_min_bytes);
+                                        l1_write_addr += row_major_min_bytes;
+                                    }
+                                }
+                #else
+                                if constexpr (stick_size_padded_front != 0) {
+                                    noc_async_read(zeros_noc_addr, l1_write_addr, stick_size_padded_front);
+                                    l1_write_addr += stick_size_padded_front;
+                                }
+                #endif
+
+                                noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
+                                l1_write_addr += stick_size_bytes;
+                                i_stick++;
+
+                #if (not_pad_by_zero)
+                                if constexpr (stick_size_padded_end != 0) {
+                                    for (uint32_t j = 0; j < num_end_pad_sticks_read; ++j) {
+                                        noc_async_read(pad_val_noc_addr, l1_write_addr, row_major_min_bytes);
+                                        l1_write_addr += row_major_min_bytes;
+                                    }
+                                }
+                #else
+                                if constexpr (stick_size_padded_end != 0) {
+                                    noc_async_read(zeros_noc_addr, l1_write_addr, stick_size_padded_end);
+                                    l1_write_addr += stick_size_padded_end;
+                                }
+                #endif */
 
             } else {
                 DPRINT << "into read padded scratch" << ENDL();
-#if (not_pad_by_zero)
-                for (uint32_t j = 0; j < num_sticks_padded_read; ++j) {
-                    noc_async_read(pad_val_noc_addr, l1_write_addr, row_major_min_bytes);
-                    l1_write_addr += row_major_min_bytes;
-                }
-#else
-                for (uint32_t j = 0; j < num_zero_pad_sticks_read; ++j) {
-                    auto read_bytes = j == num_zero_pad_sticks_read - 1 ? last_zero_stick_size : 512;
-                    noc_async_read(zeros_noc_addr, l1_write_addr, read_bytes);
-                    l1_write_addr += read_bytes;
-                }
-#endif
+                /* #if (not_pad_by_zero)
+                                for (uint32_t j = 0; j < num_sticks_padded_read; ++j) {
+                                    noc_async_read(pad_val_noc_addr, l1_write_addr, row_major_min_bytes);
+                                    l1_write_addr += row_major_min_bytes;
+                                }
+                #else
+                                for (uint32_t j = 0; j < num_zero_pad_sticks_read; ++j) {
+                                    auto read_bytes = j == num_zero_pad_sticks_read - 1 ? last_zero_stick_size : 512;
+                                    noc_async_read(zeros_noc_addr, l1_write_addr, read_bytes);
+                                    l1_write_addr += read_bytes;
+                                }
+                #endif */
             }
 
             curr_h++;
