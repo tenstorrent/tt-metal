@@ -166,14 +166,14 @@ class Program {
 
     const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
 
-    void set_pre_exec_callback(std::function<void(Program*)> callback);
+    void set_pre_exec_callback(std::function<void(const Program&)> callback);
     void call_pre_exec_callback();
-    uint32_t get_max_cb_memory_usage(const Device *device);
+    uint32_t get_max_cb_memory_usage(const Device *device) const;
 
 
    private:
 
-    std::function<void(Program*)> pre_exec_callback_;
+    std::function<void(const Program&)> pre_exec_callback_;
 
     std::unique_ptr<detail::Program_> pimpl_;
 
