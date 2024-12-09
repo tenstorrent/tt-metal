@@ -8,6 +8,8 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
+#include "debug/dprint.h"
+
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
