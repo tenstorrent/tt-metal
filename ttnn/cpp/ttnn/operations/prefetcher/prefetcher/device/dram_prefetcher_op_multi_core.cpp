@@ -80,25 +80,28 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* read cb setup */
     uint32_t reader_cb_size = global_cb->size();
-    uint32_t reader_cb_single_tile_size = 16;  // 16B aligned
+    uint32_t reader_cb_single_tile_size = 8192;  // 16B aligned
 
     uint32_t reader_cb_index = tt::CB::c_in0;
-    CircularBufferConfig in1_reader_cb_config =
+    CircularBufferConfig reader_cb_config =
         CircularBufferConfig(reader_cb_size, {{reader_cb_index, reader_cb_data_format}})
             .set_page_size(reader_cb_index, reader_cb_single_tile_size)
             .set_globally_allocated_address(global_cb_buffer);
-    auto in1_reader_cb = CreateCircularBuffer(program, reader_core_range, in1_reader_cb_config);
+    auto in1_reader_cb = CreateCircularBuffer(program, reader_core_range, reader_cb_config);
 
     /* tensor addresses cb setup */
-    uint32_t tensor_addrs_single_tile_size = tensor_addrs_tile.get_tile_size(tensor_addrs_data_format);
+    uint32_t tensor_addrs_single_tile_size =
+        sizeof(uint32_t);  // tensor_addrs_tile.get_tile_size(tensor_addrs_data_format);
     uint32_t tensor_addrs_cb_num_tiles = tensor_addrs_buffer->shard_spec().shape()[0] *
                                          tensor_addrs_buffer->shard_spec().shape()[1];  // TODO: check this
-    uint32_t tensor_addrs_cb_size = tensor_addrs_cb_num_tiles * tensor_addrs_single_tile_size;
+    uint32_t tensor_addrs_cb_size =
+        1 * num_tensors * tensor_addrs_single_tile_size;  // tensor_addrs_cb_num_tiles * tensor_addrs_single_tile_size;
 
     uint32_t tensor_addrs_cb_index = tt::CB::c_in1;
     CircularBufferConfig tensor_addrs_cb_config =
         CircularBufferConfig(tensor_addrs_cb_size, {{tensor_addrs_cb_index, tensor_addrs_data_format}})
-            .set_page_size(tensor_addrs_cb_index, tensor_addrs_single_tile_size);
+            .set_page_size(tensor_addrs_cb_index, tensor_addrs_single_tile_size)
+            .set_globally_allocated_address(*tensor_addrs_buffer);
     auto tensor_addrs_cb = CreateCircularBuffer(program, reader_core_range, tensor_addrs_cb_config);
 
     /* Compile time args */
@@ -138,7 +141,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     for (uint32_t core_index = 0; core_index < reader_core_range.num_cores(); core_index++) {
         const auto& core = reader_cores[core_index];
 
-        uint32_t bank_id = core_index + bank_start_id;
+        // TODO: Create a proper mapping for bank_id
+        uint32_t bank_id = reader_core_range.num_cores() - core_index;
         uint32_t vc = bank_id & 0x1;
         bank_ids.push_back(bank_id);
 
