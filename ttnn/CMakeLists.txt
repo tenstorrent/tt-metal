@@ -586,12 +586,14 @@ endforeach()
 ### Setup TTNN as a shared library with optional Python bindings
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations//experimental/ccl)
 add_subdirectory(cpp/ttnn/deprecated)
 set(TTNN_FINAL_SRC
     ${TTNN_SRC}
-    ${CCL_TTNN_SRCS}
     ${QUEUE_SRCS}
     ${TENSOR_SRCS}
+    ${CCL_TTNN_SRCS}
+    ${CCL_EXPERIMENTAL_TTNN_SRCS}
     ${TT_DNN_SRCS}
 )
 

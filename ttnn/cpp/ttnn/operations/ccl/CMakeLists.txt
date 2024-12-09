@@ -21,14 +21,6 @@ set(CCL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/barrier/device/barrier_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/barrier/barrier.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/barrier/barrier_pybind.cpp
-    #Experimental
-    ${CMAKE_CURRENT_SOURCE_DIR}/../experimental/ccl/all_gather_matmul/all_gather_matmul.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../experimental/ccl/all_gather_matmul/all_gather_matmul_pybind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../experimental/ccl/all_gather_matmul/device/multi_core/all_gather_matmul_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../experimental/ccl/all_reduce/all_reduce.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../experimental/ccl/all_reduce/all_reduce_pybind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../experimental/ccl/all_reduce/device/all_reduce_op.cpp
     CACHE INTERNAL
     "CCL sources to reuse in ttnn build"
 )
