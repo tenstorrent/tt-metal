@@ -33,7 +33,7 @@ void get_max_page_size_and_num_pages(
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& tensors,
     const Tensor& tensor_addrs,
-    const std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     Tensor& output_tensor) {
     TT_FATAL(global_cb != std::nullopt, "Global circular buffer must be provided");
 
@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     }
 
     /* Cores setup */
-    auto reader_core_range = global_cb->sender_cores();
+    auto reader_core_range = global_cb->sender_cores();  // CoreRangeSet({CoreRange(CoreCoord(0, 0))});
 
     /* read cb setup */
     uint32_t reader_cb_size = global_cb->size();
@@ -91,9 +91,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* tensor addresses cb setup */
     uint32_t tensor_addrs_single_tile_size = tensor_addrs_tile.get_tile_size(tensor_addrs_data_format);
-    uint32_t tensor_addrs_cb_num_tiles =
-        tensor_addrs_buffer->shard_spec().shape()[0] / tensor_addrs_tile.get_tile_shape()[0] *
-        tensor_addrs_buffer->shard_spec().shape()[1] / tensor_addrs_tile.get_tile_shape()[1];
+    uint32_t tensor_addrs_cb_num_tiles = tensor_addrs_buffer->shard_spec().shape()[0] *
+                                         tensor_addrs_buffer->shard_spec().shape()[1];  // TODO: check this
     uint32_t tensor_addrs_cb_size = tensor_addrs_cb_num_tiles * tensor_addrs_single_tile_size;
 
     uint32_t tensor_addrs_cb_index = tt::CB::c_in1;
@@ -111,7 +110,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     auto reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram copy.cpp",
+        "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram_v2.cpp",
         reader_core_range,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -167,12 +166,12 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
                                                    const std::vector<Tensor>& tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensor) {
-        for (const auto& range : reader_core_range.ranges()) {
-            for (const auto& core_coord : range) {
-                // TODO: set runtime args for reader and writer
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core_coord);
-            }
-        }
+        // for (const auto& range : reader_core_range.ranges()) {
+        //     for (const auto& core_coord : range) {
+        //         // TODO: set runtime args for reader and writer
+        //         auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core_coord);
+        //     }
+        // }
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
