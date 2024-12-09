@@ -81,7 +81,6 @@ def ttnn_conv1d(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         ),
         core_grid=get_shard_grid_from_num_cores(56, device),
-        math_fidelity=math_fidelity,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
