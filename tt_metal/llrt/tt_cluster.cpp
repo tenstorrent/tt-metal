@@ -109,6 +109,10 @@ Cluster::Cluster() {
 
     this->initialize_device_drivers();
 
+    if (arch_ == ARCH::BLACKHOLE) {
+        this->initialize_blackhole_eth_connectivity();  // TODO: thsi should be in UMD and exported up
+    }
+
     this->reserve_ethernet_cores_for_tunneling();
 
     this->initialize_ethernet_sockets();
@@ -483,16 +487,16 @@ int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
     return 0;
 }
 
-void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &core) const {
+void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
-    this->driver_->deassert_risc_reset_at_core(umd_core);
+    this->driver_->deassert_risc_reset_at_core(umd_core, soft_resets);
 }
 
-void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &core) const {
+void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
-    this->driver_->assert_risc_reset_at_core(umd_core);
+    this->driver_->assert_risc_reset_at_core(umd_core, soft_resets);
 }
 
 void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
@@ -670,28 +674,270 @@ uint64_t Cluster::get_pcie_base_addr_from_device(chip_id_t chip_id) const {
     return this->driver_->get_pcie_base_addr_from_device(chip_id);
 }
 
+/*
+    // should I define this somewhere?
+    typedef struct {
+    uint8_t pcb_type;       // 0, Used to be board_type
+    uint8_t asic_location;
+    uint8_t eth_id;
+    uint8_t logical_eth_id; // Used to be spare
+    uint32_t board_id_hi;   // 1
+    uint32_t board_id_lo;   // 2
+    uint32_t mac_addr_org;  // 3, Used to be asic_id_hi
+    uint32_t mac_addr_id;   // 4, Used to be asic_id_lo
+    uint32_t spare[2];      // 5-6
+    uint32_t ack;           // 7
+    } chip_info_t;
+*/
+
+// Port status indicates whether eth is active/idle
+// typedef enum {
+//      PORT_UNKNOWN,
+//          Unknown port can occur when eth is training/after running tt-smi reset which fills L1 with random values.
+//          We need to ensure that eth is done training before reading out the port status.
+//          This is done implicitly today because create-eth-map runs on Cluster initialization which waits for eth
+//          training.
+//      PORT_UP,
+//          Active eth successfully trained
+//      PORT_DOWN,
+//          Active eth but failed training
+//      PORT_UNUSED,
+//          Idle eth
+// } port_status_e;
+
+void Cluster::initialize_blackhole_eth_connectivity() {
+    // Go through each device available
+    //  1. Figure out which cores are active or not (wait for training)
+    //  2. Figure out the chip -> board id and asic location mapping
+    //  3. Figure out which active cores are connected to
+
+    // Mapping is needed because structs in eth L1 use eth id
+    // from
+    // https://tenstorrent.sharepoint.com/:x:/r/sites/SOC/Blackhole%20Documents/Blackhole%20-%20NOC%20Co-ordinates.xlsx?d=w449397eff6fc48abaed13762398c30dd&csf=1&web=1&e=bKt38y
+    static constexpr std::array<uint32_t, 14> eth_id_to_noc0_x_mapping = {
+        1, 16, 2, 15, 3, 14, 4, 13, 5, 12, 6, 11, 7, 10};
+    static constexpr uint32_t eth_noc0_y = 1;
+
+    constexpr uint32_t eth_status_addr = 0x7CC04;
+    // local and remote info is only valid on active ethernet cores
+    constexpr uint32_t chip_infot_num_dwords = 8;
+    constexpr uint32_t local_info_base_addr = 0x7CC00 + 240 * 0x4;
+    constexpr uint32_t remote_info_base_addr = 0x7CC00 + (240 + chip_infot_num_dwords) * 0x4;
+    constexpr int train_timeout_ms = 60000;  // 60 seconds for now
+
+    auto& all_chips = this->cluster_desc_->get_all_chips();
+    const uint32_t num_chips = all_chips.size();
+    this->chip_to_location.resize(num_chips);
+    this->chip_to_logical_active_eths.resize(num_chips);
+    this->chip_to_eth_connected_chips.resize(num_chips);
+
+    std::vector<uint32_t> local_chip_info(chip_infot_num_dwords), remote_chip_info(chip_infot_num_dwords);
+
+    // First determines which eth cores are active/idle and creates mapping of chip_id to board id and chip location
+    //  chip_to_location mapping helps determiine chip-to-chip connectivity.
+    for (const auto& chip_id : all_chips) {
+        std::cout << "CHIP " << chip_id << std::endl;
+        auto& soc_desc = this->get_soc_desc(chip_id);
+        const auto& physical_eth_cores = soc_desc.physical_ethernet_cores;
+        this->chip_to_eth_connected_chips[chip_id].resize(physical_eth_cores.size());
+        for (const CoreCoord& physical_eth_core : physical_eth_cores) {
+            CoreCoord logical_eth = soc_desc.get_logical_ethernet_core_from_physical(physical_eth_core);
+
+            // Read port status to determine whether eth is active/idle
+            // typedef enum {
+            //      PORT_UNKNOWN,
+            //          Unknown port can occur when eth is training/after running tt-smi reset which fills L1 with
+            //          random values. We need to ensure that eth is done training before reading out the port status.
+            //          This is done implicitly today because create-eth-map runs on Cluster initialization which waits
+            //          for eth training.
+            //      PORT_UP,
+            //          Active eth successfully trained
+            //      PORT_DOWN,
+            //          Active eth but failed training
+            //      PORT_UNUSED,
+            //          Idle eth
+            // } port_status_e; // TODO: define this somewhere
+            uint32_t port_status;
+            read_core(&port_status, sizeof(uint32_t), tt_cxy_pair(chip_id, physical_eth_core), eth_status_addr);
+
+            auto start = std::chrono::high_resolution_clock::now();
+            // Waits for training to finish then reads port status to determine whether eth is active/idle
+            //  create-eth-map ensures training completes on WH but not on BH
+            while (port_status == 0) {
+                auto now = std::chrono::high_resolution_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+                if (elapsed > train_timeout_ms) {
+                    TT_THROW(
+                        "Device {}: Timeout ({} ms) waiting for logical ethernet core {} to finish training",
+                        chip_id,
+                        train_timeout_ms,
+                        logical_eth.str());
+                }
+                read_core(&port_status, sizeof(uint32_t), tt_cxy_pair(chip_id, physical_eth_core), eth_status_addr);
+            }
+
+            std::cout << "physical eth core " << physical_eth_core.str() << " logical " << logical_eth.str()
+                      << " port status " << port_status << std::endl;
+
+            if (port_status == 1 or port_status == 2) {
+                this->chip_to_logical_active_eths[chip_id].emplace_back(logical_eth);
+
+                if (port_status == 1) {
+                    // Only read local chip info at this time to build chip to board_and_asic_id mapping
+                    read_core(
+                        local_chip_info.data(),
+                        chip_infot_num_dwords * sizeof(uint32_t),
+                        tt_cxy_pair(chip_id, physical_eth_core),
+                        local_info_base_addr);
+
+                    uint8_t asic_location = (uint8_t)((local_chip_info[0] >> 0x8) & 0xFF);
+                    uint64_t local_board_id = ((uint64_t)local_chip_info[1] << 32) | local_chip_info[2];
+
+                    std::cout << "\tasic location " << (uint32_t)asic_location << " board id " << std::hex
+                              << local_board_id << std::dec << std::endl;
+
+                    this->chip_to_location[chip_id] =
+                        chip_identifier_t{.chip_location = asic_location, .board_id = local_board_id};
+                }
+            }
+        }
+    }
+
+    // Now loop over the active eth on all devices to determine how they are connected
+    for (const auto& chip_id : all_chips) {
+        std::cout << "CHIP " << chip_id << std::endl;
+        auto& soc_desc = this->get_soc_desc(chip_id);
+        for (const CoreCoord& physical_eth_core : soc_desc.physical_ethernet_cores) {
+            CoreCoord logical_eth = soc_desc.get_logical_ethernet_core_from_physical(physical_eth_core);
+            uint32_t eth_channel = soc_desc.logical_eth_core_to_chan_map.at(logical_eth);
+
+            uint32_t port_status;
+            read_core(&port_status, sizeof(uint32_t), tt_cxy_pair(chip_id, physical_eth_core), eth_status_addr);
+            bool is_active_and_trained = port_status == 1;
+
+            std::cout << "Physical eth " << physical_eth_core.str() << " Logical " << logical_eth.str() << " channel "
+                      << eth_channel << " is active and trained " << is_active_and_trained << std::endl;
+
+            if (is_active_and_trained) {
+                read_core(
+                    remote_chip_info.data(),
+                    chip_infot_num_dwords * sizeof(uint32_t),
+                    tt_cxy_pair(chip_id, physical_eth_core),
+                    remote_info_base_addr);
+                uint8_t remote_eth_id = (uint8_t)((remote_chip_info[0] >> 0x10) & 0xFF);
+                uint8_t remote_asic_location = (uint8_t)((remote_chip_info[0] >> 0x8) & 0xFF);
+                uint64_t remote_board_id = ((uint64_t)remote_chip_info[1] << 32) | remote_chip_info[2];
+
+                std::cout << "\tremote eth id " << (uint32_t)remote_eth_id << " remote asic location "
+                          << (uint32_t)remote_asic_location << " remote board id " << std::hex << remote_board_id
+                          << std::dec << std::endl;
+
+                // TODO: find a better way to map board and asic location to chip
+                chip_id_t connected_chip_id;
+                std::cout << "chip to location size " << this->chip_to_location.size() << std::endl;
+                for (connected_chip_id = 0; connected_chip_id < this->chip_to_location.size(); connected_chip_id++) {
+                    const auto& chip_identifier = this->chip_to_location[connected_chip_id];
+                    if (chip_identifier.chip_location == remote_asic_location and
+                        chip_identifier.board_id == remote_board_id) {
+                        std::cout << "\tfound connected chip! " << connected_chip_id << std::endl;
+                        break;
+                    }
+                }
+
+                if (all_chips.find(connected_chip_id) != all_chips.end()) {
+                    TT_FATAL(
+                        connected_chip_id != this->chip_to_location.size(),
+                        "Expected to find connected chip for logical eth core {} on chip {}",
+                        logical_eth.str(),
+                        chip_id);
+
+                    std::cout << "\tconnected chip id " << connected_chip_id << std::endl;
+
+                    auto& remote_soc_desc = this->get_soc_desc(connected_chip_id);
+                    CoreCoord remote_physical_eth_core(eth_id_to_noc0_x_mapping[remote_eth_id], eth_noc0_y);
+                    CoreCoord remote_logical_eth =
+                        remote_soc_desc.get_logical_ethernet_core_from_physical(remote_physical_eth_core);
+                    uint32_t remote_eth_channel = remote_soc_desc.logical_eth_core_to_chan_map.at(remote_logical_eth);
+
+                    std::cout << "\tremote remote_physical_eth_core " << remote_physical_eth_core.str()
+                              << " remote_logical_eth " << remote_logical_eth.str() << " remote eth channel "
+                              << remote_eth_channel << std::endl;
+
+                    this->chip_to_eth_connected_chips[chip_id][eth_channel] = {connected_chip_id, remote_eth_channel};
+                } else {
+                    // active eth core but we don't have access to the connected chip
+                    this->chip_to_eth_connected_chips[chip_id][eth_channel] = std::nullopt;
+                }
+            } else {
+                this->chip_to_eth_connected_chips[chip_id][eth_channel] = std::nullopt;
+            }
+        }
+    }
+
+    for (chip_id_t c_id = 0; c_id < chip_to_location.size(); c_id++) {
+        std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" << std::endl;
+        auto& soc_desc = this->get_soc_desc(c_id);
+        std::cout << "Chip " << c_id << std::endl;
+        std::cout << "\tBoard id " << std::hex << this->chip_to_location[c_id].board_id << std::dec << " location "
+                  << (uint32_t)this->chip_to_location[c_id].chip_location << std::endl;
+
+        std::cout << "\tActive eth cores:" << std::endl;
+        for (const auto& active_eth_core : this->chip_to_logical_active_eths[c_id]) {
+            auto channel = soc_desc.logical_eth_core_to_chan_map.at(active_eth_core);
+            std::cout << "\t" << active_eth_core.str() << " - channel - " << channel;
+            auto connected_id_and_eth = this->chip_to_eth_connected_chips[c_id][channel];
+            if (connected_id_and_eth.has_value()) {  // Eth cores that failed training will not have any connections
+                auto remote_chip = connected_id_and_eth.value().first;
+                auto remote_channel = connected_id_and_eth.value().second;
+                auto remote_logical_eth =
+                    this->get_soc_desc(remote_chip).chan_to_logical_eth_core_map.at(remote_channel);
+                std::cout << "\t\tconnected to chip " << remote_chip << " at remote channel " << remote_channel
+                          << " remote logical eth " << remote_logical_eth.str() << std::endl;
+            } else {
+                std::cout << "\n";
+            }
+        }
+        std::cout << "\n";
+        std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" << std::endl;
+    }
+}
+
+// Returns a map of remote chip id pointing to local eth cores that are connected to that remote chip
 std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(
     chip_id_t chip_id) const {
     const auto &soc_desc = get_soc_desc(chip_id);
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> connected_chips;
-    const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
-    if (all_eth_connections.find(chip_id) == all_eth_connections.end()) {
-        return {};
-    }
-    for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(chip_id)) {
-        const auto &other_chip_id = std::get<0>(connected_chip_chan);
-        if (connected_chips.find(other_chip_id) == connected_chips.end()) {
-            std::vector<CoreCoord> active_ethernet_cores;
-
-            for (const auto &channel_pair :
-                 this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
-                ethernet_channel_t local_chip_chan = std::get<0>(channel_pair);
-                active_ethernet_cores.emplace_back(
+    if (arch_ == ARCH::BLACKHOLE) {
+        const auto& local_eth_channels_connectivity = this->chip_to_eth_connected_chips[chip_id];
+        for (uint32_t local_chip_chan = 0; local_chip_chan < local_eth_channels_connectivity.size();
+             local_chip_chan++) {
+            if (local_eth_channels_connectivity[local_chip_chan].has_value()) {
+                auto connected_chip_id = local_eth_channels_connectivity[local_chip_chan].value().first;
+                connected_chips[connected_chip_id].emplace_back(
                     get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(local_chip_chan));
             }
-            connected_chips.insert({other_chip_id, active_ethernet_cores});
-        } else {
-            continue;
+        }
+    } else {
+        const auto& all_eth_connections = this->cluster_desc_->get_ethernet_connections();
+        if (all_eth_connections.find(chip_id) == all_eth_connections.end()) {
+            return {};
+        }
+        for (const auto& [eth_chan, connected_chip_chan] : all_eth_connections.at(chip_id)) {
+            const auto& other_chip_id = std::get<0>(connected_chip_chan);
+            if (connected_chips.find(other_chip_id) == connected_chips.end()) {
+                std::vector<CoreCoord> active_ethernet_cores;
+
+                for (const auto& channel_pair :
+                     this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(
+                         chip_id, other_chip_id)) {
+                    ethernet_channel_t local_chip_chan = std::get<0>(channel_pair);
+                    active_ethernet_cores.emplace_back(
+                        get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(local_chip_chan));
+                }
+                connected_chips.insert({other_chip_id, active_ethernet_cores});
+            } else {
+                continue;
+            }
         }
     }
     return connected_chips;
@@ -832,7 +1078,8 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
         }
         std::map<std::tuple<chip_id_t, chip_id_t>, bool> reserved_chip_connections = {};
         for (const auto &chip_id : devices) {
-            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+            // Blackhole does not need to reserve ethernet cores for Fast Dispatch tunneling because all chips have PCIe
+            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr and arch_ != ARCH::BLACKHOLE) {
                 for (const auto &[connected_chip_id, active_eth_cores] :
                      this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
                     for (const auto &eth_core : active_eth_cores) {
@@ -873,7 +1120,7 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
                     }
                 }
             } else {
-                // Slow dispatch mode
+                // Slow dispatch mode or when Fast Dispatch tunneling to remote chips is not needed
                 for (const auto &[connected_chip_id, active_eth_cores] :
                      this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
                     for (const auto &eth_core : active_eth_cores) {
@@ -901,14 +1148,19 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
 std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     chip_id_t chip_id, bool skip_reserved_tunnel_cores) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
-    const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
-    for (const auto &[other_chip_id, eth_cores] : connected_chips) {
-        for (const auto &eth_core : eth_cores) {
-            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::BI_DIR_TUNNELING and
-                skip_reserved_tunnel_cores) {
-                continue;
+    if (this->arch_ == ARCH::BLACKHOLE) {
+        active_ethernet_cores.insert(
+            this->chip_to_logical_active_eths[chip_id].begin(), this->chip_to_logical_active_eths[chip_id].end());
+    } else {
+        const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+        for (const auto& [other_chip_id, eth_cores] : connected_chips) {
+            for (const auto& eth_core : eth_cores) {
+                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::BI_DIR_TUNNELING and
+                    skip_reserved_tunnel_cores) {
+                    continue;
+                }
+                active_ethernet_cores.insert(eth_core);
             }
-            active_ethernet_cores.insert(eth_core);
         }
     }
     return active_ethernet_cores;
@@ -920,7 +1172,6 @@ std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chi
     std::unordered_set<int> channels_to_skip = {};
     // UMD routing FW uses these cores for base routing
     // channel 15 is used by syseng tools.
-    // TODO (abhullar): For BH single-chip bringup we assume all ethernet cores are inactive. Update this with (#9823)
     if (this->is_galaxy_cluster()) {
         // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
         channels_to_skip = {0, 1, 2, 3, 15};
@@ -942,15 +1193,30 @@ std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chi
 std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const {
     const auto &soc_desc = get_soc_desc(std::get<0>(eth_core));
     ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
-    TT_ASSERT(
-        (this->cluster_desc_->ethernet_core_has_active_ethernet_link(std::get<0>(eth_core), eth_chan)),
-        "Logical eth core {} is not an active eth core on chip {}.",
-        std::get<1>(eth_core).str(),
-        std::get<0>(eth_core));
-    auto connected_eth_core =
-        this->cluster_desc_->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
-    return std::make_tuple(
-        std::get<0>(connected_eth_core), soc_desc.chan_to_logical_eth_core_map.at(std::get<1>(connected_eth_core)));
+    if (arch_ == ARCH::BLACKHOLE) {
+        const auto& local_eth_channels_connectivity = this->chip_to_eth_connected_chips[std::get<0>(eth_core)];
+        auto local_eth_channel = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
+        auto connected_chip_and_eth_channel = local_eth_channels_connectivity[local_eth_channel];
+        TT_FATAL(
+            connected_chip_and_eth_channel.has_value(),
+            "Logical eth core {} is not an active eth core on chip {}",
+            std::get<1>(eth_core).str(),
+            std::get<0>(eth_core));
+        auto connected_chip_id = connected_chip_and_eth_channel.value().first;
+        auto conntected_eth_channel = connected_chip_and_eth_channel.value().second;
+        return std::make_tuple(
+            connected_chip_id, get_soc_desc(connected_chip_id).chan_to_logical_eth_core_map.at(conntected_eth_channel));
+    } else {
+        TT_ASSERT(
+            (this->cluster_desc_->ethernet_core_has_active_ethernet_link(std::get<0>(eth_core), eth_chan)),
+            "Logical eth core {} is not an active eth core on chip {}.",
+            std::get<1>(eth_core).str(),
+            std::get<0>(eth_core));
+        auto connected_eth_core =
+            this->cluster_desc_->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
+        return std::make_tuple(
+            std::get<0>(connected_eth_core), soc_desc.chan_to_logical_eth_core_map.at(std::get<1>(connected_eth_core)));
+    }
 }
 
 std::vector<CoreCoord> Cluster::get_ethernet_sockets(chip_id_t local_chip, chip_id_t remote_chip) const {

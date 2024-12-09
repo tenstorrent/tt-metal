@@ -550,31 +550,29 @@ void Device::reset_cores() {
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores, other_dispatch_cores, device_to_early_exit_cores;
     go_msg_t go_msg;
     std::memset(&go_msg, 0, sizeof(go_msg_t));
-    for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
-        std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-        std::vector<uint32_t> go_signal_data(sizeof(go_msg_t) / sizeof(uint32_t));
-        DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
-        DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
+    // for (const auto &eth_core : this->get_active_ethernet_cores()) {
+    //     CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
+    //     std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+    //     std::vector<uint32_t> go_signal_data(sizeof(go_msg_t) / sizeof(uint32_t));
+    //     DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
+    //     DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
 
-        data = tt::llrt::read_hex_vec_from_core(
-            this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
-        go_signal_data = tt::llrt::read_hex_vec_from_core(
-            this->id(), virtual_core, go_signal_addr, sizeof(go_msg_t));
-        launch_msg_t *launch_msg = (launch_msg_t *)(&data[0]);
-        go_msg_t * go_signal = (go_msg_t *)(&go_signal_data[0]);
-        if (kernel_still_running(launch_msg, go_signal)) {
-            log_info(
-                tt::LogMetal,
-                "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running, issuing exit signal.",
-                this->id(),
-                virtual_core.str(),
-                this->id());
-            launch_msg->kernel_config.exit_erisc_kernel = 1;
-            llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
-            device_to_early_exit_cores[this->id()].insert(virtual_core);
-        }
-    }
+    //     data = tt::llrt::read_hex_vec_from_core(
+    //         this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
+    //     go_signal_data = tt::llrt::read_hex_vec_from_core(
+    //         this->id(), virtual_core, go_signal_addr, sizeof(go_msg_t));
+    //     launch_msg_t *launch_msg = (launch_msg_t *)(&data[0]);
+    //     go_msg_t * go_signal = (go_msg_t *)(&go_signal_data[0]);
+    //     if (kernel_still_running(launch_msg, go_signal)) {
+    //         log_info(
+    //             tt::LogMetal,
+    //             "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running,
+    //             issuing exit signal.", this->id(), virtual_core.str(), this->id());
+    //         launch_msg->kernel_config.exit_erisc_kernel = 1;
+    //         llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
+    //         device_to_early_exit_cores[this->id()].insert(virtual_core);
+    //     }
+    // }
 
     this->get_associated_dispatch_virtual_cores(dispatch_cores, other_dispatch_cores);
     // Ignore other_dispatch_cores, they will be reset by the devices that use them.
