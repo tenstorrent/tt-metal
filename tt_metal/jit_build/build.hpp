@@ -122,6 +122,11 @@ public:
     const string get_target_out_path(const string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
+
+    inline const string& get_cflags() { return cflags_; }
+    inline const string& get_defines() { return defines_; }
+    inline const string& get_includes() { return includes_; }
+    inline const string& get_lflags() { return lflags_; }
 };
 
 // Set of build states
