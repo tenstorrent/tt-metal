@@ -50,14 +50,13 @@ jobs:
         with:
           docker_username: ${{ github.actor }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_image_arch: ${{ inputs.arch }}
           docker_opts: |
             -e ARCH_NAME=${{ matrix.arch }}
             --group-add 1457
             -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
             -e CCACHE_DIR=/home/ubuntu/.ccache
             -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
-          docker_os_arch: ${{ matrix.build.os }}-amd64
+          docker_os_arch: tt-metalium/${{ matrix.build.os }}-amd64
           run_args: |
             set -eu # basic shell hygiene
             set -x

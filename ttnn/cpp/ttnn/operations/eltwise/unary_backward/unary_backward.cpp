@@ -513,47 +513,14 @@ std::vector<Tensor> ExecuteUnaryBackwardFillZero::invoke(
     return grad_tensor;
 }
 
+//   name: i0(Tensor self) -> Tensor
+//   self: grad * at::special_i1(self)
+//   result: auto_element_wise
 std::vector<Tensor> ExecuteUnaryBackwardI0::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    float t_inf = std::numeric_limits<float>::infinity();
-    Tensor value = ttnn::multiply(
-        ttnn::multiply(
-            ttnn::i0(input, output_mem_config),
-            ttnn::reciprocal(input, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        0.5,
-        std::nullopt,
-        output_mem_config);
-    Tensor result = ttnn::where(
-        ttnn::ltz(input, output_mem_config),
-        ttnn::multiply(
-            grad,
-            ttnn::subtract(
-                ttnn::neg(ttnn::i0(input, output_mem_config), output_mem_config),
-                value,
-                std::nullopt,
-                output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        ttnn::multiply(
-            grad,
-            ttnn::subtract(ttnn::i0(input, output_mem_config), value, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        output_mem_config);
-    result = ttnn::where(
-        ttnn::ge(
-            ttnn::abs(ttnn::i0(input, output_mem_config), output_mem_config), 3.4e+38, std::nullopt, output_mem_config),
-        t_inf,
-        result,
-        output_mem_config);
-    result = ttnn::where(
-        ttnn::ge(ttnn::abs(result, output_mem_config), 3.4e+38, std::nullopt, output_mem_config),
-        t_inf,
-        result,
-        output_mem_config);
+    Tensor i1_input = ttnn::i1(input, output_mem_config);
+    Tensor result = ttnn::multiply(grad, i1_input, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }

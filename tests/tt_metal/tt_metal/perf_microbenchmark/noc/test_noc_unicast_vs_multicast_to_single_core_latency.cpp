@@ -14,13 +14,18 @@ using namespace tt;
 //
 void measure_latency(const string& kernel_name) {
     const int device_id = 0;
-    tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-    CoreCoord producer_logical_core = tt_metal::dispatch_core_manager::instance().prefetcher_core(device->id(), channel, 0);
-    CoreCoord consumer_logical_core = tt_metal::dispatch_core_manager::instance().dispatcher_core(device->id(), channel, 0);
+    CoreCoord producer_logical_core =
+        tt_metal::dispatch_core_manager::instance().prefetcher_core(device->id(), channel, 0);
+    CoreCoord consumer_logical_core =
+        tt_metal::dispatch_core_manager::instance().dispatcher_core(device->id(), channel, 0);
 
-    TT_ASSERT(producer_logical_core != consumer_logical_core, "Producer and consumer core are {}. They should not be the same!", producer_logical_core.str());
+    TT_ASSERT(
+        producer_logical_core != consumer_logical_core,
+        "Producer and consumer core are {}. They should not be the same!",
+        producer_logical_core.str());
 
     auto first_worker_physical_core = device->worker_core_from_logical_core({0, 0});
 
@@ -46,7 +51,7 @@ void measure_latency(const string& kernel_name) {
     tt_metal::CloseDevice(device);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
         TT_THROW("Test not supported w/ fast dispatch, exiting");
     }

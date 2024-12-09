@@ -189,8 +189,6 @@ def from_torch(
 
     shape_with_padding = None
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
-        if len(tensor.shape) < 2:
-            raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires at least 2 dimensions!")
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
         # Tilize tensor
@@ -259,6 +257,7 @@ class TorchTensor(torch.Tensor):
 @ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
 def to_torch(
     tensor: ttnn.Tensor,
+    dtype: Optional[torch.dtype] = None,
     *,
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.MeshToTensor] = None,
@@ -271,6 +270,7 @@ def to_torch(
 
     Args:
         tensor (ttnn.Tensor): the input tensor.
+        dtype (torch.dtype, optional): the desired `torch` data type of returned tensor. Defaults to `None`.
 
     Keyword Args:
         torch_rank (int, optional): Desired rank of the `torch.Tensor`. Defaults to `None`.
@@ -316,7 +316,12 @@ def to_torch(
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze(0)
 
-    return TorchTensor(tensor)
+    torch_tensor = TorchTensor(tensor)
+
+    if dtype is not None:
+        torch_tensor = torch_tensor.to(dtype=dtype)
+
+    return torch_tensor
 
 
 def _golden_function(tensor, *args, **kwargs):

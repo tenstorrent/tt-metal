@@ -19,8 +19,8 @@ using tt::tt_metal::DataType;
 using tt::tt_metal::Device;
 
 using tt::tt_metal::Layout;
-using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::LegacyShape;
+using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::Tensor;
 
 namespace detail {
@@ -60,8 +60,8 @@ template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
 bool run_test(Device* device, const tt::tt_metal::LegacyShape& shape, float low, float high, Args... args) {
     auto input_tensor = ttnn::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
-    using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     if constexpr (unary_op_type == UnaryOpType::SQRT) {
         auto host_output = host_function<::detail::sqrt>(input_tensor);
@@ -93,7 +93,7 @@ bool run_test(Device* device, const tt::tt_metal::LegacyShape& shape, float low,
         return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::TANH) {
         auto host_output = host_function<::detail::tanh>(input_tensor);
-        auto device_output =ttnn::tanh(input_tensor.to(device)).cpu();
+        auto device_output = ttnn::tanh(input_tensor.to(device)).cpu();
         return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
     }
     TT_ASSERT(false, "Unsupported function");
@@ -104,8 +104,8 @@ void test_operation_infrastructure() {
     using namespace tt::constants;
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
-    using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
@@ -113,13 +113,13 @@ void test_operation_infrastructure() {
     auto shape = tt::tt_metal::LegacyShape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = ttnn::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
 
-    ttnn::operations::unary::operation_attributes_t op_args {
+    ttnn::operations::unary::operation_attributes_t op_args{
         {UnaryWithParam{UnaryOpType::SQRT}},
         DataType::BFLOAT16,
         MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
         false,
         false};
-    ttnn::operations::unary::tensor_args_t tensor_args {input_tensor};
+    ttnn::operations::unary::tensor_args_t tensor_args{input_tensor};
     auto program_hash = ttnn::operations::unary::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
     TT_FATAL(program_hash == 3018574135764717736ULL, "Actual value is {}", program_hash);
 
@@ -130,8 +130,8 @@ void test_shape_padding() {
     using namespace tt::constants;
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
-    using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
@@ -170,8 +170,8 @@ void test_numerically() {
 
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
-    using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
@@ -227,8 +227,8 @@ void test_program_cache() {
 
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
-    using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
+    using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
@@ -280,7 +280,7 @@ void test_program_cache() {
 }
 
 int main(int argc, char** argv) {
-    //test_operation_infrastructure();
+    // test_operation_infrastructure();
     test_shape_padding();
     test_numerically();
     test_program_cache();

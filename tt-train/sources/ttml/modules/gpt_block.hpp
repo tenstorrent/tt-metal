@@ -31,7 +31,8 @@ class GPTBlock : public autograd::ModuleBase {
     std::shared_ptr<MultiHeadAttention> attention;
 
 public:
-    explicit GPTBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_prob);
+    explicit GPTBlock(
+        uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm = false);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
 };

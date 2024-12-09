@@ -6,9 +6,6 @@
 
 #include <cstdint>
 
-#include "noc/noc_parameters.h"
-#include "noc/noc_overlay_parameters.h"
-
 #include "llrt/hal.hpp"
 
 namespace tt {
@@ -16,13 +13,7 @@ namespace tt {
 // Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
 #define DEBUG_VALID_L1_ADDR(a, l) (((a) >= HAL_MEM_L1_BASE) && ((a) + (l) <= HAL_MEM_L1_BASE + HAL_MEM_L1_SIZE))
 
-// what's the size of the NOC<n> address space?  using 0x1000 for now
-#define DEBUG_VALID_REG_ADDR(a)                                                        \
-    ((((a) >= NOC_OVERLAY_START_ADDR) &&                                               \
-      ((a) < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) || \
-     (((a) >= NOC0_REGS_START_ADDR) && ((a) < NOC0_REGS_START_ADDR + 0x1000)) ||       \
-     (((a) >= NOC1_REGS_START_ADDR) && ((a) < NOC1_REGS_START_ADDR + 0x1000)) ||       \
-     ((a) == RISCV_DEBUG_REG_SOFT_RESET_0))
+#define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::hal.valid_reg_addr(a)
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 #define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
 

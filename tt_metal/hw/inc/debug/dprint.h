@@ -64,11 +64,11 @@
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 #define DPRINT_DATA0(x)   \
     if (noc_index == 0) { \
-        x                 \
+        x;                \
     }
 #define DPRINT_DATA1(x)   \
     if (noc_index == 1) { \
-        x                 \
+        x;                \
     }
 #else
 #define DPRINT_DATA0(x)
@@ -148,14 +148,6 @@ inline uint32_t DebugPrintStrLen(const char* val) {
         end++;
     };
     return uint32_t(end - val) + 1;
-}
-
-inline uint32_t DebugPrintStrCopy(volatile char* dst, const char* src) {
-    uint32_t len = DebugPrintStrLen(src);
-    for (uint32_t j = 0; j < len; j++) {
-        dst[j] = src[j];
-    }
-    return len;
 }
 
 // Extend with new type id here, each new type needs specializations for 1 (or 3) of these functions below:
@@ -371,24 +363,50 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
         // TODO(AP): are these writes guaranteed to be ordered?
         dprint_buffer->aux.rpos = 0;
         wpos = 0;
-        if (payload_sz >= sizeof(DebugPrintMemLayout::data) - 2) {
-            // Handle a special case - this value cannot be printed because it cannot fit in the buffer.
+        if (payload_sz > sizeof(DebugPrintMemLayout::data) - 2) {
+            // Handle a special case - this value cannot be printed in one go because
+            // it doesn't fit in the buffer.
             // -2 is for code_sz and sz_sz.
             // Note that the outer if is definitely also true if we got to this inner if.
-            // In this case we replace the input value with debug error message.
             // We cannot recursively call operator << from here because it hasn't been defined yet
             // so there's a bit of code duplication here for this special case
-            // Another possibility is to wait for the device to flush and print the string piecemeal.
             // As a negative side effect,
             // unfortunately this special case increases the code size generated for each instance of <<.
+
             volatile uint8_t* printbuf = dprint_buffer->data;
-            payload_sz = DebugPrintStrCopy(
-                reinterpret_cast<volatile char*>(printbuf + code_sz + sz_sz), debug_print_overflow_error_message);
-            printbuf[0] = DPrintCSTR;
-            printbuf[code_sz] = payload_sz;
-            wpos = payload_sz + sz_sz + code_sz;
-            dprint_buffer->aux.wpos = wpos;
-            return;
+            uint32_t remaining_payload_size = payload_sz;
+            while (remaining_payload_size > sizeof(DebugPrintMemLayout::data) - 2) {
+                const uint32_t curr_payload_size = sizeof(DebugPrintMemLayout::data) - 2;
+                remaining_payload_size -= curr_payload_size;
+
+                printbuf[wpos] = typecode;
+                wpos += code_sz;
+                printbuf[wpos] = curr_payload_size;
+                wpos += sz_sz;
+                for (uint32_t j = 0; j < curr_payload_size - 1; j++) {
+                    printbuf[wpos + j] = *valaddr;
+                    valaddr++;
+                }
+                printbuf[wpos + curr_payload_size - 1] = '\0';
+                wpos += curr_payload_size;
+                dprint_buffer->aux.wpos = wpos;
+                WAYPOINT("DPW");
+                while (dprint_buffer->aux.rpos < dprint_buffer->aux.wpos) {
+#if defined(COMPILE_FOR_ERISC)
+                    internal_::risc_context_switch();
+#endif
+                    // If we've closed the device, we've now disabled printing on it, don't hang.
+                    if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+                        return;
+                    };  // wait for host to catch up to wpos with it's rpos
+                }
+                WAYPOINT("DPD");
+                wpos = 0;
+
+                remaining_payload_size += 1;
+                dprint_buffer->aux.rpos = 0;
+            }
+            payload_sz = remaining_payload_size;
         }
     }
 

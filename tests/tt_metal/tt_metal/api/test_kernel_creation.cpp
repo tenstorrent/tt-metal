@@ -21,7 +21,8 @@ TEST_F(DispatchFixture, TensixCreateKernelsOnComputeCores) {
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
                 CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
-                DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
+                DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
     }
 }
 
@@ -42,7 +43,8 @@ TEST_F(DispatchFixture, DISABLED_TensixCreateKernelsOnStorageCores) {
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
                 storage_core_range_set,
-                DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
+                DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
     }
 }
 
@@ -53,20 +55,23 @@ TEST_F(DispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
         Device* device = this->devices_.at(id);
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-        std::vector<CoreCoord> dispatch_cores = tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_type);
+        const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+        CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+        std::vector<CoreCoord> dispatch_cores =
+            tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
         std::set<CoreRange> dispatch_core_ranges;
         for (CoreCoord core : dispatch_cores) {
             dispatch_core_ranges.emplace(core);
         }
         CoreRangeSet dispatch_core_range_set(dispatch_core_ranges);
         if (dispatch_core_type == CoreType::WORKER) {
-            EXPECT_ANY_THROW(
-                auto test_kernel = tt_metal::CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
-                    CoreRangeSet(dispatch_core_range_set),
-                    DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}););
+            EXPECT_ANY_THROW(auto test_kernel = tt_metal::CreateKernel(
+                                 program,
+                                 "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+                                 CoreRangeSet(dispatch_core_range_set),
+                                 DataMovementConfig{
+                                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                                     .noc = tt_metal::NOC::RISCV_0_default}););
         } else if (dispatch_core_type == CoreType::ETH) {
             EXPECT_ANY_THROW(auto test_kernel = tt_metal::CreateKernel(
                                  program,
@@ -78,14 +83,14 @@ TEST_F(DispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDir) {
-    const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+    const string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     create_kernel(kernel_file);
     detail::CompileProgram(this->device_, this->program_);
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir) {
-    const string &orig_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
-    const string &new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
+    const string& orig_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+    const string& new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
     this->setup_kernel_dir(orig_kernel_file, new_kernel_file);
     this->create_kernel(new_kernel_file);
     detail::CompileProgram(this->device_, this->program_);
@@ -93,7 +98,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirAndKernelRootDir) {
-    const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+    const string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     this->setup_kernel_dir(kernel_file, kernel_file);
     this->create_kernel(kernel_file);
     detail::CompileProgram(this->device_, this->program_);
@@ -101,7 +106,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirA
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
-    const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
+    const string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
     this->create_kernel(kernel_file);
     EXPECT_THROW(detail::CompileProgram(this->device_, this->program_), std::exception);
 }

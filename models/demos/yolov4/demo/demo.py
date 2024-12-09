@@ -419,7 +419,34 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
         if not is_torch_model:
             input_shape = img.shape
             input_tensor = torch.permute(img, (0, 2, 3, 1))
-            input_tensor = ttnn.from_torch(input_tensor, ttnn.bfloat16)
+            # input_tensor = ttnn.from_torch(input_tensor, ttnn.bfloat16)
+            input_tensor = torch.permute(img, (0, 2, 3, 1))  # put channel at the end
+            input_tensor = torch.nn.functional.pad(
+                input_tensor, (0, 13, 0, 0, 0, 0, 0, 0)
+            )  # pad channel dim from 3 to 16
+            N, H, W, C = input_tensor.shape
+            input_tensor = torch.reshape(input_tensor, (N, 1, H * W, C))
+
+            shard_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 7),
+                    ),
+                }
+            )
+            n_cores = 64
+            shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+            input_mem_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
+            input_tensor = ttnn.from_torch(
+                input_tensor,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=input_mem_config,
+            )
             img = input_tensor
             t1 = time.time()
 

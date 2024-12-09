@@ -16,6 +16,9 @@ struct AdamWConfig {
     float epsilon{1e-8F};
     float weight_decay{0.01F};
     // TODO: add amsgrad
+
+    // flag to enable kahan summation to reduce floating point errors
+    bool use_kahan_summation{false};
 };
 
 class MorehAdamW : public OptimizerBase {
@@ -65,6 +68,7 @@ private:
     AdamWConfig m_config;
     serialization::NamedParameters m_first_moment;
     serialization::NamedParameters m_second_moment;
+    serialization::NamedParameters m_kahan_compensation;
 };
 
 }  // namespace ttml::optimizers

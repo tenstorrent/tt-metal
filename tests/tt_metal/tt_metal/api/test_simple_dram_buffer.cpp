@@ -13,33 +13,33 @@ using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
 
 namespace tt::test::buffer::detail {
-    bool SimpleDramReadOnly (Device* device, size_t local_address, size_t byte_size) {
-        std::vector<uint32_t> inputs =
-            generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
-        std::vector<uint32_t> outputs;
-        uint32_t dram_channel = device->dram_channel_from_bank_id(0);
-        writeDramBackdoor(device, dram_channel, local_address, inputs);
-        readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
-        bool pass = (inputs == outputs);
-        if (not pass) {
-            tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
-        }
-        return pass;
+bool SimpleDramReadOnly(Device* device, size_t local_address, size_t byte_size) {
+    std::vector<uint32_t> inputs =
+        generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
+    std::vector<uint32_t> outputs;
+    uint32_t dram_channel = device->dram_channel_from_bank_id(0);
+    writeDramBackdoor(device, dram_channel, local_address, inputs);
+    readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
+    bool pass = (inputs == outputs);
+    if (not pass) {
+        tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
     }
-    bool SimpleDramWriteOnly (Device* device, size_t local_address, size_t byte_size) {
-        std::vector<uint32_t> inputs =
-            generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
-        std::vector<uint32_t> outputs;
-        uint32_t dram_channel = device->dram_channel_from_bank_id(0);
-        writeDramBackdoor(device, dram_channel, local_address, inputs);
-        readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
-        bool pass = (inputs == outputs);
-        if (not pass) {
-            tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
-        }
-        return pass;
-    }
+    return pass;
 }
+bool SimpleDramWriteOnly(Device* device, size_t local_address, size_t byte_size) {
+    std::vector<uint32_t> inputs =
+        generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
+    std::vector<uint32_t> outputs;
+    uint32_t dram_channel = device->dram_channel_from_bank_id(0);
+    writeDramBackdoor(device, dram_channel, local_address, inputs);
+    readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
+    bool pass = (inputs == outputs);
+    if (not pass) {
+        tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
+    }
+    return pass;
+}
+}  // namespace tt::test::buffer::detail
 
 TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {

@@ -14,20 +14,23 @@ using namespace tt;
 
 namespace unit_tests::initialize_semaphores {
 
-void initialize_program(tt_metal::Device *device, tt_metal::Program &program, const CoreRange &core_range) {
+void initialize_program(tt_metal::Device* device, tt_metal::Program& program, const CoreRange& core_range) {
     uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t num_tiles = 2048;
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 8;
-    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(src0_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig cb_src0_config =
+        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core_range, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 1;
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(ouput_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig cb_output_config =
+        tt_metal::CircularBufferConfig(
+            num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(ouput_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core_range, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateKernel(
@@ -56,7 +59,7 @@ void initialize_program(tt_metal::Device *device, tt_metal::Program &program, co
 }
 
 void create_and_read_max_num_semaphores(
-    tt_metal::Device *device, tt_metal::Program &program, const CoreRange &core_range) {
+    tt_metal::Device* device, tt_metal::Program& program, const CoreRange& core_range) {
     std::vector<uint32_t> golden;
     for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
@@ -77,7 +80,8 @@ void create_and_read_max_num_semaphores(
             std::vector<uint32_t> res;
             for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
                 std::vector<uint32_t> single_val;
-                uint32_t semaphore_addr = program.get_sem_base_addr(device, logical_core, CoreType::WORKER) + (hal.get_alignment(HalMemType::L1) * i);
+                uint32_t semaphore_addr = program.get_sem_base_addr(device, logical_core, CoreType::WORKER) +
+                                          (hal.get_alignment(HalMemType::L1) * i);
                 uint32_t semaphore_size = sizeof(uint32_t);
                 tt_metal::detail::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
                 ASSERT_TRUE(single_val.size() == 1);
@@ -89,7 +93,7 @@ void create_and_read_max_num_semaphores(
 }
 
 void try_creating_more_than_max_num_semaphores(
-    tt_metal::Device *device, tt_metal::Program &program, const CoreRange &core_range) {
+    tt_metal::Device* device, tt_metal::Program& program, const CoreRange& core_range) {
     ASSERT_TRUE(program.num_semaphores() == 0);
     create_and_read_max_num_semaphores(device, program, core_range);
     constexpr static uint32_t val = 5;
@@ -120,18 +124,18 @@ TEST_F(DeviceFixture, TensixInitializeIllegalSemaphores) {
 TEST_F(DeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreCoord core0(0,0);
+    CoreCoord core0(0, 0);
     uint32_t sem0_id = tt_metal::CreateSemaphore(program, core0, 0);
 
-    CoreCoord core1(4,0);
+    CoreCoord core1(4, 0);
     uint32_t sem1_id = tt_metal::CreateSemaphore(program, core1, 1);
 
     CoreRange core_range({1, 0}, {3, 0});
     CoreRangeSet core_range_set({core_range});
     CoreRangeSet core_range_set2 = core_range_set.merge(std::set<CoreRange>{core1});
-    std::set<CoreRange> set_of_cores({CoreRange({2,0}, {2,0}), CoreRange({3,0}, {3,0}), CoreRange({5,0}, {5,0})});
+    std::set<CoreRange> set_of_cores({CoreRange({2, 0}, {2, 0}), CoreRange({3, 0}, {3, 0}), CoreRange({5, 0}, {5, 0})});
     CoreRangeSet core_range_set3(set_of_cores);
-    CoreRangeSet core_range_set4({CoreRange({5,0}, {6,0})});
+    CoreRangeSet core_range_set4({CoreRange({5, 0}, {6, 0})});
 
     uint32_t sem2_id = tt_metal::CreateSemaphore(program, core_range_set, 2);
     uint32_t sem3_id = tt_metal::CreateSemaphore(program, core_range_set2, 3);

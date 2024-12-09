@@ -37,7 +37,7 @@ void ttnn_device(py::module& module) {
         py::arg("device_id"),
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::arg("dispatch_core_type") = tt::tt_metal::DispatchCoreType::WORKER,
+        py::arg("dispatch_core_config") = tt::tt_metal::DispatchCoreConfig{},
         py::return_value_policy::reference,
         R"doc(
             Open a device with the given device_id. If the device is already open, return the existing device.
@@ -81,11 +81,39 @@ void py_device_module_types(py::module& m_device) {
         .value("WORKER", tt::tt_metal::DispatchCoreType::WORKER)
         .value("ETH", tt::tt_metal::DispatchCoreType::ETH);
 
+    py::enum_<tt::tt_metal::DispatchCoreAxis>(
+        m_device, "DispatchCoreAxis", "Enum of axis (row or col) of dispatch cores.")
+        .value("ROW", tt::tt_metal::DispatchCoreAxis::ROW)
+        .value("COL", tt::tt_metal::DispatchCoreAxis::COL);
+
+    py::class_<tt::tt_metal::DispatchCoreConfig>(
+        m_device, "DispatchCoreConfig", "Class representing dispatch core configuration.")
+        .def(py::init<>(), "Default constructor initializing type to WORKER and axis to ROW.")
+        .def(
+            py::init<tt::tt_metal::DispatchCoreType, tt::tt_metal::DispatchCoreAxis>(),
+            "Constructor with specified dispatch core type and axis.",
+            py::arg("type"),
+            py::arg("axis"));
+
     py::class_<Device, std::unique_ptr<Device, py::nodelete>>(
         m_device, "Device", "Class describing a Tenstorrent accelerator device.");
+
+    py::class_<SubDevice>(m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
+
+    py::class_<SubDeviceManagerId>(m_device, "SubDeviceManagerId", "ID of a sub-device manager.");
 }
 
 void device_module(py::module& m_device) {
+    auto pySubDevice = static_cast<py::class_<SubDevice>>(m_device.attr("SubDevice"));
+    pySubDevice.def(
+        py::init<>([](std::vector<CoreRangeSet> cores) { return SubDevice(cores); }),
+        py::arg("cores"),
+        R"doc(
+            Creates a SubDevice object from a list of CoreRangeSet objects, where each CoreRangeSet object
+            represents the cores from a specific CoreType.
+            The order of cores is Tensix, then Ethernet.
+        )doc");
+
     auto pyDevice = static_cast<py::class_<Device, std::unique_ptr<Device, py::nodelete>>>(m_device.attr("Device"));
     pyDevice
         .def(
@@ -119,7 +147,66 @@ void device_module(py::module& m_device) {
             "num_program_cache_entries",
             &Device::num_program_cache_entries,
             "Number of entries in the program cache for this device")
-        .def("enable_async", &Device::enable_async);
+        .def("enable_async", &Device::enable_async)
+        .def(
+            "create_sub_device_manager",
+            [](Device* device,
+               const std::vector<SubDevice>& sub_devices,
+               DeviceAddr local_l1_size) -> SubDeviceManagerId {
+                SubDeviceManagerId sub_device_manager_id;
+                device->push_work(
+                    [device, sub_devices, local_l1_size, &sub_device_manager_id] {
+                        sub_device_manager_id = device->create_sub_device_manager(sub_devices, local_l1_size);
+                    },
+                    true);
+                return sub_device_manager_id;
+            },
+            py::arg("sub_devices"),
+            py::arg("local_l1_size"),
+            R"doc(
+                Creates a sub-device manager for the given device.
+
+                Args:
+                    sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager.
+                    local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
+
+                Returns:
+                    SubDeviceManagerId: The ID of the created sub-device manager.
+            )doc")
+        .def(
+            "load_sub_device_manager",
+            [](Device* device, SubDeviceManagerId sub_device_manager_id) {
+                device->push_work([device, sub_device_manager_id] {
+                    device->push_work(
+                        [device, sub_device_manager_id] { device->load_sub_device_manager(sub_device_manager_id); });
+                });
+            },
+            py::arg("sub_device_manager_id"),
+            R"doc(
+                Loads the sub-device manager with the given ID.
+
+                Args:
+                    sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to load.
+            )doc")
+        .def(
+            "clear_loaded_sub_device_manager",
+            [](Device* device) { device->push_work([device] { device->clear_loaded_sub_device_manager(); }); },
+            R"doc(
+                Clears the loaded sub-device manager for the given device.
+            )doc")
+        .def(
+            "remove_sub_device_manager",
+            [](Device* device, SubDeviceManagerId sub_device_manager_id) {
+                device->push_work(
+                    [device, sub_device_manager_id] { device->remove_sub_device_manager(sub_device_manager_id); });
+            },
+            py::arg("sub_device_manager_id"),
+            R"doc(
+                Removes the sub-device manager with the given ID.
+
+                Args:
+                    sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to remove.
+            )doc");
     // *** eps constant ***
     m_device.attr("EPS_GS") = EPS_GS;
     m_device.attr("EPS_WHB0") = EPS_WHB0;
@@ -151,9 +238,9 @@ void device_module(py::module& m_device) {
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           tt::tt_metal::DispatchCoreType dispatch_core_type) {
+           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
             return tt::tt_metal::CreateDevice(
-                device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
+                device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
         },
         R"doc(
         Creates an instance of TT device.
@@ -168,16 +255,16 @@ void device_module(py::module& m_device) {
         py::arg("num_command_queues") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::arg("dispatch_core_type") = tt::tt_metal::DispatchCoreType::WORKER);
+        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{});
     m_device.def(
         "CreateDevices",
         [](const std::vector<int>& device_ids,
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           tt::tt_metal::DispatchCoreType dispatch_core_type) {
+           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
             return tt::tt_metal::detail::CreateDevices(
-                device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
+                device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
         },
         R"doc(
         Creates an instance of TT device.
@@ -192,7 +279,7 @@ void device_module(py::module& m_device) {
         py::arg("num_command_queues") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::arg("dispatch_core_type") = tt::tt_metal::DispatchCoreType::WORKER);
+        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{});
     m_device.def("CloseDevice", &tt::tt_metal::CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 

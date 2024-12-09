@@ -6,8 +6,8 @@
 #include <vector>
 #include <map>
 
-#include "tt_metal/third_party/umd/device/tt_cluster_descriptor_types.h"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
+#include "umd/device/types/cluster_descriptor_types.h"
+#include "umd/device/tt_soc_descriptor.h"
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
@@ -32,7 +32,7 @@ std::map<chip_id_t, Device*> CreateDevices(
     const uint8_t num_hw_cqs = 1,
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
     const std::vector<uint32_t>& l1_bank_remap = {});
 
 void CloseDevices(const std::map<chip_id_t, Device*>& devices);

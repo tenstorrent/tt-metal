@@ -5,6 +5,8 @@
 import torch
 import ttnn
 from models.demos.yolov4.ttnn.common import Conv
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 
 class Down1:
@@ -14,15 +16,78 @@ class Down1:
         else:
             torch_model = model.torch_model
         self.torch_model = torch_model
-        self.conv1 = Conv(torch_model, "down1.conv1", [1, 320, 320, 3], (1, 1, 1, 1), act_block_h=128)
-        self.conv2 = Conv(torch_model, "down1.conv2", [1, 320, 320, 32], (2, 2, 1, 1), reshard=True)
-        self.conv3 = Conv(torch_model, "down1.conv3", [1, 160, 160, 64], (1, 1, 0, 0), deallocate=False)
-        self.conv4 = Conv(torch_model, "down1.conv4", [1, 160, 160, 64], (1, 1, 0, 0))
-        self.conv5 = Conv(torch_model, "down1.conv5", [1, 160, 160, 64], (1, 1, 0, 0), deallocate=False)
-        self.conv6 = Conv(torch_model, "down1.conv6", [1, 160, 160, 32], (1, 1, 1, 1))
-        self.conv7 = Conv(torch_model, "down1.conv7", [1, 160, 160, 64], (1, 1, 0, 0))
-        self.conv8 = Conv(torch_model, "down1.conv8", [1, 160, 160, 128], (1, 1, 0, 0))
+        self.conv1 = Conv(
+            torch_model,
+            "down1.conv1",
+            [1, 320, 320, 3],
+            (1, 1, 1, 1),
+            act_block_h=128,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
+        self.conv2 = Conv(
+            torch_model,
+            "down1.conv2",
+            [1, 320, 320, 32],
+            (2, 2, 1, 1),
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
+        self.conv3 = Conv(
+            torch_model,
+            "down1.conv3",
+            [1, 160, 160, 64],
+            (1, 1, 0, 0),
+            deallocate=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
+        self.conv4 = Conv(
+            torch_model,
+            "down1.conv4",
+            [1, 160, 160, 64],
+            (1, 1, 0, 0),
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
+        self.conv5 = Conv(
+            torch_model,
+            "down1.conv5",
+            [1, 160, 160, 64],
+            (1, 1, 0, 0),
+            deallocate=False,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
+        self.conv6 = Conv(
+            torch_model,
+            "down1.conv6",
+            [1, 160, 160, 32],
+            (1, 1, 1, 1),
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
+        self.conv7 = Conv(
+            torch_model,
+            "down1.conv7",
+            [1, 160, 160, 64],
+            (1, 1, 0, 0),
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
+        self.conv8 = Conv(
+            torch_model,
+            "down1.conv8",
+            [1, 160, 160, 128],
+            (1, 1, 0, 0),
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
+        )
         self.convs = [self.conv1, self.conv2, self.conv3, self.conv4, self.conv5, self.conv6, self.conv7, self.conv8]
+
+    def print_tensor(self, tensor):
+        print(tensor)
+        print(ttnn.get_memory_config(tensor))
 
     def __call__(self, device, input_tensor):
         output_tensor = self.conv1(device, input_tensor)

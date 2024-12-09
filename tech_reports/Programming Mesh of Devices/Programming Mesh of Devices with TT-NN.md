@@ -41,7 +41,7 @@ TT-NN library natively supports multi-device operations, enabling users to scale
 
 - **MeshDevice**: This "virtual device" abstraction defines a logical 2-D mesh of connected physical devices. Operations that "run on device" are distributed through SPMD across all devices captured in the mesh.
 
-- **Input Data Distribution**: Defines how input data resident in host-memory is distributed to DeviceMesh on-device memory. When operations are distributed to MeshDevice, the operation within a single-device scope works on its local input data.
+- **Input Data Distribution**: Defines how input data resident in host-memory is distributed to MeshDevice on-device memory. When operations are distributed to MeshDevice, the operation within a single-device scope works on its local input data.
 
 - **Tensor**: Defines a N-dimensional matrix containing elements of a single data type. In a MeshDevice context, a Tensor, or colloquially referred to as MeshTensor, represents a collection of tensor shards distributed across devices in a 2D Mesh.
 
@@ -138,7 +138,7 @@ torch_tensor[..., 0:32] = 1.0
 torch_tensor[..., 32:64] = 2.0
 
 # Convert to ttnn.Tensor; MeshTensor holds buffers to two shards in host-memory
-mesh_tensor: ttnn.Tensor = ttnn.from_torch(
+mesh_tensor = ttnn.from_torch(
     torch_tensor,
     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
     layout=ttnn.TILE_LAYOUT,
@@ -165,7 +165,7 @@ ttnn.Tensor([[[[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
 Let's now transfer to device:
 
 ```py
-> mesh_tensor = ttnn.to_device(mesh_tensor, device_mesh)
+> mesh_tensor = ttnn.to_device(mesh_tensor, mesh_device)
 > mesh_tensor
 
 device_id:0
@@ -194,7 +194,7 @@ We can also visualize this tensor distributed across our MeshDevice. The visuali
 ttnn.visualize_mesh_device(mesh_device, tensor=mesh_tensor)
 
 >
-                  DeviceMesh(rows=1, cols=2):
+                  MeshDevice(rows=1, cols=2):
 ┌──────────────────────────────┬──────────────────────────────┐
 │         Dev. ID: 0           │         Dev. ID: 1           │
 │            (0, 0)            │            (0, 1)            │

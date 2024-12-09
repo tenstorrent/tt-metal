@@ -36,7 +36,6 @@ void GlobalSemaphore::setup_buffer(BufferType buffer_type) {
         "Global semaphore can only be created for L1 buffer types");
     TT_FATAL(this->device_ != nullptr, "Device cannot be null");
     TT_FATAL(this->cores_.num_cores() > 0, "CoreRangeSet must have at least one core");
-    const auto& device_grid_size = this->device_->compute_with_storage_grid_size();
     uint32_t num_cores = this->cores_.num_cores();
     auto shard_parameters =
         ShardSpecBuffer(this->cores_, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {num_cores, 1});
@@ -54,14 +53,16 @@ void GlobalSemaphore::setup_buffer(BufferType buffer_type) {
     this->reset_semaphore_value();
 }
 
-std::unique_ptr<GlobalSemaphore> GlobalSemaphore::create(
+std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
     Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
     return std::make_unique<GlobalSemaphore>(device, cores, initial_value, buffer_type);
 }
-std::unique_ptr<GlobalSemaphore> GlobalSemaphore::create(
+std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
     Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
     return std::make_unique<GlobalSemaphore>(device, std::move(cores), initial_value, buffer_type);
 }
+
+Device* GlobalSemaphore::device() const { return device_; }
 
 DeviceAddr GlobalSemaphore::address() const { return buffer_->address(); }
 

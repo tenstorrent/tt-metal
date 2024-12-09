@@ -7,7 +7,6 @@
 #include "tt_metal/device.hpp"
 #include "common/core_coord.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
@@ -19,7 +18,6 @@
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
 #include "dev_msgs.h"
-#include "noc/noc_parameters.h"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
@@ -29,6 +27,10 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/types.hpp"
+#include "noc/noc_parameters.h"
+
+// FIXME: ARCH_NAME specific
+#include "eth_l1_address_map.h"
 
 namespace tt {
 
@@ -224,7 +226,8 @@ void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t tr
 std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id_);
+    const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(this->id_);
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -241,7 +244,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-         .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_type),
+         .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
          .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::L1)),
          .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
@@ -266,17 +269,17 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
         config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
     }
 
-    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->compute_cores_.insert(core);
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
-    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->storage_only_cores_.insert(core);
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
-    for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         const auto noc_coord = this->physical_core_from_logical_core(core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
@@ -320,10 +323,11 @@ void Device::initialize_device_kernel_defines()
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
     auto pcie_cores = soc_d.get_pcie_cores();
     auto grid_size = this->grid_size();
-    this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_cores[0].x));
-    this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_cores[0].y));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x)));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y)));
+
+    CoreCoord pcie_core = pcie_cores.empty() ? grid_size : pcie_cores[0];
+
+    this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));
+    this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_core.y));
 }
 
 void Device::initialize_build() {
@@ -403,13 +407,36 @@ void Device::build_firmware() {
     log_debug(tt::LogMetal, "Building base firmware for device {}", this->id_);
     ZoneScoped;
 
-    this->generate_device_headers(this->build_env_.get_out_firmware_root_path());
     jit_build_set(this->firmware_build_states_, nullptr);
+}
+
+void Device::initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord phys_core)
+{
+    const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_.size() * sizeof(uint16_t);
+    const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_.size() * sizeof(uint16_t);
+    const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_.size() * sizeof(int32_t);
+    const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_.size() * sizeof(int32_t);
+
+    const uint64_t mem_bank_to_noc_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+    const uint32_t mem_bank_to_noc_size = hal.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+
+    TT_ASSERT((dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes) <= mem_bank_to_noc_size,
+        "Size of bank_to_noc table is greater than available space");
+
+    tt::Cluster::instance().write_core(&dram_bank_to_noc_xy_[0], dram_to_noc_sz_in_bytes, tt_cxy_pair(this->id(), phys_core), mem_bank_to_noc_addr);
+    uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
+    tt::Cluster::instance().write_core(&l1_bank_to_noc_xy_[0], l1_to_noc_sz_in_bytes, tt_cxy_pair(this->id(), phys_core), l1_noc_addr);
+
+    uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
+    tt::Cluster::instance().write_core(&dram_bank_offset_map_[0], dram_offset_sz_in_bytes, tt_cxy_pair(this->id(), phys_core), dram_offset_addr);
+    uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
+    tt::Cluster::instance().write_core(&l1_bank_offset_map_[0], l1_offset_sz_in_bytes, tt_cxy_pair(this->id(), phys_core), l1_offset_addr);
 }
 
 void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg) {
     ZoneScoped;
 
+    this->initialize_device_bank_to_noc_tables(core_type, phys_core);
     uint32_t core_type_idx = hal.get_programmable_core_type_index(core_type);
     uint32_t processor_class_count = hal.get_processor_classes_count(core_type);
 
@@ -419,8 +446,11 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                 auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                 for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
-                    ll_api::memory binary_mem = llrt::get_risc_binary(
-                        firmware_build_states_[riscv_id]->get_target_out_path(""), core_type_idx, processor_class, (riscv_id - build_idx));
+                    ll_api::memory const& binary_mem = llrt::get_risc_binary(
+                        firmware_build_states_[riscv_id]->get_target_out_path(""),
+                        core_type_idx,
+                        processor_class,
+                        (riscv_id - build_idx));
                     uint32_t fw_size = binary_mem.get_text_size();
                     if (riscv_id == 1) { // TODO: clean up how brisc/ncrisc are handled
                         // In this context, ncrisc_kernel_size16 is the size of the fw
@@ -462,8 +492,11 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = build_idx; eriscv_id < (build_idx + num_build_states); eriscv_id++) {
-                        ll_api::memory binary_mem = llrt::get_risc_binary(
-                            firmware_build_states_[eriscv_id]->get_target_out_path(""), core_type_idx, processor_class, (eriscv_id - build_idx));
+                        ll_api::memory const& binary_mem = llrt::get_risc_binary(
+                            firmware_build_states_[eriscv_id]->get_target_out_path(""),
+                            core_type_idx,
+                            processor_class,
+                            (eriscv_id - build_idx));
                         uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                         llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, core_type_idx, processor_class, (eriscv_id - build_idx));
@@ -746,7 +779,7 @@ void Device::clear_l1_state() {
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
     std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-        (eth_l1_mem::address_map::ISSUE_CQ_CB_BASE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
+        (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
         0);
 
     // Clear erisc sync info
@@ -1274,7 +1307,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         compile_args[13] = 0; // unused: remote ds semaphore
                         compile_args[14] = 0; // preamble size
                         compile_args[15] = true,    // split_prefetcher
-                        compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
+                        compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_physical_core.x, prefetch_physical_core.y),
                         compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                         compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // XXXX should this be mux pages?
                         compile_args[19] = settings.num_compute_cores;
@@ -1329,7 +1362,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                             compile_args[13] = 0; // unused: remote ds semaphore
                             compile_args[14] = 0; // preamble size
                             compile_args[15] = true,    // split_prefetcher
-                            compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
+                            compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_physical_core.x, prefetch_physical_core.y),
                             compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                             compile_args[18] = mux_settings.cb_pages,
                             compile_args[19] = settings.num_compute_cores;
@@ -1818,6 +1851,7 @@ void Device::setup_tunnel_for_remote_devices() {
             uint8_t num_hw_cqs = this->num_hw_cqs_;
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
             CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
+            const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
             uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
             dispatch_worker_build_settings_t settings = {};
@@ -2188,7 +2222,8 @@ void Device::compile_command_queue_programs() {
         uint32_t cq_size = this->sysmem_manager().get_cq_size();
 
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+            const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
+            CoreType dispatch_core_type = dispatch_core_config.get_core_type();
             tt_cxy_pair prefetch_core = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
             tt_cxy_pair dispatch_core = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
             CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_core, dispatch_core_type);
@@ -2936,6 +2971,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     this->initialize_cluster();
     this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
+    this->generate_device_bank_to_noc_tables();
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal)
@@ -3058,8 +3094,8 @@ CoreCoord Device::logical_grid_size() const {
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(id_);
-    return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_type);
+    const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(id_);
+    return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
 }
 
 CoreCoord Device::dram_grid_size() const {
@@ -3128,7 +3164,7 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
 
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const {
     const auto& grid_size = this->grid_size();
-    return NOC_XY_ENCODING(
+    return tt::tt_metal::hal.noc_xy_encoding(
         tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_core.x),
         tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_core.y)
     );
@@ -3139,14 +3175,14 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
-        return NOC_MULTICAST_ENCODING(
+        return tt::tt_metal::hal.noc_multicast_encoding(
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y)
         );
     } else {
-        return NOC_MULTICAST_ENCODING(
+        return tt::tt_metal::hal.noc_multicast_encoding(
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y),
             tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
@@ -3541,37 +3577,48 @@ void Device::MarkAllocationsSafe() {
     tt::tt_metal::allocator::mark_allocations_safe(*this->get_initialized_allocator());
 }
 
-void Device::generate_device_headers(const std::string &path) const
+void Device::generate_device_bank_to_noc_tables()
 {
     const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
-    const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
     std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
-    std::vector<int32_t> dram_offsets_per_bank(num_dram_banks);
+    dram_bank_offset_map_.clear();
+    dram_bank_offset_map_.resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         dram_noc_coord_per_bank[bank_id] = this->dram_core_from_dram_channel(this->dram_channel_from_bank_id(bank_id));
-        dram_offsets_per_bank[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
+        dram_bank_offset_map_[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
     }
     const size_t num_l1_banks = this->num_banks(BufferType::L1);
-    const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
-    std::vector<int32_t> l1_offset_per_bank(num_l1_banks);
+    l1_bank_offset_map_.clear();
+    l1_bank_offset_map_.resize(num_l1_banks);
     for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
         l1_noc_coord_per_bank[bank_id] = this->worker_core_from_logical_core(this->logical_core_from_bank_id(bank_id));
-        l1_offset_per_bank[bank_id] = this->bank_offset(BufferType::L1, bank_id);
+        l1_bank_offset_map_[bank_id] = this->bank_offset(BufferType::L1, bank_id);
     }
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
 
-    // Generate header file in proper location
-    jit_build_genfiles_bank_to_noc_coord_descriptor (
-        path,
-        soc_d.grid_size,
-        dram_noc_coord_per_bank,
-        dram_offsets_per_bank,
-        l1_noc_coord_per_bank,
-        l1_offset_per_bank,
-        this->get_allocator_alignment()
-    );
+    dram_bank_to_noc_xy_.clear();
+    dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * dram_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
+        for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
+            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
+            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
+            dram_bank_to_noc_xy_.push_back(xy);
+        }
+    }
+
+    l1_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * l1_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
+        for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
+            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, l1_noc_coord_per_bank[bank_id].x);
+            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, l1_noc_coord_per_bank[bank_id].y);
+            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
+            l1_bank_to_noc_xy_.push_back(xy);
+        }
+    }
 }
 
 size_t Device::get_device_kernel_defines_hash() {
@@ -3675,7 +3722,7 @@ v1::DeviceHandle v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions optio
         options.num_hw_cqs,
         options.l1_small_size,
         options.trace_region_size,
-        options.dispatch_core_type,
+        options.dispatch_core_config,
         options.l1_bank_remap);
 
     return tt::DevicePool::instance().get_active_device(device_id);

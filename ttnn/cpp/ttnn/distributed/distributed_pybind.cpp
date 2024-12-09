@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
+#include <utility>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -17,7 +18,12 @@ namespace ttnn::distributed {
 
 namespace py = pybind11;
 
-void py_module_types(py::module& module) { py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice"); }
+void py_module_types(py::module& module) {
+    py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
+    py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
+    py::class_<MeshShape>(module, "MeshShape", "Struct representing the shape of a mesh device.");
+    py::class_<MeshOffset>(module, "MeshOffset", "Struct representing the offset of a mesh device.");
+}
 
 void py_module(py::module& module) {
     py::enum_<MeshType>(module, "MeshType")
@@ -25,6 +31,37 @@ void py_module(py::module& module) {
         .value("Ring", MeshType::Ring)
         .value("Line", MeshType::Line)
         .export_values();
+
+    static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
+        .def(
+            py::init([](size_t num_rows, size_t num_cols) { return MeshShape(num_rows, num_cols); }),
+            "Constructor with specified number of rows and columns.",
+            py::arg("num_rows"),
+            py::arg("num_cols"))
+        .def_readwrite("num_rows", &MeshShape::num_rows, "Number of rows in the mesh.")
+        .def_readwrite("num_cols", &MeshShape::num_cols, "Number of columns in the mesh.")
+        .def(
+            "__repr__",
+            [](const MeshShape& ms) {
+                return "<MeshShape num_rows=" + std::to_string(ms.num_rows) +
+                       " num_cols=" + std::to_string(ms.num_cols) + ">";
+            })
+        .def("__iter__", [](const MeshShape& ms) { return py::iter(py::make_tuple(ms.num_rows, ms.num_cols)); });
+    static_cast<py::class_<MeshOffset>>(module.attr("MeshOffset"))
+        .def(
+            py::init([](size_t row, size_t col) { return MeshOffset(row, col); }),
+            "Constructor with specified row and column offsets.",
+            py::arg("row"),
+            py::arg("col"))
+        .def_readwrite("row", &MeshOffset::row, "Row offset in the mesh.")
+        .def_readwrite("col", &MeshOffset::col, "Column offset in the mesh.")
+        .def(
+            "__repr__",
+            [](const MeshOffset& mo) {
+                return "<MeshOffset row=" + std::to_string(mo.row) + " col=" + std::to_string(mo.col) + ">";
+            })
+        .def("__iter__", [](const MeshOffset& mo) { return py::iter(py::make_tuple(mo.row, mo.col)); });
+
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
@@ -32,8 +69,8 @@ void py_module(py::module& module) {
                         size_t l1_small_size,
                         size_t trace_region_size,
                         size_t num_command_queues,
-                        DispatchCoreType dispatch_core_type,
-                        const std::pair<size_t, size_t>& offset,
+                        const DispatchCoreConfig& dispatch_core_config,
+                        const MeshOffset& offset,
                         const std::vector<chip_id_t>& physical_device_ids,
                         MeshType mesh_type) {
                 return MeshDevice::create(
@@ -41,14 +78,14 @@ void py_module(py::module& module) {
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,
-                    dispatch_core_type);
+                    dispatch_core_config);
             }),
             py::kw_only(),
             py::arg("mesh_shape"),
             py::arg("l1_small_size"),
             py::arg("trace_region_size"),
             py::arg("num_command_queues"),
-            py::arg("dispatch_core_type"),
+            py::arg("dispatch_core_config"),
             py::arg("offset"),
             py::arg("physical_device_ids"),
             py::arg("mesh_type"))
@@ -131,13 +168,59 @@ void py_module(py::module& module) {
             R"doc(
                 Disable program cache across all devices in the mesh.
             )doc")
-        .def_property_readonly("shape", &MeshDevice::shape, R"doc(
+        .def_property_readonly(
+            "shape",
+            &MeshDevice::shape,
+            R"doc(
             Get the shape of the device mesh.
 
             Returns:
                 Tuple[int, int]: The shape of the device mesh as (num_rows, num_cols).
         )doc")
-        .def("__repr__", &MeshDevice::to_string);
+        .def("__repr__", &MeshDevice::to_string)
+        .def(
+            "create_sub_device_manager",
+            [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
+                return self.create_sub_device_manager(sub_devices, local_l1_size);
+            },
+            py::arg("sub_devices"),
+            py::arg("local_l1_size"),
+            R"doc(
+                Creates a sub-device manager for the given mesh device.
+
+                Args:
+                    sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager.
+                    local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
+
+                Returns:
+                    MeshSubDeviceManagerId: The ID of the created sub-device manager.
+            )doc")
+        .def(
+            "load_sub_device_manager",
+            &MeshDevice::load_sub_device_manager,
+            py::arg("mesh_sub_device_manager_id"),
+            R"doc(
+                Loads the sub-device manager with the given ID.
+
+                Args:
+                    mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to load.
+            )doc")
+        .def(
+            "clear_loaded_sub_device_manager",
+            &MeshDevice::clear_loaded_sub_device_manager,
+            R"doc(
+                Clears the loaded sub-device manager for the given mesh device.
+            )doc")
+        .def(
+            "remove_sub_device_manager",
+            &MeshDevice::remove_sub_device_manager,
+            py::arg("mesh_sub_device_manager_id"),
+            R"doc(
+                Removes the sub-device manager with the given ID.
+
+                Args:
+                    mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to remove.
+            )doc");
 
     module.def(
         "open_mesh_device",
@@ -147,10 +230,10 @@ void py_module(py::module& module) {
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
         py::arg("num_command_queues"),
-        py::arg("dispatch_core_type"),
         py::arg("offset"),
         py::arg("physical_device_ids"),
-        py::arg("mesh_type"));
+        py::arg("mesh_type"),
+        py::arg("dispatch_core_config"));
 
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
     module.def(
@@ -186,7 +269,11 @@ void py_module(py::module& module) {
             Tensor: The shard of the tensor corresponding to the device.
     )doc");
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
-    module.def("aggregate_as_tensor", &aggregate_as_tensor, py::arg("tensors"), py::kw_only());
+    module.def(
+        "aggregate_as_tensor",
+        [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
+        py::arg("tensors"),
+        py::kw_only());
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 

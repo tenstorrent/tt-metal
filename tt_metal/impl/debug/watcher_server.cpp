@@ -18,8 +18,6 @@
 #include "dev_msgs.h"
 #include "llrt/llrt.hpp"
 #include "llrt/rtoptions.hpp"
-#include "noc/noc_overlay_parameters.h"
-#include "noc/noc_parameters.h"
 #include "debug/ring_buffer.h"
 #include "watcher_device_reader.hpp"
 
@@ -220,6 +218,7 @@ void watcher_init(Device* device) {
     }
 
     // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
+    const auto NUM_NOCS = tt::tt_metal::hal.get_num_nocs();
     for (int i = 0; i < NUM_NOCS; i++) {
         data->sanitize_noc[i].noc_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
         data->sanitize_noc[i].l1_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;

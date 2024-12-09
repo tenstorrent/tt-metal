@@ -7,9 +7,6 @@
 
 #include "tt_metal/host_api.hpp"
 
-// FIXME: ARCH_NAME specific include
-#include "tensix_types.h"  // L1_SIZE
-
 namespace ttnn::operations::experimental::transformer {
 
 void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
@@ -122,10 +119,11 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
     uint32_t per_core_q_tiles = q_shard_ht * q_shard_wt;
     uint32_t per_core_k_tiles = k_shard_ht * k_shard_wt;
 
+    const uint32_t l1_size = q_input_tensor.device()->l1_size_per_core();
     const uint32_t single_tile_size =
         tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(q_input_tensor.get_dtype()));
     TT_FATAL(
-        L1_SIZE >= 2 * (per_core_q_tiles + 2 * per_core_k_tiles) * single_tile_size, "Workload exceeds L1 capacity");
+        l1_size >= 2 * (per_core_q_tiles + 2 * per_core_k_tiles) * single_tile_size, "Workload exceeds L1 capacity");
 
     // TODO: Add this back when output is HEIGHT sharded only!
     // TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");

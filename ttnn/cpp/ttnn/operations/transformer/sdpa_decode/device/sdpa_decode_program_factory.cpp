@@ -125,19 +125,21 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores_available = grid_size.x * grid_size.y;
 
-    TT_FATAL(
-        num_cores_available <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,
-        "Error");
+    uint32_t num_cores_in_grid = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    TT_FATAL(num_cores_available <= num_cores_in_grid, "Expected number of cores available to be less than or equal to the number of cores in the grid, got {} and {}", num_cores_available, num_cores_in_grid);
+    TT_FATAL(num_cores_available >= B, "Expect number of cores available to be greater or equal to batch size, got {} and {}", num_cores_available, B);
 
     // balance the number of cores to use based on batch
     uint32_t max_num_cores_for_compute = program_config->max_cores_per_head_batch * B * num_kv_heads;
     uint32_t num_cores_per_batch = std::min(num_cores_available, max_num_cores_for_compute) / B;
-    uint32_t num_active_cores = num_cores_per_batch * B;
     //// for core assignment, it is the same whether there's 1 core for head or 1 core for many heads
     uint32_t num_cores_per_head = std::max((uint32_t)1, num_cores_per_batch / num_kv_heads);
-    uint32_t num_heads_per_core = std::max((uint32_t)1, num_kv_heads / num_cores_per_batch);
+    uint32_t num_heads_per_core = std::max((uint32_t)1, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch));
     uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     uint32_t num_output_cores = B;
+    uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
+    //// recalculate num_cores_per_batch based on num_active_cores
+    num_cores_per_batch = num_active_cores / B;
 
     TT_FATAL(
         ((num_cores_per_head >= 1) && (num_heads_per_core == 1)) ||
@@ -146,10 +148,10 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     // create core group, assume n batch and k_heads:
     // this is a 1D list of cores sorted by batch_output1, worker, ..., batch_output2, worker, ..., batch_output n,
-    // worker, ... Within each batch, we will assign head reducers. e.g. the following mapping: (batch_output1, worker1,
-    // worker2),   (worker3,       worker4,   worker5),   ..., (... worker3*k-1, worker3*k) (head_reducer1,  h_worker1,
-    // h_worker2), (head_reducer2, h_worker1, h_worker2), ..., (head_reducerk, h_worker1, h_worker2) head_reducer2 to
-    // head_reducerk then send the result to head_reducer1, which is also the batch_output1
+    // worker, ... Within each batch, we will assign head reducers. e.g. the following mapping:
+    // (batch_output1, worker1,   worker2),   (worker3,       worker4,   worker5),   ..., (... worker3*k-1, worker3*k)
+    // (head_reducer1, h_worker1, h_worker2), (head_reducer2, h_worker1, h_worker2), ..., (head_reducerk, h_worker1,
+    // h_worker2) head_reducer2 to head_reducerk then send the result to head_reducer1, which is also the batch_output1
     std::vector<CoreCoord> core_group;
     std::vector<CoreCoord> core_group_idle;
     if (is_q_sharded || is_output_sharded) {

@@ -93,6 +93,9 @@ def test_head(device, reset_seeds, model_location_generator):
     result_2 = result_2[:, :255, :, :]
     result_3 = result_3[:, :255, :, :]
 
-    assert_with_pcc(result_1, ref1, 0.99)
-    assert_with_pcc(result_2, ref2, 0.99)
-    assert_with_pcc(result_3, ref3, 0.99)
+    pcc_passed, pcc_message = assert_with_pcc(result_1, ref1, 0.99)
+    logger.info(pcc_message)
+    pcc_passed, pcc_message = assert_with_pcc(result_2, ref2, 0.99)
+    logger.info(pcc_message)
+    pcc_passed, pcc_message = assert_with_pcc(result_3, ref3, 0.99)
+    logger.info(pcc_message)
