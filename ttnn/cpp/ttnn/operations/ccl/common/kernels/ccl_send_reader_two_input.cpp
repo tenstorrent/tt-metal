@@ -951,6 +951,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+    DPRINT << "START\n";
     size_t arg_idx = 0;
     #ifndef NO_TENSOR_MODE
     // Load the input tensor spec

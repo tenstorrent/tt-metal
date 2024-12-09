@@ -105,7 +105,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
-    args_out.reserve(args_out.size() + (sizeof(connection) / sizeof(size_t)) + 1);
     auto edm_noc_xy = WorkerXY(connection.edm_noc_x, connection.edm_noc_y);
     std::vector<uint32_t> const values = {
         connection.persistent_fabric,
@@ -120,6 +119,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         sender_worker_flow_control_semaphore_id,
         sender_worker_buffer_index_semaphore_id
         };
+    args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
@@ -541,7 +541,7 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(Device
     auto &link_count_map = (direction == FORWARD) ? next_forward_direction_edm_available : next_backward_direction_edm_available;
     log_info(tt::LogOp, "EDM conecting in {} direction", direction == FORWARD ? "FORWARD" : "BACKWARD");
     const auto next_link = link_count_map[device->id()];
-    link_count_map[device->id()] = next_link + 1;
+    link_count_map[device->id()] = (next_link + 1) %  edm_builders.size();
 
     TT_ASSERT(edm_builders.size() > 0);
     TT_ASSERT(next_link < edm_builders.size());
@@ -657,22 +657,16 @@ void FabricEriscDatamoverBuilder::teardown_from_host(Device *d) const {
 }
 
 void EdmLineFabricOpInterface::teardown_from_host() const {
-    auto terminate_edm_core = [](Device *d, FabricEriscDatamoverBuilder const& edm) {
-        std::vector<uint32_t> val(1, tt::fabric::GRACEFULLY_TERMINATE);
-        tt::tt_metal::detail::WriteToDeviceL1(
-            d,
-            d->logical_core_from_ethernet_core(CoreCoord(edm.my_noc_x, edm.my_noc_y)),
-            ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address,
-            val,
-            CoreType::ETH);
-    };
-
     for (Device *d : this->device_sequence) {
-        for (auto& edm_builder : edm_builders_forward_direction.at(d->id())) {
-            terminate_edm_core(d, edm_builder);
+        if (edm_builders_forward_direction.find(d->id()) != edm_builders_forward_direction.end()) {
+            for (auto& edm_builder : edm_builders_forward_direction.at(d->id())) {
+                edm_builder.teardown_from_host(d);
+            }
         }
-        for (auto& edm_builder : edm_builders_backward_direction.at(d->id())) {
-            terminate_edm_core(d, edm_builder);
+        if (edm_builders_backward_direction.find(d->id()) != edm_builders_backward_direction.end()) {
+            for (auto& edm_builder : edm_builders_backward_direction.at(d->id())) {
+                edm_builder.teardown_from_host(d);
+            }
         }
     }
 }
