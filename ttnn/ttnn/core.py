@@ -59,6 +59,23 @@ def num_cores_to_corerangeset(
     )
 
 
+def num_cores_to_corerangeset_in_subcoregrids(
+    start_core: ttnn.CoreCoord,
+    target_num_cores: int,
+    subcoregrids: ttnn.CoreRangeSet,
+    row_wise: bool = False,
+):
+    """
+    Create a CoreRangeSet containing the specified number of cores starting from start_core in given subcoregrids
+    """
+    return ttnn._ttnn.operations.core.num_cores_to_corerangeset_in_subcoregrids(
+        start_core,
+        target_num_cores,
+        subcoregrids,
+        row_wise,
+    )
+
+
 def has_tile_padding(tensor, *, dim=None):
     if dim is not None:
         rank = tensor.shape.rank
