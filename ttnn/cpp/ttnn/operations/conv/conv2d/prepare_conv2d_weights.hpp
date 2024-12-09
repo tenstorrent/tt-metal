@@ -6,21 +6,13 @@
 #pragma once
 #include <optional>
 
-#include "conv2d_utils.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/common/math.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+
+namespace ttnn::operations::sliding_window {
+    struct ParallelConfig;
+}
 
 namespace ttnn {
 
