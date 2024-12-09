@@ -14,7 +14,8 @@ Once you have setup the hardware move on to step 2.
 #### Install System-level Dependencies
 ```
 wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/install_dependencies.sh
-sudo bash ./install_dependencies.sh
+chmod a+x install_dependencies.sh
+sudo ./install_dependencies.sh
 ```
 
 #### Install the Driver (TT-KMD)
@@ -182,6 +183,7 @@ source python_env/bin/activate
 ---
 
 ## Option 2: From Docker Release Image
+Installing from Docker Release Image is the quickest way to access our APIs and to start runnig AI models.
 
 ### Step 1. Download and Install the Latest Docker release Image:
 
