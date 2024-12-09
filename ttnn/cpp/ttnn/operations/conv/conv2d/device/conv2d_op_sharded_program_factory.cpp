@@ -1033,6 +1033,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         // TODO: Generalize this to not make this assumption
         read_window_in_inner_loop = true;
         if (!block_sharded) {
+            TT_THROW("Weight width sliced only supported for block sharded conv");
             num_weight_cb_tiles *= filter_h * filter_w;
             num_act_cb_tiles *= filter_h * filter_w;
         }
