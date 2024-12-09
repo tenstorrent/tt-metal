@@ -167,7 +167,7 @@ CclHostLowLevelWorkerCommand local_semaphore_wait(semaphore_id_t const& semaphor
 CclHostLowLevelWorkerCommand local_core_semaphore_set(semaphore_id_t const& semaphore_id, size_t value) {
     TT_FATAL(value < std::numeric_limits<uint32_t>::max(), "When invoking: local_core_inline_write. Raw inline writes currently are limited to values no larger than {} due to a command encoding limitation. Support for larger values is not yet added", std::numeric_limits<uint32_t>::max());
     return CclHostLowLevelWorkerCommand(
-        CclCommandCode::WAIT_VALUE,
+        CclCommandCode::RAW_INLINE_WRITE_BYTES,
         ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandInlineReadWrite{value}),
         ttnn::ccl::cmd::CclCommandAddrType::NONE,
         ttnn::ccl::cmd::CclCommandAddrNone{},
