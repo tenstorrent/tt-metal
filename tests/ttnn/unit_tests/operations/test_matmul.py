@@ -992,8 +992,8 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         per_core_N = n // num_cores // 32 + uneven_width
     else:
         in0_block_w = k // 32
-        per_core_M = (m // 32 // num_cores + uneven_width,)
-        per_core_N = (n // 32,)
+        per_core_M = m // 32 // num_cores + uneven_width
+        per_core_N = n // 32
     out_block_h = per_core_M // num_out_block_h
     out_block_w = per_core_N // num_out_block_w
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
