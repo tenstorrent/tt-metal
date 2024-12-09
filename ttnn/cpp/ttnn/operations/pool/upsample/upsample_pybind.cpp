@@ -25,7 +25,7 @@ void bind_upsample(py::module& module) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            scale_factor (int or tt::tt_metal::Array2D or tt::tt_metal::Array3D or tt::tt_metal::Array4D): multiplier for spatial size. Has to match input size if it is a tuple.
+            scale_factor (int or tt::tt_metal::Array2D): multiplier for spatial size.
 
 
         Keyword args:
