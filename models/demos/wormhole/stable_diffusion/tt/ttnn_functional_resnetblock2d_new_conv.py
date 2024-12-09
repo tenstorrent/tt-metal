@@ -459,19 +459,22 @@ class resnetBlock2D:
             conv_config = ttnn.Conv2dConfig(
                 dtype=ttnn.bfloat8_b,
                 weights_dtype=ttnn.bfloat8_b,
-                math_fidelity=ttnn.MathFidelity.LoFi,
                 activation="",
                 shard_layout=self.conv1_shard_layout,
-                math_approx_mode_enabled=True,
-                fp32_dest_acc_enabled=True,
-                packer_l1_accum_enabled=False,
                 input_channels_alignment=32,
                 transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
+            compute_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
             if self.conv1_config_override and "act_block_h" in self.conv2_config_override:
                 conv_config.act_block_h_override = self.conv1_config_override["act_block_h"]
-            [hidden_states, _out_height, _out_width, self.conv1s_weights[0], self.conv1s_bias[0]] = ttnn.conv2d(
+            [hidden_states, [self.conv1s_weights[0], self.conv1s_bias[0]]] = ttnn.conv2d(
                 input_tensor=hidden_states,
                 weight_tensor=self.conv1s_weights[0],
                 in_channels=self.conv1_in_channels,
@@ -485,7 +488,10 @@ class resnetBlock2D:
                 input_height=self.conv1_input_height,
                 input_width=self.conv1_input_width,
                 conv_config=conv_config,
+                compute_config=compute_config,
                 conv_op_cache=conv_cache,
+                return_output_dim=False,
+                return_weights_and_bias=True,
             )
 
         else:
@@ -529,26 +535,26 @@ class resnetBlock2D:
                 conv_config = ttnn.Conv2dConfig(
                     dtype=ttnn.bfloat8_b,
                     weights_dtype=ttnn.bfloat8_b,
-                    math_fidelity=ttnn.MathFidelity.LoFi,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    math_approx_mode_enabled=True,
-                    fp32_dest_acc_enabled=True,
-                    packer_l1_accum_enabled=False,
                     input_channels_alignment=32,
                     transpose_shards=False,
                     reshard_if_not_optimal=False,
                 )
-
+                compute_config = ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                )
                 if self.conv1_config_override and "act_block_h" in self.conv2_config_override:
                     conv_config.act_block_h_override = self.conv1_config_override["act_block_h"]
 
                 [
                     split_hidden_states[i],
-                    _out_height,
-                    _out_width,
-                    self.conv1s_weights[i],
-                    self.conv1s_bias[i],
+                    [_out_height, _out_width],
+                    [self.conv1s_weights[i], self.conv1s_bias[i]],
                 ] = ttnn.conv2d(
                     input_tensor=split_hidden_states[i],
                     weight_tensor=self.conv1s_weights[i],
@@ -563,7 +569,10 @@ class resnetBlock2D:
                     input_height=self.conv1_input_height,
                     input_width=self.conv1_input_width,
                     conv_config=conv_config,
+                    compute_config=compute_config,
                     conv_op_cache=conv_cache,
+                    return_output_dim=True,
+                    return_weights_and_bias=True,
                 )
                 if i != 0:
                     split_hidden_states[i] = ttnn.add(
@@ -658,19 +667,22 @@ class resnetBlock2D:
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            math_approx_mode_enabled=True,
-            fp32_dest_acc_enabled=True,
-            packer_l1_accum_enabled=False,
             input_channels_alignment=32,
             transpose_shards=False,
             reshard_if_not_optimal=False,
         )
+        compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
         if self.conv2_config_override and "act_block_h" in self.conv2_config_override:
             conv_config.act_block_h_override = self.conv2_config_override["act_block_h"]
-        [hidden_states, _out_height, _out_width, self.conv2_weights, self.conv2_bias] = ttnn.conv2d(
+        [hidden_states, [_out_height, _out_width], [self.conv2_weights, self.conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.conv2_weights,
             bias_tensor=self.conv2_bias,
@@ -684,7 +696,10 @@ class resnetBlock2D:
             input_height=self.conv2_input_height,
             input_width=self.conv2_input_width,
             conv_config=conv_config,
+            compute_config=compute_config,
             conv_op_cache=conv_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
         use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
 
@@ -702,17 +717,24 @@ class resnetBlock2D:
             conv_config = ttnn.Conv2dConfig(
                 dtype=ttnn.bfloat8_b,
                 weights_dtype=ttnn.bfloat8_b,
-                math_fidelity=ttnn.MathFidelity.LoFi,
                 activation="",
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                math_approx_mode_enabled=True,
-                fp32_dest_acc_enabled=True,
-                packer_l1_accum_enabled=False,
                 input_channels_alignment=32,
                 transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
-            [input_tensor, _out_height, _out_width, self.conv_shortcut_weights, self.conv_shortcut_bias] = ttnn.conv2d(
+            compute_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+            [
+                input_tensor,
+                [_out_height, _out_width],
+                [self.conv_shortcut_weights, self.conv_shortcut_bias],
+            ] = ttnn.conv2d(
                 input_tensor=input_tensor,
                 weight_tensor=self.conv_shortcut_weights,
                 in_channels=self.conv_shortcut_in_channels,
@@ -726,7 +748,10 @@ class resnetBlock2D:
                 input_height=self.conv_shortcut_input_height,
                 input_width=self.conv_shortcut_input_width,
                 conv_config=conv_config,
+                compute_config=compute_config,
                 conv_op_cache=conv_cache,
+                return_output_dim=True,
+                return_weights_and_bias=True,
             )
 
         if ttnn.get_memory_config(input_tensor) != ttnn.get_memory_config(hidden_states):

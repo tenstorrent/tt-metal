@@ -127,12 +127,11 @@ def test_prepare_conv_weights(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         input_channels_alignment=(16 if input_channels == 16 and input_height == 115 else 32),
-        packer_l1_accum_enabled=packer_l1_acc,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
     )
-
+    compute_config = ttnn.init_device_compute_kernel_config(device.arch(), packer_l1_acc=packer_l1_acc)
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
@@ -179,11 +178,12 @@ def test_prepare_conv_weights(
     tt_weight_tensor_formatted = ttnn.to_device(tt_weight_tensor_formatted, device)
     tt_bias_tensor_formatted = ttnn.to_device(tt_bias_tensor_formatted, device) if has_bias else None
     (k := next(iter(conv_kwargs)), conv_kwargs.pop(k))  ##removing 1st element from dict
-    tt_output_tensor_on_device, _, _, _, _ = ttnn.conv2d(
+    tt_output_tensor_on_device = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor_formatted,
         bias_tensor=tt_bias_tensor_formatted,
         **conv_kwargs,
+        compute_config=compute_config,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)

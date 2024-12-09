@@ -176,11 +176,20 @@ def conv2d(
     groups: int = 1,
     bias_tensor: ttnn.Tensor = None,
     conv_config: Conv2dConfig = None,  # config overrides by user
+    compute_config=None,  # compute config overrides by user
     memory_config: ttnn.MemoryConfig = None,  # memory config overrides by user
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,  # ignored
+    return_output_dim=False,
+    return_weights_and_bias=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    return ttnn._ttnn.operations.conv.conv2d(
+    (
+        conv_output,
+        output_height,
+        output_width,
+        prepared_device_weight,
+        prepared_device_bias,
+    ) = ttnn._ttnn.operations.conv.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight_tensor,
         device=device,
@@ -196,8 +205,18 @@ def conv2d(
         groups=groups,
         bias_tensor=bias_tensor,
         conv_config=conv_config,
+        compute_config=compute_config,
         memory_config=memory_config,
     )
+
+    if return_output_dim and return_weights_and_bias:
+        return conv_output, [output_height, output_width], [prepared_device_weight, prepared_device_bias]
+    elif return_weights_and_bias:
+        return conv_output, [prepared_device_weight, prepared_device_bias]
+    elif return_output_dim:
+        return conv_output, [output_height, output_width]
+    else:
+        return conv_output
 
 
 __all__ = []

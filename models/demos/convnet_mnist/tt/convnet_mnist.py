@@ -19,21 +19,23 @@ def convnet_mnist(
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
-        math_fidelity=ttnn.MathFidelity.LoFi,
         activation="",
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        math_approx_mode_enabled=True,
-        fp32_dest_acc_enabled=False,
-        packer_l1_accum_enabled=False,
         input_channels_alignment=32,
         transpose_shards=False,
         reshard_if_not_optimal=True,
         deallocate_activation=True,
         reallocate_halo_output=True,
     )
-
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
     x = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-    [x, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    x = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=parameters.conv1.weight,
         in_channels=1,
@@ -47,9 +49,12 @@ def convnet_mnist(
         input_height=input_tensor.shape[1],
         input_width=input_tensor.shape[2],
         conv_config=conv_config,
+        compute_config=compute_config,
         conv_op_cache={},
         debug=True,
         groups=1,
+        return_output_dim=False,
+        return_weights_and_bias=False,
     )
     x = ttnn.relu(x)
 
@@ -76,7 +81,7 @@ def convnet_mnist(
             dilation=[1, 1],
         )
 
-    [x, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    x, [out_height, out_width] = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=parameters.conv2.weight,
         in_channels=32,
@@ -93,6 +98,8 @@ def convnet_mnist(
         conv_op_cache={},
         debug=False,
         groups=1,
+        return_output_dim=True,
+        return_weights_and_bias=False,
     )
 
     x = ttnn.relu(x)

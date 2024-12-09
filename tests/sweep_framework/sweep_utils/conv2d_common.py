@@ -117,18 +117,20 @@ def run_full(
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
         shard_layout=None,
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
         override_sharding_config=override_sharding_config,
         output_layout=output_layout,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_split_reader=enable_split_reader,
         enable_subblock_padding=enable_subblock_padding,
     )
-
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+    )
     if override_sharding_config:
         if len(core_grid) == 2:
             conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core_grid[0], core_grid[1])})
@@ -137,7 +139,7 @@ def run_full(
                 {ttnn.CoreRange(core_grid[0], core_grid[1]), ttnn.CoreRange(core_grid[2], core_grid[3])}
             )
     start_time = start_measuring_time()
-    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -152,7 +154,10 @@ def run_full(
         input_height=input_height,
         input_width=input_width,
         conv_config=conv_config,
+        compute_config=compute_config,
         groups=groups,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -220,7 +225,7 @@ def run_short(
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
     start_time = start_measuring_time()
-    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -235,6 +240,8 @@ def run_short(
         input_height=input_height,
         input_width=input_width,
         groups=groups,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)

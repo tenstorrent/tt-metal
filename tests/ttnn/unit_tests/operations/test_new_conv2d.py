@@ -137,18 +137,21 @@ def run_conv(
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
         shard_layout=shard_layout,
         input_channels_alignment=(
             16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
         ),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
         output_layout=output_layout,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
     )
     if config_override and "act_block_h" in config_override and not auto_shard:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -162,7 +165,7 @@ def run_conv(
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
 
-    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -177,10 +180,13 @@ def run_conv(
         input_height=input_height,
         input_width=input_width,
         conv_config=conv_config,
+        compute_config=compute_config,
         conv_op_cache=reader_patterns_cache,
         debug=debug,
         groups=groups,
         memory_config=memory_config,
+        return_weights_and_bias=True,
+        return_output_dim=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -280,11 +286,14 @@ def run_conv_with_split(
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
         shard_layout=shard_layout if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
         # input_channels_alignment=(16 if use_shallow_conv_variant else 32),
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -306,7 +315,7 @@ def run_conv_with_split(
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
         # tt_input_tensor_on_device = convs[i].copy_input_to_device(tt_input_tensor)
         # tt_output_tensor_on_device = convs[i](tt_input_tensor_on_device)
-        [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+        [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
             weight_tensor=tt_weight_tensor,
             in_channels=split_input_channels,
@@ -320,7 +329,10 @@ def run_conv_with_split(
             input_height=input_height,
             input_width=input_width,
             conv_config=conv_config,
+            compute_config=compute_config,
             conv_op_cache=reader_patterns_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
         tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
         torch_conv_output_tensor = ttnn.to_torch(tt_conv_output_tensor)
@@ -625,12 +637,9 @@ def test_conv_ws(
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=ttnn.MathFidelity.HiFi4,
         shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED if not auto_shard else None,
         input_channels_alignment=32,
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
@@ -638,7 +647,13 @@ def test_conv_ws(
         act_block_w_div=act_block_w_div if not auto_shard else 1,
         act_block_h_override=32,
     )
-    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+    )
+    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -652,9 +667,12 @@ def test_conv_ws(
         input_height=input_height,
         input_width=input_width,
         conv_config=conv_config,
+        compute_config=compute_config,
         conv_op_cache=reader_patterns_cache,
         debug=debug,
         groups=groups,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -2730,7 +2748,7 @@ def test_shallow_conv_with_tiled_input(device):
 
     tt_input = ttnn.reshape(tt_input, (1, 1, batch_size * img_h * img_w, in_channels))
 
-    tt_out, out_height, out_width, _, _ = ttnn.conv2d(
+    [tt_out, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input,
         weight_tensor=tt_kernel,
         in_channels=in_channels,
@@ -2745,7 +2763,12 @@ def test_shallow_conv_with_tiled_input(device):
         input_height=img_h,
         input_width=img_w,
         groups=1,
+        compute_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+        ),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_out)
