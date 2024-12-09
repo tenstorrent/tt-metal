@@ -591,7 +591,7 @@ def test_conv_ws(
     debug = False
     groups = 1
 
-    torch.manual_seed(0)
+    # torch.manual_seed()
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
     conv_bias_shape = [1, 1, 1, output_channels]
