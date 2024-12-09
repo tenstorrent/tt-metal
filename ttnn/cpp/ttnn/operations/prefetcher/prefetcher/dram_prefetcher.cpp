@@ -15,8 +15,18 @@ ttnn::Tensor ExecuteDramPrefetcher::invoke(
     std::vector<ttnn::Tensor>& tensors,
     const Tensor& tensor_addrs,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
-    operation::run(DramPrefetcher{tensor_addrs, global_cb}, tensors);
-    return tensors[0];
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output(tensors))};
+    operation::launch_op(
+        [tensor_addrs, global_cb](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            return operation::run(DramPrefetcher{tensor_addrs, global_cb}, input_tensors);
+        },
+        tensors,
+        output_tensors);
+
+    return output_tensors[0];
 }
 
 }  // namespace ttnn::operations::dram_prefetcher
