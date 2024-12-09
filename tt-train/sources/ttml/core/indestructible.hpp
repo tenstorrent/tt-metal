@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <type_traits>
 #include <utility>
 
 namespace ttml::core {
@@ -11,28 +10,31 @@ namespace ttml::core {
 template <typename T>
 class Indestructible {
 public:
-    // Create (or retrieve) the single indestructible instance of T.
-    // This constructs T only once and returns a reference.
     template <typename... Args>
-    static T& get_instance(Args&&... args) {
-        static bool constructed = false;
-        static typename std::aligned_storage<sizeof(T), alignof(T)>::type storage;
-        if (!constructed) {
-            // Construct the object in the allocated storage
-            new (&storage) T(std::forward<Args>(args)...);
-            constructed = true;
-        }
-        // Return a reference to the constructed object
+    explicit Indestructible(Args&&... args) {
+        // Construct T in our aligned storage
+        new (&storage) T(std::forward<Args>(args)...);
+    }
+
+    T& get() {
         return *reinterpret_cast<T*>(&storage);
     }
-    // Disallow creating instances of Indestructible itself
-    Indestructible() = delete;
+
+    const T& get() const {
+        return *reinterpret_cast<const T*>(&storage);
+    }
+
+    // Disable copy and assignment
     Indestructible(const Indestructible&) = delete;
     Indestructible& operator=(const Indestructible&) = delete;
 
-private:
-    // Private destructor to prevent external destruction.
-    // Even if called, it won't be used since we never create `Indestructible` objects.
+    // Destructor does NOT call T's destructor.
+    // This leaves the object "indestructible."
     ~Indestructible() = default;
+
+private:
+    // A buffer of unsigned char with alignment of T and size of T
+    alignas(T) unsigned char storage[sizeof(T)];
 };
+
 }  // namespace ttml::core

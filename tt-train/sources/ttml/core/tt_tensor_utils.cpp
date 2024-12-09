@@ -193,11 +193,7 @@ template <class T, DataType TensorType>
     host_owned_shapes.reserve(buffers.size());
     for (const auto& buffer : buffers) {
         auto shape = create_shape(get_shape_4d(buffer));
-        size_t volume = shape.logical_shape().volume();
-        if (buffer.size() != volume) {
-            throw std::logic_error(
-                fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
-        }
+
         if constexpr (std::is_same_v<T, float>) {
             auto owned_buffer =
                 create_owned_buffer_from_vector_of_floats(std::vector<T>(buffer.begin(), buffer.end()), TensorType);

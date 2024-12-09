@@ -7,8 +7,6 @@
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
 #include <ttnn/distributed/types.hpp>
-#include <ttnn/tensor/types.hpp>
-#include <xtensor/xrandom.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
@@ -16,8 +14,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce/all_reduce.hpp"
-#include "xtensor/xbuilder.hpp"
-#include "xtensor/xio.hpp"
 
 auto check_board_is_n300() {
     return tt::Cluster::instance().get_board_type(0) == BoardType::N300;
@@ -167,5 +163,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
     ttml::core::MeshToXTensorVariant<float> composer = ttml::core::ConcatMeshToXTensor<float>(mesh_shape, 3);
     auto xtensors_back = ttml::core::to_xtensor(mul_tensor, composer);
     xt::xarray<float> mul_res = xt::linalg::dot(xtensor_a, xtensor_b);
+
+    // (128, 64) X (64, 256) => (128, 256)
     EXPECT_TRUE(xt::allclose(mul_res, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2));
 }

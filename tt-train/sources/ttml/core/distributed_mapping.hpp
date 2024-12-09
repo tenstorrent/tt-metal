@@ -194,7 +194,7 @@ public:
         tt::tt_metal::distributed::MeshShape mesh_shape, const tt::tt_metal::distributed::MeshShape& dims) :
         Base(std::move(mesh_shape)), m_dims(dims) {
         if (m_dims.first == m_dims.second) {
-            throw std::invalid_argument("Both dimensions in 'dims' must be different");
+            throw std::invalid_argument("Dimensions in 'dims' must be different");
         }
     }
 
@@ -204,28 +204,18 @@ public:
         size_t row_dim = m_dims.first;
         size_t col_dim = m_dims.second;
 
-        // Reshape the list of shards into a 2D grid representing the mesh
-        std::vector<std::vector<xt::xarray<T>>> mesh_shape_tensors;
-        mesh_shape_tensors.reserve(rows);
-        for (int i = 0; i < rows; ++i) {
-            std::vector<xt::xarray<T>> row_tensors;
-            row_tensors.reserve(cols);
-            for (int j = 0; j < cols; ++j) {
-                int index = i * cols + j;
-                row_tensors.push_back(tensors[index]);
-            }
-            mesh_shape_tensors.push_back(std::move(row_tensors));
-        }
-
-        // Concatenate along columns first (within each row)
         std::vector<xt::xarray<T>> row_concatenated;
         row_concatenated.reserve(static_cast<size_t>(rows));
-        for (const auto& row : mesh_shape_tensors) {
-            auto concatenated_row = core::concatenate(row, col_dim);
+
+        for (int i = 0; i < rows; ++i) {
+            auto row_start = tensors.begin() + i * cols;
+            auto row_end = row_start + cols;
+            std::vector<xt::xarray<T>> row_tensors(row_start, row_end);
+
+            auto concatenated_row = core::concatenate(row_tensors, col_dim);
             row_concatenated.push_back(std::move(concatenated_row));
         }
 
-        // Then concatenate the resulting tensors along rows
         auto result = core::concatenate(row_concatenated, row_dim);
         return {result};
     }

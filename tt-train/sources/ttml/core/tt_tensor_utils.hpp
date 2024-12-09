@@ -57,7 +57,7 @@ template <class T = float, DataType TensorType = DataType::BFLOAT16>
 template <class T = float>
 [[nodiscard]] xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     auto vec = to_vector<T>(tensor);
-    auto shape = tensor.get_shape().logical_shape();  // TODO: check if this is correct shape
+    auto shape = tensor.get_shape().logical_shape();
     return span_to_xtensor(std::span<T>(vec.data(), vec.size()), shape);
 }
 
