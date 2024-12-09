@@ -9,12 +9,17 @@ namespace ttnn::operations::data_movement {
 
 ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
     const auto tensor_shape = input_tensor.get_shape();
-    const auto rank = tensor_shape.rank();
+    const uint32_t rank = tensor_shape.rank();
     SmallVector<uint32_t> output_shape_vector;
 
     int normal_dim;
     // Handle negative dimension by converting it to positive
-    TT_FATAL((dim < -rank - 1) || (dim > rank), "Dimension out of range");
+    TT_FATAL(
+        (dim < -rank - 1) || (dim > rank),
+        "Dimension out of range (expected to be in range of [{},{}], but got {})",
+        -rank - 1,
+        rank,
+        dim);
     if (dim < 0) {
         normal_dim = rank + 1 + dim;
     } else {
@@ -34,7 +39,7 @@ ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const 
         output_shape_vector.push_back(1);
     }
 
-    return ttnn::reshape(input_tensor, ttnn::Shape(output_shape_vector));
+    return ttnn::reshape(input_tensor, output_shape_vector);
 }
 
 }  // namespace ttnn::operations::data_movement
