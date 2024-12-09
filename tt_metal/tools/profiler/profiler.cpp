@@ -22,8 +22,7 @@ namespace tt {
 
 namespace tt_metal {
 
-void DeviceProfiler::readRiscProfilerResults(
-    int device_id, const std::vector<std::uint32_t>& profile_buffer, const CoreCoord& worker_core) {
+void DeviceProfiler::readRiscProfilerResults(int device_id, const CoreCoord& worker_core) {
     ZoneScoped;
 
     my_device_id = device_id;
@@ -352,8 +351,6 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
     generateZoneSourceLocationsHashes();
 
     if (output_dram_buffer != nullptr) {
-        std::vector<uint32_t> profile_buffer(output_dram_buffer->size() / sizeof(uint32_t), 0);
-
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
@@ -370,7 +367,7 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
         }
 
         for (const auto& worker_core : worker_cores) {
-            readRiscProfilerResults(device_id, profile_buffer, worker_core);
+            readRiscProfilerResults(device_id, worker_core);
         }
     } else {
         log_warning("DRAM profiler buffer is not initialized");

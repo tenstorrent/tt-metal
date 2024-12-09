@@ -496,7 +496,7 @@ void ProfilerSync(ProfilerSyncState state) {
                         .emplace(sender.first, (std::pair<double, uint64_t>){1 / freqScale, -1 * int(shift)});
                 }
             }
-            setSyncInfo(0, (std::pair<double, uint64_t>){1, 0}, deviceDeviceSyncInfo);
+            setSyncInfo(0, (std::pair<double, uint64_t>){1.0, 0}, deviceDeviceSyncInfo);
         }
     }
 
@@ -547,6 +547,8 @@ void InitDeviceProfiler(Device* device) {
                 .page_size = pageSize,
                 .buffer_type = tt::tt_metal::BufferType::DRAM};
             tt_metal_device_profiler_map.at(device_id).output_dram_buffer = tt_metal::CreateBuffer(dram_config);
+            tt_metal_device_profiler_map.at(device_id).profile_buffer.resize(
+                tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size() / sizeof(uint32_t));
         }
 
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
