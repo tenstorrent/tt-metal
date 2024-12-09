@@ -1029,6 +1029,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     auto stick_size_padded = W_padded * a.element_size();
     auto stick_size_padded_front = front_pad[-1] * a.element_size();
     auto stick_size_padded_end = stick_size_padded - stick_size - stick_size_padded_front;
+    uint32_t stick_size_padded_aligned = align(stick_size_padded, hal.get_alignment(HalMemType::L1));
     uint32_t row_major_min_bytes = 16;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -1050,31 +1051,32 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
          num_sticks_padded_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
 
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     auto num_sticks = num_sticks_padded_per_core_group_1 > num_sticks_padded_per_core_group_2
                           ? num_sticks_padded_per_core_group_1
                           : num_sticks_padded_per_core_group_2;
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_sticks * stick_size_padded, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, stick_size_padded);
+        tt::tt_metal::CircularBufferConfig(num_sticks * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, stick_size_padded_aligned);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
     if (not_pad_by_zero) {
-        uint32_t src1_cb_index = 1;
+        uint32_t src1_cb_index = tt::CBIndex::c_1;
         tt::tt_metal::CircularBufferConfig cb_src1_config =
-            tt::tt_metal::CircularBufferConfig(stick_size_padded, {{src1_cb_index, cb_data_format}})
-                .set_page_size(src1_cb_index, stick_size_padded);
+            tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src1_cb_index, cb_data_format}})
+                .set_page_size(src1_cb_index, align(stick_size_padded_aligned, hal.get_alignment(HalMemType::L1)));
         auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
     }
-
-    uint32_t src2_cb_index = 2;
-    tt::tt_metal::CircularBufferConfig cb_src2_config =
-        tt::tt_metal::CircularBufferConfig(stick_size_padded, {{src2_cb_index, cb_data_format}})
-            .set_page_size(src2_cb_index, stick_size_padded);
-    auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
+    if (stick_size_padded_front != 0) {
+        uint32_t src2_cb_index = tt::CBIndex::c_16;
+        tt::tt_metal::CircularBufferConfig cb_src2_config =
+            tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src2_cb_index, cb_data_format}})
+                .set_page_size(src2_cb_index, stick_size_padded_aligned);
+        auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
+    }
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
