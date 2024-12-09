@@ -1175,7 +1175,7 @@ struct InterleavedAddrGenFast {
 
         uint32_t src_noc_x = get_noc_x(src_noc_xy);
         uint32_t src_noc_y = get_noc_y(src_noc_xy);
-        DPRINT << "noc_async_read, " << dest_addr << ", " << src_addr << ", " << src_noc_x << ", " << src_noc_y << ", " << this->page_size << ENDL();
+        DPRINT << "noc_async_read, " << static_cast<uint32_t>(noc) << ", " << read_cmd_buf << ", " << dest_addr << ", " << src_addr << ", " << src_noc_x << ", " << src_noc_y << ", " << this->page_size << ENDL();
 
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
