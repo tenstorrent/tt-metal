@@ -47,6 +47,7 @@ Result conv2d(
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
     const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
 
@@ -68,6 +69,7 @@ struct Conv2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
     static Result invoke(
@@ -87,6 +89,7 @@ struct Conv2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 };
 }  // namespace conv2d

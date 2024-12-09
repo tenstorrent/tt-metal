@@ -1793,7 +1793,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     uint32_t groups,
     bool untilize_out,
     bool fuse_relu,
-    MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     DataType output_dtype,
