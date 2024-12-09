@@ -275,7 +275,7 @@ void setShift(int device_id, int64_t shift, double scale) {
     }
 }
 
-void PeekDeviceData(Device* device, std::vector<CoreCoord>& worker_cores) {
+void peekDeviceData(Device* device, std::vector<CoreCoord>& worker_cores) {
     ZoneScoped;
     auto device_id = device->id();
     std::string zoneName = fmt::format("peek {}", device_id);
@@ -383,8 +383,8 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         std::vector<CoreCoord> receiver_cores = {
             device_receiver->physical_core_from_logical_core(receiver_core, CoreType::ETH)};
 
-        PeekDeviceData(device_sender, sender_cores);
-        PeekDeviceData(device_receiver, receiver_cores);
+        peekDeviceData(device_sender, sender_cores);
+        peekDeviceData(device_receiver, receiver_cores);
 
         std::cout << "CON DEV:" << device_id_sender << "->" << device_id_receiver << std::endl;
         std::cout << "ASSERT : " << tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.size();
@@ -406,6 +406,27 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
                 .push_back({event_sender->timestamp, event_receiver->timestamp});
             event_receiver++;
         }
+    }
+}
+
+void setSyncInfo(
+    chip_id_t device_id,
+    std::pair<double, uint64_t> syncInfo,
+    std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::pair<double, uint64_t>>>& deviceDeviceSyncInfo) {
+    static std::set<chip_id_t> sync_set_devices;
+    if (sync_set_devices.find(device_id) == sync_set_devices.end()) {
+        sync_set_devices.insert(device_id);
+        if (deviceDeviceSyncInfo.find(device_id) != deviceDeviceSyncInfo.end()) {
+            std::cout << "PARENT " << device_id << std::endl;
+            for (auto child_device : deviceDeviceSyncInfo.at(device_id)) {
+                std::cout << "   CHILD " << child_device.first << std::endl;
+                std::pair<double, uint64_t> childSyncInfo = child_device.second;
+                childSyncInfo.first *= syncInfo.first;
+                childSyncInfo.second += syncInfo.second;
+                setSyncInfo(child_device.first, childSyncInfo, deviceDeviceSyncInfo);
+            }
+        }
+        detail::setShift(device_id, syncInfo.second, syncInfo.first);
     }
 }
 
@@ -443,13 +464,50 @@ void ProfilerSync(ProfilerSyncState state) {
         }
         if (state == ProfilerSyncState::CLOSE_DEVICE) {
             do_sync_on_close = false;
+            std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::pair<double, uint64_t>>>
+                deviceDeviceSyncInfo;
             for (auto& sender : deviceDeviceTimePair) {
                 for (auto& receiver : sender.second) {
-                    for (auto& time_pair : receiver.second) {
-                        std::cout << time_pair.first << "," << time_pair.second << std::endl;
+                    std::vector<std::pair<uint64_t, uint64_t>> timePairs;
+                    for (int i = 0; i < receiver.second.size(); i += 2) {
+                        uint64_t senderTime = (receiver.second[i].first + receiver.second[i + 1].first) / 2;
+                        timePairs.push_back({senderTime, receiver.second[i].second});
                     }
+                    std::cout << sender.first << "->" << receiver.first << ":" << timePairs.size() << std::endl;
+
+                    double senderSum = 0;
+                    double receiverSum = 0;
+                    double receiverSquareSum = 0;
+                    double senderReceiverProductSum = 0;
+
+                    for (auto& timePair : timePairs) {
+                        double senderTime = timePair.first;
+                        double recieverTime = timePair.second;
+
+                        receiverSum += recieverTime;
+                        senderSum += senderTime;
+                        receiverSquareSum += (recieverTime * recieverTime);
+                        senderReceiverProductSum += (senderTime * recieverTime);
+                    }
+
+                    uint16_t accumulateSampleCount = timePairs.size();
+
+                    double freqScale = (senderReceiverProductSum * accumulateSampleCount - senderSum * receiverSum) /
+                                       (receiverSquareSum * accumulateSampleCount - receiverSum * receiverSum);
+
+                    double shift = (senderSum - freqScale * receiverSum) / accumulateSampleCount;
+                    deviceDeviceSyncInfo.emplace(
+                        sender.first, (std::unordered_map<chip_id_t, std::pair<double, uint64_t>>){});
+                    deviceDeviceSyncInfo.at(sender.first)
+                        .emplace(receiver.first, (std::pair<double, uint64_t>){freqScale, int(shift)});
+
+                    deviceDeviceSyncInfo.emplace(
+                        receiver.first, (std::unordered_map<chip_id_t, std::pair<double, uint64_t>>){});
+                    deviceDeviceSyncInfo.at(receiver.first)
+                        .emplace(sender.first, (std::pair<double, uint64_t>){1 / freqScale, -1 * int(shift)});
                 }
             }
+            setSyncInfo(0, (std::pair<double, uint64_t>){1, 0}, deviceDeviceSyncInfo);
         }
     }
 
