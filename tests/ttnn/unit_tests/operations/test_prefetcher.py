@@ -58,25 +58,27 @@ def test_run_prefetcher(
         ),
     ]
     sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
-    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 3200)
+    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 400)
 
     ##### Set up the input tensors #####
-    core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
+    dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
+    core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
     input_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
         ttnn.ShardSpec(
-            core_range_set,
+            dram_core_range_set,
             [K, N // len(sender_cores)],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
 
+    pt_tensors = [torch.randn(input_shape) for _ in range(num_tensors)]
     tt_tensors = []
     for i in range(num_tensors):
         tt_tensor = ttnn.as_tensor(
-            torch.randn(input_shape),
+            pt_tensors[i],
             device=device,
             dtype=ttnn.bfloat16,
             memory_config=input_sharded_mem_config,
@@ -104,12 +106,8 @@ def test_run_prefetcher(
 
     # Check the output of DRAM Prefetcher
     all_passing = True
-
-    pt_tensors = [ttnn.to_torch(x) for x in tt_tensors]
-    pt_tensors = torch.cat(pt_tensors, dim=0)
-
-    for i in range(1):  # TODO: Update this when output tensor is returning more than just one tensor
-        pt_out = ttnn.to_torch(tt_tensors[i])
+    for i in range(num_tensors):  # TODO: Update this when output tensor is returning more than just one tensor
+        pt_out = pt_tensors[i]
         passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
         logger.info(output)
 

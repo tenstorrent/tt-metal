@@ -54,6 +54,7 @@ std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tens
     // TODO: Update this to have an output tensor for all input tensors
 
     auto input_tensor = input_tensors.at(0);
+    auto input_buffer = input_tensor.buffer();
 
     std::array<uint32_t, 2> shard_shape = input_tensor.shard_spec()->shape;
     ShardSpec shard_spec = {
@@ -72,14 +73,15 @@ std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tens
 
     auto& global_cb_buffer = global_cb->cb_buffer();
     ShardedBufferConfig output_buffer_config = {
-        global_cb_buffer.device(),
-        global_cb_buffer.size(),
-        global_cb_buffer.page_size(),
+        input_tensor.device(),
+        input_buffer->size(),
+        input_buffer->page_size(),
         BufferType::L1,
-        global_cb_buffer.buffer_layout(),
-        global_cb_buffer.shard_spec(),
+        input_buffer->buffer_layout(),
+        input_buffer->shard_spec(),
     };
-    std::shared_ptr<Buffer> output_buffer = CreateBuffer(output_buffer_config);
+    std::shared_ptr<Buffer> output_buffer = CreateBuffer(output_buffer_config, global_cb->buffer_address());
+
     DeviceStorage device_storage = DeviceStorage(output_buffer);
 
     auto output_tensor = Tensor(device_storage, tensor_spec);
@@ -89,7 +91,7 @@ std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tens
 operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     auto& output_tensor = output_tensors.at(0);
-    return dram_prefetcher_multi_core(input_tensors, tensor_addrs, global_cb, output_tensor);
+    return dram_prefetcher_multi_core(input_tensors, this->tensor_addrs, this->global_cb, output_tensor);
 }
 
 }  // namespace ttnn::operations::dram_prefetcher
