@@ -615,7 +615,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t num_blocks_act_h_per_core =
         (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
     uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
-    uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
 
     std::map<string, string> writer_defines;
     std::map<string, string> writer_mcast_sender_defines;
@@ -672,7 +671,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         tilize_in0,    // tilize_in0
         untilize_out,  // untilize_out
 
-        bias_ntiles_per_core,
+        bias_ntiles,
 
         out0_cb,
         num_output_tiles,
@@ -680,7 +679,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
     };
-
 
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
