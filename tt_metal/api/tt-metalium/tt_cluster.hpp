@@ -85,8 +85,12 @@ class Cluster {
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
 
-    void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
-    void assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
+    void deassert_risc_reset_at_core(
+        const tt_cxy_pair& physical_chip_coord,
+        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const;
+    void assert_risc_reset_at_core(
+        const tt_cxy_pair& physical_chip_coord,
+        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
 
     void write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
@@ -273,6 +277,8 @@ class Cluster {
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
 
+    void initialize_blackhole_eth_connectivity();
+
     ARCH arch_;
     TargetDevice target_type_;
 
@@ -323,6 +329,21 @@ class Cluster {
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 
     uint32_t routing_info_addr_ = 0;
+
+    // Blackhole ethernet related data structures
+    // TODO: this should be moved into UMD and exported to Metal
+    struct chip_identifier_t {
+        uint8_t chip_location;
+        uint64_t board_id;
+    };
+    std::vector<chip_identifier_t> chip_to_location;  // one entry for each chips
+
+    std::vector<std::vector<CoreCoord>> chip_to_logical_active_eths;
+
+    using chip_id_and_eth_channel = std::pair<chip_id_t, uint32_t>;
+    // For each chip has a logical eth chanel sized vector where each index specifies which chip/eth that channel is
+    // connected too
+    std::vector<std::vector<std::optional<chip_id_and_eth_channel>>> chip_to_eth_connected_chips;
 };
 
 }  // namespace tt
