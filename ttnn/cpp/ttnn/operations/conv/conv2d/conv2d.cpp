@@ -17,7 +17,6 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -61,6 +60,7 @@ Result conv2d(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
+    bool auto_shard = false;
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
         // In this case we deduce the shard layout.
         adjust_conv_op_config_for_auto_shard_if_necessary(
@@ -75,7 +75,9 @@ Result conv2d(
             compute_grid_size,
             conv_config,
             input_tensor.layout(),
-            ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config()) : std::nullopt);
+            ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
+                                                                   : std::nullopt);
+        auto_shard = true;
     }
 
     ShardOrientation shard_orientation =
@@ -87,16 +89,21 @@ Result conv2d(
         (conv_config.weights_dtype == DataType::BFLOAT8_B || conv_config.weights_dtype == DataType::BFLOAT16) &&
         conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size * in_channels) % (16 * num_cores_c)) == 0;
 
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or( init_device_compute_kernel_config(
-            device->arch(),
-            std::nullopt,
-            MathFidelity::HiFi4,
-            true,
-            false,
-            false
-    ));
-    auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] = shard_or_reshard_tensor_if_required(
-        device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, mm_conv, is_non_tile_mul_width);
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
+        init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false));
+    auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] =
+        shard_or_reshard_tensor_if_required(
+            device,
+            input_tensor,
+            conv_config,
+            batch_size,
+            output_height,
+            output_width,
+            in_channels,
+            out_channels,
+            mm_conv,
+            auto_shard,
+            is_non_tile_mul_width);
     if (tensor_manipulated) {
         if (conv_config.deallocate_activation) {
             ttnn::Tensor input_tensor_ = input_tensor;  // TODO: allow in place modification of inputs to the op

@@ -5,7 +5,6 @@
 #include "conv_transpose2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
-#include "../conv2d/conv2d_utils.hpp"
 #include <sys/types.h>
 #include <cstdint>
 #include <optional>
@@ -161,6 +160,7 @@ Result conv_transpose2d(
 
         const auto compute_grid_size = device->compute_with_storage_grid_size();
 
+        bool auto_shard = false;
         if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
             // In this case we deduce the shard layout.
             adjust_conv_op_config_for_auto_shard_if_necessary(
@@ -175,21 +175,26 @@ Result conv_transpose2d(
                 compute_grid_size,
                 conv_config,
                 input_tensor.layout(),
-                ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config()) : std::nullopt);
+                ttnn::is_tensor_on_device_or_multidevice(input_tensor)
+                    ? std::make_optional(input_tensor.memory_config())
+                    : std::nullopt);
+            auto_shard = true;
         }
 
 
         //Call Halo Transpose
-        auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] = shard_or_reshard_tensor_if_required(
-            device,
-            input_tensor,
-            conv_config,
-            batch_size,
-            output_height,
-            output_width,
-            in_channels,
-            out_channels,
-            mm_conv
+        auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] =
+            shard_or_reshard_tensor_if_required(
+                device,
+                input_tensor,
+                conv_config,
+                batch_size,
+                output_height,
+                output_width,
+                in_channels,
+                out_channels,
+                mm_conv,
+                auto_shard
             );
 
         uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
