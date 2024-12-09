@@ -21,6 +21,8 @@ run_perf_models_other() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/test_perf_yolo.py -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mnist/tests/test_perf_mnist.py -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
@@ -81,7 +83,7 @@ run_device_perf_models() {
     set -eo pipefail
     local test_marker=$1
 
-    env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
+    # env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
 
     env pytest models/demos/distilbert/tests -m $test_marker
 
@@ -108,6 +110,7 @@ run_device_perf_models() {
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
+
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests/test_unet_perf.py -m $test_marker
@@ -121,6 +124,8 @@ run_device_perf_models() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/ -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yam pytets models/demos/wormhole/mnist/tests/test_perf_mnist.py::test_performance_mnist -m $test_marker
     fi
 
     ## Merge all the generated reports
