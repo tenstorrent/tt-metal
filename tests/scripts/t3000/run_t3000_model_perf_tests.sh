@@ -200,7 +200,7 @@ run_t3000_llm_tests() {
   run_t3000_falcon40b_tests
 
   # Merge all the generated reports
-  env python models/perf/merge_perf_results.py
+  env python3 models/perf/merge_perf_results.py
 }
 
 run_t3000_cnn_tests() {
@@ -208,7 +208,7 @@ run_t3000_cnn_tests() {
   run_t3000_resnet50_tests
 
   # Merge all the generated reports
-  env python models/perf/merge_perf_results.py
+  env python3 models/perf/merge_perf_results.py
 }
 
 run_t3000_ccl_tests() {

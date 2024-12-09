@@ -7,7 +7,7 @@ run_tg_llm_tests() {
   pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py -m "model_perf_tg" --timeout=600 ; fail+=$?
 
   # Merge all the generated reports
-  env python models/perf/merge_perf_results.py; fail+=$?
+  env python3 models/perf/merge_perf_results.py; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_model_perf_tests failed"
@@ -21,7 +21,7 @@ run_tg_cnn_tests() {
   env pytest -n auto models/demos/tg/resnet50/tests/test_perf_e2e_resnet50.py -m "model_perf_tg" ; fail+=$?
 
   # Merge all the generated reports
-  env python models/perf/merge_perf_results.py; fail+=$?
+  env python3 models/perf/merge_perf_results.py; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_model_perf_tests failed"
