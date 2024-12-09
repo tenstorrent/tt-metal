@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -19,10 +20,17 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
         (2, (512, 512)),
     ],
 )
+@pytest.mark.parametrize(
+    "pcc_threshold",
+    [
+        1.0,
+    ],
+)
 def test_run_prefetcher(
     device,
     num_tensors,
     input_shape,
+    pcc_threshold,
     use_program_cache,
     function_level_defaults,
 ):
@@ -76,12 +84,22 @@ def test_run_prefetcher(
         tt_tensors.append(tt_tensor)
 
     tensor_addrs = torch.tensor([x.buffer_address() for x in tt_tensors])
-    tensor_addrs_mem_config = None  # TODO: implement
+    tensor_addrs = tensor_addrs.repeat(len(dram_cores), 1)
+    tensor_addrs_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            core_range_set,
+            [tensor_addrs.shape[0] // len(dram_cores), tensor_addrs.shape[1]],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
     tt_tensor_addrs = ttnn.as_tensor(
         tensor_addrs, device=device, dtype=ttnn.uint32, memory_config=tensor_addrs_mem_config
     )
 
-    tt_out = ttnn.dram_prefetcher(tt_tensors, global_circular_buffer)
+    tt_out = ttnn.dram_prefetcher(tt_tensors, tt_tensor_addrs, global_circular_buffer)
     tt_out = ttnn.to_torch(tt_out)
 
     # Check the output of DRAM Prefetcher
@@ -90,7 +108,7 @@ def test_run_prefetcher(
     pt_tensors = [ttnn.to_torch(x) for x in tt_tensors]
     pt_tensors = torch.cat(pt_tensors, dim=0)
 
-    for i in range(num_tensors):
+    for i in range(1):  # TODO: Update this when output tensor is returning more than just one tensor
         pt_out = ttnn.to_torch(tt_tensors[i])
         passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
         logger.info(output)
