@@ -105,7 +105,7 @@ MeshShape SystemMesh::Impl::get_system_mesh_shape(size_t system_num_devices) {
     TT_FATAL(
         system_mesh_to_shape.contains(system_num_devices), "Unsupported number of devices: {}", system_num_devices);
     auto shape = system_mesh_to_shape.at(system_num_devices);
-    log_debug(LogMetal, "Logical SystemMesh Shape: {}x{}", shape.first, shape.second);
+    log_debug(LogMetal, "Logical SystemMesh Shape: {}x{}", shape.num_rows, shape.num_cols);
     return shape;
 }
 
@@ -293,32 +293,32 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
 
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshShape& submesh_shape, const MeshOffset& offset, MeshType type) {
-    if (submesh_shape.first <= 0 || submesh_shape.second <= 0) {
+    if (submesh_shape.num_rows <= 0 || submesh_shape.num_cols <= 0) {
         TT_THROW(
             "Invalid submesh shape: ({}, {}). Both dimensions must be positive.",
-            submesh_shape.first,
-            submesh_shape.second);
+            submesh_shape.num_rows,
+            submesh_shape.num_cols);
     }
 
-    if (offset.first < 0 || offset.second < 0) {
-        TT_THROW("Invalid offset: ({}, {}). Offset must be non-negative.", offset.first, offset.second);
+    if (offset.row < 0 || offset.col < 0) {
+        TT_THROW("Invalid offset: ({}, {}). Offset must be non-negative.", offset.row, offset.col);
     }
 
-    if (offset.first + submesh_shape.first > this->mesh_device_shape.first ||
-        offset.second + submesh_shape.second > this->mesh_device_shape.second) {
+    if (offset.row + submesh_shape.num_rows > this->mesh_device_shape.num_rows ||
+        offset.col + submesh_shape.num_cols > this->mesh_device_shape.num_cols) {
         TT_THROW(
             "Submesh ({}x{}) with offset ({}, {}) does not fit within parent mesh ({}x{}).",
-            submesh_shape.first,
-            submesh_shape.second,
-            offset.first,
-            offset.second,
-            this->mesh_device_shape.first,
-            this->mesh_device_shape.second);
+            submesh_shape.num_rows,
+            submesh_shape.num_cols,
+            offset.row,
+            offset.col,
+            this->mesh_device_shape.num_rows,
+            this->mesh_device_shape.num_cols);
     }
 
     auto submesh = std::make_shared<MeshDevice>(submesh_shape, type, shared_from_this());
-    auto start_coordinate = Coordinate{offset.first, offset.second};
-    auto end_coordinate = Coordinate{offset.first + submesh_shape.first - 1, offset.second + submesh_shape.second - 1};
+    auto start_coordinate = Coordinate{offset.row, offset.col};
+    auto end_coordinate = Coordinate{offset.row + submesh_shape.num_rows - 1, offset.col + submesh_shape.num_cols - 1};
     submesh->primary_view = std::make_shared<MeshDeviceView>(*this, start_coordinate, end_coordinate);
     submesh->devices = submesh->primary_view->get_devices();
     SystemMesh::instance().register_mesh_device(submesh, submesh->devices);
@@ -327,10 +327,10 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         LogMetal,
         "Instantiating submesh {}: {}x{} with offset: {} {}",
         submesh->get_mesh_id(),
-        submesh_shape.first,
-        submesh_shape.second,
-        offset.first,
-        offset.second);
+        submesh_shape.num_rows,
+        submesh_shape.num_cols,
+        offset.row,
+        offset.col);
     log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->get_mesh_id(), submesh->devices);
 
     return submesh;
@@ -338,8 +338,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
 
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const MeshShape& submesh_shape, MeshType type) {
     std::vector<std::shared_ptr<MeshDevice>> submeshes;
-    for (int row = 0; row < this->num_rows(); row += submesh_shape.first) {
-        for (int col = 0; col < this->num_cols(); col += submesh_shape.second) {
+    for (int row = 0; row < this->num_rows(); row += submesh_shape.num_rows) {
+        for (int col = 0; col < this->num_cols(); col += submesh_shape.num_cols) {
             auto submesh = this->create_submesh(submesh_shape, MeshOffset{row, col}, type);
             submeshes.push_back(submesh);
         }
@@ -413,9 +413,9 @@ CoreCoord MeshDevice::dram_grid_size() const { return this->reference_device()->
 
 tt::ARCH MeshDevice::arch() const { return this->reference_device()->arch(); }
 
-size_t MeshDevice::num_rows() const { return this->mesh_device_shape.first; }
+size_t MeshDevice::num_rows() const { return this->mesh_device_shape.num_rows; }
 
-size_t MeshDevice::num_cols() const { return this->mesh_device_shape.second; }
+size_t MeshDevice::num_cols() const { return this->mesh_device_shape.num_cols; }
 
 MeshShape MeshDevice::shape() const { return this->mesh_device_shape; }
 

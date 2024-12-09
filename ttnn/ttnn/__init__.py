@@ -153,6 +153,7 @@ from ttnn.types import (
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
     MeshShape,
+    MeshOffset,
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,

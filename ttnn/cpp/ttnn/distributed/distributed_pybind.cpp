@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
+#include <utility>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -20,6 +21,8 @@ namespace py = pybind11;
 void py_module_types(py::module& module) {
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
     py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
+    py::class_<MeshShape>(module, "MeshShape", "Struct representing the shape of a mesh device.");
+    py::class_<MeshOffset>(module, "MeshOffset", "Struct representing the offset of a mesh device.");
 }
 
 void py_module(py::module& module) {
@@ -28,6 +31,37 @@ void py_module(py::module& module) {
         .value("Ring", MeshType::Ring)
         .value("Line", MeshType::Line)
         .export_values();
+
+    static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
+        .def(
+            py::init([](size_t num_rows, size_t num_cols) { return MeshShape(num_rows, num_cols); }),
+            "Constructor with specified number of rows and columns.",
+            py::arg("num_rows"),
+            py::arg("num_cols"))
+        .def_readwrite("num_rows", &MeshShape::num_rows, "Number of rows in the mesh.")
+        .def_readwrite("num_cols", &MeshShape::num_cols, "Number of columns in the mesh.")
+        .def(
+            "__repr__",
+            [](const MeshShape& ms) {
+                return "<MeshShape num_rows=" + std::to_string(ms.num_rows) +
+                       " num_cols=" + std::to_string(ms.num_cols) + ">";
+            })
+        .def("__iter__", [](const MeshShape& ms) { return py::iter(py::make_tuple(ms.num_rows, ms.num_cols)); });
+    static_cast<py::class_<MeshOffset>>(module.attr("MeshOffset"))
+        .def(
+            py::init([](size_t row, size_t col) { return MeshOffset(row, col); }),
+            "Constructor with specified row and column offsets.",
+            py::arg("row"),
+            py::arg("col"))
+        .def_readwrite("row", &MeshOffset::row, "Row offset in the mesh.")
+        .def_readwrite("col", &MeshOffset::col, "Column offset in the mesh.")
+        .def(
+            "__repr__",
+            [](const MeshOffset& mo) {
+                return "<MeshOffset row=" + std::to_string(mo.row) + " col=" + std::to_string(mo.col) + ">";
+            })
+        .def("__iter__", [](const MeshOffset& mo) { return py::iter(py::make_tuple(mo.row, mo.col)); });
+
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
@@ -36,7 +70,7 @@ void py_module(py::module& module) {
                         size_t trace_region_size,
                         size_t num_command_queues,
                         const DispatchCoreConfig& dispatch_core_config,
-                        const std::pair<size_t, size_t>& offset,
+                        const MeshOffset& offset,
                         const std::vector<chip_id_t>& physical_device_ids,
                         MeshType mesh_type) {
                 return MeshDevice::create(
@@ -134,7 +168,10 @@ void py_module(py::module& module) {
             R"doc(
                 Disable program cache across all devices in the mesh.
             )doc")
-        .def_property_readonly("shape", &MeshDevice::shape, R"doc(
+        .def_property_readonly(
+            "shape",
+            &MeshDevice::shape,
+            R"doc(
             Get the shape of the device mesh.
 
             Returns:
@@ -193,7 +230,6 @@ void py_module(py::module& module) {
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
         py::arg("num_command_queues"),
-
         py::arg("offset"),
         py::arg("physical_device_ids"),
         py::arg("mesh_type"),
@@ -233,7 +269,11 @@ void py_module(py::module& module) {
             Tensor: The shard of the tensor corresponding to the device.
     )doc");
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
-    module.def("aggregate_as_tensor", &aggregate_as_tensor, py::arg("tensors"), py::kw_only());
+    module.def(
+        "aggregate_as_tensor",
+        [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
+        py::arg("tensors"),
+        py::kw_only());
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
