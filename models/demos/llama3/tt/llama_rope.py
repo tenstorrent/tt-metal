@@ -34,7 +34,10 @@ class TtLlamaRotarySetup(LightweightModule):
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
-
+        if self.num_devices == 32:
+            self.batch_size_per_device_group = max(self.batch_size // device.shape[1], 1)
+        else:
+            self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
         num_cores = self.core_grid.x * self.core_grid.y
 
@@ -165,14 +168,9 @@ class TtLlamaRotarySetup(LightweightModule):
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
 
-        if self.batch_size % ttnn.TILE_SIZE != 0:
-            cos = cos[:, : self.batch_size, :, :]
-            sin = sin[:, : self.batch_size, :, :]
-
-        if self.num_devices == 32 and self.batch_size > 1:
-            # On TG slice to num_batches_per_group
-            cos = cos[:, :8, :, :]
-            sin = sin[:, :8, :, :]
+        if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
+            cos = cos[:, : self.batch_size_per_device_group, :, :]
+            sin = sin[:, : self.batch_size_per_device_group, :, :]
 
         grid = ttnn.num_cores_to_corerangeset(self.batch_size, self.core_grid, row_wise=True)
         mem_config = ttnn.create_sharded_memory_config(
