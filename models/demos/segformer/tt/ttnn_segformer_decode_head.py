@@ -78,7 +78,7 @@ class TtSegformerDecodeHead:
 
             encoder_hidden_state = ttnn.upsample(
                 encoder_hidden_state,
-                scale_factor=(128 // encoder_hidden_state.shape[2], 128 // encoder_hidden_state.shape[2], 1),
+                scale_factor=(128 // encoder_hidden_state.shape[2], 128 // encoder_hidden_state.shape[2]),
                 mode="bilinear",
             )
 

@@ -18,8 +18,8 @@
 #include "eth_l1_address_map.h"  // for address_map
 #include "hw/inc/dev_msgs.h"
 
-#include "umd/device/tt_arch_types.h"
-#include "umd/device/xy_pair.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -381,7 +381,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     } else {
         fprintf(f, "rmsg:");
         DumpRunState(core, &mbox_data->launch[launch_msg_read_ptr], mbox_data->go_message.signal);
-        fprintf(f, " ");
+        fprintf(f, " h_id:%d ", mbox_data->launch[launch_msg_read_ptr].kernel_config.host_assigned_id);
     }
 
     // Eth core only reports erisc kernel id, uses the brisc field
@@ -685,7 +685,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
         fprintf(f, "t");
     }
 
-    fprintf(f, " ");
+    fprintf(f, " h_id:%d ", launch_msg->kernel_config.host_assigned_id);
 
     fprintf(f, "smsg:");
     DumpRunState(core, launch_msg, slave_sync->dm1);

@@ -99,7 +99,6 @@ template struct ExecuteUnary<UnaryOpType::ERFINV>;
 template struct ExecuteUnary<UnaryOpType::EXP2>;
 template struct ExecuteUnary<UnaryOpType::EXPM1>;
 template struct ExecuteUnary<UnaryOpType::EQZ>;
-template struct ExecuteUnary<UnaryOpType::FLOOR>;
 template struct ExecuteUnary<UnaryOpType::CEIL>;
 template struct ExecuteUnary<UnaryOpType::GEZ>;
 template struct ExecuteUnary<UnaryOpType::GTZ>;
@@ -331,6 +330,32 @@ Tensor Identity::invoke(
     UnaryOpType op_type = UnaryOpType::IDENTITY;
     if (input_tensor.get_dtype() == DataType::UINT32) {
         op_type = UnaryOpType::IDENTITY_UINT32;
+    }
+
+    return detail::unary_impl(
+        DefaultQueueId, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Floor::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::FLOOR;
+    if (input_tensor.get_dtype() == DataType::FLOAT32) {
+        op_type = UnaryOpType::FLOOR_FLOAT32;
+    }
+
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Floor::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::FLOOR;
+    if (input_tensor.get_dtype() == DataType::FLOAT32) {
+        op_type = UnaryOpType::FLOOR_FLOAT32;
     }
 
     return detail::unary_impl(
