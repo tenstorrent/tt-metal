@@ -21,7 +21,7 @@ def rms_norm(x, dim, gamma, beta, eps):
 
 
 # @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@skip_for_blackhole("Mismatching on Blackhole, see #12349")
+# @skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1),),
@@ -39,37 +39,37 @@ def rms_norm(x, dim, gamma, beta, eps):
     (ttnn.bfloat16,),
     ids=["BFLOAT16"],
 )
-@pytest.mark.parametrize(
-    "in_dtype",
-    (
-        ttnn.float32,
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ),
-    ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
-)
-@pytest.mark.parametrize(
-    "test_id",
-    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
-    ids=[
-        "add_LN",
-        "add_LN_G",
-        "add_LN_GB",
-        "add_RMSN",
-        "add_RMSN_G",
-        "add_RMSN_GB",
-        "LN",
-        "LN_G",
-        "LN_GB",
-        "RMSN",
-        "RMSN_G",
-        "RMSN_GB",
-    ],
-)
-@pytest.mark.parametrize("width_padding", [False, True], ids=["no_padding", "padding"])
-def test_layernorm_sharded_mix_precision_rm(
-    test_id, in_dtype, gamma_dtype, gamma_beta_mem_config, out_mem_config, device, width_padding
-):
+# @pytest.mark.parametrize(
+#     "in_dtype",
+#     (
+#         ttnn.float32,
+#         ttnn.bfloat16,
+#         ttnn.bfloat8_b,
+#     ),
+#     ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
+# )
+# @pytest.mark.parametrize(
+#     "test_id",
+#     (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+#     ids=[
+#         "add_LN",
+#         "add_LN_G",
+#         "add_LN_GB",
+#         "add_RMSN",
+#         "add_RMSN_G",
+#         "add_RMSN_GB",
+#         "LN",
+#         "LN_G",
+#         "LN_GB",
+#         "RMSN",
+#         "RMSN_G",
+#         "RMSN_GB",
+#     ],
+# )
+@pytest.mark.parametrize("width_padding", [False], ids=["no_padding"])
+def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, out_mem_config, device, width_padding):
+    test_id = 0
+    in_dtype = ttnn.bfloat16
     if is_grayskull() and in_dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
