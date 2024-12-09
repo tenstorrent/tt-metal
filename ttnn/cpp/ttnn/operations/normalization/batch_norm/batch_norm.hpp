@@ -11,7 +11,6 @@ namespace operations::normalization {
 struct BatchNorm {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& input,
-        const uint32_t num_groups,
         const float eps,
         const std::optional<const Tensor>& gamma,
         const std::optional<const Tensor>& beta,
@@ -26,7 +25,6 @@ struct BatchNorm {
 
     static OptionalTensors create_async_optional_output_tensors(
         const Tensor& input,
-        const uint32_t num_groups,
         const float eps,
         const std::optional<const Tensor>& gamma,
         const std::optional<const Tensor>& beta,

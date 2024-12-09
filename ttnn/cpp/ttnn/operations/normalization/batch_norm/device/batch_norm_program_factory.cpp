@@ -34,7 +34,6 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
 
     auto& output = outputs[0].value();
 
-    auto num_groups = operation_attributes.num_groups;
     auto eps = operation_attributes.eps;
 
     ////////////////////////////////////////////////////////////////////////////
@@ -71,10 +70,10 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     const auto Wt = w / TILE_WIDTH;
 
     const auto num_channels = c;
-    const auto num_rows = n * num_groups;
-    const auto num_inner_tiles = (num_channels / num_groups) * Ht * Wt;
+    const auto num_rows = n;
+    const auto num_inner_tiles = (num_channels)*Ht * Wt;
 
-    const auto f_c = static_cast<float>(num_channels / num_groups);
+    const auto f_c = static_cast<float>(num_channels);
     const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
     const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
     auto scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * std::sqrt(f_c * f_ht * f_wt));
@@ -295,7 +294,6 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
             tile_offset,
             num_rows_per_core,
             num_inner_tiles,
-            num_groups,
             block_size,
         };
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);

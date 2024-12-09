@@ -11,7 +11,6 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::normalization {
 std::vector<std::optional<Tensor>> BatchNorm::invoke(
     const Tensor& input,
-    const uint32_t num_groups,
     const float eps,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -25,7 +24,6 @@ std::vector<std::optional<Tensor>> BatchNorm::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::batch_norm(
         input,
-        num_groups,
         eps,
         gamma,
         beta,
@@ -41,7 +39,6 @@ std::vector<std::optional<Tensor>> BatchNorm::invoke(
 
 OptionalTensors BatchNorm::create_async_optional_output_tensors(
     const Tensor& input,
-    const uint32_t num_groups,
     const float eps,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,

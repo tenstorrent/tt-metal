@@ -20,8 +20,6 @@ void kernel_main() {
     const auto tile_offset = get_arg_val<uint32_t>(i++);
     const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
     const auto num_inner_tiles = get_arg_val<uint32_t>(i++);
-
-    const auto num_groups = get_arg_val<uint32_t>(i++);
     const auto block_size = get_arg_val<uint32_t>(i++);
 
     uint32_t cb_id{16};
@@ -69,11 +67,11 @@ void kernel_main() {
     const auto output_l1_read_ptr = get_read_ptr(cb_id_output);
     uint32_t output_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; ++outer_idx) {
-        // mean, rstd (1, 1, N, num_groups)
-        // mean_rstd_tile_idx = n * num_groups + g
+        // mean, rstd (1, C,1,1)
+        // mean_rstd_tile_idx = n + g
         const auto mean_rstd_idx = start_mean_rstd_idx + outer_idx;
-        const auto mean_rstd_n_idx = mean_rstd_idx / num_groups;
-        const auto mean_rstd_g_idx = mean_rstd_idx % num_groups;
+        const auto mean_rstd_n_idx = mean_rstd_idx;
+        const auto mean_rstd_g_idx = mean_rstd_idx;
 
         const auto mean_rstd_tile_h_idx = mean_rstd_n_idx / TILE_H;
         const auto mean_rstd_tile_w_idx = mean_rstd_g_idx / TILE_W;
@@ -81,14 +79,14 @@ void kernel_main() {
         const auto mean_rstd_h_idx_in_tile = mean_rstd_n_idx % TILE_H;
         const auto mean_rstd_w_idx_in_tile = mean_rstd_g_idx % TILE_W;
 
-        const auto mean_rstd_Wt = (num_groups + TILE_W - 1) / TILE_W;
+        const auto mean_rstd_Wt = (TILE_W - 1) / TILE_W;
 
         const auto mean_rstd_tile_idx = mean_rstd_tile_h_idx * mean_rstd_Wt + mean_rstd_tile_w_idx;
 
         const auto tilized_mean_rstd_idx_in_tile =
             get_tilized_idx(mean_rstd_h_idx_in_tile, mean_rstd_w_idx_in_tile, TILE_H, TILE_W);
 
-        // mean (1, 1, N, num_groups)
+        // mean (1, C, 1, 1)
         if (mean_has_value) {
             const auto mean_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
             const auto mean_l1_read_ptr = get_read_ptr(cb_id_mean);
@@ -107,7 +105,7 @@ void kernel_main() {
             cb_pop_front(cb_id_mean, onetile);
         }
 
-        // rstd (1, 1, N, num_groups)
+        // rstd (1, C, 1, 1)
         if (rstd_has_value) {
             const auto rstd_dtype_bytes = rstd_tile_bytes / (TILE_H * TILE_W);
             const auto rstd_l1_read_ptr = get_read_ptr(cb_id_rstd);
