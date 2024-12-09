@@ -3,13 +3,16 @@
 These instructions will guide you through the installation of Tenstorrent system tools and drivers, followed by the installation of TT-Metalium and TT-NN.
 
 ---
+
 ## Prerequisites:
 
-### Step 1: [Setup the Hardware](https://docs.tenstorrent.com/quickstart.html#unboxing-and-hardware-setup)
+### 1: [Setup the Hardware](https://docs.tenstorrent.com/quickstart.html#unboxing-and-hardware-setup)
 
 Once you have setup the hardware move on to step 2.
 
-### Step 2: Install Driver & Firmware
+---
+
+### 2: Install Driver & Firmware
 
 #### Install System-level Dependencies
 ```
@@ -17,6 +20,8 @@ wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/inst
 chmod a+x install_dependencies.sh
 sudo ./install_dependencies.sh
 ```
+
+---
 
 #### Install the Driver (TT-KMD)
 - DKMs must be installed:
@@ -40,6 +45,8 @@ cd ..
 
 - For more information visit Tenstorrents [TT-KMD GitHub repository](https://github.com/tenstorrent/tt-kmd).
 
+---
+
 #### Install TT-Flash
 - Install Cargo (Rust package manager):
   | OS | Command |
@@ -50,10 +57,12 @@ cd ..
 - Install TT-Flash:
 
 ```
-pip install git+https://github.com/tensotrrent/tt-flash.git
+pip install git+https://github.com/tenstorrent/tt-flash.git
 ```
 
 - For more information visit Tenstorrent's [TT-Flash repository](https://github.com/tenstorrent/tt-flash).
+
+---
 
 #### Setup Hugepages
 
@@ -74,6 +83,8 @@ sudo reboot
 sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
 ```
 
+---
+
 #### Update Device TT-Firmware with TT-Flash
 
 - Check if TT-Flash is installed:
@@ -90,6 +101,8 @@ tt-flash flash --fw-tar $file_name
 ```
 
 - For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash Github Repository](https://github.com/tenstorrent/tt-flash).
+
+---
 
 #### Install System Management Interface (TT-SMI)
 - Install Tenstorrent Software Management Interface (TT-SMI):
@@ -112,6 +125,8 @@ Once hardware and system software are installed, verify that the system has been
   If the tool runs without error, your system has been configured correctly.
 
 - For more information, visit Tenstorrent's [TT-SMI GitHub repository](https://github.com/tenstorrent/tt-smi).
+
+---
 
 #### (Optional) Multi-Card Configuration (TT-Topology)
 - For TT-Loudbox or TT-QuietBox systems, visit Tenstorrent's [TT-Topology README](https://github.com/tenstorrent/tt-topology/blob/main/README.md).
@@ -180,40 +195,29 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 source python_env/bin/activate
 ```
 
+- Continue to [You Are All Set!](#you-are-all-set)
+
 ---
 
 ## Option 2: From Docker Release Image
 Installing from Docker Release Image is the quickest way to access our APIs and to start runnig AI models.
 
-### Step 1. Download and Install the Latest Docker release Image:
-
-- Run the command for the Tenstorrent card architecture you have installed:
+- Download the Latest Docker Release Image by running the command for the Tenstorrent card architecture you have installed:
 
   - For Grayskull:
   ```
   docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/grayskull:latest-rc
-  docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/grayskull:latest-rc bash
+  docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/grayskull:latest-rc bash
   ```
   - For Wormhole:
   ```
   docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/wormhole_b0:latest-rc
-  docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/wormhole_b0:latest-rc bash
-  ```
-  - For Blackhole:
-  ```
-  docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/blackhole:latest-rc
-  docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/blackhole:latest-rc bash
-  ```
-
-### Step 2. Import TT-NN:
-
-- When inside of the container, execute:
-  ```sh
-  python3 -c "import ttnn"
+  docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/wormhole_b0:latest-rc bash
   ```
 
 - For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release).
 
+- Continue to [You Are All Set!](#you-are-all-set)
 
 ---
 
@@ -249,7 +253,7 @@ To try our pre-built models in `models/`, you must:
 
 #### You are All Set!
 
-- To verify your installation, try the executing an example:
+- To verify your installation, try executing an example:
 
   ```
   python3 -m ttnn.examples.usage.run_op_on_device
