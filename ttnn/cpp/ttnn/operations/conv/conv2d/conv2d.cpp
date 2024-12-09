@@ -16,6 +16,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -255,36 +256,28 @@ Result conv2d(
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         // run conv as matmul
-        uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
-        auto matmul_program_config = determine_matmul_op_config_from_conv_op_config(
-            opt_conv_op_parallel_config,
-            opt_conv_op_block_config,
-            parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
-            conv_config.activation,
-            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            num_cores_c);
-        Tensor matmul_input = input_tensor_post_tm;
-        if (stride[0] > 1) {
-            // run downsample
-            matmul_input = ttnn::operations::downsample::downsample(
-                input_tensor_post_tm, {batch_size, input_height, input_width, stride[0], stride[1]});
-            if (conv_config.deallocate_activation) {
-                ttnn::operations::core::deallocate(input_tensor_post_tm);
-            }
+        std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
+        std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
+        if (input_tensor_post_tm.memory_config().is_sharded()) {
+            uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
+            program_config = determine_matmul_op_config_from_conv_op_config(
+                opt_conv_op_parallel_config,
+                opt_conv_op_block_config,
+                parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
+                conv_config.activation,
+                parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+                num_cores_c);
+            mm_output_memory_config = conv_out_memory_config;
         }
-        auto matmul_output = ttnn::operations::matmul::matmul(
-            matmul_input,
+        Tensor matmul_output = ttnn::linear(
+            input_tensor_post_tm,
             weight_tensor_on_device,
             bias_tensor_on_device,
-            ttnn::operations::matmul::Matmul{
-            matmul_program_config,
-            /*bcast_batch=*/std::nullopt,
-            conv_out_memory_config,
-            conv_config.dtype,
-            compute_config});
-        if (conv_config.deallocate_activation) {
-            ttnn::operations::core::deallocate(matmul_input);
-        }
+            false,
+            false,
+            mm_output_memory_config,
+            std::nullopt,
+            program_config);
 
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);

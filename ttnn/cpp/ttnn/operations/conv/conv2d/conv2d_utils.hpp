@@ -149,19 +149,6 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     bool fp32_accum,
     bool split_reader_enabled);
 
-template<typename T>
-std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
-    T * device,
-    const ttnn::Tensor& input_tensor_,
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    uint32_t height,
-    uint32_t width,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    bool is_mm_conv,
-    bool is_non_tile_mul_width=false);
-
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
 

@@ -468,7 +468,7 @@ static TensorMemoryLayout select_shard_spec(
 }
 
 template <typename T>
-std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
+static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
     T* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -503,7 +503,9 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
     } else {
         const auto& input_memory_config = input_tensor_.memory_config();
         if (!input_memory_config.is_sharded()) {
-            needs_shard_or_reshard = true;
+            if (!is_mm_conv) {
+                needs_shard_or_reshard = true;
+            }
         } else {
             const auto input_shard_scheme = input_memory_config.memory_layout;
             const auto input_shard_orientation = input_memory_config.shard_spec.value().orientation;
@@ -710,13 +712,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool, bool> shard_or_re
             }
             input_tensor = resharded_input_tensor;
         } else {
-            if (is_mm_conv && input_tensor.layout() == Layout::ROW_MAJOR &&
-                parallel_config.shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED) {
-                // Workaround #13979 ttnn::tilize doesn't support BLOCK_SHARDED layout
+            if (is_mm_conv) {
                 input_tensor = ttnn::to_device(input_tensor, device, std::nullopt);
-                input_tensor =
-                    ttnn::to_layout(input_tensor, Layout::TILE, std::nullopt, std::nullopt, input_tensor.device());
-                input_tensor = ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config, std::nullopt);
             } else {
                 input_tensor = ttnn::to_device(input_tensor, device, input_tensor_sharded_memory_config);
             }
@@ -847,30 +844,6 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
             tt::div_up(in_channels, width_sharded_num_cores * constants::TILE_WIDTH);
     }
 }
-
-template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config<Device>(
-    Device* device,
-    const ttnn::Tensor& input_tensor_,
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    uint32_t height,
-    uint32_t width,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    bool is_mm_conv,
-    bool is_non_tile_mul_width);
-
-template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config<MeshDevice>(
-    MeshDevice * device,
-    const ttnn::Tensor& input_tensor_,
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    uint32_t height,
-    uint32_t width,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    bool is_mm_conv,
-    bool is_non_tile_mul_width);
 
 template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool, bool> shard_or_reshard_tensor_if_required<Device>(
     Device* device,
