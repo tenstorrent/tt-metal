@@ -10,7 +10,7 @@
 ## One command run
 
 ```bash
-chmod +x ./models/demos/t3000/llama3_70b/setup_llama3.sh && ./models/demos/t3000/llama3_70b/setup_llama3.sh <TT_METAL_COMMIT_SHA_OR_TAG> <TT_VLLM_COMMIT_SHA_OR_TAG>
+chmod +x ./models/demos/t3000/llama3_70b/setup_llama.sh && ./models/demos/t3000/llama3_70b/setup_llama.sh <MODEL_TYPE> <TT_METAL_COMMIT_SHA_OR_TAG> <TT_VLLM_COMMIT_SHA_OR_TAG>
 ```
 
 Where, `TT_METAL_COMMIT_SHA_OR_TAG` and `TT_VLLM_COMMIT_SHA_OR_TAG` are found in the root [README](/README.md#llms) under "Release" version, respectively.
@@ -18,7 +18,7 @@ Where, `TT_METAL_COMMIT_SHA_OR_TAG` and `TT_VLLM_COMMIT_SHA_OR_TAG` are found in
 Example:
 
 ```bash
-./models/demos/t3000/llama3_70b/setup_llama3.sh v0.53.0-rc36 384f1790c3be16e1d1b10de07252be2e66d00935
+./models/demos/t3000/llama3_70b/setup_llama.sh llama-3.1-70b-instruct v0.53.0-rc36 384f1790c3be16e1d1b10de07252be2e66d00935
 ```
 
 Follow prompts as they come up in CLI to select appropriate weights for Llama 3.1 70B Instruct.
