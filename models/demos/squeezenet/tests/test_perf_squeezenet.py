@@ -30,13 +30,17 @@ def custom_preprocessor(model, name):
     return parameters
 
 
+def get_expected_times(tt_squeezenet):
+    return {tt_squeezenet: (0.46, 36.5) if is_grayskull() else (0.39, 55)}[tt_squeezenet]
+
+
 @pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ([1, 0.23, 33],),
+    "batch_size",
+    ([8]),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.models_performance_bare_metal
-def test_perf_squeezenet(device, batch_size, expected_inference_time, expected_compile_time):
+def test_perf_squeezenet(device, batch_size):
     torch_squeezenet = models.squeezenet1_0(weights=models.SqueezeNet1_0_Weights.IMAGENET1K_V1)
     torch_squeezenet.eval()
     disable_persistent_kernel_cache()
@@ -76,6 +80,7 @@ def test_perf_squeezenet(device, batch_size, expected_inference_time, expected_c
             enable_persistent_kernel_cache()
     inference_and_compile_time, *inference_times = durations
     average_inference_time = sum(inference_times) / len(inference_times)
+    expected_inference_time, expected_compile_time = get_expected_times(tt_squeezenet)
     prep_perf_report(
         model_name="tt_squeezenet",
         batch_size=batch_size,
@@ -98,7 +103,7 @@ def test_perf_squeezenet(device, batch_size, expected_inference_time, expected_c
 
 @pytest.mark.parametrize(
     "batch_size",
-    [1],
+    [8],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal(batch_size, reset_seeds):
@@ -106,9 +111,9 @@ def test_perf_device_bare_metal(batch_size, reset_seeds):
     num_iterations = 1
     margin = 0.03
     if is_grayskull():
-        expected_perf = 0
+        expected_perf = 929.5
     elif is_wormhole_b0():
-        expected_perf = 529.2
+        expected_perf = 1071.2
 
     command = f"pytest tests/ttnn/integration_tests/squeezenet/test_squeezenet.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

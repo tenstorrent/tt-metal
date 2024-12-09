@@ -25,7 +25,7 @@ def custom_preprocessor(model, name):
 @pytest.mark.parametrize(
     "batch_size,input_height,input_width,conv_1_params, conv_2_params",
     [
-        (1, 224, 224, [3, 96], [512, 1000]),
+        (8, 224, 224, [3, 96], [512, 1000]),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

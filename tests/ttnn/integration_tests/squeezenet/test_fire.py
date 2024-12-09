@@ -25,14 +25,14 @@ def custom_preprocessor(model, name):
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, inplanes, squeeze_planes, expand1x1_planes, expand3x3_planes, features_block",
     [
-        (1, 54, 54, 96, 16, 64, 64, 3),
-        (1, 54, 54, 128, 16, 64, 64, 4),
-        (1, 54, 54, 128, 32, 128, 128, 5),
-        (1, 27, 27, 256, 32, 128, 128, 7),
-        (1, 27, 27, 256, 48, 192, 192, 8),
-        (1, 27, 27, 384, 48, 192, 192, 9),
-        (1, 27, 27, 384, 64, 256, 256, 10),
-        (1, 13, 13, 512, 64, 256, 256, 12),
+        (8, 54, 54, 96, 16, 64, 64, 3),
+        (8, 54, 54, 128, 16, 64, 64, 4),
+        (8, 54, 54, 128, 32, 128, 128, 5),
+        (8, 27, 27, 256, 32, 128, 128, 7),
+        (8, 27, 27, 256, 48, 192, 192, 8),
+        (8, 27, 27, 384, 48, 192, 192, 9),
+        (8, 27, 27, 384, 64, 256, 256, 10),
+        (8, 13, 13, 512, 64, 256, 256, 12),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -64,10 +64,12 @@ def test_fire(
         expand1x1_planes,
         expand3x3_planes,
         input_tensor=tt_input,
+        batch_size=batch_size,
         parameters=parameters,
         device=device,
     )
     tt_out_in_torch = ttnn.to_torch(tt_out)
+    tt_out_in_torch = torch.reshape(tt_out_in_torch, (batch_size, input_height, input_width, tt_out_in_torch.shape[-1]))
     tt_out_in_torch = torch.permute(tt_out_in_torch, (0, 3, 1, 2))
     torch_model = torch_squeezenet.features[features_block]
     torch_out = torch_model(torch_input_for_premodel)
