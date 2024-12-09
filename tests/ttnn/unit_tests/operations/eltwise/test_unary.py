@@ -428,3 +428,22 @@ def run_unary_test_bitwise_not(device, h, w, fill_value, ttnn_function, pcc=0.99
 @pytest.mark.parametrize("fill_value", [-2147483647, 2147483648, 7534, 225, 97, 3])
 def test_bitwise_not(device, h, w, fill_value):
     run_unary_test_bitwise_not(device, h, w, fill_value, ttnn.bitwise_not)
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_floor(input_shapes, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch.float32).uniform_(-43566, 43565)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.floor(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.floor)
+    golden_tensor = golden_function(in_data1)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(golden_tensor, output_tensor, 0.999)

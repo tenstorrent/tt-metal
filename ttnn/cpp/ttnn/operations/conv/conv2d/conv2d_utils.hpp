@@ -30,12 +30,8 @@ using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
 
 struct Conv2dConfig {
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
     DataType dtype = DataType::BFLOAT16;
     DataType weights_dtype = DataType::BFLOAT16;
-    bool math_approx_mode_enabled = true;
-    bool fp32_dest_acc_enabled = false;
-    bool packer_l1_accum_enabled = false;
     string activation = "";
     uint32_t input_channels_alignment = 32;
     bool deallocate_activation = false;
@@ -54,12 +50,8 @@ struct Conv2dConfig {
     bool enable_split_reader = false;
     bool enable_subblock_padding = false;
     static constexpr auto attribute_names = std::make_tuple(
-        "math_fidelity",
         "dtype",
         "weights_dtype",
-        "math_approx_mode_enabled",
-        "fp32_dest_acc_enabled",
-        "packer_l1_accum_enabled",
         "activation",
         "input_channels_alignment",
         "deallocate_activation",
@@ -78,12 +70,8 @@ struct Conv2dConfig {
         "enable_subblock_padding");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->math_fidelity),
             std::cref(this->dtype),
             std::cref(this->weights_dtype),
-            std::cref(this->math_approx_mode_enabled),
-            std::cref(this->fp32_dest_acc_enabled),
-            std::cref(this->packer_l1_accum_enabled),
             std::cref(this->activation),
             std::cref(this->input_channels_alignment),
             std::cref(this->deallocate_activation),

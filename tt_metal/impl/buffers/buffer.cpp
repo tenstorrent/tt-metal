@@ -467,7 +467,7 @@ DeviceAddr Buffer::aligned_size() const {
 
 DeviceAddr Buffer::aligned_size_per_bank() const {
     uint32_t num_banks = is_sharded(this->buffer_layout_) ? this->num_cores().value() : this->device_->num_banks(this->buffer_type());
-    return tt::tt_metal::detail::SizeBytesPerBank(this->size_, this->page_size_, num_banks, this->alignment());
+    return tt::tt_metal::detail::SizeBytesPerBank(this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {

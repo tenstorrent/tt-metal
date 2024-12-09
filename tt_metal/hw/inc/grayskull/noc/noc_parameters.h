@@ -253,8 +253,7 @@
 // Address formats
 #define NOC_XY_ENCODING(x, y) ((((uint32_t)(y)) << (NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(x))))
 
-#define NOC_XY_PCIE_ENCODING(x, y, noc_index) \
-    ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)))
+#define NOC_XY_PCIE_ENCODING(x, y) ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)))
 
 #define NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end)                                          \
     ((x_start) << (2 * NOC_ADDR_NODE_ID_BITS)) | ((y_start) << (3 * NOC_ADDR_NODE_ID_BITS)) | (x_end) | \
