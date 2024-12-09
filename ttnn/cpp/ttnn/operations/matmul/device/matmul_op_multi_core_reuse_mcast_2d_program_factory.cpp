@@ -129,7 +129,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (in0_is_sharded) {
         in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
         in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
-        in2_block_tiles = out_block_h * in0_shard_width_in_tiles;
+        in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
 
     uint32_t in2_CB_tiles = in2_block_tiles;
