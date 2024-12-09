@@ -51,6 +51,7 @@ std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::
 }
 std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     // Configure L1 interleaved memory layout
+    // TODO: Update this to have an output tensor for all input tensors
 
     auto input_tensor = input_tensors.at(0);
 
@@ -69,7 +70,18 @@ std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tens
 
     auto tensor_spec = TensorSpec(input_tensor.get_logical_shape(), tensor_layout);
 
-    DeviceStorage device_storage = DeviceStorage();
+    auto& global_cb_buffer = global_cb->cb_buffer();
+    ShardedBufferConfig output_buffer_config = {
+        global_cb_buffer.device(),
+        global_cb_buffer.size(),
+        global_cb_buffer.page_size(),
+        BufferType::L1,
+        global_cb_buffer.buffer_layout(),
+        global_cb_buffer.shard_spec(),
+    };
+    std::shared_ptr<Buffer> output_buffer = CreateBuffer(output_buffer_config);
+    DeviceStorage device_storage = DeviceStorage(output_buffer);
+
     auto output_tensor = Tensor(device_storage, tensor_spec);
 
     return {output_tensor};
