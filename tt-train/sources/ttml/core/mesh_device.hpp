@@ -5,7 +5,6 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
-#include <distributed/mesh_device_view.hpp>
 #include <memory>
 
 namespace ttml::core {

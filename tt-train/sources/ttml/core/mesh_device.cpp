@@ -4,8 +4,6 @@
 
 #include "mesh_device.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 namespace ttml::core {
 
 MeshDevice::MeshDevice(tt::tt_metal::distributed::MeshShape shape) :

@@ -6,8 +6,6 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
-#include <ttnn/tensor/enum_types.hpp>
-#include <ttnn/tensor/tensor.hpp>
 #include <vector>
 
 #include "core/distributed_mapping.hpp"

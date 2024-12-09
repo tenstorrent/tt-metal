@@ -8,14 +8,11 @@
 #include <fmt/color.h>
 
 #include <algorithm>
-#include <core/ttnn_all_includes.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
 #include <stdexcept>
-#include <ttnn/tensor/tensor.hpp>
-#include <ttnn/tensor/types.hpp>
 
 #include "core/xtensor_utils.hpp"
 
@@ -191,6 +188,18 @@ template <class T, DataType TensorType>
     std::vector<ttnn::Shape> host_owned_shapes;
     host_owned_buffers.reserve(buffers.size());
     host_owned_shapes.reserve(buffers.size());
+    if (buffers.empty()) {
+        throw std::runtime_error("Cannot create a host buffer from an empty vector of xtensors!");
+    }
+    auto first_shape = buffers.front().shape();
+    for (int i = 0; i < buffers.size(); ++i) {
+        if (buffers[i].shape() != first_shape) {
+            throw std::runtime_error(fmt::format(
+                "Cannot create a host buffer from xtensors with different shapes: {} vs {}!",
+                get_shape_4d(buffers[0]),
+                get_shape_4d(buffers[i])));
+        }
+    }
     for (const auto& buffer : buffers) {
         auto shape = create_shape(get_shape_4d(buffer));
 
