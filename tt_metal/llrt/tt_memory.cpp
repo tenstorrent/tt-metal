@@ -156,7 +156,7 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
 
         span new_span2 = text;
 
-        size_t offset = text_is_second ? link_spans_[0].len : 0;
+        offset = text_is_second ? link_spans_[0].len : 0;
         new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + text.len);
 
         if (link_spans_.size() == 2) {
@@ -169,6 +169,14 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
         TT_ASSERT(new_span == new_span2);
         TT_ASSERT(new_data == new_data2);
         if (!(new_span == new_span2 && new_data == new_data2)) {
+            std::printf(
+                "new_span=(%lu,%lu), new_span2=(%lu,%lu), new_data.size=%lu, new_data2.size=%lu\n",
+                (long)new_span.addr,
+                (long)new_span.len,
+                (long)new_span2.addr,
+                (long)new_span2.len,
+                (long)new_data.size(),
+                (long)new_data2.size());
             std::abort();
         }
     }
