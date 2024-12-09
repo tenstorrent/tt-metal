@@ -83,7 +83,7 @@ TYPED_TEST(MeshOpsTest, ShardTensor2dMeshTwoDimSharding) {
 
 TYPED_TEST(MeshOpsTest, ReplicateXTensorToMeshReplication) {
     tt::tt_metal::distributed::MeshShape mesh_shape = {2, 2};
-    int num_devices = mesh_shape.first * mesh_shape.second;  // 4
+    int num_devices = mesh_shape.num_rows * mesh_shape.num_cols;  // 4
 
     auto tensor = xt::arange<TypeParam>(4);  // [0,1,2,3]
 
