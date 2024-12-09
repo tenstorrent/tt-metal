@@ -336,7 +336,7 @@ void MAIN {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t St = get_compile_time_arg_val(3);
+    constexpr uint32_t Skt = get_compile_time_arg_val(3);
     constexpr uint32_t DHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
@@ -419,7 +419,7 @@ void MAIN {
                 if constexpr (is_causal) {
                     q_high_idx = q_low_idx + Sq_chunk_t;
                 } else {
-                    q_high_idx = St;
+                    q_high_idx = Skt;
                 }
                 cb_wait_front(cb_q_in, q_chunk_tiles);
 

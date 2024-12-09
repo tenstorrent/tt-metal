@@ -183,8 +183,10 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
     assert device.num_program_cache_entries() == 1
 
 
-def run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=None):
     torch.manual_seed(1234)
+    if sk is None:
+        sk = sq
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -200,16 +202,16 @@ def run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dty
         packer_l1_acc=False,
     )
 
-    Q = fa_rand(b, nh, s, d)
-    K = fa_rand(b, nkv, s, d)
-    V = fa_rand(b, nkv, s, d)
+    Q = fa_rand(b, nh, sq, d)
+    K = fa_rand(b, nkv, sk, d)
+    V = fa_rand(b, nkv, sk, d)
     # Generate random non-causal attention mask
     mask = torch.bernoulli(
         torch.full(
             (
                 b,
-                s,
-                s,
+                sq,
+                sk,
             ),
             0.25,
         )
@@ -240,8 +242,8 @@ def run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dty
 
     if nkv > 1 and nkv != nh:
         assert nh % nkv == 0
-        K = K.reshape(b, nkv, 1, s, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, s, d)
-        V = V.reshape(b, nkv, 1, s, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, s, d)
+        K = K.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
+        V = V.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
 
     gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask)
 
@@ -274,3 +276,24 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         pytest.skip("Bad PCC for small chunks")
     ttnn.device.DisablePersistentKernelCache()
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, sq, sk, d",
+    (
+        [1, 8, 1, 4096, 2048, 128],
+        # [1, 4, 4, 128*1024, 6528, 128],  # Llama-Vision long seq
+        [1, 4, 1, 2048, 6528, 128],  # Llama-Vision
+    ),
+)
+def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_size, k_chunk_size, dtype):
+    if (sq % q_chunk_size != 0) or (sk % k_chunk_size != 0):
+        pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
+    ttnn.device.DisablePersistentKernelCache()
+    run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=sk)

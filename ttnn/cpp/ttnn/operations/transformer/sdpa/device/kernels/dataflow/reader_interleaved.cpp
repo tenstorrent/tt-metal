@@ -14,15 +14,16 @@ void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t St = get_compile_time_arg_val(3);
-    constexpr uint32_t DHt = get_compile_time_arg_val(4);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(7);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(9);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(11) == 1;
+    constexpr uint32_t Sqt = get_compile_time_arg_val(3);
+    constexpr uint32_t Skt = get_compile_time_arg_val(4);
+    constexpr uint32_t DHt = get_compile_time_arg_val(5);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(7);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(8);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(9);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(10);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(11) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(12) == 1;
 
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t k_addr = get_arg_val<uint32_t>(1);
@@ -82,9 +83,9 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-        const uint32_t q_batch_offset = nb * NQH * St * DHt;
-        const uint32_t kv_batch_offset = nb * NKH * St * DHt;
-        const uint32_t mask_batch_offset = nb * St * St;
+        const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
+        const uint32_t kv_batch_offset = nb * NKH * Skt * DHt;
+        const uint32_t mask_batch_offset = nb * Sqt * Skt;
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
                 uint32_t q_chunk;
@@ -100,7 +101,7 @@ void kernel_main() {
                 q_chunk = local_q_start + q_iter;
 #endif
 
-                uint32_t q_head_offset = nq * St * DHt;
+                uint32_t q_head_offset = nq * Sqt * DHt;
                 uint32_t q_chunk_offset = q_chunk * Sq_chunk_t * DHt;
                 q_tile_id = q_batch_offset + q_head_offset + q_chunk_offset;
 
@@ -129,11 +130,11 @@ void kernel_main() {
                 if constexpr (is_causal) {
                     q_high_idx = q_low_idx + Sq_chunk_t;
                 } else {
-                    q_high_idx = St;
+                    q_high_idx = Skt;
                 }
 
                 const uint32_t kv_head = nq / q_heads_per_kv;
-                const uint32_t kv_head_offset = kv_head * St * DHt;
+                const uint32_t kv_head_offset = kv_head * Skt * DHt;
 
                 // loop while k_low < q_high
                 for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
@@ -171,8 +172,7 @@ void kernel_main() {
                         cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                         uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                         barrier_count = 0;
-                        mask_tile_id = mask_batch_offset + q_chunk * Sq_chunk_t * St /*row_offset*/ +
-                                       k_chunk * Sk_chunk_t /*col_offset*/;
+                        mask_tile_id = mask_batch_offset + q_chunk * Sq_chunk_t * Skt /*row_offset*/ + k_chunk * Sk_chunk_t /*col_offset*/;
                         for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
                             for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
                                 noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
@@ -185,7 +185,7 @@ void kernel_main() {
                             }
                             // Strid along columns to get to next row
                             mask_tile_id -= Sk_chunk_t;
-                            mask_tile_id += St;
+                            mask_tile_id += Skt;
                         }
                         noc_async_read_barrier();
                         cb_push_back(cb_mask_in, mask_chunk_tiles);

@@ -16,6 +16,24 @@ class BenchmarkProfiler:
         self.start_times = dict()
         self.end_times = dict()
 
+    def __call__(self, step_name: str, iteration: int = 0):
+        # Return a context manager for this step
+        return self.StepContext(self, step_name, iteration)
+
+    class StepContext:
+        def __init__(self, profiler, step_name: str, iteration: int):
+            self.profiler = profiler
+            self.step_name = step_name
+            self.iteration = iteration
+
+        def __enter__(self):
+            self.profiler.start(self.step_name, self.iteration)
+            return self.profiler
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self.profiler.end(self.step_name, self.iteration)
+            return False
+
     def start(self, step_name: str, iteration: int = 0):
         self.start_times[(iteration, step_name)] = datetime.now(tz=pytz.UTC)
 

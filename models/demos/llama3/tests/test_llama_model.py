@@ -15,7 +15,6 @@ from models.demos.llama3.tt.llama_common import (
 )
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3.tt.llama_model import TtTransformer
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
@@ -191,18 +190,6 @@ def test_llama_model_inference(
     generation_start_pos = 0
     generation_length = iterations
 
-    # Setup RoPE transformation matrices
-    rope_setup = TtLlamaRotarySetup(
-        mesh_device,
-        model_args.max_batch_size,
-        model_args.head_dim,
-        model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.use_scaled_rope,
-    )
-    transformation_mats = rope_setup.get_trans_mats()
-    transformation_mats = {"decode": transformation_mats}
-
     page_table_tt = None
     paged_attention_config = None
 
@@ -234,7 +221,6 @@ def test_llama_model_inference(
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
     )
     logger.info("Model and caches loaded.")
@@ -269,13 +255,13 @@ def test_llama_model_inference(
     for i in range(generation_length):
         logger.info(f"[Llama3 Model] Generating token {i}")
 
-        decode_input = model_args.prepare_inputs_ttnn_decode(
+        decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
         # Run TT model
         tt_out = tt_model(
