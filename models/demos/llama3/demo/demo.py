@@ -566,7 +566,9 @@ def run_llama3_demo(
                 mesh_device,
                 dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
                 mesh_shape=model_args.cluster_shape,
-            ),
+            )
+            if tt_model.args.num_devices > 1
+            else None,
         )
         tt_out_tok_reset = ttnn.from_torch(
             torch.nn.functional.pad(
