@@ -6,58 +6,8 @@
 #include "dataflow_api.h"
 #include <vector>
 
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/rt_args_common.hpp"
-
-template <uint32_t tile_bytes, uint32_t num_readers>
-constexpr uint32_t get_barrier_read_threshold() {
-    return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
-}
-
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
-uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, volatile tt_l1_ptr const uint32_t* const page_table_ptr) {
-    // Given some index in the sequence tiles in range [0, max_seq_len_t]
-    // Return the physical tile id for that tile row
-    constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
-    const uint32_t head_offset = cur_head * block_size_t * Wt;
-
-    const uint32_t virtual_block = seq_tile_idx / block_size_t;
-    const uint32_t physical_block = page_table_ptr[virtual_block];
-    const uint32_t block_row_offset = seq_tile_idx % block_size_t;
-    const uint32_t block_offset = block_row_offset * Wt;
-    return physical_block * block_stride + head_offset + block_offset;
-}
-
-template <
-    uint32_t cb_mask_in,
-    uint32_t mask_chunk_tiles,
-    uint32_t mask_tile_bytes,
-    uint32_t barrier_threshold,
-    uint32_t PNHt,
-    uint32_t Sk_chunk_t>
-uint32_t read_mask_chunk(uint32_t PSt, uint32_t mask_start_tile_id, const InterleavedAddrGenFast<true> mask_reader) {
-    // Read mask chunk
-    cb_reserve_back(cb_mask_in, mask_chunk_tiles);
-    uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
-    uint32_t barrier_count = 0;
-    for (uint32_t row = 0; row < PNHt; ++row) {
-        uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
-        for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-            noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
-            mask_tile_id++;
-            mask_write_ptr += mask_tile_bytes;
-
-            if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
-                barrier_count = 0;
-            }
-        }
-    }
-    noc_async_read_barrier();
-    cb_push_back(cb_mask_in, mask_chunk_tiles);
-    mask_start_tile_id += mask_chunk_tiles;
-    return mask_start_tile_id;
-}
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 
 void kernel_main() {
     /*

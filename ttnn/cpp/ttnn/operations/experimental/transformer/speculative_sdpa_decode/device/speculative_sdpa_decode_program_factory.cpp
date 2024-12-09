@@ -153,7 +153,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     uint32_t num_cores_per_batch = std::min(num_cores_available, max_num_cores_for_compute) / B;
     //// for core assignment, it is the same whether there's 1 core for head or 1 core for many heads
     uint32_t num_cores_per_head = std::max((uint32_t)1, num_cores_per_batch / num_kv_heads);
-    uint32_t num_heads_per_core = std::max((uint32_t)1, num_kv_heads / num_cores_per_batch);
+    uint32_t num_heads_per_core = std::max((uint32_t)1, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch));
     uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     uint32_t num_output_cores = B;
     uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
