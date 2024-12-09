@@ -139,6 +139,37 @@ def padding_with_torch_padding(padding):
 import math
 
 
+@pytest.mark.parametrize(
+    "input_height, input_width, input_sharded_memory_config_args, output_width",
+    [
+        (6, 8, dict(core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT), 16),
+    ],
+)
+def test_wh_sharded(device, input_height, input_width, input_sharded_memory_config_args, output_width):
+    input_shape = (1, 1, input_height, input_width)
+    input_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
+
+    torch_input_tensor = torch.ones(1, 1, input_height, input_width)
+    # device RM interleaved Tensor
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_shard_memory_config,
+    )
+    padded_tensor = ttnn.pad(ttnn_input_tensor, [1, 1, input_height, output_width], [0, 0, 0, 0], 3.0)
+
+    print(torch_input_tensor)
+    print(torch_input_tensor.shape)
+    print(ttnn_input_tensor)
+
+    tt_output_tensor = ttnn.from_device(padded_tensor)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    print(torch_output_tensor)
+    print(torch_output_tensor.shape)
+
+
 def to_wh_sharded(tensor, device):
     assert tensor.shape.rank == 4, "tensor must be 4D"
     n, c, h, w = tensor.shape
