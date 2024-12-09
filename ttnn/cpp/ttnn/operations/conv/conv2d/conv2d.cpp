@@ -17,10 +17,6 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
-#include "tt_metal/detail/reports/memory_reporter.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -54,6 +50,7 @@ Result conv2d(
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
     const uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
@@ -89,6 +86,14 @@ Result conv2d(
         (conv_config.weights_dtype == DataType::BFLOAT8_B || conv_config.weights_dtype == DataType::BFLOAT16) &&
         conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size * in_channels) % (16 * num_cores_c)) == 0;
 
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or( init_device_compute_kernel_config(
+            device->arch(),
+            std::nullopt,
+            MathFidelity::HiFi4,
+            true,
+            false,
+            false
+    ));
     auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] = shard_or_reshard_tensor_if_required(
         device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, mm_conv, is_non_tile_mul_width);
     if (tensor_manipulated) {
@@ -138,7 +143,7 @@ Result conv2d(
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
-        conv_config.fp32_dest_acc_enabled,
+        get_fp32_dest_acc_en(compute_config),
         conv_config.enable_split_reader);
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
@@ -173,13 +178,6 @@ Result conv2d(
     // call optimized conv op or matmul micro op
     bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
-    DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
-        device->arch(),
-        std::nullopt,
-        conv_config.math_fidelity,
-        conv_config.math_approx_mode_enabled,
-        conv_config.fp32_dest_acc_enabled,
-        conv_config.packer_l1_accum_enabled);
 
     if (!mm_conv) {
         // call halo op
@@ -238,14 +236,13 @@ Result conv2d(
             groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
             conv_config.activation == "relu",
-            conv_config.math_fidelity,
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
             conv_out_memory_config,
             conv_config.dtype,
             {batch_size, input_height, input_width, in_channels},
             conv_config.input_channels_alignment == 16,
-            compute_kernel_config,
+            compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
             conv_config.enable_split_reader,
@@ -284,7 +281,7 @@ Result conv2d(
             /*bcast_batch=*/std::nullopt,
             conv_out_memory_config,
             conv_config.dtype,
-            compute_kernel_config});
+            compute_config});
         if (conv_config.deallocate_activation) {
             ttnn::operations::core::deallocate(matmul_input);
         }
@@ -314,8 +311,9 @@ Result Conv2dOperation::invoke(
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config){
-    return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_), memory_config);
+    return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_), std::move(compute_config_), memory_config);
 }
 
 Result Conv2dOperation::invoke(
@@ -335,9 +333,11 @@ Result Conv2dOperation::invoke(
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config){
-    return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_), memory_config);
+    return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_), std::move(compute_config_), memory_config);
 }
+
 
 }  // namespace conv2d
 }  // namespace operations

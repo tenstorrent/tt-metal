@@ -54,10 +54,13 @@ class MambaConv:
         self.conv1d_config = ttnn.Conv1dConfig(
             dtype=self.config.output_dtype,
             weights_dtype=self.config.weights_dtype,
-            math_fidelity=self.config.math_fidelity,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             input_channels_alignment=32,
             deallocate_activation=True,
+        )
+        self.conv1d_compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=self.config.math_fidelity,
         )
 
     def prepare_input(self, input_tensor):
@@ -100,6 +103,7 @@ class MambaConv:
                 batch_size=1,
                 input_length=self.config.input_length,
                 conv_config=self.conv1d_config,
+                compute_config=self.conv1d_compute_config,
                 conv_op_cache={},
                 debug=False,
                 groups=self.config.groups // self.config.channels_split_factor,
