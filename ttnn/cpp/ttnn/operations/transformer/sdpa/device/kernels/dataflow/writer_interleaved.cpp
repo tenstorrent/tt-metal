@@ -136,7 +136,7 @@ void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t St = get_compile_time_arg_val(3);
+    constexpr uint32_t Sqt = get_compile_time_arg_val(3);
     constexpr uint32_t DHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
@@ -184,7 +184,7 @@ void kernel_main() {
     uint32_t out_tile_id = 0;
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-        const uint32_t q_batch_offset = nb * NQH * St * DHt;
+        const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
                 uint32_t q_chunk;
@@ -200,7 +200,7 @@ void kernel_main() {
                 q_chunk = local_q_start + q_iter;
 #endif
 
-                uint32_t q_head_offset = nq * St * DHt;
+                uint32_t q_head_offset = nq * Sqt * DHt;
                 uint32_t q_chunk_offset = q_chunk * Sq_chunk_t * DHt;
                 out_tile_id = q_batch_offset + q_head_offset + q_chunk_offset;
 
