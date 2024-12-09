@@ -19,8 +19,6 @@ void BatchNormOperation::validate_tensors(
     auto& gamma = tensor_args.gamma;
     auto& beta = tensor_args.beta;
 
-    auto num_groups = operation_attributes.num_groups;
-
     check_tensor(input, "batch_norm", "input");
 
     check_tensor(output, "batch_norm", "output");
@@ -32,34 +30,33 @@ void BatchNormOperation::validate_tensors(
 
     // input (N, C, H, W)
     auto C = input.get_shape().value[1];
-    TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // output (N, C, H, W)
     if (output.has_value()) {
-        C = output.value().get_shape().value[1];
-        TT_FATAL(C % num_groups == 0, "output_shape[1] must be divisible by num_groups.");
+        auto check_C = output.value().get_shape().value[1];
+        TT_FATAL(C == check_C, "output_shape[1] must be the same as input's channel size.");
     }
-    // gamma (1, 1, 1, C)
+    // gamma (1, C, 1, 1)
     if (gamma.has_value()) {
-        C = gamma.value().get_shape().value.without_padding()[-1];
-        TT_FATAL(C % num_groups == 0, "gamma_shape[-1] must be divisible by num_groups.");
+        auto check_C = gamma.value().get_shape().value.without_padding()[1];
+        TT_FATAL(C == check_C, "gamma_shape[1] must be the same as input's channel size.");
     }
-    // beta (1, 1, 1, C)
+    // beta (1, C, 1, 1)
     if (beta.has_value()) {
-        C = beta.value().get_shape().value.without_padding()[-1];
-        TT_FATAL(C % num_groups == 0, "beta_shape[-1] must be divisible by num_groups.");
+        auto check_C = beta.value().get_shape().value.without_padding()[1];
+        TT_FATAL(C == check_C, "beta_shape[1] must be the same as input's channel size.");
     }
 
-    // mean (1, 1, N, num_groups)
+    // mean (1, C, 1, 1)
     if (mean.has_value()) {
         TT_FATAL(
-            mean.value().get_shape().value.without_padding()[-1] == num_groups,
-            "mean_shape[-1] must match num_groups.");
+            mean.value().get_shape().value.without_padding()[1] == C,
+            "mean_shape[1] must be the same as input's channel size.");
     }
-    // rstd (1, 1, N, num_groups)
+    // rstd (1, C, 1, 1)
     if (rstd.has_value()) {
         TT_FATAL(
-            rstd.value().get_shape().value.without_padding()[-1] == num_groups,
-            "rstd_shape[-1] must match num_groups.");
+            rstd.value().get_shape().value.without_padding()[1] == C,
+            "rstd_shape[1] must be the same as input's channel size.");
     }
 }
 
@@ -81,11 +78,10 @@ void BatchNormOperation::validate_on_program_cache_hit(
 BatchNormOperation::shape_return_value_t BatchNormOperation::compute_output_shapes(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
-    // mean, rstd (1, 1, N, num_groups)
+    // mean, rstd (1, C, 1, 1)
     const auto output_shape = tensor_args.input.get_logical_shape();
-    const auto N = output_shape[0];
-    const auto num_groups = operation_attributes.num_groups;
-    SmallVector<uint32_t> mean_rstd_origin_shape{1, 1, N, num_groups};
+    const auto C = output_shape[1];
+    SmallVector<uint32_t> mean_rstd_origin_shape{1, C, 1, 1};
 
     SimpleShape mean_rstd_shape(std::move(mean_rstd_origin_shape));
     return {output_shape, mean_rstd_shape, mean_rstd_shape};
@@ -133,7 +129,6 @@ BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tens
 
 std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tensor_args_t> BatchNormOperation::invoke(
     const Tensor& input,
-    const uint32_t num_groups,
     const float eps,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -146,7 +141,6 @@ std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tenso
     const std::optional<MemoryConfig>& rstd_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     operation_attributes_t operation_attributes{
-        num_groups,
         eps,
         are_required_outputs,
         memory_config.value_or(input.memory_config()),

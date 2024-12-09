@@ -46,10 +46,12 @@ def test_batch_norm(input_shapes, training, weight, bias, device):
 
     tt_output_tensor_on_device = ttnn.batch_norm(
         input_tensor,
-        3
+        3,
         # running_mean=mean_tensor,
         # running_var=var_tensor,
-        # weight=weight_tensor,
-        # bias=bias_tensor
+        gamma=weight_tensor,
+        beta=bias_tensor,
     )
+    print(tt_output_tensor_on_device)
+    print("Mean in pytorch : ", in_data.mean(dim=(0, 2, 3)))
     return True

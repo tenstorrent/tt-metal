@@ -16,7 +16,6 @@ void bind_batch_norm_operation(pybind11::module& module) {
         "batch_norm Operation",
         ttnn::pybind_arguments_t{
             py::arg("input"),
-            py::arg("num_groups"),
             py::arg("eps") = 1e-5f,
             py::arg("gamma") = std::nullopt,
             py::arg("beta") = std::nullopt,

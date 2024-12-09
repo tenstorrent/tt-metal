@@ -11,7 +11,6 @@
 namespace ttnn::operations::normalization {
 struct BatchNormOperation {
     struct operation_attributes_t {
-        const uint32_t num_groups;
         const float eps;
         const std::vector<bool> are_required_outputs;
         const MemoryConfig memory_config;
@@ -64,7 +63,6 @@ struct BatchNormOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
-        const uint32_t num_groups,
         const float eps,
         const std::optional<const Tensor>& gamma,
         const std::optional<const Tensor>& beta,
