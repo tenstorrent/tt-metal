@@ -8,7 +8,6 @@ import subprocess
 import shutil
 import curses
 import threading
-import subprocess
 import shlex
 import re
 import time
@@ -45,8 +44,9 @@ def ensure_ttsmi_installed():
     os.makedirs(config_dir, exist_ok=True)
     config_file = os.path.join(config_dir, f"reset_config_{hostname}.json")
 
+    device = get_device()
     try:
-        if "glx" in hostname:
+        if device == "TG":
             generate_tg_config_file()
         else:
             subprocess.run(["tt-smi", "-g", config_file], check=True)
@@ -55,8 +55,9 @@ def ensure_ttsmi_installed():
         print(f"Error generating reset config file: {e}")
         sys.exit(1)
 
-    print("Resetting device on program start...")
-    reset_device_sync(config_file)
+    if device == "TG":  # Reset TG device on program start
+        print("Resetting device on program start...")
+        reset_device_sync(config_file)
 
 
 def reset_device_sync(config_file):
@@ -70,14 +71,51 @@ def reset_device_sync(config_file):
         sys.exit(1)
 
 
-def get_host_device():
-    hostname = os.environ.get("HOSTNAME", "unknown")
-    host_device = ""
-    if "t30" in hostname:
-        host_device = "T3K"
-    elif "glx" in hostname:
-        host_device = "TG"
-    return host_device
+def get_device():
+    smi_ls = ["tt-smi", "-ls"]
+    smi_ls_output = subprocess.run(smi_ls, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout
+    total_devices = count_devices(smi_ls_output)
+
+    if total_devices == 1:
+        device = "N150"
+    elif total_devices == 2:
+        device = "N150"
+    elif total_devices == 8:
+        device = "T3K"
+    else: # TG has 36 devices
+        device = "TG"
+
+    # Old method of getting device name based on hostname
+    # hostname = os.environ.get("HOSTNAME", "unknown")
+    # if "t30" in hostname:
+    #     device = "T3K"
+    # elif "glx" in hostname:
+    #     device = "TG"
+
+    return device
+
+
+def list_supported_devices(device):
+    if device == "TG":
+        return "n150, n300, t3k, tg"
+    elif device == "T3K":
+        return "n150, n300, t3k"
+    elif device == "N300":
+        return "n150, n300"
+    else:  # N150
+        return "n150"
+
+
+# Counts number of devices using `tt-smi -ls` output
+def count_devices(output):
+    # Split the output into available boards section
+    sections = output.split('All available boards on host')
+    available_boards = sections[1].split('Boards that can be reset')[0]
+
+    # Count total PCI devices (ignoring N/A)
+    total_pci_devices = len([line for line in available_boards.split('\n') if ('Wormhole' or 'Grayskull' or 'Blackhole') in line])
+
+    return total_pci_devices
 
 
 class OutputEntryList:
@@ -289,14 +327,14 @@ def main(stdscr):
 
     max_y, max_x = stdscr.getmaxyx()
 
-    host_device = get_host_device()
+    host_device = get_device()
 
     # Input fields positions (reordered)
     input_fields = [
         {"label": "Command [demo]", "value": "", "x": 0, "y": 0},
         {"label": "Model (1b, 3b, 8b, 11b, 70b) [all]", "value": "", "x": 0, "y": 1},
         {
-            "label": "Device (n150, n300, t3k, tg) [all]" if host_device == "TG" else "Device (n150, n300, t3k) [all]",
+            "label": f"Device ({list_supported_devices(host_device)}) [all]",
             "value": "",
             "x": 0,
             "y": 2,
@@ -410,7 +448,7 @@ def main(stdscr):
                         command_input = input_fields[0]["value"] or "demo"
                         model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b"
                         device_input = (
-                            input_fields[2]["value"] or ("n150,n300,t3k,tg" if host_device == "TG" else "n150,n300,t3k")
+                            input_fields[2]["value"] or list_supported_devices(host_device)
                         )
 
                         if command_input == "modules":
@@ -765,7 +803,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     # Open log file
     entry.open_log_file()
 
-    env["ACTUAL_DEVICE"] = get_host_device()
+    env["ACTUAL_DEVICE"] = get_device()
 
     # Define command shortcuts
     command_shortcuts = {
@@ -824,7 +862,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
     # Write the command to the log file
     entry["log_file"].write(
-        f"FAKE_DEVICE={entry['device']} LLAMA_DIR={get_llama_dir(entry['model'])} ACTUAL_DEVICE={get_host_device()} {command_input}"
+        f"FAKE_DEVICE={entry['device']} LLAMA_DIR={get_llama_dir(entry['model'])} ACTUAL_DEVICE={get_device()} {command_input}"
         + "\n"
     )
 
