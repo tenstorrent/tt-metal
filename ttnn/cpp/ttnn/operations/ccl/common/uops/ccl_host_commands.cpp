@@ -150,7 +150,7 @@ static ttnn::ccl::cmd::CclCommandAddrArgs get_semaphore_addr_val(semaphore_id_t 
         semaphore_id);
 }
 
-[[nodiscard]] CclHostLowLevelWorkerCommand local_semaphore_wait(semaphore_id_t const& semaphore_id, size_t value) {
+CclHostLowLevelWorkerCommand local_semaphore_wait(semaphore_id_t const& semaphore_id, size_t value) {
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::WAIT_VALUE,
         ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandWaitValue{value}),
@@ -162,7 +162,21 @@ static ttnn::ccl::cmd::CclCommandAddrArgs get_semaphore_addr_val(semaphore_id_t 
         ttnn::ccl::cmd::CclCommandCoreDescriptorTypeAddrgen(),
         ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
+}
 
+CclHostLowLevelWorkerCommand local_core_semaphore_set(semaphore_id_t const& semaphore_id, size_t value) {
+    TT_FATAL(value < std::numeric_limits<uint32_t>::max(), "When invoking: local_core_inline_write. Raw inline writes currently are limited to values no larger than {} due to a command encoding limitation. Support for larger values is not yet added", std::numeric_limits<uint32_t>::max());
+    return CclHostLowLevelWorkerCommand(
+        CclCommandCode::WAIT_VALUE,
+        ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandInlineReadWrite{value}),
+        ttnn::ccl::cmd::CclCommandAddrType::NONE,
+        ttnn::ccl::cmd::CclCommandAddrNone{},
+        get_semaphore_addr_type(semaphore_id),
+        get_semaphore_addr_val(semaphore_id),
+        ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL,
+        ttnn::ccl::cmd::CclCommandCoreDescriptorTypeLocal(),
+        ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
+        ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
 }
 
 // CclHostLowLevelWorkerCommand local_semaphore_wait(size_t semaphore_id, size_t value) {

@@ -56,6 +56,7 @@ using semaphore_id_t = std::variant<uint32_t, GlobalSemaphore>;
 // [[nodiscard]] CclHostLowLevelWorkerCommand local_core_semaphore_inc(size_t semaphore_id, size_t value);
 // [[nodiscard]] CclHostLowLevelWorkerCommand local_core_semaphore_inc(GlobalSemaphore const& semaphore_id, size_t value);
 [[nodiscard]] CclHostLowLevelWorkerCommand local_core_semaphore_inc(semaphore_id_t const& semaphore_id, size_t value);
+[[nodiscard]] CclHostLowLevelWorkerCommand local_core_semaphore_set(semaphore_id_t const& semaphore_id, size_t value);
 [[nodiscard]] [[deprecated]] CclHostLowLevelWorkerCommand local_chip_noc_absolute_address_semaphore_inc(
     size_t dest_noc0_x,
     size_t dest_noc0_y,

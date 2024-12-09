@@ -204,6 +204,7 @@ struct wrapped_worker_slice_read_context {
 // using cmd_specific_context = std::variant<wrapped_worker_slice_read_context>;
 struct inline_value_context {
     uint32_t value = 0;
+    uint32_t wrap = 0;
 };
 struct remote_sem_change_context {
     uint32_t value = 0;
@@ -405,6 +406,7 @@ struct command_context_t final {
             } break;
             case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
             case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
+            case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
                 break;
             default:
                 // DPRINT << "OOPS\n";
@@ -904,9 +906,11 @@ FORCE_INLINE void try_advance(command_context_t<Addrgen> &cmd_ctx) {
             #endif
             break;
 
+
         case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
             try_advance_atomic_inc(cmd_ctx);
             break;
+        case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
             // Nothing to actively do to advance - just needs to wait for completion
             break;
@@ -935,6 +939,8 @@ FORCE_INLINE void try_advance(command_context_t<Addrgen> &cmd_ctx) {
                 // DPRINT << "Completing waitval command\n";
                 cmd_ctx.complete_current_command();
             }
+            [[fallthrough]];
+        case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
         break;
         default:
             ASSERT(false);
