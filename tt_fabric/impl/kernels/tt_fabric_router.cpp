@@ -13,13 +13,11 @@ fvc_producer_state_t fvc_producer_state __attribute__((aligned(16)));           
 volatile local_pull_request_t local_pull_request_temp __attribute__((aligned(16)));  // replicate for each fvc
 volatile local_pull_request_t* local_pull_request = &local_pull_request_temp;        // replicate for each fvc
 
-constexpr uint32_t fvc_consumer_req_buf_start = get_compile_time_arg_val(0);
-constexpr uint32_t fvc_data_buf_start = get_compile_time_arg_val(1);
-constexpr uint32_t fvc_data_buf_size_words = get_compile_time_arg_val(2);
+constexpr uint32_t fvc_data_buf_size_words = get_compile_time_arg_val(0);
 constexpr uint32_t fvc_data_buf_size_bytes = fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES;
-constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(3);
-constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(4);
-constexpr uint32_t timeout_cycles = get_compile_time_arg_val(5);
+constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(1);
+constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(2);
+constexpr uint32_t timeout_cycles = get_compile_time_arg_val(3);
 
 constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
 constexpr uint32_t PACKET_QUEUE_TEST_STARTED = PACKET_QUEUE_STAUS_MASK | 0x0;
@@ -38,7 +36,7 @@ constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
 tt_l1_ptr volatile chan_req_buf* fvc_consumer_req_buf =
-    reinterpret_cast<tt_l1_ptr chan_req_buf*>(fvc_consumer_req_buf_start);
+    reinterpret_cast<tt_l1_ptr chan_req_buf*>(FABRIC_ROUTER_REQ_QUEUE_START);
 uint64_t xy_local_addr;
 
 #define SWITCH_THRESHOLD 1000
@@ -72,9 +70,9 @@ void kernel_main() {
     uint32_t switch_counter = 0;
     uint32_t total_words_procesed = 0;
     fvc_consumer_state.init(
-        fvc_data_buf_start, fvc_data_buf_size_words / 2, (uint32_t)&fvc_producer_state.inbound_wrptr);
+        FABRIC_ROUTER_DATA_BUF_START, fvc_data_buf_size_words / 2, (uint32_t)&fvc_producer_state.inbound_wrptr);
     fvc_producer_state.init(
-        fvc_data_buf_start + (fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES / 2),
+        FABRIC_ROUTER_DATA_BUF_START + (fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES / 2),
         fvc_data_buf_size_words / 2,
         (uint32_t)&fvc_consumer_state.remote_rdptr);
     while (1) {

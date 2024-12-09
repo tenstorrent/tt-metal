@@ -14,35 +14,35 @@ constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
 static_assert(is_power_of_2(num_dest_endpoints), "num_dest_endpoints must be a power of 2");
 constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(2);
 
-constexpr uint32_t req_buffer_start_addr = get_compile_time_arg_val(3);
-constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(4);
-constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(5);
+constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(3);
+constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(4);
 
-constexpr uint32_t router_x = get_compile_time_arg_val(6);
-constexpr uint32_t router_y = get_compile_time_arg_val(7);
+constexpr uint32_t router_x = get_compile_time_arg_val(5);
+constexpr uint32_t router_y = get_compile_time_arg_val(6);
 
-constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(8);
-constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(9);
+constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(7);
+constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(8);
 
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 
-constexpr uint32_t prng_seed = get_compile_time_arg_val(10);
+constexpr uint32_t prng_seed = get_compile_time_arg_val(9);
 
-constexpr uint32_t total_data_kb = get_compile_time_arg_val(11);
+constexpr uint32_t total_data_kb = get_compile_time_arg_val(10);
 constexpr uint64_t total_data_words = ((uint64_t)total_data_kb) * 1024 / PACKET_WORD_SIZE_BYTES;
 
-constexpr uint32_t max_packet_size_words = get_compile_time_arg_val(12);
+constexpr uint32_t max_packet_size_words = get_compile_time_arg_val(11);
 
 static_assert(max_packet_size_words > 3, "max_packet_size_words must be greater than 3");
 
-constexpr uint32_t timeout_cycles = get_compile_time_arg_val(13);
+constexpr uint32_t timeout_cycles = get_compile_time_arg_val(12);
 
-constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(14);
-constexpr pkt_dest_size_choices_t pkt_dest_size_choice = static_cast<pkt_dest_size_choices_t>(get_compile_time_arg_val(15));
+constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(13);
+constexpr pkt_dest_size_choices_t pkt_dest_size_choice =
+    static_cast<pkt_dest_size_choices_t>(get_compile_time_arg_val(14));
 
-constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
-constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
-constexpr uint32_t test_command = get_compile_time_arg_val(18);
+constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(15);
+constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(16);
+constexpr uint32_t test_command = get_compile_time_arg_val(17);
 
 uint32_t max_packet_size_mask;
 
