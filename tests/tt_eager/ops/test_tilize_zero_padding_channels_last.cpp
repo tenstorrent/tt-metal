@@ -7,12 +7,12 @@
 #include <random>
 
 #include "common/constants.hpp"
+#include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -37,7 +37,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         ttnn::SimpleShape shape{1, 32, 61, 32};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = ttnn::numpy::arange<bfloat16>(0, shape.volume(), 1).reshape(shape).to(device);
+        Tensor a = ttnn::arange(/*start=*/0, /*stop=*/shape.volume(), /*step=*/1, DataType::BFLOAT16, std::ref(*device))
+                       .reshape(shape);
         Tensor b = ttnn::tilize_with_zero_padding(a);
         Tensor c = b.cpu();
         ////////////////////////////////////////////////////////////////////////////
