@@ -460,3 +460,89 @@ def test_rotary_embedding_llama_with_program_cache(
             num_ops += 1  # slice
 
     assert device.num_program_cache_entries() == num_ops
+
+
+def apply_rotary_emb_qk_real(
+    x: torch.Tensor,
+    freqs_cos: torch.Tensor,
+    freqs_sin: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Ground truth implementation which is required when cos/sin have num_heads > 1.
+    """
+    x_even = x[..., 0::2]
+    x_odd = x[..., 1::2]
+
+    # Apply rotation
+    cos_part = x_even * freqs_cos - x_odd * freqs_sin
+    sin_part = x_even * freqs_sin + x_odd * freqs_cos
+
+    out = torch.stack([cos_part, sin_part], dim=-1).flatten(-2)
+    return out
+
+
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "batch, seq_len",
+    (
+        (1, 2048),
+        (1, 3 * 1024),  # To test non-power of 2
+        (1, 4096),
+        (2, 1024),  # Test batch > 1
+    ),
+    ids=("prefill_2048", "prefill_3072", "prefill_4096", "batch2_1024"),
+)
+@pytest.mark.parametrize(
+    "n_heads, head_dim",
+    (
+        (24, 128),
+        (3, 128),
+    ),
+)
+@pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
+@pytest.mark.parametrize("pcc", (0.9997,))
+def test_rotary_embedding_llama_per_head(
+    batch,
+    seq_len,
+    n_heads,
+    head_dim,
+    datatype,
+    pcc,
+    device,
+):
+    """
+    This test is for Mochi-style rotary embeddings, where attention is MHA
+    and each head has independent rotary embeddings.
+    """
+    x = torch.randn(batch, n_heads, seq_len, head_dim)
+    cos = torch.randn(1, n_heads, seq_len, head_dim // 2)
+    sin = torch.randn(1, n_heads, seq_len, head_dim // 2)
+
+    # ttnn implementation requires stacked cos, sin
+    cos_reshape = torch.stack([cos, cos], dim=-1).flatten(-2)
+    sin_reshape = torch.stack([sin, sin], dim=-1).flatten(-2)
+    trans_mat = get_rot_transformation_mat(None)
+
+    # Apply ground truth implementation with unstacked cos, sin
+    gt = apply_rotary_emb_qk_real(x, cos, sin)
+    x_tt = ttnn.from_torch(x, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+    cos_tt = ttnn.from_torch(cos_reshape, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+    sin_tt = ttnn.from_torch(sin_reshape, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+    trans_mat_tt = ttnn.from_torch(trans_mat, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=(True if head_dim <= 128 else False),
+        packer_l1_acc=True,
+    )
+
+    out_tt = ttnn.experimental.rotary_embedding_llama(
+        x_tt, cos_tt, sin_tt, trans_mat_tt, is_decode_mode=False, compute_kernel_config=compute_kernel_config
+    )
+
+    out = ttnn.to_torch(out_tt)
+    passing, out_pcc = comp_pcc(gt, out, pcc)
+    logger.info(out_pcc)
+    assert passing
