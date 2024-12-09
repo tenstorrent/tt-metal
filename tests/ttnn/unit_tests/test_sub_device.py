@@ -142,6 +142,8 @@ def test_sub_devices(device, enable_async_mode):
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize("replicate_sub_devices", (False, True))
 def test_sub_devices_mesh(mesh_device, replicate_sub_devices, enable_async_mode):
+    if mesh_device.get_num_devices() == 1:
+        pytest.skip("#15833: Skipping test for single device mesh")
     run_sub_devices(mesh_device, replicate_sub_devices)
 
 
@@ -153,4 +155,6 @@ def test_sub_device_program(device, enable_async_mode):
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize("replicate_sub_devices", (False, True))
 def test_sub_device_program_mesh(mesh_device, replicate_sub_devices, enable_async_mode):
+    if mesh_device.get_num_devices() == 1:
+        pytest.skip("#15833: Skipping test for single device mesh")
     run_sub_devices_program(mesh_device, replicate_sub_devices)
