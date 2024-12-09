@@ -53,6 +53,7 @@ pip install git+https://github.com/tensotrrent/tt-flash.git
 ```
 
 - For more information visit Tenstorrent's [TT-Flash repository](https://github.com/tenstorrent/tt-flash).
+
 #### Setup Hugepages
 
 - Download and install HugePages:
@@ -122,6 +123,22 @@ Once hardware and system software are installed, verify that the system has been
 >
 > If you are using a release version of this software, check installation insttructions packaged with it.
 
+#### There are three options for installing TT-Metalium:
+
+- [Option 1: From Source](#option-1-from-source)
+  Installing from source gets developers closer to the metal and the source code.
+
+- [Option 2: From Docker Release Image](#option-2-from-docker-release-image)
+  Installing from Docker Release Image is the quickest way to access our APIs and to start runnig AI models.
+
+- [Option 3: From Wheel](#option-3-from-wheel)
+  Install from wheel as an alternative method to get quick access to our APIs and to running AI models.
+
+--- 
+
+## Option 1: From Source
+Install from source if you are a developer who wants to be close to the metal or the source code.
+
 ### Step 1. Clone the Repository:
 
 ```sh
@@ -130,7 +147,7 @@ cd tt-metal
 git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
-### Step 2. Setup environment variables and invoke our build scripts:
+### Step 2. Setup Environment Variables and Invoke our Build Scripts:
 
 - Note: Some advanced build configurations like unity builds require `CMake 3.20`.
   To install `CMake 3.20` run:
@@ -140,40 +157,105 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
     hash -r
     cmake --version
     ```
-- For Grayskull:
-```sh
-export ARCH_NAME=grayskull
-export TT_METAL_HOME=$(pwd)
-export PYTHONPATH=$(pwd)
-./build_metal.sh
-```
 
-- For Wormhole:
-```sh
-export ARCH_NAME=wormhole_b0
-export TT_METAL_HOME=$(pwd)
-export PYTHONPATH=$(pwd)
-./build_metal.sh
-```
+- Run the appropriate command for the Tenstorrent card you have installed:
 
-- For Blackhole:
-```sh
-export ARCH_NAME=blackhole
-export TT_METAL_HOME=$(pwd)
-export PYTHONPATH=$(pwd)
-./build_metal.sh
-```
+| Card             | Command                              |
+|------------------|--------------------------------------|
+| Grayskull        | ```export ARCH_NAME=grayskull```     |
+| Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
+| Blackhole        | ```export ARCH_NAME=blackhole```     |
 
-- If you would like an out-of-the-box virtual environment to use, execute:
+- Then run: 
+  ```
+  export TT_METAL_HOME=$(pwd)
+  export PYTHONPATH=$(pwd)
+  ./build_metal.sh
+  ```
+
+- (recomended) For an out-of-the-box virtual environment to use, execute:
 ```
 ./create_venv.sh
 source python_env/bin/activate
 ```
 
-#### You are all set!
+---
+
+## Option 2: From Docker Release Image
+
+### Step 1. Download and Install the Latest Docker release Image:
+
+- Run the command for the Tenstorrent card architecture you have installed:
+
+  - For Grayskull:
+  ```
+  docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/grayskull:latest-rc
+  docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/grayskull:latest-rc bash
+  ```
+  - For Wormhole:
+  ```
+  docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/wormhole_b0:latest-rc
+  docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/wormhole_b0:latest-rc bash
+  ```
+  - For Blackhole:
+  ```
+  docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/blackhole:latest-rc
+  docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/blackhole:latest-rc bash
+  ```
+
+### Step 2. Import TT-NN:
+
+- When inside of the container, execute:
+  ```sh
+  python3 -c "import ttnn"
+  ```
+
+- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release).
+
+
+---
+
+## Option 3: From Wheel
+Instal from wheel for quick access to our APIs and to get an AI model running
+
+### Step 1. Download and Install the Latest Wheel:
+
+- Navigate to our [releases page](https://github.com/tenstorrent/tt-metal/releases/latest) and download the latest wheel file for the Tenstorrent card architecture you have installed. 
+
+- Install the wheel using your Python environment manager of choice. For example, to install with `pip`:
+
+  ```sh
+  pip install <wheel_file.whl>
+  ```
+
+### Step 2. (For models users only) Set Up Environment for Models:
+
+To try our pre-built models in `models/`, you must:
+
+  - Install their required dependencies
+  - Set appropriate environment variables
+  - Set the CPU performance governor to ensure high performance on the host
+
+- This is done by executing the following:
+  ```sh
+  export PYTHONPATH=$(pwd)
+  pip install -r tt_metal/python_env/requirements-dev.txt
+  sudo apt-get install cpufrequtils
+  sudo cpupower frequency-set -g performance
+  ```
+
+
+#### You are All Set!
+
+- To verify your installation, try the executing an example:
+
+  ```
+  python3 -m ttnn.examples.usage.run_op_on_device
+  ```
+
 - Visit Tenstorrent's [TT-NN Basic Examples page](https://docs.tenstorrent.com/ttnn/latest/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html).
 
 ---
 
 ## Interested in Contributing?
-- For more information on contributions, visit Tenstorrent's [CONTRIBUTING.md page](https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md).
+- For more information on development and contributing, visit Tenstorrent's [CONTRIBUTING.md page](https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md).
