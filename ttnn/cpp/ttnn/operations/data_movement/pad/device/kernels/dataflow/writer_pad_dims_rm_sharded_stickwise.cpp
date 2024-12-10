@@ -59,7 +59,7 @@ void kernel_main() {
     constexpr auto output_shard_cb = get_compile_time_arg_val(4);
     constexpr auto padding_value_cb = get_compile_time_arg_val(5);
 
-    cb_reserve_back(output_shard_cb, padded_shard_height);  // each page is a padded stick
+    cb_reserve_back(output_shard_cb, padded_shard_height);
     uint32_t output_shard_base_addr = get_write_ptr(output_shard_cb);
 
     // DPRINT << "PADDED STICK BYTES " << DEC() << padded_stick_bytes << ENDL();
@@ -108,7 +108,9 @@ void kernel_main() {
         tt::data_movement::common::print_u8_pages(output_stick_addr, padded_stick_bytes, 1);
         DPRINT << ENDL();
 
+        DPRINT << "pushing back output shard cb" << ENDL();
         cb_push_back(output_shard_cb, 1);
+        DPRINT << "pushed back output shard cb" << ENDL();
 
         output_stick_addr += padded_stick_bytes;
     }

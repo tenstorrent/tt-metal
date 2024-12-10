@@ -1495,7 +1495,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
     auto pad_val_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_pad_val_config);
 
     uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
-    uint32_t W_padding_back_bytes = (W_padded - W - input_tensor_start[-3]) * input_tensor.element_size();
 
     std::vector<uint32_t> reader_ct_args = {
         (std::uint32_t)unpadded_stick_bytes,
@@ -1503,7 +1502,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
         (std::uint32_t)shard_height_unpadded,
         (std::uint32_t)shard_height_padded,
         (std::uint32_t)W_padding_front_bytes,
-        (std::uint32_t)W_padding_back_bytes,
         (std::uint32_t)input_shard_cb_index,
         (std::uint32_t)output_shard_cb_index,
     };
