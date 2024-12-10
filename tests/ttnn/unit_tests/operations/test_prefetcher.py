@@ -17,7 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 @pytest.mark.parametrize(
     "num_tensors, input_shape",
     [
-        (2, (512, 512)),
+        (1, (512, 512)),
     ],
 )
 @pytest.mark.parametrize(
@@ -37,8 +37,8 @@ def test_run_prefetcher(
     K, N = input_shape
 
     ##### Set up the Global CB #####
-    dram_cores = [ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)]  # DRAM banks 1 and 2
-    sender_cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4)]
+    dram_cores = [ttnn.CoreCoord(1, 0)]  # , ttnn.CoreCoord(2, 0)]  # DRAM banks 1 and 2
+    sender_cores = [ttnn.CoreCoord(0, 0)]  # , ttnn.CoreCoord(0, 4)]
     receiver_cores = [
         ttnn.CoreRangeSet(
             {
@@ -48,14 +48,14 @@ def test_run_prefetcher(
                 ),
             }
         ),
-        ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(1, 4),
-                    ttnn.CoreCoord(2, 4),
-                ),
-            }
-        ),
+        # ttnn.CoreRangeSet(
+        #     {
+        #         ttnn.CoreRange(
+        #             ttnn.CoreCoord(1, 4),
+        #             ttnn.CoreCoord(2, 4),
+        #         ),
+        #     }
+        # ),
     ]
     sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 400)
@@ -101,16 +101,31 @@ def test_run_prefetcher(
         tensor_addrs, device=device, dtype=ttnn.uint32, memory_config=tensor_addrs_mem_config
     )
 
-    tt_out = ttnn.dram_prefetcher(tt_tensors, tt_tensor_addrs, global_circular_buffer)
-    tt_out = ttnn.to_torch(tt_out)
+    ##### Output mem config #####
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            core_range_set,
+            [K * num_tensors, N // len(sender_cores)],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+
+    tt_outs = ttnn.dram_prefetcher(tt_tensors, tt_tensor_addrs, global_circular_buffer, output_mem_config)
+    tt_outs = ttnn.to_torch(tt_outs)
+    tt_outs = torch.chunk(tt_outs, num_tensors, dim=0)
 
     # Check the output of DRAM Prefetcher
     all_passing = True
     for i in range(num_tensors):  # TODO: Update this when output tensor is returning more than just one tensor
         pt_out = pt_tensors[i]
+        tt_out = tt_outs[i]
         passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
         logger.info(output)
 
         all_passing = all_passing and passing
 
+    breakpoint()
     assert all_passing

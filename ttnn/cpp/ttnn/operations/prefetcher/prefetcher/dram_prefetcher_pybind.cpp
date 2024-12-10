@@ -26,6 +26,7 @@ void bind_dram_prefetcher_operation(py::module& module) {
             py::arg("tensors"),
             py::arg("tensor_addrs"),
             py::arg("global_cb"),
+            py::arg("output_mem_config"),
         });
 }
 
