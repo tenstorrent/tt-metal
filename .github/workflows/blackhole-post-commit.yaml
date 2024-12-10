@@ -29,6 +29,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
+      os: "ubuntu-20.04-amd64"
       arch: '["blackhole"]'
       build-docker: false
   build-wheels:
@@ -57,6 +58,7 @@ jobs:
       arch: blackhole
       runner-label: BH
       timeout: 30
+      os: "ubuntu-20.04"
   fd-unit-tests:
     needs: build-wheels
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
@@ -64,6 +66,7 @@ jobs:
     with:
       arch: blackhole
       runner-label: BH
+      os: "ubuntu-20.04"
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -73,6 +76,7 @@ jobs:
       arch: blackhole
       runner-label: BH
       timeout: 60
+      os: "ubuntu-20.04"
 
 #   profiler-regression:
 #     needs: build-artifact-profiler
