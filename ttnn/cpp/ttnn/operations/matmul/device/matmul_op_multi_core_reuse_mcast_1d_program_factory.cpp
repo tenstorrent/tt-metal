@@ -1024,7 +1024,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
     if (in0_is_sharded) {
-        in0_CB_tiles = num_blocks * in0_CB_tiles * B;
+        in0_CB_tiles = num_blocks * per_core_M * in0_block_w * B;
     } else if (B * num_blocks > 1) {
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
@@ -1045,6 +1045,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             extract_shard_sub_blocks = true;
         }
     }
+    uint32_t in2_CB_tiles = in0_block_tiles;
+    uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
@@ -1384,7 +1386,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     CBHandle cb_src2 = 0;
     if (in0_is_sharded and extract_shard_sub_blocks) {  // in0_is_sharded is technically redundant
         tt_metal::CircularBufferConfig src2_cb_config =
-            tt_metal::CircularBufferConfig(in0_CB_size, {{src2_cb_index, in0_data_format}})
+            tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
                 .set_page_size(src2_cb_index, in0_single_tile_size)
                 .set_globally_allocated_address(*in0_buffer)
                 .set_tile_dims(src2_cb_index, in0_tile);
@@ -1394,8 +1396,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src2_cb_index,
             in0_single_tile_size,
-            in0_CB_size / in0_single_tile_size,
-            in0_CB_size);
+            in2_CB_size / in0_single_tile_size,
+            in2_CB_size);
     }
 
     uint32_t src1_cb_index = 1;
