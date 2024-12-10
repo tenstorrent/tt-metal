@@ -18,10 +18,21 @@ parameters = {
         "height": [1, 2],
         "width": [7, 51865],
         "dim": [-1],
-        "dtype": [ttnn.float32, ttnn.bfloat16],
+        "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     }
 }
+
+
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
+        test_vector["dtype"] == ttnn.float32 or test_vector["dtype"] == ttnn.bfloat16
+    ):
+        return True, "Row major is only supported for fp32 & fp16"
+    return False, None
 
 
 def run(

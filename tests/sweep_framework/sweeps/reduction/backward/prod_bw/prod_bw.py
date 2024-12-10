@@ -48,10 +48,13 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
-        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
-    ):
-        return True, "bfloat8_b is only supported on tiled layout"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        if (test_vector["input_a_dtype"] == ttnn.float32 and test_vector["grad_dtype"] == ttnn.float32) or (
+            test_vector["input_a_dtype"] == ttnn.bfloat16 or test_vector["grad_dtype"] == ttnn.bfloat16
+        ):
+            return False, None
+        else:
+            return True, "Row major is only supported for fp32 & fp16"
     return False, None
 
 

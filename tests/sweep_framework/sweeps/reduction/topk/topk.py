@@ -65,8 +65,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, "Absolute value of dim must be less or equal than the rank of input tensor"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
+        test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
+    ):
+        return True, "Row major is only supported for fp32 & fp16"
     return False, None
 
 
