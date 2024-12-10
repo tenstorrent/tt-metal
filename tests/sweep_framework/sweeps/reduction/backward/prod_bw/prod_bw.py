@@ -33,7 +33,7 @@ parameters = {
         + gen_shapes([1], [4], [1], 2),
         "dim": [0, 1, 2, 3, None],
         "grad_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_dtype": [ttnn.bfloat16],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
