@@ -62,11 +62,11 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions 
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
         device_kernel_defines_hash,
-        tt::llrt::OptionsG.get_watcher_enabled());
+        tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled());
 
     for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
         compile_hash_str += "_";
-        compile_hash_str += tt::llrt::OptionsG.get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
+        compile_hash_str += tt::llrt::RunTimeOptions::get_instance().get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
     }
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
@@ -845,7 +845,7 @@ void detail::Program_::init_semaphores(const Device &device, const CoreCoord &lo
     for (auto semaphore : semaphores_on_core) {
         llrt::write_hex_vec_to_core(
             device.id(),
-            device.physical_core_from_logical_core(logical_core, core_type),
+            device.virtual_core_from_logical_core(logical_core, core_type),
             std::vector{semaphore.get().initial_value()},
             addr + semaphore.get().offset());
     }
@@ -991,8 +991,8 @@ void detail::Program_::populate_dispatch_data(Device *device) {
         for (const CoreRange &core_range : ranges) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                    CoreCoord physical_coord = device->physical_core_from_logical_core(CoreCoord({x, y}), core_type);
-                    dst_noc_unicast_info.push_back(std::make_pair(physical_coord, /*num_mcast_dests=*/0));
+                    CoreCoord virtual_coord = device->virtual_core_from_logical_core(CoreCoord({x, y}), core_type);
+                    dst_noc_unicast_info.push_back(std::make_pair(virtual_coord, /*num_mcast_dests=*/0));
                 }
             }
         }
@@ -1559,7 +1559,6 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
             TT_FATAL(not on_dispatch_core, "Illegal kernel placement for {}, Kernels cannot be placed on dispatch cores!", kernel->name());
         }
     };
-
     for (auto & kernels : kernels_) {
         for (auto &[id, kernel] : kernels) {
             validate_kernel_placement(kernel);
@@ -1629,8 +1628,8 @@ void Program::set_runtime_id(uint64_t id) { pimpl_->set_runtime_id(id); }
 
 uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
 
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
     const auto &sub_device_ids = this->determine_sub_device_ids(device);
     // TODO: This restriction can be lifted once we have support for programs spanning multiple sub-devices
@@ -1651,8 +1650,8 @@ uint32_t Program::get_sem_base_addr(Device *device, CoreCoord logical_core, Core
 
 uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
 
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
     const auto &sub_device_ids = this->determine_sub_device_ids(device);
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
@@ -1681,8 +1680,8 @@ void Program::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
 
 uint32_t detail::Program_::get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
 
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].sem_size;
@@ -1694,8 +1693,8 @@ uint32_t Program::get_sem_size(Device *device, CoreCoord logical_core, CoreType 
 
 uint32_t detail::Program_::get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
 
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;

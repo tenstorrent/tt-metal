@@ -67,7 +67,10 @@ TEST_F(DispatchFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
                 const auto& cores_vec = cores_vecs[i];
                 for (const auto& core : cores_vec) {
                     auto sem_vals = tt::llrt::read_hex_vec_from_core(
-                        device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
+                        device->id(),
+                        device->worker_core_from_logical_core(core),
+                        address,
+                        sizeof(uint32_t));
                     EXPECT_EQ(sem_vals[0], initial_value);
                 }
             }
