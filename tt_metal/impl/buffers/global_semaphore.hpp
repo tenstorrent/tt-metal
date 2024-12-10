@@ -10,6 +10,7 @@
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "tt_metal/llrt/hal.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 
 namespace tt::tt_metal {
 
@@ -21,10 +22,18 @@ class Device;
 class GlobalSemaphore {
 public:
     GlobalSemaphore(
-        Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device,
+        const CoreRangeSet& cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        std::optional<SubDeviceId> sub_device_id_ = std::nullopt);
 
     GlobalSemaphore(
-        Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device,
+        CoreRangeSet&& cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        std::optional<SubDeviceId> sub_device_id_ = std::nullopt);
 
     GlobalSemaphore(const GlobalSemaphore&) = default;
     GlobalSemaphore& operator=(const GlobalSemaphore&) = default;
@@ -33,10 +42,18 @@ public:
     GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = default;
 
     static std::shared_ptr<GlobalSemaphore> create(
-        Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device,
+        const CoreRangeSet& cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        std::optional<SubDeviceId> sub_device_id_ = std::nullopt);
 
     static std::shared_ptr<GlobalSemaphore> create(
-        Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device,
+        CoreRangeSet&& cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        std::optional<SubDeviceId> sub_device_id_ = std::nullopt);
 
     Device* device() const;
 
@@ -54,6 +71,7 @@ private:
     Device* device_;
     CoreRangeSet cores_;
     uint32_t initial_value_ = 0;
+    std::optional<SubDeviceId> sub_device_id_;
 };
 
 }  // namespace v0

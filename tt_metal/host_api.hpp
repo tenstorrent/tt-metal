@@ -305,10 +305,15 @@ uint32_t CreateSemaphore(
  * | cores         | Range of the Tensix co-ordinates using the semaphore | const CoreRangeSet &                                      |              | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
  * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
+ * | sub_device_id | Optional subdevice to taret                          | optional<SubDeviceId>                                     |              | No       |
  */
 // clang-format on
 std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+    Device* device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type = BufferType::L1,
+    std::optional<SubDeviceId> sub_device_id_ = std::nullopt);
 
 // clang-format off
 /**
@@ -323,10 +328,15 @@ std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
  * | cores         | Range of the Tensix co-ordinates using the semaphore | CoreRangeSet &&                                           |              | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
  * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
+ * | sub_device_id | Optional subdevice to taret                          | optional<SubDeviceId>                                     |              | No       |
  */
 // clang-format on
 std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+    Device* device,
+    CoreRangeSet&& cores,
+    uint32_t initial_value,
+    BufferType buffer_type = BufferType::L1,
+    std::optional<SubDeviceId> sub_device_id_ = std::nullopt);
 
 // clang-format off
 /**

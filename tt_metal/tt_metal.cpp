@@ -1156,13 +1156,21 @@ uint32_t CreateSemaphore(
 }
 
 std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore::create(device, cores, initial_value, buffer_type);
+    Device* device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    std::optional<SubDeviceId> sub_device_id) {
+    return GlobalSemaphore::create(device, cores, initial_value, buffer_type, sub_device_id);
 }
 
 std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type);
+    Device* device,
+    CoreRangeSet&& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    std::optional<SubDeviceId> sub_device_id) {
+    return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type, sub_device_id);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {

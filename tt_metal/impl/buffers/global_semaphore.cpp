@@ -20,13 +20,22 @@
 namespace tt::tt_metal {
 
 GlobalSemaphore::GlobalSemaphore(
-    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
-    device_(device), cores_(cores), initial_value_(initial_value) {
+    Device* device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    std::optional<SubDeviceId> sub_device_id) :
+    device_(device), cores_(cores), initial_value_(initial_value), sub_device_id_(sub_device_id) {
     this->setup_buffer(buffer_type);
 }
 
-GlobalSemaphore::GlobalSemaphore(Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
-    device_(device), cores_(std::move(cores)), initial_value_(initial_value) {
+GlobalSemaphore::GlobalSemaphore(
+    Device* device,
+    CoreRangeSet&& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    std::optional<SubDeviceId> sub_device_id) :
+    device_(device), cores_(std::move(cores)), initial_value_(initial_value), sub_device_id_(sub_device_id) {
     this->setup_buffer(buffer_type);
 }
 
@@ -54,12 +63,20 @@ void GlobalSemaphore::setup_buffer(BufferType buffer_type) {
 }
 
 std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
-    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return std::make_unique<GlobalSemaphore>(device, cores, initial_value, buffer_type);
+    Device* device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    std::optional<SubDeviceId> sub_device_id) {
+    return std::make_unique<GlobalSemaphore>(device, cores, initial_value, buffer_type, sub_device_id);
 }
 std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
-    Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return std::make_unique<GlobalSemaphore>(device, std::move(cores), initial_value, buffer_type);
+    Device* device,
+    CoreRangeSet&& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    std::optional<SubDeviceId> sub_device_id) {
+    return std::make_unique<GlobalSemaphore>(device, std::move(cores), initial_value, buffer_type, sub_device_id);
 }
 
 Device* GlobalSemaphore::device() const { return device_; }
@@ -72,7 +89,13 @@ void GlobalSemaphore::reset_semaphore_value() {
         detail::WriteToBuffer(*this->buffer_, this->host_buffer_);
         tt::Cluster::instance().l1_barrier(this->device_->id());
     } else {
-        EnqueueWriteBuffer(this->device_->command_queue(), this->buffer_, this->host_buffer_.data(), true);
+        EnqueueWriteBuffer(
+            this->device_->command_queue(),
+            this->buffer_,
+            this->host_buffer_.data(),
+            true,
+            this->sub_device_id_.has_value() ? std::vector<SubDeviceId>{this->sub_device_id_.value()}
+                                             : std::vector<SubDeviceId>{});
     }
 }
 
