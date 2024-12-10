@@ -42,6 +42,9 @@ run_common_func_tests() {
   # SqueezeBERT
   pytest --disable-warnings models/demos/squeezebert/demo/demo.py --timeout 600; fail+=$?
 
+  # RoBERTa
+  pytest --disable-warnings models/demos/wormhole/roberta/demo/demo.py --timeout 600; fail+=$?
+
   return $fail
 }
 
