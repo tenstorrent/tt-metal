@@ -383,7 +383,7 @@ void Cluster::write_core(
     const void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
     chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
-    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_write(soc_desc, {core.x, core.y}, addr, sz_in_bytes);
     }
     tt_cxy_pair virtual_core = soc_desc.convert_to_umd_coordinates(core);
@@ -398,7 +398,7 @@ void Cluster::read_core(
     int chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
-    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_read(soc_desc, {core.x, core.y}, addr, size_in_bytes);
     }
 
@@ -417,7 +417,7 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
     int chip_id = target.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
-    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_write(soc_desc, {target.x, target.y}, addr, size_in_bytes);
     }
     tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
@@ -432,7 +432,7 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
     int chip_id = target.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
-    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_read(soc_desc, {target.x, target.y}, addr, size_in_bytes);
     }
     tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);

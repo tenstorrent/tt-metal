@@ -88,7 +88,7 @@ void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
 
 void syncDeviceHost(
     Device* device, CoreCoord logical_core, std::shared_ptr<tt_metal::Program>& sync_program, bool doHeader) {
-    if (!tt::llrt::OptionsG.get_profiler_sync_enabled()) {
+    if (!tt::llrt::RunTimeOptions::get_instance().get_profiler_sync_enabled()) {
         return;
     }
     ZoneScopedC(tracy::Color::Tomato3);
@@ -350,7 +350,7 @@ void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cor
     std::scoped_lock<std::mutex> lock(device_mutex);
     const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
     auto dispatch_core_type = dispatch_core_config.get_core_type();
-    if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
         auto device_id = device->id();
         auto device_num_hw_cqs = device->num_hw_cqs();
         for (const CoreCoord& core :
@@ -369,7 +369,7 @@ void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cor
                 Finish(device->command_queue());
             }
         } else {
-            if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
+            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
                 bool waitForDispatch = true;
                 uint8_t loopCount = 0;
                 CoreCoord unfinishedCore = {0, 0};

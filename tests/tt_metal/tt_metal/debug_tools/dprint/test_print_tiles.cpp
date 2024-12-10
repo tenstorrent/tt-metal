@@ -125,22 +125,22 @@ static void RunTest(DPrintFixture* fixture, Device* device, tt::DataFormat data_
     // Create kernels on device
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
-        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
+        llrt::RunTimeOptions::get_instance().get_root_dir() +
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program,
-        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
+        llrt::RunTimeOptions::get_instance().get_root_dir() +
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program,
-        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
+        llrt::RunTimeOptions::get_instance().get_root_dir() +
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
         core,
-        ComputeConfig{}
-    );
+        ComputeConfig{});
 
     // BRISC kernel needs dram info via rtargs
     tt_metal::SetRuntimeArgs(

@@ -143,7 +143,7 @@ WatcherDeviceReader::WatcherDeviceReader(
     FILE* f, Device* device, std::vector<string>& kernel_names, void (*set_watcher_exception_message)(const string&)) :
     f(f), device(device), kernel_names(kernel_names), set_watcher_exception_message(set_watcher_exception_message) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
-    if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
+    if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
@@ -156,7 +156,7 @@ WatcherDeviceReader::WatcherDeviceReader(
 
 WatcherDeviceReader::~WatcherDeviceReader() {
     // On close, read out eth link retraining register so that we can see if retraining has occurred.
-    if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
+    if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
@@ -276,7 +276,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
         log_info(LogLLRuntime, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
-        if (!tt::llrt::OptionsG.get_watcher_auto_unpause()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().get_watcher_auto_unpause()) {
             while (std::cin.get() != '\n') {
                 ;
             }
@@ -347,7 +347,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 
     if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
-        if (!tt::llrt::OptionsG.watcher_status_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_status_disabled()) {
             DumpWaypoints(core, mbox_data, false);
         }
         // Ethernet cores have firmware that starts at address 0, so no need to check it for a
@@ -355,16 +355,16 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
         if (!is_eth_core) {
             DumpL1Status(core, &mbox_data->launch[launch_msg_read_ptr]);
         }
-        if (!tt::llrt::OptionsG.watcher_noc_sanitize_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_noc_sanitize_disabled()) {
             const auto NUM_NOCS_ = tt::tt_metal::hal.get_num_nocs();
             for (uint32_t noc = 0; noc < NUM_NOCS_; noc++) {
                 DumpNocSanitizeStatus(core, core_str, mbox_data, noc);
             }
         }
-        if (!tt::llrt::OptionsG.watcher_assert_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_assert_disabled()) {
             DumpAssertStatus(core, core_str, mbox_data);
         }
-        if (!tt::llrt::OptionsG.watcher_pause_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_pause_disabled()) {
             DumpPauseStatus(core, core_str, mbox_data);
         }
     }
@@ -373,7 +373,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     if (!is_eth_core) {
         // Dump state always available
         DumpLaunchMessage(core, mbox_data);
-        if (tt::llrt::OptionsG.get_watcher_dump_all()) {
+        if (tt::llrt::RunTimeOptions::get_instance().get_watcher_dump_all()) {
             // Reading registers while running can cause hangs, only read if
             // requested explicitly
             DumpSyncRegs(core);
@@ -401,10 +401,10 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 
     // Ring buffer at the end because it can print a bunch of data, same for stack usage
     if (enabled) {
-        if (!tt::llrt::OptionsG.watcher_stack_usage_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_stack_usage_disabled()) {
             DumpStackUsage(core, mbox_data);
         }
-        if (!tt::llrt::OptionsG.watcher_ring_buffer_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_ring_buffer_disabled()) {
             DumpRingBuffer(core, mbox_data, false);
         }
     }

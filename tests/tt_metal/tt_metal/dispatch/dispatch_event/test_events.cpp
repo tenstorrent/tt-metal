@@ -122,7 +122,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
 // Negative test. Host syncing on a future event that isn't actually issued.
 // Ensure that expected hang is seen, which indicates event sync feature is working properly.
 TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
-    tt::llrt::OptionsG.set_test_mode_enabled(true);  // Required for finish hang breakout.
+    tt::llrt::RunTimeOptions::get_instance().set_test_mode_enabled(true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
@@ -153,7 +153,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang)
 TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventHang) {
     // Skip this test until #7216 is implemented.
     GTEST_SKIP();
-    tt::llrt::OptionsG.set_test_mode_enabled(true);  // Required for finish hang breakout.
+    tt::llrt::RunTimeOptions::get_instance().set_test_mode_enabled(true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);

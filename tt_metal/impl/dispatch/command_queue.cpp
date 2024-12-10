@@ -2493,7 +2493,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     program.set_last_used_command_queue_for_testing(this);
 
 #ifdef DEBUG
-    if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
         if (const auto &buffer = program.get_kernels_buffer()) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
@@ -2552,7 +2552,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     this->enqueue_command(command, blocking, sub_device_ids);
 
 #ifdef DEBUG
-    if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
         if (const auto& buffer = program.get_kernels_buffer()) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
@@ -2918,7 +2918,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id);
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event, false, sub_device_ids);
-    if (tt::llrt::OptionsG.get_test_mode_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q > this->num_completed_completion_q_reads) {
             if (DPrintServerHangDetected()) {
                 // DPrint Server hang. Mark state and early exit. Assert in main thread.
@@ -3192,7 +3192,7 @@ void EventSynchronize(const std::shared_ptr<Event>& event) {
         event->event_id);
 
     while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
-        if (tt::llrt::OptionsG.get_test_mode_enabled() && tt::watcher_server_killed_due_to_error()) {
+        if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled() && tt::watcher_server_killed_due_to_error()) {
             TT_FATAL(
                 false,
                 "Command Queue could not complete EventSynchronize. See {} for details.",

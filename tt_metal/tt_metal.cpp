@@ -863,7 +863,7 @@ DeviceAddr AllocateBuffer(Buffer* buffer) {
     GraphTracker::instance().track_allocate(buffer);
 
 #if defined(TRACY_ENABLE)
-    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_buffer_usage_enabled()) {
         TracyAllocN(
             reinterpret_cast<void const*>(allocated_addr),
             buffer->size(),
@@ -880,7 +880,7 @@ void DeallocateBuffer(Buffer* buffer) {
     }
 
 #if defined(TRACY_ENABLE)
-    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_buffer_usage_enabled()) {
         TracyFreeN(
             reinterpret_cast<void const*>(buffer->address()),
             get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
