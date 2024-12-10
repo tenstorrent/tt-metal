@@ -4,6 +4,8 @@
 
 #include <CLI/CLI.hpp>
 #include <core/ttnn_all_includes.hpp>
+#include <functional>
+#include <memory>
 #include <mnist/mnist_reader.hpp>
 #include <ttnn/operations/eltwise/ternary/where.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
@@ -19,7 +21,6 @@
 #include "optimizers/sgd.hpp"
 #include "utils.hpp"
 #include "yaml-cpp/node/node.h"
-
 using ttml::autograd::TensorPtr;
 
 using DatasetSample = std::pair<std::vector<uint8_t>, uint8_t>;
@@ -95,7 +96,6 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
-
     // Load MNIST data
     const size_t num_targets = 10;
     const size_t num_features = 784;
