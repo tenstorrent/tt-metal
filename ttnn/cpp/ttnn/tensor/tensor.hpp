@@ -16,6 +16,7 @@
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "ttnn/common/constants.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
