@@ -18,6 +18,7 @@ struct ScaledDotProductAttention {
     const MemoryConfig output_mem_config;
     const std::optional<SDPAProgramConfig> program_config;
     const bool is_causal;
+    const std::optional<int64_t> chunk_start_idx;
     const DeviceComputeKernelConfig compute_kernel_config;
 
     void validate(

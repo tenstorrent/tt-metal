@@ -15,6 +15,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 template <uint32_t in0, uint32_t in1, uint32_t num_tiles>
@@ -360,6 +361,7 @@ void MAIN {
 
     constexpr uint32_t is_causal = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(24) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -368,6 +370,7 @@ void MAIN {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
+    const uint32_t chunk_start_t = get_arg_val<uint32_t>(7);
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -413,7 +416,7 @@ void MAIN {
 #endif
 
                 // Get Q chunk
-                const uint32_t q_low_idx =
+                uint32_t q_low_idx =
                     q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                 uint32_t q_high_idx;
                 if constexpr (is_causal) {
@@ -421,12 +424,19 @@ void MAIN {
                 } else {
                     q_high_idx = Skt;
                 }
+                if constexpr (is_chunked) {
+                    q_low_idx = chunk_start_t + q_low_idx;
+                    q_high_idx = chunk_start_t + q_high_idx;
+                }
+                // UNPACK(DPRINT << "UNPACK: q_low_idx: " << q_low_idx << ENDL();)
+                // UNPACK(DPRINT << "UNPACK: q_high_idx: " << q_high_idx << ENDL();)
                 cb_wait_front(cb_q_in, q_chunk_tiles);
 
                 // loop while k_low < q_high
                 for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                     const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                     const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
+                    // UNPACK(DPRINT << "UNPACK: k_chunk: " << k_chunk << ENDL();)
 
                     /* QK = Q_CHUNK @ K_CHUNK */
                     pack_reconfig_data_format(cb_qk_im);
@@ -445,6 +455,8 @@ void MAIN {
                         qk_subblock_w,
                         true /*transpose*/);
 
+                    // UNPACK(DPRINT << "UNPACK: done with qk_im" << ENDL();)
+
                     /* QK *= SCALE */
                     mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
 
@@ -455,6 +467,7 @@ void MAIN {
                     // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
                     if constexpr (is_causal) {
                         if (!(q_low_idx >= k_high_idx)) {
+                            // UNPACK(DPRINT << "UNPACK: adding mask" << ENDL();)
                             /* QK += MASK */
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
@@ -466,6 +479,7 @@ void MAIN {
                             add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                         }
                     }
+                    // UNPACK(DPRINT << "UNPACK: done with mask" << ENDL();)
 
                     reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                     reduce_c<
@@ -510,6 +524,7 @@ void MAIN {
                         out_subblock_h,
                         out_subblock_w,
                         false /*transpose*/);
+                    // UNPACK(DPRINT << "UNPACK: done with out_im" << ENDL();)
                     reconfig_data_format_srca(cb_out_im);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
@@ -555,5 +570,8 @@ void MAIN {
             }
         }
     }
+    // UNPACK(DPRINT << "UNPACK: done" << ENDL();)
+    // MATH(DPRINT << "MATH: done" << ENDL();)
+    // PACK(DPRINT << "PACK: done" << ENDL();)
 }
 }  // namespace NAMESPACE

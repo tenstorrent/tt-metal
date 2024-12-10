@@ -5,6 +5,7 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "debug/dprint.h"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -147,6 +148,7 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(11);
     constexpr uint32_t is_causal = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(14) == 1;
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -156,6 +158,7 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(5);
     const uint32_t local_q_start = get_arg_val<uint32_t>(6);
     const uint32_t local_q_end = get_arg_val<uint32_t>(7);
+    const uint32_t chunk_start_t = get_arg_val<uint32_t>(8);
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -205,9 +208,14 @@ void kernel_main() {
                 out_tile_id = q_batch_offset + q_head_offset + q_chunk_offset;
 
                 if constexpr (is_causal) {
-                    const uint32_t q_low_idx =
+                    uint32_t q_low_idx =
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
-                    const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
+                    uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
+
+                    if constexpr (is_chunked) {
+                        q_low_idx = chunk_start_t + q_low_idx;
+                        q_high_idx = chunk_start_t + q_high_idx;
+                    }
 
                     for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                         const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
@@ -219,8 +227,14 @@ void kernel_main() {
                         // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
                         // Read mask chunk
                         if (!(q_low_idx >= k_high_idx)) {
+                            DPRINT << "WRITER: chunk_start_t: " << chunk_start_t << ENDL();
+                            DPRINT << "WRITER: q_low_idx: " << q_low_idx << ENDL();
+                            DPRINT << "WRITER: k_high_idx: " << k_high_idx << ENDL();
+                            DPRINT << "WRITER: masking for q_chunk: " << q_chunk << " and k_chunk: " << k_chunk
+                                   << ENDL();
                             generate_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, q_chunk, k_chunk);
                         }
+                        // DPRINT << "WRITER: done with k_chunk: " << k_chunk << ENDL();
                     }
                 }
 
@@ -243,4 +257,5 @@ void kernel_main() {
             }
         }
     }
+    DPRINT << "WRITER: done" << ENDL();
 }
