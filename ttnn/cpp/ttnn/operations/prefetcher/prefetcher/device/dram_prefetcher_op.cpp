@@ -49,11 +49,11 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
 
 /*
 TODO fixes for multiple output tensors
-- refactor compute_output_shapes to return a vector of shapes (each shape is same as each input tensor)
+- ✅ refactor compute_output_shapes to return a vector of shapes (each shape is same as each input tensor)
 - refactor create_output_tensors to create a vector of output tensors (for-loop over all input shapes
-- Fix pybind to output list of output tensors
+- ✅ Fix pybind to output list of output tensors
 
-How to handle writing to outpu cb? (since now there are multiple output tensors)
+How to handle writing to output cb? (since now there are multiple output tensors)
 - If create_device_tensor results in contiguous tensor allocation, then create a CB that is sizes for ALL output
 tensors, and then align it to the base of the first tensor
 - If not -- multiple CBs, one for each output tensor?
@@ -61,21 +61,30 @@ tensors, and then align it to the base of the first tensor
 std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // Output shape is the same as the input shape, but the height is multiplied by the number of input tensors
     auto input_shape = input_tensors.at(0).get_legacy_shape();
-    return {ttnn::SimpleShape{input_shape[0] * input_tensors.size(), input_shape[1]}};
+    return {
+        ttnn::SimpleShape{input_shape[0] * input_tensors.size(), input_shape[1]},
+        ttnn::SimpleShape{input_shape[0] * input_tensors.size(), input_shape[1]}};
 }
 std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return {create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensors.at(0).get_dtype(),
-        Layout::TILE,
-        input_tensors.at(0).device(),
-        this->output_mem_config)};
+    return {
+        create_device_tensor(
+            this->compute_output_shapes(input_tensors).at(0),
+            input_tensors.at(0).get_dtype(),
+            Layout::TILE,
+            input_tensors.at(0).device(),
+            this->reader_output_mem_config),
+        // create_device_tensor(
+        // this->compute_output_shapes(input_tensors).at(1),
+        // input_tensors.at(0).get_dtype(),
+        // Layout::TILE,
+        // input_tensors.at(0).device(),
+        // this->writer_output_mem_config)
+    };
 }
 operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    auto& output_tensor = output_tensors.at(0);
     return dram_prefetcher_multi_core(
-        input_tensors, this->tensor_addrs, this->num_layers, this->global_cb, output_tensor);
+        input_tensors, this->tensor_addrs, this->num_layers, this->global_cb, output_tensors);
 }
 
 }  // namespace ttnn::operations::dram_prefetcher
