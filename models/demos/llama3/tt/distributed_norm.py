@@ -8,7 +8,7 @@ from models.demos.llama3.tt.llama_ccl import tt_sharded_distributed_rmsnorm, tt_
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, TG):
+    def __init__(self, norm, args, TG=False):
         self.norm = norm
         self.args = args
 
