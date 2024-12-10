@@ -18,384 +18,7 @@ namespace conv2d {
 
 using namespace tt;
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-const uint32_t act_cb = CBIndex::c_0;
-const uint32_t weight_cb = CBIndex::c_1;
-const uint32_t bias_cb = CBIndex::c_2;
-const uint32_t sharded_act_cb = CBIndex::c_3;
-const uint32_t cb_for_reader_indices = CBIndex::c_4;
-const uint32_t cb_for_l1_array = CBIndex::c_5;
-const uint32_t act_cb_row_major_bfloat16 = CBIndex::c_6;
-const uint32_t act_cb_second_reader = CBIndex::c_7;
-const uint32_t matmul_partials_cb = CBIndex::c_24;
-const uint32_t tilize_mode_tilized_act_cb = CBIndex::c_25;
-const uint32_t untilize_mode_reblock_cb = CBIndex::c_26;
-const uint32_t out0_cb = CBIndex::c_16;
-const uint32_t temp_sum_cb = CBIndex::c_27;
-const uint32_t untilized_padded_out_cb = CBIndex::c_28;
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
-operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
-    tt_metal::Program& program,
-    const Tensor& a,
-    const Tensor& b,
-    const ttnn::Shape& ashape,
-    std::optional<const Tensor> bias,
-    const std::optional<const Tensor>& conv_reader_indices,
-    const sliding_window::SlidingWindowConfig& sliding_window_config,
-    uint32_t output_channels,
-    uint32_t groups,
-    bool untilize_out,
-    bool has_bias,
-    bool fuse_relu,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
-    bool use_shallow_conv_variant,
-    bool transpose_mcast,
-    Tensor& output,
-    DeviceComputeKernelConfig compute_kernel_config,
-    bool enable_act_double_buffer,
-    bool enable_split_reader,
-    bool enable_subblock_padding);
-
-// TODO: Add namespace for utilities?
-std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
-    tt_metal::Program& program,
-    const Tensor& input,
-    CoreRange core,
-    uint32_t num_cb0_tiles,
-    uint32_t num_cb0_second_reader_tiles,
-    uint32_t num_cb1_tiles,
-    uint32_t num_cb0_tilized_tiles,
-    uint32_t num_output_tiles,
-    uint32_t num_reblock_cb_tiles,
-    uint32_t num_writer_output_tiles,
-    bool untilize_out,
-    tt::DataFormat act_df,
-    tt::DataFormat weight_df,
-    tt::DataFormat tilized_act_df,
-    tt::DataFormat out_df,
-    tt::DataFormat bias_df,
-    bool weight_width_sliced,
-    const Tensor& output,
-    uint32_t bias_ntiles,
-    bool with_bias,
-    bool split_reader,
-    bool fp32_dest_acc_en,
-    bool packer_l1_acc_en,
-    bool use_non_tile_height) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-
-    tt::DataFormat interm0_df =
-        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
-
-    uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
-    uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
-    uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
-    uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
-    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
-
-    CBHandle cb_sharded_act = 0;
-    if (input.memory_config().is_sharded()) {
-        uint32_t num_bytes_for_df = datum_size(act_df);
-        auto shard_shape = input.shard_spec().value().shape;
-        // 2D-sys-conv already has uint16_t indicies, TODO: do the same for 1D-sys-conv
-        TT_FATAL(
-            shard_shape[0] <= (1 << 16), "Shard height must be less than 2^16, read pattern indicies are uint16_t");
-        CircularBufferConfig cb_sharded_act_config =
-            CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_cb, act_df}})
-                .set_page_size(sharded_act_cb, shard_shape[1] * num_bytes_for_df);
-        // incoming data is the input cb instead of raw l1/dram addr
-        cb_sharded_act_config.set_globally_allocated_address(*input.buffer());
-        cb_sharded_act = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_config);
-
-        if (weight_width_sliced) {
-            // For 2D convs, each core creates and tilizes full input matrix then mcasts round robin style
-            // Each core receives input into act_cb, so won't need a separate cb to receive
-            // However, we need a separate cb to push ROW_MAJOR BFLOAT16 data for tilizing and configure act cb to be
-            // output df
-
-            // num_cb0_tiles is double buffered
-            CircularBufferConfig cb_act_config =
-                CircularBufferConfig(num_cb0_tiles * tilized_act_tile_size, {{act_cb, tilized_act_df}})
-                    .set_page_size(act_cb, tilized_act_tile_size);
-            auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
-            log_debug(LogOp, "Act CB: {}, npages: {}, pagesize: {}", act_cb, num_cb0_tiles, tilized_act_tile_size);
-
-            // num_cb0_tilized_tiles is single buffered
-            CircularBufferConfig cb_act_row_major_bfloat16_config =
-                CircularBufferConfig(num_cb0_tilized_tiles * act_tile_size, {{act_cb_row_major_bfloat16, act_df}})
-                    .set_page_size(act_cb_row_major_bfloat16, act_tile_size);
-            auto cb_act_row_major_bfloat16 =
-                tt_metal::CreateCircularBuffer(program, core, cb_act_row_major_bfloat16_config);
-            log_debug(
-                LogOp,
-                "Act CB Row Major BFLOAT16: {}, npages: {}, pagesize: {}",
-                act_cb_row_major_bfloat16,
-                num_cb0_tilized_tiles,
-                act_tile_size);
-        } else {
-            // For 1D convs, locally create act matrix in act_cb, which is always ROW_MAJOR BFLOAT16
-            // Then, tilize input in compute
-
-            // Extra cb for second reader if we split act reads across two RISCs
-            // In this case, the regular reader only does first half of reads along output block h
-            if (split_reader) {
-                CircularBufferConfig cb_act_config =
-                    CircularBufferConfig(num_cb0_second_reader_tiles * act_tile_size, {{act_cb_second_reader, act_df}})
-                        .set_page_size(act_cb_second_reader, act_tile_size);
-                auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
-                log_debug(
-                    LogOp,
-                    "Act CB Second Reader: {}, npages: {}, pagesize: {}",
-                    act_cb_second_reader,
-                    num_cb0_second_reader_tiles,
-                    act_tile_size);
-            }
-
-            CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb, act_df}})
-                                                     .set_page_size(act_cb, act_tile_size);
-            auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
-            log_debug(LogOp, "Act CB: {}, npages: {}, pagesize: {}", act_cb, num_cb0_tiles, act_tile_size);
-        }
-    } else {
-        TT_THROW("Input must be sharded!");
-    }
-
-    CircularBufferConfig cb_weight_config =
-        CircularBufferConfig(num_cb1_tiles * weight_tile_size, {{weight_cb, weight_df}})
-            .set_page_size(weight_cb, weight_tile_size);
-    auto cb_weight = tt_metal::CreateCircularBuffer(program, core, cb_weight_config);
-    log_debug(LogOp, "Weight CB: {}, npages: {}, pagesize: {}", weight_cb, num_cb1_tiles, weight_tile_size);
-
-    // Used for placing tilized activations
-    CircularBufferConfig cb_src0_tilized_config =
-        CircularBufferConfig(
-            num_cb0_tilized_tiles * tilized_act_tile_size, {{tilize_mode_tilized_act_cb, tilized_act_df}})
-            .set_page_size(tilize_mode_tilized_act_cb, tilized_act_tile_size);
-    auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
-    log_debug(
-        LogOp,
-        "Tilized Act CB: {}, npages: {}, pagesize: {}",
-        tilize_mode_tilized_act_cb,
-        num_cb0_tilized_tiles,
-        tilized_act_tile_size);
-
-    CBHandle cb_output = 0;
-    if (untilize_out) {
-        auto output_shard_shape = output.shard_spec().value().shape;
-        CircularBufferConfig cb_matmul_partials_config =
-            CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
-                .set_page_size(matmul_partials_cb, interm0_single_tile_size);
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
-        log_debug(
-            LogOp,
-            "Matmul Partials CB: {}, npages: {}, pagesize: {}",
-            matmul_partials_cb,
-            num_output_tiles,
-            interm0_single_tile_size);
-
-        bool need_unpad_after_untilize =
-            output_shard_shape[1] * output_shard_shape[0] < num_writer_output_tiles * TILE_HW;
-        // If only width is non-tile multiple
-        if (need_unpad_after_untilize && !use_non_tile_height && weight_width_sliced) {
-            uint32_t num_bytes_for_df = datum_size(out_df);
-            CircularBufferConfig compute_cb_output_config =
-                CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{untilized_padded_out_cb, out_df}})
-                    .set_page_size(untilized_padded_out_cb, out_tile_size);
-            auto compute_cb_output = tt_metal::CreateCircularBuffer(program, core, compute_cb_output_config);
-            log_debug(
-                LogOp,
-                "untilized padded out CB(shard widht non-tile multiple): {}, npages: {}, pagesize: {}",
-                untilized_padded_out_cb,
-                num_writer_output_tiles,
-                out_tile_size * num_bytes_for_df);
-            CircularBufferConfig cb_output_config =
-                CircularBufferConfig(
-                    num_bytes_for_df * output_shard_shape[0] * output_shard_shape[1], {{out0_cb, out_df}})
-                    .set_page_size(out0_cb, output_shard_shape[1] * num_bytes_for_df);
-            cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
-            cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-            log_debug(
-                LogOp,
-                "output CB(shard widht non-tile multiple): {}, npages: {}, pagesize: {}",
-                out0_cb,
-                output_shard_shape[0],
-                output_shard_shape[1] * num_bytes_for_df);
-        } else {
-            auto shard_shape = output.shard_spec().value().shape;
-            uint32_t aligned_output_stick_nbytes =
-                use_non_tile_height ? shard_shape[1] * output.element_size() : out_tile_size;
-            uint32_t aligned_output_num_pages = use_non_tile_height ? shard_shape[0] : num_writer_output_tiles;
-            CircularBufferConfig cb_output_config =
-                CircularBufferConfig(aligned_output_num_pages * aligned_output_stick_nbytes, {{out0_cb, out_df}})
-                    .set_page_size(out0_cb, aligned_output_stick_nbytes);
-            cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
-            cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-            log_debug(
-                LogOp,
-                "output CB: {}, npages: {}, pagesize: {}",
-                out0_cb,
-                aligned_output_num_pages,
-                aligned_output_stick_nbytes);
-        }
-    } else {
-        // Share buffer if same data format
-        if (interm0_df == out_df) {
-            CoreRangeSet cores(std::set<CoreRange>({core}));
-            std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
-                {out0_cb, out_df}, {matmul_partials_cb, out_df}};
-            CircularBufferConfig cb_matmul_partials_config =
-                CircularBufferConfig(num_output_tiles * out_tile_size, cb_output_data_format_spec)
-                    .set_page_size(out0_cb, out_tile_size)
-                    .set_page_size(matmul_partials_cb, out_tile_size);
-            if (output.is_sharded()) {
-                cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(*output.buffer());
-            }
-            log_debug(
-                LogOp,
-                "Matmul Partials CB: {}, npages: {}, pagesize: {}",
-                matmul_partials_cb,
-                num_output_tiles,
-                out_tile_size);
-            cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
-        } else {
-            // Separate buffer if not same data format
-            CircularBufferConfig cb_matmul_partials_config =
-                CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
-                    .set_page_size(matmul_partials_cb, interm0_single_tile_size);
-            auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
-            log_debug(
-                LogOp,
-                "Matmul Partials CB: {}, npages: {}, pagesize: {}",
-                matmul_partials_cb,
-                num_output_tiles,
-                interm0_single_tile_size);
-
-            CircularBufferConfig cb_output_config =
-                CircularBufferConfig(num_output_tiles * out_tile_size, {{out0_cb, out_df}})
-                    .set_page_size(out0_cb, out_tile_size);
-            if (output.is_sharded()) {
-                cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
-            }
-            cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-        }
-    }
-
-    if (with_bias) {
-        uint32_t bias_tile_size = tt_metal::detail::TileSize(bias_df);
-        // bias input
-        uint32_t bias_pagesize = bias_tile_size;
-        CircularBufferConfig cb_bias_config = CircularBufferConfig(bias_ntiles * bias_pagesize, {{bias_cb, bias_df}})
-                                                  .set_page_size(bias_cb, bias_pagesize);
-        auto cb_bias = tt_metal::CreateCircularBuffer(program, core, cb_bias_config);
-
-        log_debug(LogOp, "Bias CB: {}, npages: {}, pagesize: {}", bias_cb, bias_ntiles, bias_pagesize);
-    }
-
-    return {cb_sharded_act, cb_output};
-}
-
-// TODO: Add namespace for utilities?
-std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
-    tt_metal::Program& program,
-    const Tensor& input,
-    CoreRange core,
-    uint32_t num_cb0_tiles,
-    uint32_t num_cb1_tiles,
-    uint32_t num_cb0_tilized_tiles,
-    uint32_t num_output_tiles,
-    uint32_t num_reblock_cb_tiles,
-    uint32_t num_writer_output_tiles,
-    bool untilize_out,
-    tt::DataFormat act_df,
-    tt::DataFormat weight_df,
-    tt::DataFormat tilized_act_df,
-    tt::DataFormat out_df,
-    tt::DataFormat bias_df,
-    bool weight_width_sliced,
-    const Tensor& output,
-    uint32_t bias_ntiles,
-    bool with_bias,
-    bool split_reader,
-    bool fp32_dest_acc_en,
-    bool packer_l1_acc_en) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    tt::DataFormat interm0_df =
-        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
-
-    uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
-    uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
-    uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
-    uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
-    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
-
-    CBHandle cb_sharded_act = 0;
-    if (input.memory_config().is_sharded()) {
-        uint32_t num_bytes_for_df = datum_size(act_df);
-        auto shard_shape = input.shard_spec().value().shape;
-        // 2D-sys-conv already has uint16_t indicies, TODO: do the same for 1D-sys-conv
-        TT_FATAL(
-            shard_shape[0] <= (1 << 16), "Shard height must be less than 2^16, read pattern indicies are uint16_t");
-        CircularBufferConfig cb_sharded_act_config =
-            CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_cb, act_df}})
-                .set_page_size(sharded_act_cb, shard_shape[1] * num_bytes_for_df);
-        // incoming data is the input cb instead of raw l1/dram addr
-        cb_sharded_act_config.set_globally_allocated_address(*input.buffer());
-        cb_sharded_act = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_config);
-
-        // For 1D convs, locally create act matrix in act_cb, which is always ROW_MAJOR BFLOAT16
-        // Then, tilize input in compute
-
-        CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb, act_df}})
-                                                 .set_page_size(act_cb, act_tile_size);
-        auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
-    } else {
-        TT_THROW("Input must be sharded!");
-    }
-
-    CircularBufferConfig cb_weight_config =
-        CircularBufferConfig(num_cb1_tiles * weight_tile_size, {{weight_cb, weight_df}})
-            .set_page_size(weight_cb, weight_tile_size);
-    auto cb_weight = tt_metal::CreateCircularBuffer(program, core, cb_weight_config);
-
-    // Used for placing tilized activations
-    CircularBufferConfig cb_src0_tilized_config =
-        CircularBufferConfig(
-            num_cb0_tilized_tiles * tilized_act_tile_size, {{tilize_mode_tilized_act_cb, tilized_act_df}})
-            .set_page_size(tilize_mode_tilized_act_cb, tilized_act_tile_size);
-    auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
-
-    CBHandle cb_output = 0;
-    // Share buffer if same data format
-    CoreRangeSet cores(std::set<CoreRange>({core}));
-
-    // breakdown above as separate CBs
-    CircularBufferConfig cb_matmul_partials_config =
-        CircularBufferConfig(1 * out_tile_size, {{matmul_partials_cb, out_df}})
-            .set_page_size(matmul_partials_cb, out_tile_size);
-    auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
-
-    CircularBufferConfig cb_temp_sum_config =
-        CircularBufferConfig(1 * out_tile_size, {{temp_sum_cb, out_df}}).set_page_size(temp_sum_cb, out_tile_size);
-    auto cb_temp_sum = tt_metal::CreateCircularBuffer(program, core, cb_temp_sum_config);
-
-    std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {{out0_cb, out_df}};
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * out_tile_size, cb_output_data_format_spec)
-            .set_page_size(out0_cb, out_tile_size);
-
-    if (output.is_sharded()) {
-        cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
-    }
-    cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
-
-    return {cb_sharded_act, cb_output};
-}
-
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
+operation::ProgramWithCallbacks multi_core_height_sharded_conv2d(
     tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -419,7 +42,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool use_non_tile_height) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
     tt_metal::Device* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -530,21 +152,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool block_sharded = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
 
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
-    bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
+    TT_FATAL(
+        per_core_out_matrix_width_ntiles == weight_matrix_width_ntiles,
+        " In Height Sharding, every core must do the full out width");
     uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-    uint32_t input_channels_padded = 0;
-    if (weight_width_sliced) {
-        conv_act_c_blocks = a_shard_spec.orientation == ShardOrientation::ROW_MAJOR ? num_cores_x : num_cores_y;
-        if (transpose_mcast) {
-            TT_FATAL(conv_act_c_blocks == num_cores_y, "Expected conv_act_c_blocks to be equal to height of grid");
-            input_channels_padded = shard_shape[1] * num_cores_y;
-        } else {
-            TT_FATAL(conv_act_c_blocks == num_cores_x, "Expected conv_act_c_blocks to be equal to width of grid");
-            input_channels_padded = shard_shape[1] * num_cores_x;
-        }
-    } else {
-        input_channels_padded = shard_shape[1];
-    }
+    uint32_t input_channels_padded = shard_shape[1];
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
     TT_FATAL(
@@ -555,7 +167,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // TODO: Expose option to split readers for 1D convs to python?
     // bool split_reader = use_shallow_conv_variant;
     if (enable_split_reader) {
-        TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");
         TT_FATAL(
             (act_block_h_ntiles / block_config.out_subblock_h_ntiles) >= 2,
             "split reader needs to have at leaset two subblocks");
@@ -844,49 +455,30 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         log_debug(LogOp, "packer_l1_acc: {}", packer_l1_acc);
     }
 
-    uint32_t window_outer;
-    uint32_t window_inner;
-
-    if (weight_width_sliced) {
-        window_outer = 1;
-        window_inner = filter_h;
-    } else {
-        window_outer = num_blocks_act_w;
-        window_inner = filter_h * filter_w / num_blocks_act_w;
-    }
+    uint32_t window_outer = num_blocks_act_w;
+    uint32_t window_inner = filter_h * filter_w / num_blocks_act_w;
 
     reader_defines["WINDOW_INNER"] = std::to_string(window_inner);
     log_debug(LogOp, "window_outer: {}, window_inner: {}", window_outer, window_inner);
 
-    assert(weight_matrix_width_ntiles % per_core_out_matrix_width_ntiles == 0);
-    assert(per_core_out_matrix_width_ntiles % weight_block_w_ntiles == 0);
+    TT_FATAL(
+        weight_matrix_width_ntiles % per_core_out_matrix_width_ntiles == 0,
+        "{} {}",
+        weight_matrix_width_ntiles,
+        per_core_out_matrix_width_ntiles);
+    TT_FATAL(
+        per_core_out_matrix_width_ntiles % weight_block_w_ntiles == 0,
+        "{} {}",
+        per_core_out_matrix_width_ntiles,
+        weight_block_w_ntiles);
     uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
-    if (not weight_width_sliced) {
-        assert(num_blocks_weight_w_per_core == num_blocks_weight_w);
-    }
+    TT_FATAL(num_blocks_weight_w_per_core == num_blocks_weight_w, "every core must have the full weight width");
     uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     uint32_t total_num_cores_per_weight_slice = 0;
     uint32_t total_num_cores_per_act_slice = 0;  // only used when (BLOCK_SHARDING && !transpose_mcast)
-    if (weight_width_sliced) {
-        if (transpose_mcast) {
-            assert(num_cores_y % num_weight_slices_width == 0);
-            uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
-            total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
-        } else {
-            assert(num_cores_x % num_weight_slices_width == 0);
-            uint32_t num_cores_x_per_weight_slice_width = num_cores_x / num_weight_slices_width;
-            uint32_t num_act_slices_height = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
-            total_num_cores_per_act_slice = num_cores_x * num_cores_y / num_act_slices_height;
-            log_debug(LogOp, "total_num_cores_per_act_slice: {}", total_num_cores_per_act_slice);
-            total_num_cores_per_weight_slice = num_cores_x_per_weight_slice_width * num_cores_y;
-        }
-        assert(total_num_cores_per_weight_slice * per_core_out_matrix_height_ntiles == act_matrix_height_ntiles);
-    } else {
-        assert(num_cores_y % num_weight_slices_width == 0);
-        uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
-        total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
-        assert(total_num_cores * per_core_out_matrix_height_ntiles >= act_matrix_height_ntiles);
-    }
+
+    uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
+    total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
     // assert(per_core_out_matrix_height_ntiles % act_block_h_ntiles == 0);
     // uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
     uint32_t num_blocks_act_h_per_core =
@@ -920,10 +512,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     TT_FATAL(total_active_num_cores_per_weight_slice <= total_num_cores_per_weight_slice, "Error");
     uint32_t total_noop_cores = total_num_cores_per_weight_slice - total_active_num_cores_per_weight_slice;
     uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
-    if (weight_width_sliced) {
-        TT_FATAL(total_noop_cores == 0, "Error");
-        TT_FATAL(total_active_num_cores == total_num_cores, "Error");
-    }
 
     if (has_bias) {
         TT_FATAL(bias_ntiles == weight_matrix_width_ntiles, "Error");
@@ -978,39 +566,27 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t act_mcast_sender_semaphore_id = 0;
     uint32_t act_mcast_receiver_semaphore_id = 0;
     std::vector<uint32_t> act_mcast_noc_y;
-    if (weight_width_sliced) {
-        // 2D mcast
-        if (transpose_mcast) {
-            mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1));
-            mcast_receiver_cores = CoreRange(CoreCoord(1, 0), bottom_right_core);
-        } else {
-            mcast_sender_cores = CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0));
-            mcast_receiver_cores = CoreRange(CoreCoord(0, 1), bottom_right_core);
+
+    // 1D mcast
+    if (total_num_cores > 1) {
+        std::set<CoreRange> mcast_receiver_set;
+        if (num_cores_x > 1) {
+            mcast_receiver_set.insert(CoreRange(CoreCoord(1, 0), CoreCoord(num_active_cores_x - 1, 0)));
         }
+        if (num_cores_y > 1) {
+            if (num_active_cores_y_with_full_x >= 2) {
+                mcast_receiver_set.insert(
+                    CoreRange(CoreCoord(0, 1), CoreCoord(num_active_cores_x - 1, num_active_cores_y_with_full_x - 1)));
+            }
+            if (num_active_cores_x_last_y > 0) {
+                mcast_receiver_set.insert(CoreRange(
+                    CoreCoord(0, num_active_cores_y_with_full_x),
+                    CoreCoord(num_active_cores_x_last_y - 1, num_active_cores_y_with_full_x)));
+            }
+        }
+        mcast_receiver_cores = mcast_receiver_set;
         weights_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
         weights_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    } else {
-        // 1D mcast
-        if (total_num_cores > 1) {
-            std::set<CoreRange> mcast_receiver_set;
-            if (num_cores_x > 1) {
-                mcast_receiver_set.insert(CoreRange(CoreCoord(1, 0), CoreCoord(num_active_cores_x - 1, 0)));
-            }
-            if (num_cores_y > 1) {
-                if (num_active_cores_y_with_full_x >= 2) {
-                    mcast_receiver_set.insert(CoreRange(
-                        CoreCoord(0, 1), CoreCoord(num_active_cores_x - 1, num_active_cores_y_with_full_x - 1)));
-                }
-                if (num_active_cores_x_last_y > 0) {
-                    mcast_receiver_set.insert(CoreRange(
-                        CoreCoord(0, num_active_cores_y_with_full_x),
-                        CoreCoord(num_active_cores_x_last_y - 1, num_active_cores_y_with_full_x)));
-                }
-            }
-            mcast_receiver_cores = mcast_receiver_set;
-            weights_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            weights_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-        }
     }
 
     bool read_window_in_inner_loop = false;
@@ -1024,16 +600,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     }
     uint32_t num_act_cb_second_reader_tiles = 0;
     // TODO: This flag should be set in kernel logic but need this for create_CB
-    if (weight_width_sliced) {
-        // If conv_act_c_blocks > 1 and we have 2D conv with sharded input, we always read entire filter_h x filter_w
-        // window before pushing in reader/writer
-        // TODO: Generalize this to not make this assumption
-        read_window_in_inner_loop = true;
-        if (!block_sharded) {
-            num_weight_cb_tiles *= filter_h * filter_w;
-            num_act_cb_tiles *= filter_h * filter_w;
-        }
-    } else if (num_blocks_act_h_per_core > 1) {
+    if (num_blocks_act_h_per_core > 1) {
         fully_buffer_weights = true;
     }
     uint32_t num_cb0_tilized_tiles = num_act_cb_tiles;
@@ -1113,7 +680,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             tilized_act_df,
             out_df,
             bias_df,
-            weight_width_sliced,
+            false,
             output,
             bias_ntiles_per_core,
             has_bias,
@@ -1141,7 +708,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             tilized_act_df,
             out_df,
             bias_df,
-            weight_width_sliced,
+            false,
             output,
             bias_ntiles_per_core,
             has_bias,
@@ -1162,37 +729,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
     if (filter_h >= 1 and filter_w >= 1) {
-        if (!is_conv1d and weight_width_sliced) {
-            // 2D conv
-            assert(read_window_in_inner_loop == true);
-            reader_kernel =
-                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
-                "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
-            writer_mcast_sender_kernel =
-                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
-                "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-            writer_mcast_receiver_kernel =
-                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
-                "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
-            act_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            act_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-
-            if (transpose_mcast) {
-                act_mcast_noc_y.reserve(num_cores_y);
-                for (uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
-                    act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
-                }
-            } else {
-                // NOTE: using same var for x as well, this is intentional
-                act_mcast_noc_y.reserve(num_cores_x);
-                for (int32_t core_idx_x = 0; core_idx_x < num_cores_x; ++core_idx_x) {
-                    act_mcast_noc_y.push_back(device->worker_core_from_logical_core({(uint32_t)core_idx_x, 0}).x);
-                }
-            }
-
-            // For 2D convs, pre-tilize input and round robin self-mcast tilized act matrix to other cores
-            tilize_in0 = false;
-        } else if (is_conv1d and is_depthwise_conv) {
+        if (is_conv1d and is_depthwise_conv) {
             // 1D Depthwise Conv
             TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH), "Error");
             TT_FATAL(split_reader == false, "Split reader not supported for this conv yet!");
@@ -1475,15 +1012,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         bool noop_core = false;
 
         // per core specific args
-        uint32_t act_slice_i;
-        uint32_t weight_slice_i;
-        if (weight_width_sliced && transpose_mcast || !weight_width_sliced) {
-            act_slice_i = core_i % total_num_cores_per_weight_slice;
-            weight_slice_i = core_i / total_num_cores_per_weight_slice;
-        } else {
-            act_slice_i = core_i / total_num_cores_per_act_slice;
-            weight_slice_i = core_i % total_num_cores_per_act_slice;
-        }
+        uint32_t act_slice_i = core_i % total_num_cores_per_weight_slice;
+        uint32_t weight_slice_i = core_i / total_num_cores_per_weight_slice;
         uint32_t out_start_tile_id = (act_slice_i * per_core_out_matrix_height_ntiles * weight_matrix_width_ntiles) +
                                      (weight_slice_i * per_core_out_matrix_width_ntiles);
         uint32_t out_start_tile_id_h = act_slice_i * per_core_out_matrix_height_ntiles;
@@ -1493,65 +1023,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             assert(bias_tile_offset < bias_ntiles);
         }
 
-        if (weight_width_sliced) {
-            auto shard_shape = a.shard_spec().value().shape;
-            uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
-
-            bool reader_is_noc_0 = reader_noc == NOC::NOC_0;
-
-            TT_FATAL(!reader_is_noc_0, "Error");
-
-            if (transpose_mcast) {
-                CoreCoord bottom_core = {(std::size_t)core_x_i, (std::size_t)num_cores_y - 1};
-                auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
-
-                uint32_t act_mcast_dest_noc_start_x = bottom_core_physical.x;
-                uint32_t act_mcast_dest_noc_start_y =
-                    reader_is_noc_0 ? top_left_core_physical.y : bottom_core_physical.y;
-                uint32_t act_mcast_dest_noc_end_x = bottom_core_physical.x;
-                uint32_t act_mcast_dest_noc_end_y = reader_is_noc_0 ? bottom_core_physical.y : top_left_core_physical.y;
-                reader_rt_args = {
-                    (uint32_t)noop_core,
-
-                    // mcast args
-                    act_mcast_dest_noc_start_x,
-                    act_mcast_dest_noc_start_y,
-                    act_mcast_dest_noc_end_x,
-                    act_mcast_dest_noc_end_y,
-                    core_y_i,                          // act_mcast_sender_id (goes down the column)
-                    (uint32_t)bottom_core_physical.x,  // act_mcast_sender_noc_x
-                };
-                reader_rt_args.insert(
-                    reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());  // act_mcast_sender_noc_y
-            } else {
-                CoreCoord core = {core_x_i, core_y_i};
-                auto core_physical = device->worker_core_from_logical_core(core);
-                CoreCoord bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
-                auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
-
-                uint32_t act_mcast_dest_noc_start_x =
-                    reader_is_noc_0 ? top_left_core_physical.x : bottom_right_core_physical.x;
-                uint32_t act_mcast_dest_noc_start_y = core_physical.y;
-                uint32_t act_mcast_dest_noc_end_x =
-                    reader_is_noc_0 ? bottom_right_core_physical.x : top_left_core_physical.x;
-                uint32_t act_mcast_dest_noc_end_y = core_physical.y;
-                reader_rt_args = {
-                    (uint32_t)noop_core,
-
-                    // mcast args
-                    act_mcast_dest_noc_start_x,
-                    act_mcast_dest_noc_start_y,
-                    act_mcast_dest_noc_end_x,
-                    act_mcast_dest_noc_end_y,
-                    core_x_i,                   // act_mcast_sender_id (goes along the row)
-                    (uint32_t)core_physical.y,  // act_mcast_sender_noc_x
-                };
-                reader_rt_args.insert(
-                    reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());  // act_mcast_sender_noc_y
-            }
-        } else {
-            reader_rt_args = {(uint32_t)noop_core};
-        }
+        reader_rt_args = {(uint32_t)noop_core};
 
         // log_debug("Core: {}, READER RT ARGS: {}", core, reader_rt_args.size());
 
@@ -1598,110 +1070,35 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
             (uint32_t)noop_core};
 
-        // Mcast sender
-        if (weight_width_sliced) {
-            // 2D mcast
-            if (transpose_mcast) {
-                CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core_y_i};
-                auto right_core_physical = device->worker_core_from_logical_core(right_core);
-                if (core_x_i == 0) {
-                    // sender
-                    if (writer_mcast_noc == NOC::NOC_0) {
-                        writer_rt_args.push_back(top_left_core_plus_one_physical.x);  // weights_mcast_dest_noc_start_x
-                        writer_rt_args.push_back(right_core_physical.y);              // weights_mcast_dest_noc_start_y
-                        writer_rt_args.push_back(bottom_right_core_physical.x);       // weights_mcast_dest_noc_end_x
-                        writer_rt_args.push_back(right_core_physical.y);              // weights_mcast_dest_noc_end_y
-                    } else {
-                        writer_rt_args.push_back(bottom_right_core_physical.x);       // weights_mcast_dest_noc_start_x
-                        writer_rt_args.push_back(right_core_physical.y);              // weights_mcast_dest_noc_start_y
-                        writer_rt_args.push_back(top_left_core_plus_one_physical.x);  // weights_mcast_dest_noc_end_x
-                        writer_rt_args.push_back(right_core_physical.y);              // weights_mcast_dest_noc_end_y
-                    }
-
-                    writer_rt_args.push_back(num_cores_x - 1);  // weights_mcast_num_dests
-                    writer_rt_args.push_back(num_cores_x - 1);  // weights_mcast_num_cores
-                    writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
-                    writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
-                    writer_rt_args.push_back(output.buffer()->aligned_page_size());
-
-                    SetRuntimeArgs(program, writer_mcast_sender_id, core, writer_rt_args);
-                } else {
-                    // receiver
-                    writer_rt_args.push_back(top_left_core_physical.x);  // weights_mcast_sender_noc_x
-                    writer_rt_args.push_back(right_core_physical.y);     // weights_mcast_sender_noc_y
-                    writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
-                    writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
-                    writer_rt_args.push_back(output.buffer()->aligned_page_size());
-
-                    SetRuntimeArgs(program, writer_mcast_receiver_id, core, writer_rt_args);
-                }
+        // 1D mcast
+        if (core_x_i == 0 and core_y_i == 0) {
+            // sender
+            if (writer_mcast_noc == NOC::NOC_0) {
+                writer_rt_args.push_back(top_left_core_physical.x);      // weights_mcast_dest_noc_start_x
+                writer_rt_args.push_back(top_left_core_physical.y);      // weights_mcast_dest_noc_start_y
+                writer_rt_args.push_back(bottom_right_core_physical.x);  // weights_mcast_dest_noc_end_x
+                writer_rt_args.push_back(bottom_right_core_physical.y);  // weights_mcast_dest_noc_end_y
             } else {
-                CoreCoord top_core = {(std::size_t)core_x_i, 0};
-                auto top_core_physical = device->worker_core_from_logical_core(top_core);
-                TT_FATAL(writer_mcast_noc == NOC::NOC_0, "Error");
-                if (core_y_i == 0) {
-                    // sender
-                    if (writer_mcast_noc == NOC::NOC_0) {
-                        writer_rt_args.push_back(top_core_physical.x);                // weights_mcast_dest_noc_start_x
-                        writer_rt_args.push_back(top_left_core_plus_one_physical.y);  // weights_mcast_dest_noc_start_y
-                        writer_rt_args.push_back(top_core_physical.x);                // weights_mcast_dest_noc_end_x
-                        writer_rt_args.push_back(bottom_right_core_physical.y);       // weights_mcast_dest_noc_end_y
-                    } else {
-                        // TODO: ...
-                        TT_THROW("TODO: Writer on NOC 1 not supported yet!");
-                        // writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_start_x
-                        // writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_start_y
-                        // writer_rt_args.push_back(top_left_core_plus_one_physical.x); // weights_mcast_dest_noc_end_x
-                        // writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_end_y
-                    }
-
-                    writer_rt_args.push_back(num_cores_y - 1);  // weights_mcast_num_dests
-                    writer_rt_args.push_back(num_cores_y - 1);  // weights_mcast_num_cores
-                    writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
-                    writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
-
-                    SetRuntimeArgs(program, writer_mcast_sender_id, core, writer_rt_args);
-                } else {
-                    // receiver
-                    writer_rt_args.push_back(top_core_physical.x);       // weights_mcast_sender_noc_x
-                    writer_rt_args.push_back(top_left_core_physical.y);  // weights_mcast_sender_noc_y
-                    writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
-                    writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
-
-                    SetRuntimeArgs(program, writer_mcast_receiver_id, core, writer_rt_args);
-                }
+                writer_rt_args.push_back(bottom_right_core_physical.x);  // weights_mcast_dest_noc_start_x
+                writer_rt_args.push_back(bottom_right_core_physical.y);  // weights_mcast_dest_noc_start_y
+                writer_rt_args.push_back(top_left_core_physical.x);      // weights_mcast_dest_noc_end_x
+                writer_rt_args.push_back(top_left_core_physical.y);      // weights_mcast_dest_noc_end_y
             }
+            writer_rt_args.push_back(total_active_num_cores - 1);  // weights_mcast_num_dests
+            writer_rt_args.push_back(total_num_cores - 1);         // weights_mcast_num_cores
+            writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
+            writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
+
+            SetRuntimeArgs(program, writer_mcast_sender_id, core, writer_rt_args);
         } else {
-            // 1D mcast
-            if (core_x_i == 0 and core_y_i == 0) {
-                // sender
-                if (writer_mcast_noc == NOC::NOC_0) {
-                    writer_rt_args.push_back(top_left_core_physical.x);      // weights_mcast_dest_noc_start_x
-                    writer_rt_args.push_back(top_left_core_physical.y);      // weights_mcast_dest_noc_start_y
-                    writer_rt_args.push_back(bottom_right_core_physical.x);  // weights_mcast_dest_noc_end_x
-                    writer_rt_args.push_back(bottom_right_core_physical.y);  // weights_mcast_dest_noc_end_y
-                } else {
-                    writer_rt_args.push_back(bottom_right_core_physical.x);  // weights_mcast_dest_noc_start_x
-                    writer_rt_args.push_back(bottom_right_core_physical.y);  // weights_mcast_dest_noc_start_y
-                    writer_rt_args.push_back(top_left_core_physical.x);      // weights_mcast_dest_noc_end_x
-                    writer_rt_args.push_back(top_left_core_physical.y);      // weights_mcast_dest_noc_end_y
-                }
-                writer_rt_args.push_back(total_active_num_cores - 1);  // weights_mcast_num_dests
-                writer_rt_args.push_back(total_num_cores - 1);         // weights_mcast_num_cores
-                writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
-                writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
+            // receiver
+            writer_rt_args.push_back(top_left_core_physical.x);  // weights_mcast_sender_noc_x
+            writer_rt_args.push_back(top_left_core_physical.y);  // weights_mcast_sender_noc_y
+            writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
+            writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
 
-                SetRuntimeArgs(program, writer_mcast_sender_id, core, writer_rt_args);
-            } else {
-                // receiver
-                writer_rt_args.push_back(top_left_core_physical.x);  // weights_mcast_sender_noc_x
-                writer_rt_args.push_back(top_left_core_physical.y);  // weights_mcast_sender_noc_y
-                writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
-                writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
-
-                // log_debug("Core: {}, WRITER RT ARGS: {}", core, writer_rt_args.size());
-                SetRuntimeArgs(program, writer_mcast_receiver_id, core, writer_rt_args);
-            }
+            // log_debug("Core: {}, WRITER RT ARGS: {}", core, writer_rt_args.size());
+            SetRuntimeArgs(program, writer_mcast_receiver_id, core, writer_rt_args);
         }
 
     }  // for num_cores
@@ -1784,103 +1181,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<const Tensor>& bias,
-    const sliding_window::SlidingWindowConfig& sliding_window_config,
-    uint32_t output_channels,
-    uint32_t groups,
-    bool untilize_out,
-    bool fuse_relu,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
-    DataType output_dtype,
-    std::array<std::uint32_t, 4> input_tensor_shape,
-    bool use_shallow_conv_variant,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    Tensor& output,
-    bool enable_act_double_buffer,
-    bool enable_weights_double_buffer,
-    bool enable_split_reader,
-    bool enable_subblock_padding,
-    bool use_non_tile_height) {
-    tt_metal::Program program = tt_metal::CreateProgram();
-
-    ttnn::operations::sliding_window::ParallelConfig parallel_config;
-    parallel_config.grid = a.shard_spec().value().grid;
-    parallel_config.shard_scheme = a.memory_config().memory_layout;
-    parallel_config.shard_orientation = a.shard_spec().value().orientation;
-
-    // create conv config tensors
-    auto pad_metadata = ttnn::operations::sliding_window::generate_pad_metadata(sliding_window_config);
-    auto op_trace_metadata = ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
-    auto shard_boundaries =
-        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
-    auto conv_sharded_input_top_left_indices = ttnn::operations::sliding_window::generate_sliding_window_op_config(
-        op_trace_metadata, shard_boundaries, true, true);
-    // create sharded ttnn config tensors
-    DataType indices_tt_dtype = DataType::UINT16;
-    // For 2d convs, each core in a column or row share the same specs
-    CoreCoord grid_size = parallel_config.grid.bounding_box().grid_size();
-
-    bool is_block_sharded = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    auto conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
-        conv_sharded_input_top_left_indices, sliding_window_config, parallel_config);
-    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
-
-    // add config tensor to program
-    tt::tt_metal::detail::AddConfigBuffer(program, conv_reader_indices_tensor.device_buffer());
-    if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
-        return multi_core_optimized_conv_width_sharded_v2_impl(
-            program,
-            a,
-            b,
-            ttnn::Shape(input_tensor_shape),
-            bias,
-            conv_reader_indices_tensor,
-            sliding_window_config,
-            output_channels,
-            groups,
-            untilize_out,
-            bias.has_value(),
-            fuse_relu,
-            parallelization_config,
-            block_config,
-            use_shallow_conv_variant,
-            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            output,
-            compute_kernel_config.value(),
-            enable_act_double_buffer,
-            enable_split_reader,
-            enable_subblock_padding);
-    }
-    return multi_core_optimized_conv_sharded_v2_impl(
-        program,
-        a,
-        b,
-        ttnn::Shape(input_tensor_shape),
-        bias,
-        conv_reader_indices_tensor,
-        sliding_window_config,
-        output_channels,
-        groups,
-        untilize_out,
-        bias.has_value(),
-        fuse_relu,
-        parallelization_config,
-        block_config,
-        use_shallow_conv_variant,
-        parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-        output,
-        compute_kernel_config.value(),
-        enable_act_double_buffer,
-        enable_weights_double_buffer,
-        enable_split_reader,
-        enable_subblock_padding,
-        use_non_tile_height);
-}
 }  // namespace conv2d
 
 }  // namespace ttnn::operations::conv
