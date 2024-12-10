@@ -15,7 +15,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         READ_BARRIER_END,
         READ_BARRIER_WITH_TRID,
 
-        WRITE,
+        WRITE_,
         WRITE_INLINE,
         WRITE_MULTICAST,
         WRITE_SET_STATE,
@@ -33,6 +33,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         UNSUPPORTED
     };
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
+    using NocVirtualChannel = int8_t;
 
     KernelProfilerNocEventMetadata() = default;
 
@@ -42,11 +43,12 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     }
 
     // these can be compressed to bit-fields if needed, but byte orientated has less overhead
-    uint8_t dst_x = 0;
-    uint8_t dst_y = 0;
+    int8_t dst_x = -1;
+    int8_t dst_y = -1;
     NocEventType noc_xfer_type = NocEventType::UNDEF;
     NocType noc_type = NocType::UNDEF;
-    uint32_t num_bytes = 0;
+    NocVirtualChannel noc_vc = -1;
+    uint32_t num_bytes : 24;
 
     uint64_t asU64() {
         uint64_t ret;

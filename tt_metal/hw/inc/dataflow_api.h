@@ -704,7 +704,7 @@ void noc_async_read(std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr,
         Read responses - assigned VCs dynamically
     */
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ,src_noc_addr,size);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ,src_noc_addr,size, -1);
 
     WAYPOINT("NARW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
@@ -722,7 +722,7 @@ void noc_async_read_one_packet(std::uint64_t src_noc_addr, std::uint32_t dst_loc
         Read responses - assigned VCs dynamically
     */
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ,src_noc_addr,size);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1);
 
     WAYPOINT("RPW");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
@@ -755,7 +755,7 @@ void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32
         Read responses - assigned VCs dynamically
     */
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE,src_noc_addr,size);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, -1);
 
     WAYPOINT("RPW");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
@@ -783,7 +783,7 @@ void noc_async_read_one_packet_with_state(std::uint32_t src_noc_addr, std::uint3
         Read responses - assigned VCs dynamically
     */
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE,src_noc_addr,0);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE,src_noc_addr,0,-1);
 
     WAYPOINT("RPW");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
@@ -814,7 +814,7 @@ void noc_async_read_set_state(std::uint64_t src_noc_addr, uint8_t noc = noc_inde
         Read responses - assigned VCs dynamically
     */
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE,src_noc_addr,0);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE,src_noc_addr,0,-1);
 
     WAYPOINT("NARW");
     WAYPOINT("RPW");
@@ -839,7 +839,7 @@ void noc_async_read_with_state(std::uint32_t src_noc_addr, std::uint32_t dst_loc
         Read responses - assigned VCs dynamically
     */
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE,src_noc_addr,size);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE,src_noc_addr,size,-1);
 
     WAYPOINT("NARW");
 
@@ -890,7 +890,7 @@ template <bool enable_noc_tracing = true>
 FORCE_INLINE
 void noc_async_write_one_packet(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE,dst_noc_addr,size);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_,dst_noc_addr,size,NOC_UNICAST_WRITE_VC);
 
     WAYPOINT("NWPW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
@@ -929,7 +929,7 @@ void noc_async_write_multicast_one_packet(
     bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST,dst_noc_addr_multicast,size);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST,dst_noc_addr_multicast,size, NOC_MULTICAST_WRITE_VC);
 
     WAYPOINT("NMPW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
@@ -964,7 +964,7 @@ template <bool non_posted = true, bool enable_noc_tracing = true>
 FORCE_INLINE
 void noc_async_write_one_packet_set_state(std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, dst_noc_addr, size);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, dst_noc_addr, size, vc);
 
     WAYPOINT("NWPW");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
@@ -990,7 +990,7 @@ template <bool non_posted = true, bool enable_noc_tracing = true>
 FORCE_INLINE
 void noc_async_write_one_packet_with_state(std::uint32_t src_local_l1_addr, std::uint32_t dst_noc_addr, uint8_t noc = noc_index) {
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0, 0);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0, 0, -1);
 
     WAYPOINT("NWPW");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
@@ -1284,7 +1284,7 @@ FORCE_INLINE void noc_async_read_page(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size);
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size, -1);
 
     s.noc_async_read_page(id, dst_local_l1_addr, offset, noc);
 }
@@ -1296,7 +1296,7 @@ FORCE_INLINE void noc_async_read_tile(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size);
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size, -1);
 
     s.noc_async_read_tile(id, dst_local_l1_addr, offset, noc);
 }
@@ -1326,7 +1326,7 @@ void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr
         noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size);
     } else {
 
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE, dst_noc_addr, size);
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
 
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr,size);
@@ -1349,7 +1349,7 @@ template <bool DRAM, uint32_t tile_hw, bool enable_noc_tracing = true>
 FORCE_INLINE void noc_async_write_tile(
     const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
 
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE, id, s.page_size);
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, s.page_size, NOC_UNICAST_WRITE_VC);
 
     s.noc_async_write_tile(id, src_local_l1_addr, noc);
 }
@@ -1799,7 +1799,7 @@ template <bool enable_noc_tracing = true>
 FORCE_INLINE
 void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, addr, 32);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, addr, 32, NOC_UNICAST_WRITE_VC);
 
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
@@ -1839,7 +1839,7 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index)
     Generic increment with 32-bit wrap.
   */
 
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC,addr,0);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC,addr,0, NOC_UNICAST_WRITE_VC);
 
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);

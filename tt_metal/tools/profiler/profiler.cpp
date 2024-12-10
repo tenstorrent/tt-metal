@@ -298,7 +298,7 @@ void DeviceProfiler::dumpResultToFile(
         core.y,
         ev_md.dst_x,
         ev_md.dst_y,
-        ev_md.num_bytes,
+        uint32_t(ev_md.num_bytes),
         magic_enum::enum_name(ev_md.noc_xfer_type),
         timestamp - smallest_timestamp,
         delta);
@@ -581,17 +581,18 @@ void DeviceProfiler::dumpJsonReport(
 
                                 std::string prefix(first_record ? " " : ",");
                                 first_record = false;
-
                                 json_rpt_os
                                     << fmt::format(
-                                           R"({}{{ "proc":{:<6},  "sx":{:<2},  "sy":{:<2},  "dx":{:<2},  "dy":{:<2},  "num_bytes":{:<6},  "type":{:<22}, "timestamp":{:<16}, "kernel_start_delta":{:<6} }})",
+                                           R"({}{{ "proc":{:<6}, "noc":{:<6}, "vc":{:<2}, "sx":{:<2},  "sy":{:<2},  "dx":{:<2},  "dy":{:<2},  "num_bytes":{:<6},  "type":{:<22}, "timestamp":{:<16}, "kernel_start_delta":{:<6} }})",
                                            prefix,
                                            dquote(tracy::riscName[riscType]),
+                                           dquote(magic_enum::enum_name(ev_md.noc_type)),
+                                           ev_md.noc_vc,
                                            worker_core.x,
                                            worker_core.y,
                                            ev_md.dst_x,
                                            ev_md.dst_y,
-                                           ev_md.num_bytes,
+                                           uint32_t(ev_md.num_bytes),
                                            dquote(magic_enum::enum_name(ev_md.noc_xfer_type)),
                                            timestamp,
                                            kernel_start_delta) +

@@ -51,15 +51,17 @@ inline std::pair<uint32_t, uint32_t> decode_noc_id_into_coord(uint32_t id, uint8
 template <uint32_t STATIC_ID = 12345>
 inline void recordNocEvent(
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
-    uint32_t dst_x = 0,
-    uint32_t dst_y = 0,
+    int32_t dst_x = -1,
+    int32_t dst_y = -1,
     uint32_t num_bytes = 0,
+    int8_t vc = -1,
     uint8_t noc = noc_index) {
     KernelProfilerNocEventMetadata ev_md;
     ev_md.dst_x = dst_x;
     ev_md.dst_y = dst_y;
     ev_md.noc_xfer_type = noc_event_type;
     ev_md.num_bytes = num_bytes;
+    ev_md.noc_vc = vc;
     ev_md.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
@@ -73,54 +75,50 @@ inline void recordNocEvent(
 
 template <bool DRAM, typename NocIDU32>
 inline void recordNocEventWithID(
-    KernelProfilerNocEventMetadata::NocEventType noc_event_type, NocIDU32 noc_id, uint32_t num_bytes) {
+    KernelProfilerNocEventMetadata::NocEventType noc_event_type, NocIDU32 noc_id, uint32_t num_bytes, int8_t vc) {
     static_assert(std::is_same_v<NocIDU32, uint32_t>);
     auto [decoded_x, decoded_y] = decode_noc_id_into_coord<DRAM>(noc_id);
-    recordNocEvent(noc_event_type, decoded_x, decoded_y, num_bytes);
+    recordNocEvent(noc_event_type, decoded_x, decoded_y, num_bytes, vc);
 }
 
 template <typename NocAddrU64>
 inline void recordNocEventWithAddr(
-    KernelProfilerNocEventMetadata::NocEventType noc_event_type, NocAddrU64 noc_addr, uint32_t num_bytes) {
+    KernelProfilerNocEventMetadata::NocEventType noc_event_type, NocAddrU64 noc_addr, uint32_t num_bytes, int8_t vc) {
     static_assert(std::is_same_v<NocAddrU64, uint64_t>);
     auto [decoded_x, decoded_y] = decode_noc_addr_to_coord(noc_addr);
-    recordNocEvent(noc_event_type, decoded_x, decoded_y, num_bytes);
-}
-
-inline void recordNocEvent(KernelProfilerNocEventMetadata::NocEventType noc_event_type) {
-    recordNocEvent(noc_event_type, 0, 0, 0);
+    recordNocEvent(noc_event_type, decoded_x, decoded_y, num_bytes, vc);
 }
 
 }  // namespace noc_event_profiler
 
-#define RECORD_NOC_EVENT_WITH_ADDR(event_type, noc_addr, num_bytes)                      \
-    {                                                                                    \
-        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;               \
-        if constexpr (enable_noc_tracing) {                                              \
-            noc_event_profiler::recordNocEventWithAddr(event_type, noc_addr, num_bytes); \
-        }                                                                                \
+#define RECORD_NOC_EVENT_WITH_ADDR(event_type, noc_addr, num_bytes, vc)                      \
+    {                                                                                        \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                   \
+        if constexpr (enable_noc_tracing) {                                                  \
+            noc_event_profiler::recordNocEventWithAddr(event_type, noc_addr, num_bytes, vc); \
+        }                                                                                    \
     }
 
-#define RECORD_NOC_EVENT_WITH_ID(event_type, noc_id, num_bytes)                            \
-    {                                                                                      \
-        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                 \
-        if constexpr (enable_noc_tracing) {                                                \
-            noc_event_profiler::recordNocEventWithID<DRAM>(event_type, noc_id, num_bytes); \
-        }                                                                                  \
+#define RECORD_NOC_EVENT_WITH_ID(event_type, noc_id, num_bytes, vc)                            \
+    {                                                                                          \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                     \
+        if constexpr (enable_noc_tracing) {                                                    \
+            noc_event_profiler::recordNocEventWithID<DRAM>(event_type, noc_id, num_bytes, vc); \
+        }                                                                                      \
     }
 
 #define RECORD_NOC_EVENT(event_type)                                       \
     {                                                                      \
         using NocEventType = KernelProfilerNocEventMetadata::NocEventType; \
         if constexpr (enable_noc_tracing) {                                \
-            noc_event_profiler::recordNocEvent(event_type);                \
+            noc_event_profiler::recordNocEvent(event_type);          \
         }                                                                  \
     }
 
 #else
 
-#define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes)
-#define RECORD_NOC_EVENT_WITH_ID(type, noc_id, num_bytes)
+#define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
+#define RECORD_NOC_EVENT_WITH_ID(type, noc_id, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
 
 #endif
