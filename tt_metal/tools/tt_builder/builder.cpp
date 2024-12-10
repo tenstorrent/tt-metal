@@ -6,9 +6,12 @@
 #include <fstream>
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/utils.hpp"
+#include "tt_metal/jit_build/build.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt;
 namespace fs = std::filesystem;
+using namespace std;
 
 void generate_build_inputs() {
     std::filesystem::path output_dir(tt::llrt::OptionsG.get_root_dir() + "build/tools/firmware_build/");
@@ -18,8 +21,8 @@ void generate_build_inputs() {
     const string& gpp_tool = device->build_env().get_gpp_tool();
     JitBuildStateSet& firmware_build_states = device->firmware_build_states_;
 
-    std::string log_file = output_dir.string() + "build_output.log";
-    std::cout << "FW build state count = " << firmware_build_states.size() << std::endl;
+    string log_file = output_dir.string() + "build_output.log";
+    cout << "FW build state count = " << firmware_build_states.size() << endl;
     for (auto& build_state : firmware_build_states) {
         const string& target_name = build_state->get_target_name();
         const string& build_cflags = build_state->get_cflags();
@@ -29,21 +32,6 @@ void generate_build_inputs() {
         const auto& build_srcs = build_state->get_srcs();
         const auto& build_objs = build_state->get_objs();
         const string& build_link_objs = build_state->get_link_objs();
-
-        string cmake_file = target_name + ".cmake";
-        string fname = output_dir.string() + cmake_file;
-        FILE* f;
-        if ((f = fopen(fname.c_str(), "w")) == nullptr) {
-            throw(std::runtime_error("Builder failed to create input file"));
-        }
-
-        fprintf(f, "# Build variable for %s\n", cmake_file.c_str());
-        fprintf(f, "\nset(GPP_FLAGS_device \n %s)\n", build_cflags.c_str());
-        fprintf(f, "\nset(GPP_DEFINES_device \n %s)\n", build_defines.c_str());
-        fprintf(f, "\nset(GPP_INCLUDES_device \n %s)\n", build_includes.c_str());
-        fprintf(f, "\nset(GPP_LINK_FLAGS_device \n %s)\n", build_lflags.c_str());
-        fflush(f);
-        fclose(f);
 
         // Compiling
         string cmd;
@@ -57,7 +45,7 @@ void generate_build_inputs() {
             string file_cmd = cmd + "-c -o " + build_objs[i] + " " + build_srcs[i];
             if (!tt::utils::run_command(file_cmd, log_file, false)) {
                 // build_failure(target_name_, "compile", file_cmd, log_file);
-                throw(std::runtime_error("Build failed at compile"));
+                throw(runtime_error("Build failed at compile"));
             }
         }
 
@@ -76,7 +64,7 @@ void generate_build_inputs() {
         cmd += "-o " + output_dir.string() + target_name + ".elf";
         if (!tt::utils::run_command(cmd, log_file, false)) {
             // build_failure(this->target_name_, "link", cmd, log_file);
-            throw(std::runtime_error("Build failed at link"));
+            throw(runtime_error("Build failed at link"));
         }
     }
 
@@ -84,21 +72,15 @@ void generate_build_inputs() {
 }
 
 int main(int argc, char* argv[]) {
-    std::cout << "Running tt_builder and command" << std::endl;
-    std::cout << "current path is ";
-    std::string cmd = "pwd";
-    std::string log_file = "./build/tools/output.log";
-    if (!tt::utils::run_command(cmd, log_file, false)) {
-        std::cout << "Error running command" << std::endl;
-    }
-    std::cout << "Finished running " << cmd << " calling generate_build_inputs " << std::endl;
+    cout << "Running tt_builder " << endl;
+    cout << "calling generate_build_inputs " << endl;
 
     try {
         generate_build_inputs();
-    } catch (const std::exception& e) {
+    } catch (const exception& e) {
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
+        log_error(LogTest, "System error message: {}", strerror(errno));
     }
 }
