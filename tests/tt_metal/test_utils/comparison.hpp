@@ -21,7 +21,7 @@ namespace test_utils {
 //! Constructor(float in) - constructor with a float as the initializer
 //! Constructor(uint32_t in) - constructor with a uint32_t as the initializer -- only lower bits needed
 
-// this follows the implementation of numpy::is_close
+// this follows the implementation of ttnn::is_close
 template <typename ValueType>
 bool is_close(const ValueType a, const ValueType b, float rtol = 0.01f, float atol = 0.001f) {
     float af = 0.0f;
