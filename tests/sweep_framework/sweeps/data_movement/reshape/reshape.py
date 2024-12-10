@@ -127,7 +127,7 @@ def run(
         memory_config=input_a_memory_config,
     )
 
-    print(f"input_shape {input_shape} rehape_shape {rehape_shape} input_a_dtype {input_a_dtype}")
+    # print(f"input_shape {input_shape} rehape_shape {rehape_shape} input_a_dtype {input_a_dtype}")
 
     start_time = start_measuring_time()
     result = ttnn.reshape(input_tensor_a, shape=rehape_shape)
