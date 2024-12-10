@@ -34,6 +34,7 @@ on:
           - eltwise.unary.cos.cos_forge
           - eltwise.unary.sin.sin
           - eltwise.unary.sin.sin_pytorch2
+          - eltwise.unary.sin.sin_forge
           - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
           - eltwise.unary.clamp.clamp_pytorch2
@@ -62,6 +63,7 @@ on:
           - eltwise.unary.expm1.expm1
           - eltwise.unary.tanh.tanh
           - eltwise.unary.tanh.tanh_pytorch2
+          - eltwise.unary.tanh.tanh_forge
           - eltwise.unary.atanh.atanh
           - eltwise.unary.atan.atan
           - eltwise.unary.sign.sign
