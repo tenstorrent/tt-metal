@@ -46,7 +46,7 @@ public:
     }
     void ReadBuffer(
         tt::tt_metal::Device* device,
-        std::shared_ptr<tt::tt_metal::Buffer> out_buffer,
+        const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer,
         std::vector<uint32_t>& dst_vec) {
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::ReadFromBuffer(out_buffer, dst_vec);

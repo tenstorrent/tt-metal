@@ -80,7 +80,7 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        decode_input = model_args.prepare_inputs_ttnn_decode(
+        decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             ttnn.L1_MEMORY_CONFIG,
         )
