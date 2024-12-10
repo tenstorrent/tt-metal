@@ -38,24 +38,23 @@ class RoutingTableGenerator {
     void print_routing_tables() const;
 
    private:
-    std::unique_ptr<MeshGraph> mesh_graph_;
-    ;
-    // configurable in future architectures
-    const uint32_t max_nodes_in_mesh_ = 1024;
-    const uint32_t max_num_meshes_ = 1024;
+       std::unique_ptr<MeshGraph> mesh_graph_;
+       // configurable in future architectures
+       const uint32_t max_nodes_in_mesh_ = 1024;
+       const uint32_t max_num_meshes_ = 1024;
 
-    std::vector<uint32_t> mesh_sizes;
+       std::vector<uint32_t> mesh_sizes;
 
-    RoutingTable intra_mesh_table_;
-    RoutingTable inter_mesh_table_;
+       RoutingTable intra_mesh_table_;
+       RoutingTable inter_mesh_table_;
 
-    std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> get_paths_to_all_meshes(
-        mesh_id_t src, const InterMeshConnectivity& inter_mesh_connectivity);
-    void generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity);
-    // when generating intermesh routing table, we use the intramesh connectivity table to find the shortest path to the
-    // exit chip
-    void generate_intermesh_routing_table(
-        const InterMeshConnectivity& inter_mesh_connectivity, const IntraMeshConnectivity& intra_mesh_connectivity);
+       std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> get_paths_to_all_meshes(
+           mesh_id_t src, const InterMeshConnectivity& inter_mesh_connectivity);
+       void generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity);
+       // when generating intermesh routing table, we use the intramesh connectivity table to find the shortest path to
+       // the exit chip
+       void generate_intermesh_routing_table(
+           const InterMeshConnectivity& inter_mesh_connectivity, const IntraMeshConnectivity& intra_mesh_connectivity);
 };
 
 }  // namespace tt::tt_fabric
