@@ -126,6 +126,11 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         user_id=0,
         vision_tokens=None,
     ):
+        skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        assert (
+            x_11SH.memory_config() == skip_mem_cfg
+        ), f"decoder input memcfg mismatch: {x_11SH.memory_config()} != {skip_mem_cfg}"
+
         attn_out = self.attention(
             x_11SH=self.attention_norm(x_11SH, mode=mode),
             xattn_mask=xattn_mask,
