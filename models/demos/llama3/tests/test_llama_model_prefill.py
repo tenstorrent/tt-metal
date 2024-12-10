@@ -10,12 +10,12 @@ import ttnn
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
-    sample,
     HostEmbedding,
     encode_prompt_llama_instruct,
+    PagedAttentionConfig,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
-from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer, precompute_freqs_cis
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
@@ -30,14 +30,6 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "seq_len",
-    (
-        # 128,
-        # 1024,
-        4096,
-    ),
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -46,19 +38,70 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ensure_gc):
+# Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
+@pytest.mark.parametrize(
+    "paged_attention",
+    (
+        True,
+        # False,
+    ),
+    ids=(
+        "paged_attention",
+        # "default_attention",
+    ),
+)
+@pytest.mark.parametrize(
+    "page_params",
+    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize(
+    "seq_len",
+    (4096,),
+)
+@pytest.mark.parametrize(
+    "optimizations",
+    [
+        pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
+        pytest.param(LlamaOptimizations.performance, id="performance"),
+    ],
+)
+def test_llama_model_inference(
+    seq_len,
+    batch_size,
+    paged_attention,
+    page_params,
+    optimizations,
+    mesh_device,
+    use_program_cache,
+    reset_seeds,
+    ensure_gc,
+    is_ci_env,
+):
+    if is_ci_env and optimizations == LlamaOptimizations.accuracy:
+        pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
+
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.91  # TODO Look on improving PCC
+    # This sets the minimum PCC for each iteration based on optimization mode
+    if optimizations == LlamaOptimizations.accuracy:
+        pcc = 0.91  # TODO Look on improving PCC
+    else:  # performance mode
+        assert optimizations == LlamaOptimizations.performance
+        pcc = 0.869  # TODO Look on improving PCC
 
     mesh_device.enable_async(True)
 
     # Use instruct weights instead of general weights
     instruct = True
 
-    model_args = TtModelArgs(mesh_device, instruct=instruct, max_batch_size=1)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
+
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
@@ -100,15 +143,29 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len)
-    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-    transformation_mats = ttnn.as_tensor(
-        transformation_mat_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # Setup page table
+    page_table_tt = None
+    paged_attention_config = None
+
+    if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
+        )
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtual blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     # Load TTNN model
     tt_model = TtTransformer(
@@ -117,6 +174,7 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
+        paged_attention_config=paged_attention_config,
     )
 
     logger.info("Model and caches loaded.")
@@ -124,30 +182,35 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
     if run_ref_pt:
         all_tests_pass = True
 
-    batch = 1
-
     # Select the first token from the prompt for initial decoding
     encoded_prompt_tensor = torch.tensor(encoded_prompt)  # [:,0]
-    pt_decode_input = embd(encoded_prompt_tensor).view(batch, seq_len, -1)
+    pt_prefill_input = embd(encoded_prompt_tensor).view(batch_size, seq_len, -1)
 
-    tt_decode_input = pt_decode_input
+    tt_prefill_input = pt_prefill_input
 
-    decode_input = model_args.prepare_inputs_ttnn_prefill(
-        tt_decode_input,
+    tt_prefill_input = model_args.prepare_residual_tensor_prefill(
+        pt_prefill_input,
     )
     for i in range(1):
         start_pos = 0
         # Run TT model
-        tt_out = tt_model(decode_input, None, rot_mats, transformation_mats, user_id=i, mode="prefill")
+        tt_out = tt_model(
+            tt_prefill_input,
+            current_pos=None,
+            rot_mats=rot_mats,
+            user_id=i,
+            mode="prefill",
+            page_table=page_table_tt,
+        )
         # Convert ttnn tensor to torch tensor
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
             :, 0, :, :
         ].view(
-            batch, seq_len, -1
-        )  # [ batch, seq, hidden_dim]
+            batch_size, seq_len, -1
+        )  # [ batch_size, seq, hidden_dim]
 
         if run_ref_pt:  # Run reference model
-            ref_output = reference_model(pt_decode_input, start_pos, mode="prefill")
+            ref_output = reference_model(pt_prefill_input, start_pos, mode="prefill")
 
         # Measure PCC if also running reference model
         if run_ref_pt:
@@ -169,20 +232,58 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
                     pytorch_layer_present = [
                         reference_model.layers[i]
                         .attention.cache_k.clone()
-                        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
                         reference_model.layers[i]
                         .attention.cache_v.clone()
-                        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
                     ]
 
                     tt_layer_present = []
-                    for layer_past in tt_model.layers[i].attention.layer_past_list[0]:
-                        tt_layer_present.append(
-                            ttnn.to_torch(layer_past, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
-                        )
+                    if paged_attention:
+                        for layer_past in tt_model.layers[l].attention.layer_past:
+                            tt_layer_present.append(
+                                ttnn.to_torch(layer_past, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
+                                    reverse_permutation
+                                ]
+                                .reshape(
+                                    model_args.max_batch_size,
+                                    paged_attention_config.max_num_blocks // model_args.max_batch_size,
+                                    model_args.n_kv_heads,
+                                    paged_attention_config.block_size,
+                                    model_args.head_dim,
+                                )
+                                .transpose(1, 2)
+                                .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                                    :batch_size, ...
+                                ]
+                            )
+                        tt_layer_present = [
+                            (
+                                ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
+                                    reverse_permutation
+                                ]
+                                .reshape(
+                                    model_args.max_batch_size,
+                                    paged_attention_config.max_num_blocks // model_args.max_batch_size,
+                                    model_args.n_kv_heads,
+                                    paged_attention_config.block_size,
+                                    model_args.head_dim,
+                                )
+                                .transpose(1, 2)
+                                .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                                    :batch_size, ...
+                                ]
+                            )
+                            for cache in tt_model.layers[l].attention.layer_past
+                        ]
+                    else:
+                        for layer_past in tt_model.layers[i].attention.layer_past_list[0]:
+                            tt_layer_present.append(
+                                ttnn.to_torch(layer_past, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+                            )
 
                     for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                        cache_length_to_check = model_args.sliding_window
+                        cache_length_to_check = model_args.max_seq_len
                         cache_pt = cache_pt[:, :, 0:cache_length_to_check, :]
                         cache_tt = cache_tt[:, :, 0:cache_length_to_check, :]
                         does_pass, output_pcc = comp_pcc(cache_pt, cache_tt)
@@ -200,7 +301,7 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
 
     if run_ref_pt:
         if all_tests_pass:
-            logger.info(f"All Llama decode iterations Passed!")
+            logger.info(f"All Llama prefill iterations Passed!")
         else:
-            logger.warning("One or more iterations of Llama decode had bad PCC")
+            logger.warning("One or more iterations of Llama prefill had bad PCC")
             assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

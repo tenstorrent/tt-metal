@@ -5,11 +5,11 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t dst0_addr  = get_arg_val<uint32_t>(0);
+    uint32_t dst0_addr = get_arg_val<uint32_t>(0);
     uint32_t dst0_noc_x = get_arg_val<uint32_t>(1);
     uint32_t dst0_noc_y = get_arg_val<uint32_t>(2);
     uint32_t cb_id_out0 = get_arg_val<uint32_t>(3);
-    uint32_t dst1_addr  = get_arg_val<uint32_t>(4);
+    uint32_t dst1_addr = get_arg_val<uint32_t>(4);
     uint32_t dst1_noc_x = get_arg_val<uint32_t>(5);
     uint32_t dst1_noc_y = get_arg_val<uint32_t>(6);
     uint32_t cb_id_out1 = get_arg_val<uint32_t>(7);

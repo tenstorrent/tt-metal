@@ -33,9 +33,7 @@ PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
 
 PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     if (layout == Layout::ROW_MAJOR) {
-        if (tile.has_value()) {
-            tt::log_warning("Specifying tile shape for a row major layout is deprecated, and will be removed soon");
-        }
+        // TODO: add TT_FATAL(!tile.has_value(), "Specifying tile shape for a row major layout is not supported")
         config_ = RowMajorPageConfig(tile.value_or(Tile()));
     } else {
         config_ = TilePageConfig(tile.value_or(Tile()));

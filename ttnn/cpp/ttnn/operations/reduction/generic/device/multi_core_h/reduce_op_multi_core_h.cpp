@@ -119,6 +119,9 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     tt_metal::KernelHandle reader_kernel_id;
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+
+    uint32_t chunk_size = out_sharded ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);
+
     if (in_sharded) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
         std::map<string, string> reader_defines;
@@ -132,7 +135,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     } else {
         bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
         std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)src0_is_dram, Ht, Wt, HtWt, packed_scaler_value};
+            (std::uint32_t)src0_is_dram, Ht, Wt, HtWt, chunk_size, packed_scaler_value};
 
         std::map<string, string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
@@ -172,6 +175,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
         1,                          // NC
+        chunk_size,                 // Column Chunk Size
     };
 
     auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
@@ -189,6 +193,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             Ht,                         // Ht
             num_cols_per_core_group_2,  // Wt
             1,                          // NC
+            chunk_size,                 // Column Chunk Size
         };
 
         auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(

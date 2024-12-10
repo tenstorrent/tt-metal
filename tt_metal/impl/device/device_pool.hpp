@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_cluster_descriptor_types.h"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/device/device.hpp"
@@ -38,7 +38,7 @@ public:
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
-        tt_metal::DispatchCoreType dispatch_core_type,
+        const tt_metal::DispatchCoreConfig& dispatch_core_config,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {}) noexcept;
 
     tt_metal::v1::DeviceHandle get_active_device(chip_id_t device_id) const;

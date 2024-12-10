@@ -28,13 +28,30 @@ from models.demos.llama3.tt.distributed_norm import DistributedNorm
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize(
+    "max_seq_len",
+    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
+)
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
-def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc, mode):
+def test_llama_rms_norm_inference(
+    max_seq_len,
+    batch_size,
+    mode,
+    mesh_device,
+    use_program_cache,
+    reset_seeds,
+    ensure_gc,
+):
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)

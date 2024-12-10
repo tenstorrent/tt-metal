@@ -36,8 +36,7 @@ void LayerNormPreAllGather::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 }
 
-std::vector<ttnn::SimpleShape> LayerNormPreAllGather::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<TensorSpec> LayerNormPreAllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
     auto output_shape = input_tensors.at(0).get_logical_shape();
@@ -47,13 +46,7 @@ std::vector<ttnn::SimpleShape> LayerNormPreAllGather::compute_output_shapes(
     }
     output_shape[3] = num_tiles_w * TILE_WIDTH;
 
-    return {output_shape};
-}
-
-std::vector<Tensor> LayerNormPreAllGather::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, this->dtype, Layout::TILE, input_tensor.memory_config());
+    return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), input_tensor.memory_config()))};
 }
 
 operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(

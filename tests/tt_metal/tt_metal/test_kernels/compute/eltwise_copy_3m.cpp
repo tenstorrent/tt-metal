@@ -4,7 +4,6 @@
 
 #include <cstdint>
 
-
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #include "compute_kernel_api/eltwise_binary.h"
@@ -16,12 +15,11 @@ namespace NAMESPACE {
 #include "llk_math_common.h"
 #include "llk_math_unary_datacopy_api.h"
 
-void math_main()
-{
+void math_main() {
     int __outer_loop_iter;
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, 0) ));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, 0)));
     llk_math_pack_sync_init();
-    llk_math_hw_configure_disaggregated(0,0);
+    llk_math_hw_configure_disaggregated(0, 0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_math_wait_for_dest_available();
@@ -35,8 +33,7 @@ void math_main()
 #include "llk_pack_common.h"
 #include "llk_pack.h"
 
-void pack_main()
-{
+void pack_main() {
     int __outer_loop_iter;
     llk_pack_init();
     llk_pack_hw_configure_disaggregated<false>(16);
@@ -44,27 +41,26 @@ void pack_main()
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         llk_packer_wait_for_math_done();
-        llk_wait_for_free_tiles<false,false,false>(16,1);
-        llk_pack<false, false >(0,16);
-        llk_push_tiles<false,false>(16,1);
+        llk_wait_for_free_tiles<false, false, false>(16, 1);
+        llk_pack<false, false>(0, 16);
+        llk_push_tiles<false, false>(16, 1);
         llk_pack_dest_section_done();
     }
 }
 #endif
 
 #ifdef TRISC_UNPACK
-void unpack_main()
-{
+void unpack_main() {
     int __outer_loop_iter;
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
-    UNPACK(( llk_unpack_A_hw_configure_disaggregated<BroadcastType::NONE>(0) ));
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()));
+    UNPACK((llk_unpack_A_hw_configure_disaggregated<BroadcastType::NONE>(0)));
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        llk_wait_tiles(0,1);
-        llk_unpack_A(0,0);
-        llk_pop_tiles(0,1);
+        llk_wait_tiles(0, 1);
+        llk_unpack_A(0, 0);
+        llk_pop_tiles(0, 1);
     }
 }
 #endif
 
-} // NAMESPACE
+}  // namespace NAMESPACE

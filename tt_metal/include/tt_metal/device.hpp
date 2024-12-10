@@ -56,9 +56,9 @@ struct CreateDeviceOptions {
      */
     std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
     /**
-     * Dispatch core type to use (default: DispatchCoreType::WORKER).
+     * Dispatch core config to use (default: DispatchCoreType::WORKER, DispatchCoreAxis::ROW).
      */
-    DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
+    DispatchCoreConfig dispatch_core_config = DispatchCoreConfig{};
     /**
      * For shuffling bank id offsets
      */

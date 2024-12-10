@@ -121,11 +121,12 @@ void kernel_main() {
     const uint64_t reduce_second_stage_receiver_semaphore_noc_addr =
         remote_noc_addrs_second_stage[0] | reduce_second_stage_semaphore_addr;
 
-    const auto& global_reduce_receiver = [&](const uint32_t cb_partial,
-                                             const uint32_t cb_external,
-                                             const uint32_t cb_ex,
-                                             const uint32_t cb_ex_global,
-                                             const uint32_t cb_reduce_first_stage) __attribute__((always_inline)) {
+    const auto& global_reduce_receiver = [&](
+        const uint32_t cb_partial,
+        const uint32_t cb_external,
+        const uint32_t cb_ex,
+        const uint32_t cb_ex_global,
+        const uint32_t cb_reduce_first_stage) __attribute__((always_inline)) {
         // global reduce
         // wait for local data ready
         cb_wait_front(cb_partial, block_h);

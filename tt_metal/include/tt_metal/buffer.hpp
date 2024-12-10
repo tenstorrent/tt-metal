@@ -29,6 +29,14 @@ BufferHandle CreateBuffer(InterleavedBufferConfig config);
 void DeallocateBuffer(const BufferHandle& buffer);
 
 /**
+ * @brief Retrieves the ID of the specified buffer.
+ *
+ * @param buffer The buffer to get the ID from.
+ * @return The unique ID of the buffer.
+ */
+std::size_t GetId(const BufferHandle& buffer);
+
+/**
  * @brief Copies data from a host buffer into the specified device buffer.
  *
  * @param buffer Buffer to write data into.

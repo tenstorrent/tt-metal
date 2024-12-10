@@ -19,6 +19,7 @@ rm -rf $kernel_path
 ./build/test/tt_metal/unit_tests_eth
 ./build/test/tt_metal/unit_tests_llk
 ./build/test/tt_metal/unit_tests_stl
+./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=MeshDeviceSuite.*
 
 if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     env python tests/scripts/run_tt_metal.py --dispatch-mode slow

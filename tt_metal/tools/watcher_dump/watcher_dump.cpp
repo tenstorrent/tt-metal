@@ -52,7 +52,7 @@ void dump_data(
         std::ofstream iq_file = std::ofstream(iq_fname);
         // Minimal setup, since we'll be attaching to a potentially hanging chip.
         Device* device = tt::tt_metal::CreateDeviceMinimal(
-            id, num_hw_cqs, eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER);
+            id, num_hw_cqs, DispatchCoreConfig{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER});
         devices.push_back(device);
         if (dump_cqs) {
             std::unique_ptr<SystemMemoryManager> sysmem_manager = std::make_unique<SystemMemoryManager>(id, num_hw_cqs);

@@ -6,7 +6,7 @@
 
 #include "llrt/hal.hpp"
 #include "common/core_coord.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
+#include "umd/device/tt_soc_descriptor.h"
 
 namespace tt {
 

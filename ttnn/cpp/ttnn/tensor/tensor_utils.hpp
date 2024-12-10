@@ -20,6 +20,16 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype = std::nullopt);
 
+// Converts convolution weights to tilized 2d matrix layout for block sharded conv. Adds zero padding between weight
+// blocks based on output shard width padding. Returns a new tensor with layout=Tile
+Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
+    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype = std::nullopt);
+
+// Converts convolution bias to tilized layout for block sharded conv. Adds zero padding between bias blocks based on
+// output shard width padding. Returns a new tensor with layout=Tile
+Tensor convert_conv_bias_tensor_to_tiled_layout_block_sharded(
+    const Tensor& conv_bias_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype = std::nullopt);
+
 // Converts convolution weights to tilized 2d matrix layout with special block height padding
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
@@ -132,40 +142,6 @@ void insert_buffer_and_shape_for_device(
 
 Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor);
 
-template <typename TensorContainer>
-auto get_device_tensors(Device* device, const TensorContainer& input_tensors) {
-    // Could be Tensor, const Tensor, std::optional<Tensor>, or std::optional<const Tensor>
-    using ValueType = typename TensorContainer::value_type;
-
-    // We need a way to extract the underlying Tensor type (const or non-const) from ValueType
-    // and to decide whether we are dealing with an optional type.
-    using IsOptional = std::conditional_t<
-        std::is_same_v<ValueType, std::optional<Tensor>> || std::is_same_v<ValueType, std::optional<const Tensor>>,
-        std::true_type,
-        std::false_type>;
-    using TensorType = std::conditional_t<
-        std::is_same_v<ValueType, std::optional<Tensor>> || std::is_same_v<ValueType, Tensor>,
-        Tensor,
-        const Tensor>;
-
-    // Result container type adjustment based on input type
-    using ResultType = std::conditional_t<IsOptional::value, std::optional<TensorType>, TensorType>;
-    std::vector<ResultType> transformed_tensors;
-
-    for (const auto& tensor : input_tensors) {
-        if constexpr (IsOptional::value) {
-            if (tensor.has_value()) {
-                transformed_tensors.emplace_back(get_device_tensor(tensor.value(), device));
-            } else {
-                transformed_tensors.emplace_back(std::nullopt);
-            }
-        } else {
-            transformed_tensors.emplace_back(get_device_tensor(tensor, device));
-        }
-    }
-    return transformed_tensors;
-}
-
 inline bool is_tensor_on_device(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
 inline bool is_tensor_on_multi_device(const ttnn::Tensor& tensor) {
@@ -186,5 +162,4 @@ inline uint32_t get_batch_size(const T& shape) {
 }
 
 }  // namespace tt_metal
-
 }  // namespace tt

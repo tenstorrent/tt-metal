@@ -12,6 +12,8 @@
 #include "device.hpp"
 #include "profiler.hpp"
 #include "events.hpp"
+#include "global_circular_buffer.hpp"
+#include "global_semaphore.hpp"
 #include "tensor.hpp"
 #include "reports.hpp"
 #include "ttnn/distributed/distributed_pybind.hpp"
@@ -43,6 +45,8 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_device = module.def_submodule("device", "ttnn devices");
     auto m_multi_device = module.def_submodule("multi_device", "ttnn multi_device");
     auto m_events = module.def_submodule("events", "ttnn events");
+    auto m_global_circular_buffer = module.def_submodule("global_circular_buffer", "ttnn global circular buffer");
+    auto m_global_semaphore = module.def_submodule("global_semaphore", "ttnn global semaphore");
     auto m_profiler = module.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = module.def_submodule("reports", "ttnn reports");
     auto m_operations = module.def_submodule("operations", "ttnn Operations");
@@ -58,6 +62,8 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::device::py_device_module_types(m_device);
     ttnn::distributed::py_module_types(m_multi_device);
     ttnn::events::py_module_types(m_events);
+    ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
+    ttnn::global_semaphore::py_module_types(m_global_semaphore);
     ttnn::reports::py_module_types(m_reports);
 
     // FUNCTIONS / OPERATIONS
@@ -79,6 +85,8 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::device::py_device_module(m_device);
     ttnn::distributed::py_module(m_multi_device);
     ttnn::events::py_module(m_events);
+    ttnn::global_circular_buffer::py_module(m_global_circular_buffer);
+    ttnn::global_semaphore::py_module(m_global_semaphore);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
 

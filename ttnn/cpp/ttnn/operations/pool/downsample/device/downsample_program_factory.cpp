@@ -844,7 +844,7 @@ operation::ProgramWithCallbacks downsample_single_core(
             num_input_tiles_in_row,
             num_output_tiles,
 
-            (uint32_t)false};
+            (uint32_t) false};
 
         tt::tt_metal::SetRuntimeArgs(program, downsample_writer_kernel_id, core, writer_kernel_args);
         prev_core = core;

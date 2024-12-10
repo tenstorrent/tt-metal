@@ -136,6 +136,7 @@ void JitBuildEnv::init(
                       this->aliased_arch_name_ + " " + "-I" + this->root_ + "tt_metal/hw/inc/" +
                       this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " + "-I" + this->root_ +
                       "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " + "-I" + this->root_ +
+                      "tt_metal/third_party/umd/device/api " + "-I" + this->root_ +
                       "tt_metal/third_party/umd/device/" + this->arch_name_ + " " +  // TODO(fixme)
                       "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " + "-I" +
                       this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ +
@@ -541,7 +542,7 @@ void JitBuildState::compile_one(
     if (settings != nullptr) {
         if (process_defines_at_compile) {
             settings->process_defines([&defines](const string& define, const string& value) {
-                defines += "-D" + define + "=" + value + " ";
+                defines += "-D" + define + "='" + value + "' ";
             });
         }
 

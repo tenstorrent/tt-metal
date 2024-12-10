@@ -19,14 +19,12 @@ void kernel_main() {
     const InterleavedAddrGen<src_is_dram> source_address_generator = {
         .bank_base_address = src_addr, .page_size = page_size};
 
-    DPRINT << "swr: args " <<
-        "\n\tsrc_addr="<<src_addr<<
-        "\n\tsrc_is_dram="<<(src_is_dram?"T":"F")<<
-        "\n\tnum_pages_to_read_total="<<num_pages_to_read_total<<
-        "\n\tpages_per_edm_buffer="<<pages_per_edm_buffer<<
-        "\n\tpage_size="<<page_size<<"\n";
+    DPRINT << "swr: args " << "\n\tsrc_addr=" << src_addr << "\n\tsrc_is_dram=" << (src_is_dram ? "T" : "F")
+           << "\n\tnum_pages_to_read_total=" << num_pages_to_read_total
+           << "\n\tpages_per_edm_buffer=" << pages_per_edm_buffer << "\n\tpage_size=" << page_size << "\n";
 
-    for (uint32_t num_pages_read = 0; num_pages_read < num_pages_to_read_total; num_pages_read += pages_per_edm_buffer) {
+    for (uint32_t num_pages_read = 0; num_pages_read < num_pages_to_read_total;
+         num_pages_read += pages_per_edm_buffer) {
         // How can I read ahead into the circular buffer so I don't have to do an async read barrier for
         // every page? I only want to block when the CB is full
         uint32_t pages_to_read = std::min<uint32_t>(pages_per_edm_buffer, num_pages_to_read_total - num_pages_read);
@@ -42,5 +40,4 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, pages_to_read);
     }
-
 }

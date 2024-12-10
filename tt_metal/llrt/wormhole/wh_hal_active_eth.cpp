@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "core_config.h"
 #include "dev_msgs.h"
 #include "eth_l1_address_map.h"
 
@@ -13,7 +14,7 @@
 #include "hal_asserts.hpp"
 #include "wormhole/wh_hal.hpp"
 
-#include "tt_soc_descriptor.h"  // CoreType
+#include "umd/device/tt_soc_descriptor.h"  // CoreType
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((uint64_t)&(((mailboxes_t*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
@@ -42,6 +43,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         GET_ETH_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FW_VERSION_ADDR)] =
         eth_l1_mem::address_map::FW_VERSION_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] =
+        eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH;
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -61,6 +64,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FW_VERSION_ADDR)] = sizeof(std::uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SIZE;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types(1);

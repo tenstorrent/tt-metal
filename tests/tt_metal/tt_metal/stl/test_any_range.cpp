@@ -13,7 +13,7 @@
 #include "tt_metal/tt_stl/any_range.hpp"
 
 // convenience alias that guarantees at least vector and deque will fit within the capacity
-MAKE_ANY_RANGE(IntRange, tt::stl::AnySizedRandomAccessRangeFor<int &, std::vector<int>, std::deque<int>>);
+MAKE_ANY_RANGE(IntRange, tt::stl::AnySizedRandomAccessRangeFor<int&, std::vector<int>, std::deque<int>>);
 
 TEST(AnyRangeTest, CanTypeEraseSizedRandomAccessRange) {
     IntRange range{std::vector{1, 2, 3, 4, 5}};
@@ -182,7 +182,7 @@ TEST(AnyRangeTest, CanReturnOwning) {
 }
 
 MAKE_ANY_RANGE(
-    SharedIntRange, tt::stl::AnyRandomAccessRangeFor<std::shared_ptr<int> &, std::array<std::shared_ptr<int>, 4>>);
+    SharedIntRange, tt::stl::AnyRandomAccessRangeFor<std::shared_ptr<int>&, std::array<std::shared_ptr<int>, 4>>);
 
 TEST(AnyRangeTest, NotConstructibleIfTooSmall) {
     static_assert(std::is_constructible_v<SharedIntRange, std::array<std::shared_ptr<int>, 4>>);
@@ -191,7 +191,7 @@ TEST(AnyRangeTest, NotConstructibleIfTooSmall) {
 
 TEST(AnyRangeTest, CanReferenceRangeOfNonTrivialElements) {
     int delete_count = 0;
-    const auto deleter = [&](int *ptr) {
+    const auto deleter = [&](int* ptr) {
         ::delete ptr;
         ++delete_count;
     };
@@ -235,7 +235,7 @@ TEST(AnyRangeTest, CanReferenceRangeOfNonTrivialElements) {
 
 TEST(AnyRangeTest, CanTransferOwnershipFromRangeOfNonTrivialElements) {
     int delete_count = 0;
-    const auto deleter = [&](int *ptr) {
+    const auto deleter = [&](int* ptr) {
         ::delete ptr;
         ++delete_count;
     };
@@ -286,7 +286,7 @@ TEST(AnyRangeTest, ConstructibleIfRangeReferenceConvertibleToValue) {
     static_assert(std::is_constructible_v<BoolRange, std::array<bool, 4>>);
 }
 
-MAKE_ANY_RANGE(BoolRefRange, tt::stl::AnyRandomAccessRangeFor<bool &, std::vector<bool>>);
+MAKE_ANY_RANGE(BoolRefRange, tt::stl::AnyRandomAccessRangeFor<bool&, std::vector<bool>>);
 
 TEST(AnyRangeTest, EnablesArrowOperatorForLvalue) { static_assert(arrow_operator_enabled<BoolRefRange::iterator>); }
 

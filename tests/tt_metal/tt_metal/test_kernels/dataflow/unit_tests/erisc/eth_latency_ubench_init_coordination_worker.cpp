@@ -8,7 +8,6 @@
 #include "dataflow_api.h"
 #include <array>
 
-
 void kernel_main() {
     std::array<uint32_t, 8> channels_addrs;
     std::array<uint32_t, 8> channels_sem_addrs;

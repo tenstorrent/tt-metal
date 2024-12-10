@@ -43,7 +43,6 @@ using VariantVectorType = std::variant<std::vector<float>, std::vector<bfloat16>
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_config) {
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -60,9 +59,9 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     float in0_val = 1.0;
     float in1_val = 127.0;
     float in2_val = 0.0078125;
-    uint32_t single_tile_size_fp32 = 4 * 32 * 32;              // Single 32x32 tile size for Float32
-    uint32_t single_tile_size_bfp16b = 2 * 32 * 32;            // Single 32x32 tile size for Float16_b
-    uint32_t single_tile_size_bfp8b = 1 * 32 * 32 + 64;        // Single 32x32 tile size for Bfp8_b
+    uint32_t single_tile_size_fp32 = 4 * 32 * 32;        // Single 32x32 tile size for Float32
+    uint32_t single_tile_size_bfp16b = 2 * 32 * 32;      // Single 32x32 tile size for Float16_b
+    uint32_t single_tile_size_bfp8b = 1 * 32 * 32 + 64;  // Single 32x32 tile size for Bfp8_b
     uint32_t single_tile_size_out0 = test_config.fp32_dest_acc_en ? single_tile_size_fp32 : single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp16b = test_config.num_tiles * single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp8b = test_config.num_tiles * single_tile_size_bfp8b;
@@ -72,13 +71,22 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config_bfp16b{
-        .device = device, .size = dram_buffer_size_bfp16b, .page_size = dram_buffer_size_bfp16b, .buffer_type = tt::tt_metal::BufferType::DRAM};
+        .device = device,
+        .size = dram_buffer_size_bfp16b,
+        .page_size = dram_buffer_size_bfp16b,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt::tt_metal::InterleavedBufferConfig dram_config_bfp8b{
-        .device = device, .size = dram_buffer_size_bfp8b, .page_size = dram_buffer_size_bfp8b, .buffer_type = tt::tt_metal::BufferType::DRAM};
+        .device = device,
+        .size = dram_buffer_size_bfp8b,
+        .page_size = dram_buffer_size_bfp8b,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt::tt_metal::InterleavedBufferConfig dram_config_out0{
-        .device = device, .size = dram_buffer_size_out0, .page_size = dram_buffer_size_out0, .buffer_type = tt::tt_metal::BufferType::DRAM};
+        .device = device,
+        .size = dram_buffer_size_out0,
+        .page_size = dram_buffer_size_out0,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     // This will be srcB in Bfp8_b
     auto input0_dram_buffer = CreateBuffer(dram_config_bfp8b);
@@ -121,7 +129,9 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     auto l1_input2_cb = tt_metal::CreateCircularBuffer(program, core, l1_input2_cb_config);
 
     tt_metal::CircularBufferConfig l1_output0_cb_config =
-        tt_metal::CircularBufferConfig(dram_buffer_size_out0, {{out0_id, (test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)}})
+        tt_metal::CircularBufferConfig(
+            dram_buffer_size_out0,
+            {{out0_id, (test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)}})
             .set_page_size(out0_id, single_tile_size_out0);
     auto l1_output0_cb = tt_metal::CreateCircularBuffer(program, core, l1_output0_cb_config);
 
@@ -133,8 +143,7 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     vector<uint32_t> compute_kernel_args = {};
     std::map<string, string> defines;
 
-
-    defines["DST_ACCUM_MODE"] = "1"; // Needed always in order for reader kernel to load data from CB2
+    defines["DST_ACCUM_MODE"] = "1";  // Needed always in order for reader kernel to load data from CB2
     defines["EXPLICIT_RECONFIG"] = test_config.explicit_reconfig ? "1" : "0";
     defines["SPLIT_SRC_RECONFIG"] = test_config.split_src_reconfig ? "1" : "0";
     defines["BLOCK_COPY"] = test_config.block_copy ? "1" : "0";
@@ -145,7 +154,9 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines=defines});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = defines});
 
     auto writer_kernel = tt_metal::CreateKernel(
         program,
@@ -181,16 +192,9 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     // is in different format than the other. If thread reconfiguration is done
     // incorrectly or underlying API/LLK is broken, this will be shown in either
     // difference in output sizes or values.
-    std::vector<uint32_t> src0_vec = create_constant_vector_of_bfp8(
-            dram_buffer_size_bfp8b,
-            in0_val,
-            false);
-    std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(
-            dram_buffer_size_bfp16b,
-            in1_val);
-    std::vector<uint32_t> src2_vec = create_constant_vector_of_bfloat16(
-            dram_buffer_size_bfp16b,
-            in2_val);
+    std::vector<uint32_t> src0_vec = create_constant_vector_of_bfp8(dram_buffer_size_bfp8b, in0_val, false);
+    std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size_bfp16b, in1_val);
+    std::vector<uint32_t> src2_vec = create_constant_vector_of_bfloat16(dram_buffer_size_bfp16b, in2_val);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
@@ -285,7 +289,6 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
 
     tt_metal::detail::LaunchProgram(device, program);
 
-
     // ////////////////////////////////////////////////////////////////////////////
     // //                      Comparison Checking
     // ////////////////////////////////////////////////////////////////////////////
@@ -295,21 +298,17 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     tt_metal::detail::ReadFromBuffer(output1_dram_buffer, dest1_buffer_data);
 
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
-        dest0_buffer_data,
-        packed_golden0,
-        [&](const bfloat16& a, const bfloat16& b) {
+        dest0_buffer_data, packed_golden0, [&](const bfloat16& a, const bfloat16& b) {
             return is_close(a, b, 0.0155f);
         });
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
-        dest1_buffer_data,
-        packed_golden1,
-        [&](const bfloat16& a, const bfloat16& b) {
+        dest1_buffer_data, packed_golden1, [&](const bfloat16& a, const bfloat16& b) {
             return is_close(a, b, 0.0155);
         });
 
     return pass;
 }
-}  // namespace unit_tests::compute::binary
+}  // namespace unit_tests::compute::reconfig
 
 ////////////////////////////////////////////////////////////////////////////
 //                             Test Description
@@ -334,16 +333,18 @@ TEST_F(DeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool block_copy : {true, false}) {
                     for (bool dst_full_sync_en : {true, false}) {
-                        log_info(LogTest, "Block Copy = {}, "
-                                        "Explicit = {}, "
-                                        "Split = {}, "
-                                        "FP32DestAcc = {}"
-                                        "DstSyncFull = {}.",
-                                        block_copy,
-                                        explicit_reconfig,
-                                        split_src_reconfig,
-                                        fp32_dest_acc_en,
-                                        dst_full_sync_en);
+                        log_info(
+                            LogTest,
+                            "Block Copy = {}, "
+                            "Explicit = {}, "
+                            "Split = {}, "
+                            "FP32DestAcc = {}"
+                            "DstSyncFull = {}.",
+                            block_copy,
+                            explicit_reconfig,
+                            split_src_reconfig,
+                            fp32_dest_acc_en,
+                            dst_full_sync_en);
                         unit_tests::compute::reconfig::ReconfigConfig test_config = {
                             .num_tiles = 1,
                             .ublock_size_tiles = 1,
@@ -351,10 +352,10 @@ TEST_F(DeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
                             .split_src_reconfig = split_src_reconfig,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
                             .block_copy = block_copy,
-                            .dst_full_sync_en = dst_full_sync_en
-                        };
+                            .dst_full_sync_en = dst_full_sync_en};
                         for (unsigned int id = 0; id < num_devices_; id++) {
-                            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+                            ASSERT_TRUE(
+                                unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
                         }
                     }
                 }
@@ -372,10 +373,7 @@ TEST_F(DeviceFixture, TensixTileCopyReconfigL1Acc) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);
             unit_tests::compute::reconfig::ReconfigConfig test_config = {
-                .num_tiles = 1,
-                .ublock_size_tiles = 1,
-                .dst_full_sync_en = dst_full_sync_en
-            };
+                .num_tiles = 1, .ublock_size_tiles = 1, .dst_full_sync_en = dst_full_sync_en};
             for (unsigned int id = 0; id < num_devices_; id++) {
                 ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
             }

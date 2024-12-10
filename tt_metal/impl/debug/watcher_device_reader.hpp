@@ -15,7 +15,7 @@
 #include <vector>
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "third_party/umd/device/tt_soc_descriptor.h"
+#include "umd/device/tt_soc_descriptor.h"
 #include "llrt/hal.hpp"
 
 // FIXME: ARCH_NAME specific, needed for several pointer types here

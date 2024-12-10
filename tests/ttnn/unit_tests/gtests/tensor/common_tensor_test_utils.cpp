@@ -10,7 +10,8 @@
 
 namespace test_utils {
 
-void test_tensor_on_device(const ttnn::SimpleShape& input_shape, const TensorLayout& layout, tt::tt_metal::Device* device) {
+void test_tensor_on_device(
+    const ttnn::SimpleShape& input_shape, const TensorLayout& layout, tt::tt_metal::Device* device) {
     using namespace tt::tt_metal;
 
     const uint32_t io_cq = 0;
@@ -38,7 +39,7 @@ void test_tensor_on_device(const ttnn::SimpleShape& input_shape, const TensorLay
 
     for (int i = 0; i < input_buf_size; i++) {
         EXPECT_EQ(host_data[i], readback_data[i]);
-        if(host_data[i] != readback_data[i]) {
+        if (host_data[i] != readback_data[i]) {
             break;
         }
     }
@@ -48,11 +49,11 @@ void test_tensor_on_device(const ttnn::SimpleShape& input_shape, const TensorLay
 }
 
 void test_tensor_on_device(const ttnn::SimpleShape& input_shape, const tt::tt_metal::TensorLayout& layout) {
-    tt::tt_metal::Device* device =  tt::tt_metal::CreateDevice(0);
+    tt::tt_metal::Device* device = tt::tt_metal::CreateDevice(0);
 
     test_tensor_on_device(input_shape, layout, device);
 
     tt::tt_metal::CloseDevice(device);
 }
 
-} // namespace test_utils
+}  // namespace test_utils

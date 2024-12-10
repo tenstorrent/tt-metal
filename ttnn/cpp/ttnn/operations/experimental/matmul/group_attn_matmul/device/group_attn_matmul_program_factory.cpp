@@ -572,8 +572,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         if (in0_is_sharded) {
             uint32_t cb0_num_input_tiles =
                 a.shard_spec().value().numel() / TILE_HW;  // Should be full MtKt and C should be 1
-            UpdateDynamicCircularBufferAddress(program, cb_src0, *src0_buffer);
-            UpdateCircularBufferTotalSize(program, cb_src0, cb0_num_input_tiles * in0_single_tile_size);
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                program, cb_src0, *src0_buffer, cb0_num_input_tiles * in0_single_tile_size);
         } else {
             uint32_t cb0_num_input_tiles =
                 in0_block_w;  // TODO: Generalize; double buffer and add blocking along ineer dim if we have Mt > 1
@@ -586,8 +586,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         if (in1_is_sharded) {
             uint32_t cb2_num_input_tiles =
                 b.shard_spec().value().numel() / TILE_HW;  // Should be full CKtNt and batch must be 32
-            UpdateDynamicCircularBufferAddress(program, cb_src2, *src1_buffer);
-            UpdateCircularBufferTotalSize(program, cb_src2, cb2_num_input_tiles * in1_single_tile_size);
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                program, cb_src2, *src1_buffer, cb2_num_input_tiles * in1_single_tile_size);
         }
 
         UpdateCircularBufferTotalSize(program, cb_interm1, MtNt * interm_single_tile_size);
@@ -595,8 +595,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         if (output_is_sharded) {
             uint32_t num_output_tiles =
                 output.shard_spec().value().numel() / TILE_HW;  // Should be full MtNt and C should be 1
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-            UpdateCircularBufferTotalSize(program, cb_output, num_output_tiles * output_single_tile_size);
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                program, cb_output, *dst_buffer, num_output_tiles * output_single_tile_size);
         } else {
             uint32_t num_output_tiles =
                 MtNt;  // TODO: Should be MtNt if Mt > 1? Or, produce one Nt at a time and double buffer?
