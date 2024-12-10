@@ -160,58 +160,56 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
 
     new_span.len = new_len;
 
-    {
-        TT_ASSERT(this->link_spans_.size() != 0);
-        TT_ASSERT(link_spans_.size() <= 2);
-        std::printf("text_addr=%lx\n", long(text_addr_));
+    TT_ASSERT(this->link_spans_.size() != 0);
+    TT_ASSERT(link_spans_.size() <= 2);
+    std::printf("text_addr=%lx\n", long(text_addr_));
 
-        std::vector<word_t> new_data2;
+    std::vector<word_t> new_data2;
 
-        bool text_is_second =
-            // link_spans_.size() == 2 && link_spans_[1].addr >= text_start && link_spans_[1].addr < text_end;
-            link_spans_.size() == 2 && link_spans_[1].addr == text_addr_;
-        auto const& text = link_spans_[text_is_second];
-        TT_ASSERT(text.addr >= text_start && text.addr < text_end && text.addr == text_addr_);
+    bool text_is_second =
+        // link_spans_.size() == 2 && link_spans_[1].addr >= text_start && link_spans_[1].addr < text_end;
+        link_spans_.size() == 2 && link_spans_[1].addr == text_addr_;
+    auto const& text = link_spans_[text_is_second];
+    TT_ASSERT(text.addr >= text_start && text.addr < text_end && text.addr == text_addr_);
 
-        span new_span2 = text;
+    span new_span2 = text;
 
-        offset = text_is_second ? link_spans_[0].len : 0;
+    offset = text_is_second ? link_spans_[0].len : 0;
+    std::printf(
+        "Copying new text[%d]@%lu (%lx,%lu)\n", int(text_is_second), long(offset), long(text.addr), long(text.len));
+    new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + text.len);
+
+    if (link_spans_.size() == 2) {
+        offset = text_is_second ? 0 : text.len;
+        auto const& data = link_spans_[!text_is_second];
+        TT_ASSERT(data.addr >= data_start && data.addr < data_end);
         std::printf(
-            "Copying new text[%d]@%lu (%lx,%lu)\n", int(text_is_second), long(offset), long(text.addr), long(text.len));
-        new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + text.len);
-
-        if (link_spans_.size() == 2) {
-            offset = text_is_second ? 0 : text.len;
-            auto const& data = link_spans_[!text_is_second];
-            TT_ASSERT(data.addr >= data_start && data.addr < data_end);
-            std::printf(
-                "Copying new data[%d]@%lu (%lx,%lu)\n",
-                int(!text_is_second),
-                long(offset),
-                long(data.addr),
-                long(data.len));
-            new_span2.len += data.len;
-            new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + data.len);
-        }
-        TT_ASSERT(new_span == new_span2);
-        TT_ASSERT(new_data == new_data2);
-        if (!(new_span == new_span2 && new_data == new_data2)) {
-            std::printf(
-                "new_span=(%lx,%lu), new_span2=(%lx,%lu), new_data.size=%lu, new_data2.size=%lu\n",
-                (long)new_span.addr,
-                (long)new_span.len,
-                (long)new_span2.addr,
-                (long)new_span2.len,
-                (long)new_data.size(),
-                (long)new_data2.size());
-            std::abort();
-        }
+            "Copying new data[%d]@%lu (%lx,%lu)\n",
+            int(!text_is_second),
+            long(offset),
+            long(data.addr),
+            long(data.len));
+        new_span2.len += data.len;
+        new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + data.len);
+    }
+    TT_ASSERT(new_span == new_span2);
+    TT_ASSERT(new_data == new_data2);
+    if (false && !(new_span == new_span2 && new_data == new_data2)) {
+        std::printf(
+            "new_span=(%lx,%lu), new_span2=(%lx,%lu), new_data.size=%lu, new_data2.size=%lu\n",
+            (long)new_span.addr,
+            (long)new_span.len,
+            (long)new_span2.addr,
+            (long)new_span2.len,
+            (long)new_data.size(),
+            (long)new_data2.size());
+        std::abort();
     }
 
     this->link_spans_.resize(1);
-    this->link_spans_[0] = new_span;
-    this->data_ = new_data;
-    this->text_addr_ = new_span.addr;
+    this->link_spans_[0] = new_span2;
+    this->data_ = new_data2;
+    //    this->text_addr_ = new_span.addr;
 }
 
 }  // namespace ll_api
