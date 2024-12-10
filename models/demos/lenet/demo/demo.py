@@ -31,7 +31,7 @@ def run_demo_dataset(device, batch_size, iterations, model_location_generator, r
     for iters in range(iterations):
         x = test_input.permute(0, 2, 3, 1)
         x = ttnn.from_torch(x, dtype=ttnn.bfloat16)
-        tt_output = tt_lenet.lenet(x, batch_size, device, parameters)
+        tt_output = tt_lenet.lenet(x, device, parameters)
         tt_output = ttnn.to_torch(tt_output)
         _, torch_predicted = torch.max(torch_output.data, -1)
         _, ttnn_predicted = torch.max(tt_output.data, -1)

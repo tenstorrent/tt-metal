@@ -32,9 +32,13 @@ def test_lenet(device, batch_size, model_location_generator, reset_seeds):
     parameters = lenet_utils.custom_preprocessor_device(parameters, device)
     x = test_input.permute(0, 2, 3, 1)
     x = ttnn.from_torch(
-        x, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+        x,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    tt_output = tt_lenet.lenet(x, batch_size, device, parameters)
+    tt_output = tt_lenet.lenet(x, device, parameters)
 
     tt_output = ttnn.to_torch(tt_output)
 
