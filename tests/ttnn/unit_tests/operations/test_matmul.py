@@ -996,8 +996,8 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         per_core_M = m // 32
         per_core_N = n // num_cores // 32 + uneven_width
     else:
-        in0_block_w = k // 32
-        per_core_M = m // 32 // num_cores + uneven_width
+        in0_block_w = k // 32 // 2  # test exracting shards
+        per_core_M = m // 32 // num_cores
         per_core_N = n // 32
     out_block_h = per_core_M // num_out_block_h
     out_block_w = per_core_N // num_out_block_w
@@ -1017,13 +1017,21 @@ def run_matmul_1d_multiple_output_blocks_per_core(
     in0 = torch.randn(in0_shape).bfloat16().float()
     in1 = torch.randn(in1_shape).bfloat16().float()
 
-    if in_sharded and mcast_in0:
-        in0_memory_config = ttnn.create_sharded_memory_config(
-            (1, 1, m, k),
-            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+    if in_sharded:
+        if mcast_in0:
+            in0_memory_config = ttnn.create_sharded_memory_config(
+                (1, 1, m, k),
+                core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+        else:
+            in0_memory_config = ttnn.create_sharded_memory_config(
+                (1, 1, m, k),
+                core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
     else:
         in0_memory_config = ttnn.DRAM_MEMORY_CONFIG
     in1_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -1080,11 +1088,17 @@ def run_matmul_1d_multiple_output_blocks_per_core(
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-    if out_sharded and mcast_in0:
-        out_mem_config = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-        )
+    if out_sharded:
+        if mcast_in0:
+            out_mem_config = ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            )
+        else:
+            out_mem_config = ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            )
     else:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
