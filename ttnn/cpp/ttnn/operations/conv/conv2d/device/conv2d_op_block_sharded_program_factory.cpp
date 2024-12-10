@@ -42,7 +42,6 @@ operation::ProgramWithCallbacks multi_core_block_sharded_conv2d(
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool use_non_tile_height) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
     tt_metal::Device* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");

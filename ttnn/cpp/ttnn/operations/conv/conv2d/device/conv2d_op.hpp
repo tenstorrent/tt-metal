@@ -15,7 +15,6 @@ namespace operations::conv {
 namespace conv2d {
 
 
-namespace CMAKE_UNIQUE_NAMESPACE {
 const uint32_t act_cb = tt::CBIndex::c_0;
 const uint32_t weight_cb = tt::CBIndex::c_1;
 const uint32_t bias_cb = tt::CBIndex::c_2;
@@ -30,7 +29,6 @@ const uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_26;
 const uint32_t out0_cb = tt::CBIndex::c_16;
 const uint32_t temp_sum_cb = tt::CBIndex::c_27;
 const uint32_t untilized_padded_out_cb = tt::CBIndex::c_28;
-}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 
 // TODO: Accept parallelization

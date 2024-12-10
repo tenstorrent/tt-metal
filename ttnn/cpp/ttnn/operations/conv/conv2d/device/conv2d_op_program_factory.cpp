@@ -240,7 +240,6 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en,
     bool use_non_tile_height) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
     using namespace tt;
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
@@ -476,7 +475,6 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
     bool split_reader,
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
     using namespace tt;
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
