@@ -63,6 +63,8 @@ std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<std::pai
     deviceDeviceTimePair;
 std::mutex device_mutex;
 
+bool do_sync_on_close = true;
+std::set<chip_id_t> sync_set_devices;
 constexpr CoreCoord SYNC_CORE = {0, 0};
 
 void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer) {
@@ -406,7 +408,6 @@ void setSyncInfo(
     chip_id_t device_id,
     std::pair<double, uint64_t> syncInfo,
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::pair<double, uint64_t>>>& deviceDeviceSyncInfo) {
-    static std::set<chip_id_t> sync_set_devices;
     if (sync_set_devices.find(device_id) == sync_set_devices.end()) {
         sync_set_devices.insert(device_id);
         if (deviceDeviceSyncInfo.find(device_id) != deviceDeviceSyncInfo.end()) {
@@ -418,13 +419,16 @@ void setSyncInfo(
             }
         }
         detail::setShift(device_id, syncInfo.second, syncInfo.first);
+        std::cout << device_id << ": " << syncInfo.second << ", " << syncInfo.first << std::endl;
     }
 }
 
 void ProfilerSync(ProfilerSyncState state) {
 #if defined(TRACY_ENABLE)
-    static bool do_sync_on_close = true;
+    ZoneScoped;
     if (state == ProfilerSyncState::INIT) {
+        do_sync_on_close = true;
+        sync_set_devices.clear();
         auto ethernet_connections = tt::Cluster::instance().get_ethernet_connections();
         std::set<chip_id_t> visited_devices = {};
         for (const auto& device : ethernet_connections) {
