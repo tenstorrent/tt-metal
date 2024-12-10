@@ -118,8 +118,6 @@ void kernel_main() {
                     // clear the flags field to invalidate pull request slot.
                     // flags will be set to non-zero by next requestor.
                     req_buf_advance_rdptr((chan_req_buf*)fvc_consumer_req_buf);
-                    // req->bytes[47] = 0;
-                    // fvc_consumer_req_buf->rdptr.ptr++;
                     fvc_consumer_state.packet_in_progress = 0;
                     loop_count = 0;
                 }

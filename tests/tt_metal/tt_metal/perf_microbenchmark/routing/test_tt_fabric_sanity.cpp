@@ -77,7 +77,8 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_dump_stat_json = 0;
     constexpr const char* default_output_dir = "/tmp";
 
-    constexpr uint32_t default_test_device_id = 0;
+    constexpr uint32_t default_test_device_id_l = 0;
+    constexpr uint32_t default_test_device_id_r = -1;
 
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
@@ -90,10 +91,6 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --tx_y: Y coordinate of the starting TX core, default = {}", default_tx_y);
         log_info(LogTest, "  --rx_x: X coordinate of the starting RX core, default = {}", default_rx_x);
         log_info(LogTest, "  --rx_y: Y coordinate of the starting RX core, default = {}", default_rx_y);
-        log_info(LogTest, "  --mux_x: X coordinate of the starting mux core, default = {}", default_mux_x);
-        log_info(LogTest, "  --mux_y: Y coordinate of the starting mux core, default = {}", default_mux_y);
-        log_info(LogTest, "  --demux_x: X coordinate of the starting demux core, default = {}", default_demux_x);
-        log_info(LogTest, "  --demux_y: Y coordinate of the starting demux core, default = {}", default_demux_y);
         log_info(
             LogTest,
             "  --routing_table_start_addr: Routing Table start address, default = 0x{:x}",
@@ -115,7 +112,10 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --tx_data_sent_per_iter_high: the criteria to determine the amount of tx data sent per iter is high (unit: words); if both 0, then disable counting it in tx kernel, default = {}", default_tx_data_sent_per_iter_high);
         log_info(LogTest, "  --dump_stat_json: Dump stats in json to output_dir, default = {}", default_dump_stat_json);
         log_info(LogTest, "  --output_dir: Output directory, default = {}", default_output_dir);
-        log_info(LogTest, "  --device_id: Device on which the test will be run, default = {}", default_test_device_id);
+        log_info(
+            LogTest, "  --device_id: Device on which the test will be run, default = {}", default_test_device_id_l);
+        log_info(
+            LogTest, "  --device_id_r: Device on which the test will be run, default = {}", default_test_device_id_r);
         return 0;
     }
 
@@ -123,10 +123,6 @@ int main(int argc, char **argv) {
     uint32_t tx_y = test_args::get_command_option_uint32(input_args, "--tx_y", default_tx_y);
     uint32_t rx_x = test_args::get_command_option_uint32(input_args, "--rx_x", default_rx_x);
     uint32_t rx_y = test_args::get_command_option_uint32(input_args, "--rx_y", default_rx_y);
-    uint32_t mux_x = test_args::get_command_option_uint32(input_args, "--mux_x", default_mux_x);
-    uint32_t mux_y = test_args::get_command_option_uint32(input_args, "--mux_y", default_mux_y);
-    uint32_t demux_x = test_args::get_command_option_uint32(input_args, "--demux_x", default_demux_x);
-    uint32_t demux_y = test_args::get_command_option_uint32(input_args, "--demux_y", default_demux_y);
     uint32_t prng_seed = test_args::get_command_option_uint32(input_args, "--prng_seed", default_prng_seed);
     uint32_t data_kb_per_tx = test_args::get_command_option_uint32(input_args, "--data_kb_per_tx", default_data_kb_per_tx);
     uint32_t max_packet_size_words = test_args::get_command_option_uint32(input_args, "--max_packet_size_words", default_max_packet_size_words);
@@ -157,7 +153,10 @@ int main(int argc, char **argv) {
 
     assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM);
 
-    uint32_t test_device_id = test_args::get_command_option_uint32(input_args, "--device_id", default_test_device_id);
+    uint32_t test_device_id_l =
+        test_args::get_command_option_uint32(input_args, "--device_id", default_test_device_id_l);
+    uint32_t test_device_id_r =
+        test_args::get_command_option_uint32(input_args, "--device_id_r", default_test_device_id_r);
 
     bool pass = true;
 
@@ -172,38 +171,63 @@ int main(int argc, char **argv) {
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
 
         int num_devices = tt_metal::GetNumAvailableDevices();
-        if (test_device_id >= num_devices) {
-            log_info(LogTest,
-                "Device {} is not valid. Highest valid device id = {}.",
-                test_device_id, num_devices-1);
+        if (test_device_id_l >= num_devices) {
+            log_info(
+                LogTest, "Device {} is not valid. Highest valid device id = {}.", test_device_id_l, num_devices - 1);
             throw std::runtime_error("Invalid Device Id.");
         }
-        int device_id_l = test_device_id;
 
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id_l);
+        tt_metal::Device* device = tt_metal::CreateDevice(test_device_id_l);
         auto const& device_active_eth_cores = device->get_active_ethernet_cores();
 
         if (device_active_eth_cores.size() == 0) {
-            log_info(LogTest,
+            log_info(
+                LogTest,
                 "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
-                device_id_l);
+                test_device_id_l);
             tt_metal::CloseDevice(device);
             throw std::runtime_error("Test cannot run on specified device.");
         }
 
-        auto eth_core_iter = device_active_eth_cores.begin();
-        auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(*eth_core_iter);
+        log_info(LogTest, "Device {} conneted to ...", test_device_id_l);
+        // int32_t peer_device = -1;
+        bool peer_device_found = false;
+        for (auto active_eth_core : device_active_eth_cores) {
+            auto [receiver_device, eth_receiver_core] = device->get_connected_ethernet_core(active_eth_core);
+            // log_info(LogTest, "Device {}:Core{}", receiver_device, eth_receiver_core.str());
+            // auto sockets = device->get_ethernet_sockets(peer_device);
+            // for (auto socket : sockets) {
+            //     log_info(LogTest, "Device {}:LogicalCore{}", peer_device, socket.str());
+            // }
+            if (test_device_id_r == -1) {
+                test_device_id_r = receiver_device;
+                peer_device_found = true;
+                break;
+            } else if (receiver_device == test_device_id_r) {
+                peer_device_found = true;
+                break;
+            }
+        }
 
-        tt_metal::Device *device_r = tt_metal::CreateDevice(device_id_r);
+        if (!peer_device_found) {
+            log_info(LogTest, "Device {} does not have direct connection to {}", test_device_id_l, test_device_id_r);
+            tt_metal::CloseDevice(device);
+            throw std::runtime_error("Test cannot run on specified devices.");
+        }
 
-        CoreCoord tunneler_logical_core = device->get_ethernet_sockets(device_id_r)[0];
+        // auto eth_core_iter = device_active_eth_cores.begin();
+        // auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(*eth_core_iter);
+
+        tt_metal::Device* device_r = tt_metal::CreateDevice(test_device_id_r);
+
+        CoreCoord tunneler_logical_core = device->get_ethernet_sockets(test_device_id_r)[0];
         CoreCoord tunneler_phys_core = device->ethernet_core_from_logical_core(tunneler_logical_core);
 
-        CoreCoord r_tunneler_logical_core = device_r->get_ethernet_sockets(device_id_l)[0];
+        CoreCoord r_tunneler_logical_core = device_r->get_ethernet_sockets(test_device_id_l)[0];
         CoreCoord r_tunneler_phys_core = device_r->ethernet_core_from_logical_core(r_tunneler_logical_core);
 
-        std::cout<<"Left Tunneler = "<<tunneler_logical_core.str()<<std::endl;
-        std::cout<<"Right Tunneler = "<<r_tunneler_logical_core.str()<<std::endl;
+        log_info(LogTest, "Running on Left  Device {}:LogicalCore{}", test_device_id_l, tunneler_logical_core.str());
+        log_info(LogTest, "Running on Right Device {}:LogicalCore{}", test_device_id_r, r_tunneler_logical_core.str());
 
         tt_metal::Program program = tt_metal::CreateProgram();
         tt_metal::Program program_r = tt_metal::CreateProgram();
@@ -235,7 +259,8 @@ int main(int argc, char **argv) {
                 tx_pkt_dest_size_choice,                          // 15: pkt_dest_size_choice
                 tx_data_sent_per_iter_low,                        // 16: data_sent_per_iter_low
                 tx_data_sent_per_iter_high,                       // 17: data_sent_per_iter_high
-                fabric_command
+                fabric_command,
+                dest_device,
 
             };
 

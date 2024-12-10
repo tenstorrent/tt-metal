@@ -44,6 +44,7 @@ constexpr pkt_dest_size_choices_t pkt_dest_size_choice =
 constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
 constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
 constexpr uint32_t test_command = get_compile_time_arg_val(18);
+constexpr uint32_t dest_device = get_compile_time_arg_val(19);
 
 uint32_t max_packet_size_mask;
 
@@ -92,6 +93,7 @@ inline bool test_buffer_handler_async_wr() {
             packet_header.routing.flags = FORWARD;
             packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
             packet_header.routing.dst_mesh_id = 4;
+            packet_header.routing.dst_dev_id = dest_device;
             packet_header.session.command = ASYNC_WR;
             packet_header.session.target_offset_l = target_address;
             packet_header.session.target_offset_h = 0x410;
@@ -176,6 +178,7 @@ inline bool test_buffer_handler_atomic_inc() {
 
             packet_header.routing.flags = INLINE_FORWARD;
             packet_header.routing.dst_mesh_id = 4;
+            packet_header.routing.dst_dev_id = dest_device;
             packet_header.routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
             packet_header.session.command = ATOMIC_INC;
             packet_header.session.target_offset_l = target_address;
