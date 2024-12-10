@@ -16,12 +16,11 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape
         return tensor;
     }
 
-    // const uint32_t tile_first_dim =tensor.get_tile().get_width();
-    // const uint32_t tile_second_dim =tensor.get_tile().get_height();
     const uint32_t tile_first_dim = tensor.get_tensor_spec().tile().get_width();
     const uint32_t tile_second_dim = tensor.get_tensor_spec().tile().get_height();
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2] : 1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
+    // Validate the operation
     TT_FATAL(
         shape.logical_shape().volume() == tensor.get_logical_volume(),
         "Invalid view, logical volumes are changing from {} to {}",
@@ -43,7 +42,7 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape
         "Invalid second last dims for TILED reshape, from {} to {}, use reshape instead\n",
         tensor_shape_second_last_dim,
         shape_second_last_dim);
-
+    // Perform the View
     return PerformView(tensor, shape, tile_first_dim, tile_second_dim);
 }
 
