@@ -12,7 +12,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -721,7 +721,7 @@ Tensor _swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryCon
 
 // tril : select lower triangular region of input matrix
 Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_l = numpy::index_tril<::bfloat16>(
+    Tensor index_l = ttnn::index_tril<::bfloat16>(
         input_a.get_legacy_shape(),
         diag,
         DataType::BFLOAT16,
@@ -733,7 +733,7 @@ Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConf
 
 // triu : select upper triangular region of input matrix
 Tensor _triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_u = numpy::index_triu<::bfloat16>(
+    Tensor index_u = ttnn::index_triu<::bfloat16>(
         input_a.get_legacy_shape(),
         diag,
         DataType::BFLOAT16,

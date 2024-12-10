@@ -9,7 +9,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/async_runtime.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "tt_metal/common/logger.hpp"
 
 #include "common_tensor_test_utils.hpp"
