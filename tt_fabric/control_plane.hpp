@@ -27,7 +27,23 @@ class ControlPlane {
     void print_routing_tables() const;
     void print_ethernet_channels() const;
 
-   private:
+    // Return mesh_id, chip_id from physical chip id
+    std::pair<mesh_id_t, chip_id_t> get_mesh_chip_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
+    chip_id_t get_physical_chip_id_from_mesh_chip_id(const std::pair<mesh_id_t, chip_id_t>& mesh_chip_id) const;
+
+    // Return valid ethernet channels on the specificed routing plane
+    std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
+        mesh_id_t mesh_id, chip_id_t chip_id, routing_plane_id_t routing_plane_id) const;
+
+    // Return path from device to device in the fabric
+    std::vector<std::pair<chip_id_t, chan_id_t>> get_fabric_route(
+        mesh_id_t src_mesh_id,
+        chip_id_t src_chip_id,
+        mesh_id_t dst_mesh_id,
+        chip_id_t dst_chip_id,
+        chan_id_t src_chan_id) const;
+
+private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     // map[mesh_id][chip_id][direction] has a list of ethernet channels in that direction
@@ -39,32 +55,21 @@ class ControlPlane {
     std::vector<std::vector<std::vector<std::vector<chan_id_t>>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
 
+    // Tries to get a valid downstream channel from the candidate_target_chans
+    // First along same routing plane, but if not available, take round robin from candidates
+    chan_id_t get_downstream_eth_chan_id(
+        chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
+
     std::vector<chip_id_t> get_mesh_physical_chip_ids(
         std::uint32_t mesh_ns_size,
         std::uint32_t mesh_ew_size,
         std::uint32_t num_ports_per_side,
         std::uint32_t nw_chip_physical_chip_id);
 
-    chan_id_t get_eth_chan_id(chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const {
-        std::uint32_t num_eth_ports_per_direction =
-            routing_table_generator_->get_chip_spec().num_eth_ports_per_direction;
-        // Explicitly map router plane channels based on mod
-        //   - chan 0,4,8,12 talk to each other
-        //   - chan 1,5,9,13 talk to each other
-        //   - chan 2,6,10,14 talk to each other
-        //   - chan 3,7,11,15 talk to each other
-        std::uint32_t src_chan_mod = src_chan_id % num_eth_ports_per_direction;
-        for (const auto& target_chan_id : candidate_target_chans) {
-            if (src_chan_mod == target_chan_id % num_eth_ports_per_direction) {
-                return target_chan_id;
-            }
-        }
-        // If no match found, return a channel from candidate_target_chans
-        while (src_chan_mod >= candidate_target_chans.size()) {
-            src_chan_mod = src_chan_mod % candidate_target_chans.size();
-        }
-        return candidate_target_chans[src_chan_mod];
-    };
+    std::tuple<mesh_id_t, chip_id_t, chan_id_t> get_connected_mesh_chip_chan_ids(
+        mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t chan_id) const;
+
+    routing_plane_id_t get_routing_plane_id(chan_id_t eth_chan_id) const;
 };
 
 }  // namespace tt::tt_fabric
