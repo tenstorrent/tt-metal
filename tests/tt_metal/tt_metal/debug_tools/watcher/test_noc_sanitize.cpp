@@ -130,7 +130,7 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     // We should be able to find the expected watcher error in the log as well.
     string expected;
     int noc = (use_ncrisc) ? 1 : 0;
-    CoreCoord target_core = device->virtual_noc_coordinate(noc, input_buf_noc_xy);
+    CoreCoord target_core = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     string risc_name = (is_eth_core) ? "erisc" : "brisc";
     if (use_ncrisc) {
         risc_name = "ncrisc";
