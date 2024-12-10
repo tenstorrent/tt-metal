@@ -9,25 +9,6 @@
 
 #include "debug/dprint.h"
 
-#define MAX_NUM_TENSORS 8
-
-void get_tensor_addrs_l1(
-    const uint32_t num_layers,
-    const uint32_t num_tensors,
-    const uint32_t addrs_cb_id,
-    volatile tt_l1_ptr uint32_t** tensor_addrs_l1) {
-    volatile tt_l1_ptr uint32_t* l1_cb_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(addrs_cb_id));
-
-    // Format of CB: [t1_l1, ..., t1_l80, ..., tn_l1, ..., tn_80]
-    // So only need to store pointer to the tensor addres for the first layer
-    for (uint32_t t = 0; t < num_tensors; t++) {
-        tensor_addrs_l1[t] = l1_cb_addr;
-        l1_cb_addr += num_layers;
-    }
-}
-
-// [t1_1, t1_2, ..., t1_80, t2_1, t2_2, ..., t2_80, ..., t5_1, t5_2, ..., t5_80]
-
 void kernel_main() {
     constexpr uint32_t num_layers = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
@@ -59,8 +40,8 @@ void kernel_main() {
     uint32_t l1_buffer_start_addr = get_write_ptr(cb_id);
     uint32_t l1_buffer_end_addr = get_write_ptr(cb_id) + read_cb_size;
 
-    volatile tt_l1_ptr uint32_t* tensor_addrs_l1[MAX_NUM_TENSORS];
-    get_tensor_addrs_l1(num_layers, num_tensors, addrs_cb_id, tensor_addrs_l1);
+    volatile tt_l1_ptr uint32_t* tensor_addrs_l1 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(addrs_cb_id));
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         for (uint32_t t = 0; t < num_tensors; t++) {
@@ -70,7 +51,7 @@ void kernel_main() {
             uint32_t curr_block_size_bytes = curr_block_num_pages * curr_page_size;
 
             // Address setup
-            uint32_t tensor_base_address = tensor_addrs_l1[t][layer];
+            uint32_t tensor_base_address = tensor_addrs_l1[t * num_layers + layer];  // tensor_addrs_l1[t][layer];
             DPRINT << "tensor_base_address: " << tensor_base_address << ENDL();
             uint32_t src_base_addr =
                 noc_async_read_tile_dram_sharded_set_state<true>(tensor_base_address, curr_page_size, bank_id, vc);
