@@ -80,6 +80,7 @@ enum class UnaryOpType {
     BITWISE_OR,
     RIGHT_SHIFT,
     FLOOR,
+    FLOOR_FLOAT32,
     CEIL,
     LEFT_SHIFT,
     REMAINDER,

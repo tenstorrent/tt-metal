@@ -36,8 +36,8 @@ void signal_handler(int signum) {
 using ttml::autograd::TensorPtr;
 
 using DatasetSample = std::pair<std::span<const uint32_t>, std::span<const uint32_t>>;
-// tokens, targets, mask, positions
-using BatchType = std::tuple<TensorPtr, TensorPtr, TensorPtr, TensorPtr>;
+// tokens, targets, masks
+using BatchType = std::tuple<TensorPtr, TensorPtr, TensorPtr>;
 using DataLoader = ttml::datasets::DataLoader<
     ttml::datasets::InMemoryTokenDataset,
     std::function<BatchType(std::vector<DatasetSample> &&samples)>,
@@ -77,11 +77,6 @@ void generate(
 
     auto vocab_size = tokenizer.get_vocab_size();
 
-    auto positions_vector = std::vector<uint32_t>(max_sequence_length);
-    std::iota(positions_vector.begin(), positions_vector.end(), 0);
-    auto positions_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
-        positions_vector, ttml::core::create_shape({1, 1, 1, max_sequence_length}), device, Layout::ROW_MAJOR));
-
     std::vector<float> mask;
     mask.reserve(static_cast<size_t>(max_sequence_length * max_sequence_length * num_heads));
     for (int head = 0; head < num_heads; ++head) {
@@ -114,7 +109,7 @@ void generate(
             device,
             Layout::ROW_MAJOR));
 
-        auto output = (*model)(prompt_tensor, positions_tensor, mask_tensor);
+        auto output = (*model)(prompt_tensor, mask_tensor);
         auto output_vector = ttml::core::to_vector(output->get_value());
 
         uint32_t predicted_token_id = prompt_tokens.size() - 1U;
@@ -207,6 +202,10 @@ int main(int argc, char **argv) {
         {"seed", static_cast<int>(config.seed)},
         {"use_kahan_summation", config.use_kahan_summation},
         {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
+        {"positional_embedding_type",
+         config.transformer_config.positional_embedding_type == ttml::models::gpt2::PositionalEmbeddingType::Trainable
+             ? "trainable"
+             : "fixed"},
     });
 
     // set seed
@@ -242,17 +241,9 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> data;
         std::vector<int32_t> targets;
         ttml::autograd::TensorPtr masks_tensor;
-        ttml::autograd::TensorPtr positions_tensor;
     };
     CachedHostData cached_data;
-    std::vector<uint32_t> positions;
     std::vector<float> mask;
-    positions.reserve((size_t)config.batch_size * sequence_length);
-    for (int sample_idx = 0; sample_idx < config.batch_size; ++sample_idx) {
-        for (int i = 0; i < sequence_length; ++i) {
-            positions.push_back(i);
-        }
-    }
     auto num_heads = config.transformer_config.num_heads;
     mask.reserve((size_t)config.batch_size * sequence_length * sequence_length * num_heads);
     for (int sample_idx = 0; sample_idx < config.batch_size; ++sample_idx) {
@@ -266,8 +257,6 @@ int main(int argc, char **argv) {
     }
     cached_data.masks_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
         mask, ttml::core::create_shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
-    cached_data.positions_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
-        positions, ttml::core::create_shape({config.batch_size, 1, 1, sequence_length}), device, Layout::ROW_MAJOR));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, num_heads, vocab_size = tokenizer.get_vocab_size(), device, &cached_data](
@@ -296,7 +285,7 @@ int main(int argc, char **argv) {
             end_timer = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader step time {} ms\n", (double)duration / 1000.);
-            return std::make_tuple(data_tensor, targets_tensor, cached_data.masks_tensor, cached_data.positions_tensor);
+            return std::make_tuple(data_tensor, targets_tensor, cached_data.masks_tensor);
         };
 
     LossAverageMeter loss_meter;
@@ -338,12 +327,12 @@ int main(int argc, char **argv) {
     const uint32_t num_epochs = config.num_epochs;
     auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
-        for (auto [features, target, masks, positions] : train_dataloader) {
+        for (auto [features, target, masks] : train_dataloader) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer.zero_grad();
             }
-            auto output = (*model)(features, positions, masks);
+            auto output = (*model)(features, masks);
             auto loss = ttml::ops::nll_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             auto loss_float = ttml::core::to_vector(loss->get_value())[0];

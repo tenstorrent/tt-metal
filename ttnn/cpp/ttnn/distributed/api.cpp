@@ -6,8 +6,10 @@
 
 #include <memory>
 
+#include "tt_metal/tt_stl/overloaded.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
 
 using namespace tt::tt_metal;
@@ -21,7 +23,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     MeshType mesh_type,
-    const std::pair<size_t, size_t>& offset,
+    const MeshOffset& offset,
     const std::vector<int>& physical_device_ids) {
     auto config = MeshDeviceConfig(mesh_shape, offset, physical_device_ids, mesh_type);
     return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
@@ -58,18 +60,20 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
     TT_THROW("Expected tensor to be on MultiDeviceHostStorage type!");
 }
 
-Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards) {
+Tensor aggregate_as_tensor(
+    const std::vector<Tensor>& tensor_shards, const tt::tt_metal::DistributedTensorConfig& config) {
     TT_ASSERT(tensor_shards.size() > 0, "At least one tensor shard must be provided");
+    const auto& reference_shard = tensor_shards.at(0);
     for (const auto& shard : tensor_shards) {
-        if (shard.storage_type() != tensor_shards.at(0).storage_type()) {
+        if (shard.storage_type() != reference_shard.storage_type()) {
             TT_THROW("All tensor shards must have the same storage type");
         }
     }
 
     // Based whether the first tensor shard has OwnedBuffer or Device buffer,
     // we want to use MultiDeviceHostStorage or MultiDeviceStorage
-    StorageType storage_type = tensor_shards.at(0).storage_type();
-    Tile tile = tensor_shards.at(0).get_tensor_spec().tile();
+    StorageType storage_type = reference_shard.storage_type();
+    Tile tile = reference_shard.get_tensor_spec().tile();
     if (storage_type == StorageType::OWNED) {
         std::vector<ttnn::Shape> shapes;
         std::vector<OwnedBuffer> host_owned_buffers;
@@ -81,7 +85,7 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards) {
                 TT_THROW(
                     "Error aggregating multichip tensors: Attempting to aggregate tensors with different tiling "
                     "configurations. Device {} has tiling ({}x{}) while device {} has tiling {}x{}.",
-                    tensor_shards.at(0).device()->id(),
+                    reference_shard.device()->id(),
                     tile.get_height(),
                     tile.get_width(),
                     shard.device()->id(),
@@ -89,12 +93,12 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards) {
                     shard_tile.get_width());
             }
         }
-        auto storage = MultiDeviceHostStorage{AllGatherTensor(), std::move(host_owned_buffers), shapes};
+        auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), shapes};
         return Tensor(
             std::move(storage),
-            tensor_shards.at(0).get_legacy_shape(),
-            tensor_shards.at(0).get_dtype(),
-            tensor_shards.at(0).get_layout(),
+            reference_shard.get_legacy_shape(),
+            reference_shard.get_dtype(),
+            reference_shard.get_layout(),
             tile);
     } else {
         std::vector<int> ordered_device_ids;
@@ -111,7 +115,7 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards) {
                 TT_THROW(
                     "Error aggregating multichip tensors: Attempting to aggregate tensors with different tiling "
                     "configurations. Device {} has tiling ({}x{}) while device {} has tiling {}x{}.",
-                    tensor_shards.at(0).device()->id(),
+                    reference_shard.device()->id(),
                     tile.get_height(),
                     tile.get_width(),
                     shard.device()->id(),
@@ -119,12 +123,12 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards) {
                     shard_tile.get_width());
             }
         }
-        auto storage = MultiDeviceStorage{AllGatherTensor(), ordered_device_ids, std::move(device_buffers), shapes};
+        auto storage = MultiDeviceStorage{config, ordered_device_ids, std::move(device_buffers), shapes};
         return Tensor(
             std::move(storage),
-            tensor_shards.at(0).get_legacy_shape(),
-            tensor_shards.at(0).get_dtype(),
-            tensor_shards.at(0).get_layout(),
+            reference_shard.get_legacy_shape(),
+            reference_shard.get_dtype(),
+            reference_shard.get_layout(),
             tile);
     }
 }
@@ -140,7 +144,7 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     return physical_device_ids;
 }
 
-std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, MeshDevice& mesh_device) {
+std::vector<Device*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device) {
     // For multi-device tensors, returns the number of workers capped by the number of buffers
     // Otherwise, returns all available workes from mesh_device.
     auto get_workers_for_tensor = [&tensor, &mesh_device]() {
@@ -151,19 +155,15 @@ std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, MeshDevice&
         }
         return workers;
     };
-
     if (mesh_device.get_view() != nullptr and std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
         const auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
 
         return std::visit(
-            [&](const auto& strategy) {
-                using StrategyType = std::decay_t<decltype(strategy)>;
-                if constexpr (std::is_same_v<StrategyType, ShardTensor2D>) {
-                    return mesh_device.get_view()->get_devices(strategy.shard_mesh);
-                } else {
-                    return get_workers_for_tensor();
-                }
-            },
+            tt::stl::overloaded{
+                [&](const ShardTensor2D& s) {
+                    return mesh_device.get_view()->get_devices(MeshShape{s.shard_mesh.y, s.shard_mesh.x});
+                },
+                [&](const auto&) { return get_workers_for_tensor(); }},
             host_storage.strategy);
     } else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {
         return tensor.workers;

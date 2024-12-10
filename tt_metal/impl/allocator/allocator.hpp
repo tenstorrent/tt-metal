@@ -136,7 +136,7 @@ void shrink_allocator_size(
     Allocator& allocator, const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
 void reset_allocator_size(Allocator& allocator, const BufferType& buffer_type);
 
-DeviceAddr allocate_buffer(Allocator& allocator, DeviceAddr size, Buffer* buffer);
+DeviceAddr allocate_buffer(Allocator& allocator, Buffer* buffer);
 
 void mark_allocations_unsafe(Allocator& allocator);
 
