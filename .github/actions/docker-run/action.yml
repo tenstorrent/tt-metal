@@ -9,8 +9,8 @@ inputs:
     description: 'Docker image architecture'
     required: false
     default: tt-metalium/ubuntu-20.04-amd64
-  docker_image_tag:
-    description: 'Specify exact Docker image tag to use. `docker_os_arch` will be ignored when this value is supplied.'
+  docker_version:
+    description: 'Specify version for the Docker image tag to use.'
     required: false
   docker_username:
     description: docker login username
@@ -39,14 +39,9 @@ runs:
   steps:
     - name: Determine docker image tag
       uses: ./.github/actions/generate-docker-tag
-      if: ${{ inputs.docker_image_tag == '' }}
       with:
         image: ${{ inputs.docker_os_arch }}
-    - name: Set the docker image tag if provided
-      shell: bash
-      if: ${{ inputs.docker_image_tag != '' }}
-      run: |
-        echo "TT_METAL_DOCKER_IMAGE_TAG=${{ inputs.docker_image_tag }}" >> $GITHUB_ENV
+        version: ${{ inputs.docker_version }}
     - name: Set
       shell: bash
       run: |
