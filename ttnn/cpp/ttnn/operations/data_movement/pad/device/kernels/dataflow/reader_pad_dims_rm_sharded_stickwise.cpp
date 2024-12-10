@@ -37,13 +37,6 @@ void kernel_main() {
     uint32_t output_shard_base_addr = get_write_ptr(output_shard_cb);
     uint32_t output_shard_addr = output_shard_base_addr + output_offset_bytes;
 
-    DPRINT << "input_shard_base_addr: " << input_shard_base_addr << ENDL();
-    tt::data_movement::common::print_u8_pages(input_shard_base_addr, unpadded_stick_bytes, 1);
-    DPRINT << ENDL();
-    DPRINT << "output_shard_base_addr: " << output_shard_base_addr << ENDL();
-    tt::data_movement::common::print_u8_pages(output_shard_base_addr, padded_stick_bytes, padded_shard_height);
-    DPRINT << ENDL();
-
     auto input_stick_ptr = reinterpret_cast<u8_vol_ptr>(input_shard_base_addr);
     auto output_stick_ptr = reinterpret_cast<u8_vol_ptr>(output_shard_addr);
 
