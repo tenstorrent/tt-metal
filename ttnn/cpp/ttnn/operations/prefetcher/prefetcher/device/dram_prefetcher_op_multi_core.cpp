@@ -44,6 +44,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     for (const auto& tensor : tensors) {
         tensor_buffers.push_back(tensor.buffer());
     }
+    Buffer* output_buffer = output_tensor.buffer();
 
     /* Tiles */
     tt::tt_metal::Tile tensor_addrs_tile = tensor_addrs.get_tensor_spec().tile();
@@ -87,7 +88,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         CircularBufferConfig(reader_cb_size, {{reader_cb_index, reader_cb_data_format}})
             .set_page_size(reader_cb_index, reader_cb_single_tile_size)
             .set_globally_allocated_address(global_cb_buffer);
-    auto in1_reader_cb = CreateCircularBuffer(program, reader_core_range, reader_cb_config);
+    auto reader_cb = CreateCircularBuffer(program, reader_core_range, reader_cb_config);
 
     /* tensor addresses cb setup */
     uint32_t tensor_addrs_single_tile_size =
@@ -103,6 +104,18 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             .set_page_size(tensor_addrs_cb_index, tensor_addrs_single_tile_size)
             .set_globally_allocated_address(*tensor_addrs_buffer);
     auto tensor_addrs_cb = CreateCircularBuffer(program, reader_core_range, tensor_addrs_cb_config);
+
+    /* output buffer (based on reader_cb) */
+    uint32_t output_single_tile_size = reader_cb_single_tile_size;
+    uint32_t output_cb_size =
+        num_tensors * tensor_block_num_tiles[0] * num_blocks * tensor_tiles[0].get_tile_size(tensor_data_formats[0]);
+
+    uint32_t output_cb_index = tt::CB::c_in2;
+    CircularBufferConfig output_cb_config =
+        CircularBufferConfig(output_cb_size, {{output_cb_index, tensor_data_formats[0]}})
+            .set_page_size(output_cb_index, output_single_tile_size)
+            .set_globally_allocated_address(*output_buffer);
+    auto output_cb = CreateCircularBuffer(program, reader_core_range, output_cb_config);
 
     /* Compile time args */
     std::vector<uint32_t> reader_ct_args = {
