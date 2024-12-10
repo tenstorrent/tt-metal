@@ -11,19 +11,10 @@
 namespace ttnn {
 using queue_id = uint8_t;
 
-void write_buffer(
-    queue_id cq_id,
-    Tensor& dst,
-    std::vector<std::shared_ptr<void>> src,
-    const std::optional<std::size_t> transfer_size = std::nullopt);
+void write_buffer(queue_id cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src);
 
 void read_buffer(
-    queue_id cq_id,
-    Tensor& src,
-    std::vector<std::shared_ptr<void>> dst,
-    const std::optional<std::size_t> transfer_size = std::nullopt,
-    size_t src_offset = 0,
-    bool blocking = true);
+    queue_id cq_id, Tensor& src, std::vector<std::shared_ptr<void>> dst, size_t src_offset = 0, bool blocking = true);
 
 void queue_synchronize(CommandQueue& cq);
 
