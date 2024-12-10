@@ -156,6 +156,17 @@ ttnn::Tensor pad_to_tile_vol(
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config);
 
+enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
+
+ttnn::MemoryConfig create_sharded_memory_config(
+    const ttnn::Shape& shape,
+    const tt::tt_metal::CoreRangeSet& core_grid,
+    const ShardStrategy& strategy,
+    const tt::tt_metal::ShardOrientation& orientation,
+    bool halo = false,
+    bool use_height_and_width_as_shard_shape = false,
+    const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR);
+
 }  // namespace data_movement
 }  // namespace operations
 }  // namespace ttnn
