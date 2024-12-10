@@ -53,7 +53,7 @@ cd ..
   |---|---|
   | Ubuntu / Debian | ```sudo apt install cargo``` |
   | Fedora / EL9 | ```sudo dnf install cargo``` |
-  
+
 - Install TT-Flash:
 
 ```
@@ -61,27 +61,6 @@ pip install git+https://github.com/tenstorrent/tt-flash.git
 ```
 
 - For more information visit Tenstorrent's [TT-Flash repository](https://github.com/tenstorrent/tt-flash).
-
----
-
-#### Setup Hugepages
-
-- Download and install HugePages:
-```sh
-wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
-sudo -E python3 setup_hugepages.py first_pass
-```
-
-- Reboot to load changes:
-```
-sudo reboot
-```
-
-- Enable/check HugePages setup:
-  - Ensure you are in the same directory where setup_hugepages.py was downloaded.
-```sh
-sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
-```
 
 ---
 
@@ -150,7 +129,7 @@ Once hardware and system software are installed, verify that the system has been
 - [Option 3: From Wheel](#option-3-from-wheel)
   Install from wheel as an alternative method to get quick access to our APIs and to running AI models.
 
---- 
+---
 
 ## Option 1: From Source
 Install from source if you are a developer who wants to be close to the metal or the source code.
@@ -182,7 +161,7 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
 | Blackhole        | ```export ARCH_NAME=blackhole```     |
 
-- Then run: 
+- Then run:
   ```
   export TT_METAL_HOME=$(pwd)
   export PYTHONPATH=$(pwd)
@@ -226,7 +205,7 @@ Instal from wheel for quick access to our APIs and to get an AI model running
 
 ### Step 1. Download and Install the Latest Wheel:
 
-- Navigate to our [releases page](https://github.com/tenstorrent/tt-metal/releases/latest) and download the latest wheel file for the Tenstorrent card architecture you have installed. 
+- Navigate to our [releases page](https://github.com/tenstorrent/tt-metal/releases/latest) and download the latest wheel file for the Tenstorrent card architecture you have installed.
 
 - Install the wheel using your Python environment manager of choice. For example, to install with `pip`:
 

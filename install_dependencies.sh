@@ -68,6 +68,7 @@ ub_package_list()
      python3.8-venv \
      libc++-17-dev \
      libc++abi-17-dev \
+     tenstorrent-tools \
     )
 
 }
@@ -115,6 +116,16 @@ install_llvm() {
     fi
 }
 
+configure_hugepages() {
+    TT_TOOLS_VERSION='1.1-5_all'
+    echo "Installing Tenstorrent Hugepages Service $TT_TOOLS_VERSION..."
+    TEMP_DIR=$(mktemp -d)
+    wget -P $TEMP_DIR https://github.com/tenstorrent/tt-system-tools/releases/download/upstream%2F1.1/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
+    apt-get install $TEMP_DIR/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
+    systemctl enable --now tenstorrent-hugepages.service
+    rm -rf "$TEMP_DIR"
+}
+
 install()
 {
     if [ $FLAVOR == "ubuntu" ]; then
@@ -130,12 +141,12 @@ if [ "$EUID" -ne 0 ]; then
     usage
 fi
 
-install_llvm
-
 update_package_list
 
 if [ $validate == 1 ]; then
     validate_packages
 else
+    configure_hugepages
+    install_llvm
     install
 fi
