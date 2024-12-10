@@ -1153,13 +1153,21 @@ uint32_t CreateSemaphore(
 }
 
 std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore::create(device, cores, initial_value, buffer_type);
+    Device* device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    return GlobalSemaphore::create(device, cores, initial_value, buffer_type, sub_device_ids);
 }
 
 std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type);
+    Device* device,
+    CoreRangeSet&& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type, sub_device_ids);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
@@ -1362,8 +1370,9 @@ std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
     Device* device,
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer::create(device, sender_receiver_core_mapping, size, buffer_type);
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    return GlobalCircularBuffer::create(device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
 }
 
 CBHandle CreateCircularBuffer(
