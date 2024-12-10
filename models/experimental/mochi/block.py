@@ -252,15 +252,6 @@ class TtAsymmetricJointBlock(LightweightModule):
         else:
             scale_msa_y = mod_y
 
-        print(f"scale_msa_x: {scale_msa_x.shape}")
-        print(f"gate_msa_x: {gate_msa_x.shape}")
-        print(f"scale_mlp_x: {scale_mlp_x.shape}")
-        print(f"gate_mlp_x: {gate_mlp_x.shape}")
-        print(f"scale_msa_y: {scale_msa_y.shape}")
-        print(f"gate_msa_y: {gate_msa_y.shape}")
-        print(f"scale_mlp_y: {scale_mlp_y.shape}")
-        print(f"gate_mlp_y: {gate_mlp_y.shape}")
-
         print(f"x: {x.shape}")
         print(f"y: {y.shape}")
 

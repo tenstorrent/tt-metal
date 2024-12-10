@@ -166,7 +166,7 @@ def test_tt_attn_qkv_y(mesh_device, seq_len, use_program_cache, reset_seeds, att
 @pytest.mark.parametrize(
     "vision_seq_len, text_seq_len",
     [
-        (512, 256),
+        (44 * 1024, 256),
         # (2048, 128)
         # (240, 118)
         # (44520, 118),
@@ -182,16 +182,19 @@ def test_tt_attn_qkv_y(mesh_device, seq_len, use_program_cache, reset_seeds, att
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "attn_path, dim_x, dim_y",
+    "attn_path, dim_x, dim_y, update_y",
     [
-        ("blocks.0.attn", 3072, 1536),
+        ("blocks.0.attn", 3072, 1536, True),
+        ("blocks.47.attn", 3072, 1536, False),
     ],
 )
 def test_tt_attn_prepare_qkv(
-    mesh_device, vision_seq_len, text_seq_len, use_program_cache, reset_seeds, attn_path, dim_x, dim_y
+    mesh_device, vision_seq_len, text_seq_len, use_program_cache, reset_seeds, attn_path, dim_x, dim_y, update_y
 ):
     state_dict, partial_state_dict = load_model_weights(attn_path)
-    reference_model, tt_model = create_models(mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y)
+    reference_model, tt_model = create_models(
+        mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y, update_y
+    )
 
     # Create input tensors
     batch_size = 1
@@ -270,7 +273,7 @@ def test_tt_attn_prepare_qkv(
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "seq_len",
-    (512,),
+    (44 * 1024 + 256,),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -282,15 +285,18 @@ def test_tt_attn_prepare_qkv(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "attn_path, dim_x, dim_y",
+    "attn_path, dim_x, dim_y, update_y",
     [
-        ("blocks.0.attn", 3072, 1536),
+        ("blocks.0.attn", 3072, 1536, True),
+        ("blocks.47.attn", 3072, 1536, False),
     ],
 )
-def test_tt_attn_run_attention(mesh_device, seq_len, use_program_cache, reset_seeds, attn_path, dim_x, dim_y):
+def test_tt_attn_run_attention(mesh_device, seq_len, use_program_cache, reset_seeds, attn_path, dim_x, dim_y, update_y):
     """Test run_attention implementation by comparing with reference model."""
     state_dict, partial_state_dict = load_model_weights(attn_path)
-    reference_model, tt_model = create_models(mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y)
+    reference_model, tt_model = create_models(
+        mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y, update_y
+    )
 
     batch_size = 1
     head_dim = dim_x // NUM_HEADS
@@ -350,7 +356,7 @@ def test_tt_attn_run_attention(mesh_device, seq_len, use_program_cache, reset_se
 @pytest.mark.parametrize(
     "vision_seq_len, text_seq_len",
     [
-        (512, 256),
+        (44 * 1024, 256),
     ],
 )
 @pytest.mark.parametrize(
@@ -363,17 +369,20 @@ def test_tt_attn_run_attention(mesh_device, seq_len, use_program_cache, reset_se
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "attn_path, dim_x, dim_y",
+    "attn_path, dim_x, dim_y, update_y",
     [
-        ("blocks.0.attn", 3072, 1536),
+        ("blocks.0.attn", 3072, 1536, True),
+        ("blocks.47.attn", 3072, 1536, False),
     ],
 )
 def test_tt_attn_post_attention(
-    mesh_device, vision_seq_len, text_seq_len, use_program_cache, reset_seeds, attn_path, dim_x, dim_y
+    mesh_device, vision_seq_len, text_seq_len, use_program_cache, reset_seeds, attn_path, dim_x, dim_y, update_y
 ):
     """Test post_attention implementation by comparing with reference model."""
     state_dict, partial_state_dict = load_model_weights(attn_path)
-    reference_model, tt_model = create_models(mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y)
+    reference_model, tt_model = create_models(
+        mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y, update_y
+    )
 
     batch_size = 1
     total_seq_len = vision_seq_len + text_seq_len
@@ -442,7 +451,7 @@ def test_tt_attn_post_attention(
 @pytest.mark.parametrize(
     "vision_seq_len, text_seq_len",
     [
-        (512, 256),
+        (44 * 1024, 256),
     ],
 )
 @pytest.mark.parametrize(
@@ -455,17 +464,20 @@ def test_tt_attn_post_attention(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "attn_path, dim_x, dim_y",
+    "attn_path, dim_x, dim_y, update_y",
     [
-        ("blocks.0.attn", 3072, 1536),
+        ("blocks.0.attn", 3072, 1536, True),
+        ("blocks.47.attn", 3072, 1536, False),
     ],
 )
 def test_tt_attn_forward(
-    mesh_device, vision_seq_len, text_seq_len, use_program_cache, reset_seeds, attn_path, dim_x, dim_y
+    mesh_device, vision_seq_len, text_seq_len, use_program_cache, reset_seeds, attn_path, dim_x, dim_y, update_y
 ):
     """Test complete forward pass of TtAsymmetricAttention."""
     state_dict, partial_state_dict = load_model_weights(attn_path)
-    reference_model, tt_model = create_models(mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y)
+    reference_model, tt_model = create_models(
+        mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y, update_y
+    )
 
     # Create input tensors
     batch_size = 1

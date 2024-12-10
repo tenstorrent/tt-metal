@@ -5,6 +5,7 @@ import torch
 from typing import Tuple, Optional
 
 from models.experimental.mochi.mod_rmsnorm import modulated_rmsnorm
+from models.experimental.mochi.common import matmul_config
 
 
 class TtAsymmetricAttention(LightweightModule):
@@ -81,15 +82,14 @@ class TtAsymmetricAttention(LightweightModule):
             self.proj_bias_x = self._create_bias_layer(
                 "proj_x", dim_x, weight_cache_path, state_dict, state_dict_prefix
             )
-        self.proj_y = (
-            self._create_linear_layer("proj_y", dim_x, dim_y, weight_cache_path, state_dict, state_dict_prefix)
-            if update_y
-            else None
-        )
-        if self.out_bias:
-            self.proj_bias_y = self._create_bias_layer(
-                "proj_y", dim_y, weight_cache_path, state_dict, state_dict_prefix
+        if update_y:
+            self.proj_y = self._create_linear_layer(
+                "proj_y", dim_x, dim_y, weight_cache_path, state_dict, state_dict_prefix
             )
+            if self.out_bias:
+                self.proj_bias_y = self._create_bias_layer(
+                    "proj_y", dim_y, weight_cache_path, state_dict, state_dict_prefix
+                )
 
         # Query and key normalization for stability.
         assert qk_norm
@@ -129,6 +129,11 @@ class TtAsymmetricAttention(LightweightModule):
             weight_dtype=ttnn.bfloat16,
             weight_key=".k_norm_y",
         )
+
+        self.X_MM_SEQ_LEN = 512
+
+        self.qkv_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x, 3 * dim_x, (8, 8))
+        self.proj_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x, dim_x, (8, 8))
 
     def _create_linear_layer(self, name, in_features, out_features, weight_cache_path, state_dict, state_dict_prefix):
         torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
@@ -179,8 +184,6 @@ class TtAsymmetricAttention(LightweightModule):
         )
 
         # Reshape and split QKV
-        batch_size, seq_len = y.shape[1], y.shape[2]
-        print(f"qkv_y shape: {qkv_y.shape}")
         # NOTE: This reshape is illegal because it's 5D
         # qkv_y = ttnn.reshape(qkv_y, (batch_size, seq_len, 3, self.num_heads, self.head_dim))
         # NOTE: This unpack may not work and may lead to strange error messages
@@ -241,10 +244,13 @@ class TtAsymmetricAttention(LightweightModule):
             q, k, v: Query, key and value tensors prepared for attention
         """
         B = x.shape[1]
-        assert B == 1, f"Batch size must be 1, got {B}"
-        assert x.shape[0] == 1, f"x dim0 must be 1, got {x.shape[0]}"
         seq_x = x.shape[2]
         seq_y = y.shape[2]
+        assert B == 1, f"Batch size must be 1, got {B}"
+        assert x.shape[0] == 1, f"x dim0 must be 1, got {x.shape[0]}"
+        assert (
+            seq_x % self.X_MM_SEQ_LEN == 0
+        ), f"Visual sequence length must be divisible by {self.X_MM_SEQ_LEN}, got {seq_x}"
         # TODO: This assert doesn't do what I want it to do. Should check padded shapes
         # assert seq_x % 1024 == 0, f"Visual sequence length must be divisible by 1024, got {seq_x}"
         assert seq_x + seq_y == max_seqlen_in_batch, f"Padded sequence lengths are not yet supported"
@@ -259,21 +265,19 @@ class TtAsymmetricAttention(LightweightModule):
         x = modulated_rmsnorm(x, scale_x)
 
         # Process visual features
-        # x = ttnn.reshape(x, (1, x.shape[2] // 1024, 1024, x.shape[3]))
+        x = ttnn.reshape(x, (1, seq_x // self.X_MM_SEQ_LEN, self.X_MM_SEQ_LEN, x.shape[3]))
         qkv_x = ttnn.linear(
             x,
             self.qkv_x,
             bias=self.qkv_bias_x if self.qkv_bias else None,
             compute_kernel_config=compute_kernel_config,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.qkv_x_config,
         )
-        # x = ttnn.reshape(x, (1, B, seq_x, x.shape[3]))
+        qkv_x = ttnn.reshape(qkv_x, (1, B, seq_x, qkv_x.shape[3]))
 
         # Split qkv_x into q, k, v
-        batch_size, seq_len = x.shape[1], x.shape[2]
-        print(f"qkv_x shape: {qkv_x.shape}")
         # Need to get these tensors to shape [B, H, L, D] for rotary embeddings
         q_x, k_x, v_x = ttnn.experimental.nlp_create_qkv_heads(
             qkv_x,
@@ -293,7 +297,7 @@ class TtAsymmetricAttention(LightweightModule):
         D = num_heads * head_dim
 
         # Process text features if present
-        if batch_size == 1:
+        if B == 1:
             text_seqlen = max_seqlen_in_batch - N
             if text_seqlen > 0:
                 # Process text features
@@ -351,8 +355,8 @@ class TtAsymmetricAttention(LightweightModule):
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=128,  # TODO: Make this dynamic
-            k_chunk_size=128,
+            q_chunk_size=256,  # TODO: Make this dynamic
+            k_chunk_size=256,
             exp_approx_mode=False,
         )
 
@@ -408,7 +412,6 @@ class TtAsymmetricAttention(LightweightModule):
                 x = out[:, :, :N, :]  # (B, N, local_dim)
                 y = out[:, :, N:, :]  # (B, <=L, local_dim)
                 # Pad text features if needed
-                print(f"y shape: {y.shape}")
                 if y.shape[2] < L:
                     raise ValueError("Not supporting padded text features")
                     # y = ttnn.pad(y, (0, 0, 0, L - y.shape[1], 0, 0))  # (B, L, local_dim)
@@ -427,20 +430,17 @@ class TtAsymmetricAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
-        # Project outputs
-        print(f"x shape: {x.shape}")
-        print(f"y shape: {y.shape}")
-        print(f"proj_x shape: {self.proj_x.shape}")
-        print(f"proj_bias_x shape: {self.proj_bias_x.shape}")
+        x = ttnn.reshape(x, (1, x.shape[2] // self.X_MM_SEQ_LEN, self.X_MM_SEQ_LEN, x.shape[3]))
         x = ttnn.linear(
             x,
             self.proj_x,
             bias=self.proj_bias_x if self.out_bias else None,
             compute_kernel_config=compute_kernel_config,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.proj_x_config,
         )
+        x = ttnn.reshape(x, (1, 1, x.shape[1] * x.shape[2], x.shape[3]))
 
         if self.update_y:
             y = ttnn.linear(
