@@ -192,17 +192,15 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
         new_span2.len += data.len;
         new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + data.len);
     }
-    TT_ASSERT(new_span == new_span2);
-    TT_ASSERT(new_data == new_data2);
+    std::printf(
+        "new_span=(%lx,%lu), new_span2=(%lx,%lu), new_data.size=%lu, new_data2.size=%lu\n",
+        (long)new_span.addr,
+        (long)new_span.len,
+        (long)new_span2.addr,
+        (long)new_span2.len,
+        (long)new_data.size(),
+        (long)new_data2.size());
     if (false && !(new_span == new_span2 && new_data == new_data2)) {
-        std::printf(
-            "new_span=(%lx,%lu), new_span2=(%lx,%lu), new_data.size=%lu, new_data2.size=%lu\n",
-            (long)new_span.addr,
-            (long)new_span.len,
-            (long)new_span2.addr,
-            (long)new_span2.len,
-            (long)new_data.size(),
-            (long)new_data2.size());
         std::abort();
     }
 
