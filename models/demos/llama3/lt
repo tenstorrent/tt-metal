@@ -733,7 +733,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     command_shortcuts = {
         "demo": "pytest models/demos/llama3/demo/demo.py -k performance-batch-1",
         "demo-32": "pytest models/demos/llama3/demo/demo.py -k performance-batch-32",
-        "demo-long": "pytest models/demos/llama3/demo/demo.py -k long",
+        "demo-long": "pytest models/demos/llama3/demo/demo.py -k performance-long",
         "attention": "pytest models/demos/llama3/tests/test_llama_attention.py",
         "attention-prefill": "pytest models/demos/llama3/tests/test_llama_attention_prefill.py",
         "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py",

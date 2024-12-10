@@ -83,7 +83,7 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
     torch_result = torch_result.permute(0, 2, 3, 1)
 
     ## ttnn uses NHWC, so need to set scale_factor_c = 1
-    scale_factor = (scale_h, scale_w, 1)
+    scale_factor = (scale_h, scale_w)
     input_tensor = ttnn.from_torch(input, device=device)
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -204,8 +204,7 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     print(f"in_shard_mem_config: {in_sharded_mem_config}")
     print(f"out_shard_mem_config: {out_sharded_mem_config}")
 
-    ## ttnn uses NHWC, so need to set scale_factor_c = 1
-    scale_factor = (scale_h, scale_w, 1)
+    scale_factor = (scale_h, scale_w)
     input_tensor = ttnn.from_torch(tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
     output_tensor = ttnn.upsample(input_tensor, scale_factor, memory_config=out_sharded_mem_config)
@@ -337,8 +336,7 @@ def test_bilinear_multi_core(
     logger.debug(f"in_shard_mem_config: {in_sharded_mem_config}")
     logger.debug(f"out_shard_mem_config: {out_sharded_mem_config}")
 
-    ## ttnn uses NHWC, so need to set scale_factor_c = 1
-    scale_factor = (scale_h, scale_w, 1)
+    scale_factor = (scale_h, scale_w)
     input_tensor = ttnn.from_torch(tt_input, device=device)
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
     output_tensor = ttnn.upsample(

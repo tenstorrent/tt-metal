@@ -139,7 +139,7 @@ def open_mesh_device(
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
     dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
-    offset: Tuple[int, int] = (0, 0),
+    offset: ttnn.MeshOffset = ttnn.MeshOffset(row=0, col=0),
     physical_device_ids: List[int] = [],
     mesh_type: "MeshType" = MeshType.RowMajor,
 ):
@@ -152,7 +152,8 @@ def open_mesh_device(
         trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
         num_command_queues (int, optional): Number of command queues. Defaults to 1.
         dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
-        offset (Tuple[int, int], optional): Offset in logical mesh coordinates for the mesh device. Defaults to (0, 0).
+        offset (ttnn.MeshOffset, optional): Offset in logical mesh coordinates for the mesh device. Defaults to (0, 0).
+        physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
         mesh_type (MeshType, optional): Defines type of mesh requested. Type imposes connectivity constraints and defines device iteration order.
 
     Returns:
@@ -160,7 +161,7 @@ def open_mesh_device(
 
     """
     return ttnn._ttnn.multi_device.MeshDevice(
-        mesh_shape=mesh_shape.as_tuple(),
+        mesh_shape=mesh_shape,
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,
         num_command_queues=num_command_queues,
@@ -455,6 +456,8 @@ class ConcatMeshToTensor(MeshToTensor):
         return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
 
 
+# TODO: #15061 - Remove this function, as it does not abide to the MeshToTensor interface.
+# Instead, lift this implementation to the caller.
 class ListMeshToTensor(MeshToTensor):
     def __init__(self, mesh_device: MeshDevice):
         self.mesh_device = mesh_device

@@ -8,7 +8,7 @@
 #include <variant>
 #include <tuple>
 #include <optional>
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "tt_metal/common/base_types.hpp"
 
 namespace ttnn {
