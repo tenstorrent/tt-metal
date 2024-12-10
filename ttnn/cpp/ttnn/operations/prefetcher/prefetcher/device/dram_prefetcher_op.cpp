@@ -47,46 +47,17 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_logical_shape()};
+    // Output shape is the same as the input shape, but the height is multiplied by the number of input tensors
+    auto input_shape = input_tensors.at(0).get_legacy_shape();
+    return {ttnn::SimpleShape{input_shape[0] * input_tensors.size(), input_shape[1]}};
 }
 std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    // Configure L1 interleaved memory layout
-    // TODO: Update this to have an output tensor for all input tensors
-
-    auto input_tensor = input_tensors.at(0);
-    auto input_buffer = input_tensor.buffer();
-
-    std::array<uint32_t, 2> shard_shape = input_tensor.shard_spec()->shape;
-    ShardSpec shard_spec = {
-        global_cb->sender_cores(),
-        shard_shape,
-        ShardOrientation::ROW_MAJOR,
-        false,
-    };
-
-    auto output_mem_config = MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec);
-
-    auto tensor_layout =
-        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config);
-
-    auto tensor_spec = TensorSpec(input_tensor.get_logical_shape(), tensor_layout);
-
-    auto& global_cb_buffer = global_cb->cb_buffer();
-    ShardedBufferConfig output_buffer_config = {
-        input_tensor.device(),
-        input_buffer->size(),
-        input_buffer->page_size(),
-        BufferType::L1,
-        input_buffer->buffer_layout(),
-        input_buffer->shard_spec(),
-    };
-    std::shared_ptr<Buffer> output_buffer = CreateBuffer(output_buffer_config, global_cb->buffer_address());
-
-    DeviceStorage device_storage = DeviceStorage(output_buffer);
-
-    auto output_tensor = Tensor(device_storage, tensor_spec);
-
-    return {output_tensor};
+    return {create_device_tensor(
+        this->compute_output_shapes(input_tensors).at(0),
+        input_tensors.at(0).get_dtype(),
+        Layout::TILE,
+        input_tensors.at(0).device(),
+        this->output_mem_config)};
 }
 operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
