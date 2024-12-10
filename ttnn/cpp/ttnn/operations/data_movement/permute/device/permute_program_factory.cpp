@@ -344,8 +344,6 @@ void PermuteDeviceOperation::MultiCoreBlockedGeneric::override_runtime_arguments
         runtime_args[0] = src_buffer->address();
         auto& runtime_args_writer = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
         runtime_args_writer[0] = dst_buffer->address();
-        auto& runtime_args_compute = tt::tt_metal::GetRuntimeArgs(program, compute_kernel_id, core);
-        runtime_args_compute[0] = dst_buffer->address();
     }
 }
 
