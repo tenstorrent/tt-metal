@@ -596,6 +596,7 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
 
                 auto& fabric_connection = cmd_ctx.current_cmd_header.get_unicast_dest_args().is_forward_direction ? cmd_ctx.fabric_connection.get_forward_connection() : cmd_ctx.fabric_connection.get_backward_connection();
                 // DPRINT << "fbrc sminc to x,y,addr,hops: " << (uint32_t)dest_noc0_x << ", " << (uint32_t)dest_noc0_y << ", " << (uint32_t)dest_bank_addr << ", " << (uint32_t)cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops << "\n";
+                fabric_connection.wait_for_empty_write_slot();
                 fabric_connection.send_payload_flush_blocking_from_address(cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
             } break;
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
