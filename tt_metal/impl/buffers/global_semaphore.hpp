@@ -44,6 +44,9 @@ public:
 
     void reset_semaphore_value();
 
+    static constexpr auto attribute_names = std::forward_as_tuple("cores", "initial_value");
+    const auto attribute_values() const { return std::make_tuple(this->cores_, this->initial_value_); }
+
 private:
     void setup_buffer(BufferType buffer_type);
 
@@ -59,3 +62,12 @@ private:
 }  // namespace v0
 
 }  // namespace tt::tt_metal
+
+namespace std {
+
+template <>
+struct hash<tt::tt_metal::GlobalSemaphore> {
+    std::size_t operator()(const tt::tt_metal::GlobalSemaphore& global_semaphore) const;
+};
+
+}  // namespace std

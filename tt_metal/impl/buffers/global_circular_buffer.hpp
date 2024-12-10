@@ -76,3 +76,12 @@ private:
 }  // namespace v1
 
 }  // namespace tt::tt_metal
+
+namespace std {
+
+template <>
+struct hash<tt::tt_metal::v1::experimental::GlobalCircularBuffer> {
+    std::size_t operator()(const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_circular_buffer) const;
+};
+
+}  // namespace std
