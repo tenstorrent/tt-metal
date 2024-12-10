@@ -12,7 +12,7 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/program/program.hpp"
@@ -165,7 +165,7 @@ class FabricEriscDatamoverBuilder {
         // TODO
     }
 
-    void teardown_from_host(Device *d) const;
+    void teardown_from_host(Device *d, tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
    protected:
    friend class EdmLineFabricOpInterface;
@@ -270,7 +270,7 @@ class EdmLineFabricOpInterface {
 
     size_t get_edm_buffer_size_bytes() const { return buffer_size_bytes; }
 
-    void teardown_from_host() const;
+    void teardown_from_host(tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
    private:
     // Device ID -> EDM Builders
