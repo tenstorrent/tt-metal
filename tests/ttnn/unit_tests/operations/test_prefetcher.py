@@ -35,10 +35,11 @@ Testing for writer side:
 
 
 @pytest.mark.parametrize(
-    "num_tensors, input_shape",
-    [
-        # (2, (128, 128)),  # Will hang for 2 dram prefetcher cores, because shape is too small
-        (2, (512, 512)),
+    "num_tensors, input_shapes, num_layers",
+    [  # TODO: test different shapes etc
+        (2, [(512, 512), (512, 512)], 1),
+        # (2, [(128, 128), (128, 128)], 1), # Hangs
+        # (1, [(512, 512)], 2), # Hangs
     ],
 )
 @pytest.mark.parametrize(
@@ -50,7 +51,8 @@ Testing for writer side:
 def test_run_prefetcher(
     device,
     num_tensors,
-    input_shape,
+    input_shapes,
+    num_layers,
     pcc_threshold,
     use_program_cache,
     function_level_defaults,
@@ -86,22 +88,24 @@ def test_run_prefetcher(
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
-    input_sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(
-            dram_core_range_set,
-            [K, N // len(dram_cores)],
-            ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-
-    pt_tensors = [torch.randn(input_shape) for _ in range(num_tensors)]
+    pt_tensors = [torch.randn(input_shapes[tid]) for tid in range(num_tensors) for _ in range(num_layers)]
     tt_tensors = []
-    for i in range(num_tensors):
+
+    for tid in range(num_tensors):
+        K, N = input_shapes[tid]
+        input_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                dram_core_range_set,
+                [K, N // len(dram_cores)],
+                ttnn.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
         tt_tensor = ttnn.as_tensor(
-            pt_tensors[i],
+            pt_tensors[tid * num_layers],
             device=device,
             dtype=ttnn.bfloat16,
             memory_config=input_sharded_mem_config,
@@ -109,6 +113,7 @@ def test_run_prefetcher(
         )
         tt_tensors.append(tt_tensor)
 
+    # Set up the tensor addrs
     tensor_addrs = torch.tensor([x.buffer_address() for x in tt_tensors])
     tensor_addrs = tensor_addrs.repeat(len(dram_cores), 1)
     tensor_addrs_mem_config = ttnn.MemoryConfig(
@@ -131,13 +136,16 @@ def test_run_prefetcher(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             sender_core_range_set,
-            [K * num_tensors, N // len(sender_cores)],
+            [
+                K * num_tensors * num_layers,
+                N // len(sender_cores),
+            ],  # Assuming all tensors have the same shape TODO: extend to different shapes
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
 
-    tt_outs = ttnn.dram_prefetcher(tt_tensors, tt_tensor_addrs, global_circular_buffer, output_mem_config)
+    tt_outs = ttnn.dram_prefetcher(tt_tensors, tt_tensor_addrs, num_layers, global_circular_buffer, output_mem_config)
     tt_outs_pt = ttnn.to_torch(tt_outs)
     tt_outs_pt = torch.chunk(tt_outs_pt, num_tensors, dim=0)
 
