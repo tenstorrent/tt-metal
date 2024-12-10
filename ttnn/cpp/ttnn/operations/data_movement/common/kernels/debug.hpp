@@ -35,6 +35,7 @@ inline void print_u8_pages(uint32_t l1_addr, uint32_t bytes_per_page, uint32_t n
         for (uint32_t j = 0; j < bytes_per_page; ++j, ++ptr) {
             DPRINT << SETW(2) << HEX() << "0x" << (uint32_t)*ptr << " ";
         }
+        DPRINT << DEC();  // revert to decimal representation
         DPRINT << ENDL();
     }
 }
