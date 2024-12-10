@@ -92,8 +92,8 @@ inline bool test_buffer_handler_async_wr() {
 
             packet_header.routing.flags = FORWARD;
             packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
-            packet_header.routing.dst_mesh_id = 4;
-            packet_header.routing.dst_dev_id = dest_device;
+            packet_header.routing.dst_mesh_id = dest_device >> 16;
+            packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
             packet_header.session.command = ASYNC_WR;
             packet_header.session.target_offset_l = target_address;
             packet_header.session.target_offset_h = 0x410;
@@ -177,8 +177,8 @@ inline bool test_buffer_handler_atomic_inc() {
             tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
 
             packet_header.routing.flags = INLINE_FORWARD;
-            packet_header.routing.dst_mesh_id = 4;
-            packet_header.routing.dst_dev_id = dest_device;
+            packet_header.routing.dst_mesh_id = dest_device >> 16;
+            packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
             packet_header.routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
             packet_header.session.command = ATOMIC_INC;
             packet_header.session.target_offset_l = target_address;

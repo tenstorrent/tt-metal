@@ -215,9 +215,6 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Test cannot run on specified devices.");
         }
 
-        // auto eth_core_iter = device_active_eth_cores.begin();
-        // auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(*eth_core_iter);
-
         tt_metal::Device* device_r = tt_metal::CreateDevice(test_device_id_r);
 
         CoreCoord tunneler_logical_core = device->get_ethernet_sockets(test_device_id_r)[0];
@@ -226,8 +223,23 @@ int main(int argc, char **argv) {
         CoreCoord r_tunneler_logical_core = device_r->get_ethernet_sockets(test_device_id_l)[0];
         CoreCoord r_tunneler_phys_core = device_r->ethernet_core_from_logical_core(r_tunneler_logical_core);
 
-        log_info(LogTest, "Running on Left  Device {}:LogicalCore{}", test_device_id_l, tunneler_logical_core.str());
-        log_info(LogTest, "Running on Right Device {}:LogicalCore{}", test_device_id_r, r_tunneler_logical_core.str());
+        auto [dev_l_mesh_id, dev_l_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_l);
+        auto [dev_r_mesh_id, dev_r_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_r);
+
+        log_info(
+            LogTest,
+            "Running on Left  Device {}:LogicalCore{} : Fabric Mesh Id {} : Fabric Device Id {}",
+            test_device_id_l,
+            tunneler_logical_core.str(),
+            dev_l_mesh_id,
+            dev_l_chip_id);
+        log_info(
+            LogTest,
+            "Running on Right Device {}:LogicalCore{} : Fabric Mesh Id {} : Fabric Device Id {}",
+            test_device_id_r,
+            r_tunneler_logical_core.str(),
+            dev_r_mesh_id,
+            dev_r_chip_id);
 
         tt_metal::Program program = tt_metal::CreateProgram();
         tt_metal::Program program_r = tt_metal::CreateProgram();
@@ -259,8 +271,8 @@ int main(int argc, char **argv) {
                 tx_pkt_dest_size_choice,                          // 15: pkt_dest_size_choice
                 tx_data_sent_per_iter_low,                        // 16: data_sent_per_iter_low
                 tx_data_sent_per_iter_high,                       // 17: data_sent_per_iter_high
-                fabric_command,
-                dest_device,
+                fabric_command,                                   // 18: fabric command
+                (dev_r_mesh_id << 16 | dev_r_chip_id),            // 19: receiver/dest device/mesh id
 
             };
 
