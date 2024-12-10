@@ -542,7 +542,10 @@ void generate_multi_input_test_worker_reader_kernel(
     bool fabric_enabled = std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args) || std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args);
     using namespace ttnn::ccl::cmd::uops;
     using namespace ttnn::ccl::cmd;
-    tt::log_trace(tt::LogTest, "Generating multi input test worker reader kernel for command type: {}", static_cast<uint32_t>(command_type));
+    log_trace(
+        tt::LogTest,
+        "Generating multi input test worker reader kernel for command type: {}",
+        static_cast<uint32_t>(command_type));
 
     TT_FATAL(command_type == ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB || command_type == ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR, "Unsupported tensor IO command type");
 
@@ -2957,6 +2960,80 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     log_info(tt::LogTest, "Fabric teardown");
     persistent_fabric_teardown_sequence(
         devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+
+    log_info(tt::LogTest, "Waiting for teardown completion");
+    for (auto d : devices) {
+        tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+    }
+    log_info(tt::LogTest, "Finished");
+}
+
+#include "ttnn/cpp/ttnn/operations/ccl/all_gather_v2/device/all_gather_op.hpp"
+TEST(CclAsyncOp, AllGatherSmall_PersistentFabric) {
+    // JUST MAKE SURE IT DOESN'T HANG - CORRECTNESS CHECKS ARE DONE IN PYTEST
+    // HERE WE JUST CHECK THE BASIC PLUMBING IS DONE
+    log_info(tt::LogTest, "entering test");
+    const size_t dim = 3;
+    const size_t num_links = 1;
+    constexpr auto layout = Layout::TILE;
+    // DEVICES setuip
+    T3000TestDevice test_fixture;
+    std::vector<Device*> devices = {test_fixture.devices_.at(0), test_fixture.devices_.at(1)};
+    // test_fixture.devices_.at(2),
+    // test_fixture.devices_.at(3)};
+    const size_t num_devices = devices.size();
+    const ttnn::Shape input_shape = ttnn::Shape{1, 1, 32, 128};
+    const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    auto const logical_shape = input_shape.logical_shape();
+    const auto num_elems = logical_shape.volume();
+
+    // INPUT TENSOR setup
+    log_info(tt::LogTest, "setting up input tensors");
+    size_t page_size = tile_size(DataFormat::Float16);
+    std::vector<Tensor> device_input_tensors;
+    for (size_t i = 0; i < num_devices; i++) {
+        // host_input_tensors.push_back(ttnn::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f) ,
+        // {logical_shape[0],logical_shape[1],logical_shape[2],logical_shape[3]}, layout).to(devices[i]));
+        auto t = ttnn::numpy::arange<bfloat16>(0, num_elems, 1).reshape(input_shape).to(layout);
+        t.set_tensor_spec(TensorSpec(
+            logical_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
+
+        device_input_tensors.push_back(t.to(devices[i]));
+    }
+    // Need to make it a mesh tensor for use with the op
+    const Tensor input_mesh_tensor = ttnn::distributed::api::aggregate_as_tensor(device_input_tensors);
+
+    // FABRIC setup
+    // const bool enable_persistent_fabric = true;
+
+    // std::vector<Program> dummy_worker_programs;
+    // std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
+    // std::optional<std::vector<Program>> fabric_programs;
+    // std::vector<Program*> fabric_program_ptrs;
+    // std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
+    // setup_test_with_persistent_fabric(
+    //     devices,
+    //     dummy_worker_programs,
+    //     subdevice_managers,
+    //     fabric_programs,
+    //     fabric_program_ptrs,
+    //     fabric_handle,
+    //     enable_persistent_fabric);
+    log_info(tt::LogTest, "Lauching op");
+
+    auto output_tensor = ttnn::operations::ccl::all_gather_v2(
+        input_mesh_tensor, dim, num_links, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, 0, 0, ttnn::ccl::Topology::Linear);
+
+    // wait for op completion
+    // log_info(tt::LogTest, "Waiting for Op finish");
+    // std::ranges::for_each(devices, [&](Device* d) {
+    //     tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
+    // });
+    // log_info(tt::LogTest, "Main op done");
+
+    // log_info(tt::LogTest, "Fabric teardown");
+    // persistent_fabric_teardown_sequence(
+    //     devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {
