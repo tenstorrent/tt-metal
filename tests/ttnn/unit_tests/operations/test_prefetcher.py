@@ -168,8 +168,6 @@ def test_run_prefetcher(
         ),
     )
 
-    breakpoint()
-
     tt_outs = ttnn.dram_prefetcher(
         tt_tensors,
         tt_tensor_addrs,

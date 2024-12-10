@@ -10,8 +10,6 @@
 
 #include "debug/dprint.h"
 
-uint32_t layer = 0;
-
 /*
 TODO:
     - How do the coalesced sizes differ?
@@ -42,7 +40,7 @@ void kernel_main() {
     const uint32_t* single_tile_sizes = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* block_height_in_tiles =
         (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));  // Kt / num_blocks = in_block_h;
-    const uint32_t noc = get_arg_val(rt_args_idx++);
+    const uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         for (uint32_t t = 0; t < num_tensors; t++) {
