@@ -149,8 +149,8 @@ jobs:
       fail-fast: false
       matrix:
         test-config:
-          - model: "wh_b0_unstable"
-            cmd: ./tests/scripts/single_card/nightly/run_wh_b0_unstable.sh
+          - model: "stable_diffusion"
+            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/stable_diffusion
           - model: "mamba 1"
             cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
           - model: "mamba 2"
