@@ -45,6 +45,19 @@ constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
 constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
 constexpr uint32_t test_command = get_compile_time_arg_val(18);
 
+constexpr uint32_t base_target_address = get_compile_time_arg_val(19);
+uint32_t target_address = base_target_address;
+
+// atomic increment for the ATOMIC_INC command
+constexpr uint32_t atomic_increment = get_compile_time_arg_val(20);
+constexpr uint32_t dest_device = get_compile_time_arg_val(21);
+
+constexpr uint32_t base_target_address = get_compile_time_arg_val(19);
+uint32_t target_address = base_target_address;
+
+// atomic increment for the ATOMIC_INC command
+constexpr uint32_t atomic_increment = get_compile_time_arg_val(20);
+
 uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
@@ -53,8 +66,6 @@ tt_l1_ptr volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(routing_table_start_addr);
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
-uint32_t target_address;
-
 
 uint64_t xy_local_addr;
 
@@ -91,7 +102,8 @@ inline bool test_buffer_handler_async_wr() {
 
             packet_header.routing.flags = FORWARD;
             packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
-            packet_header.routing.dst_mesh_id = 4;
+            packet_header.routing.dst_mesh_id = dest_device >> 16;
+            packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
             packet_header.session.command = ASYNC_WR;
             packet_header.session.target_offset_l = target_address;
             packet_header.session.target_offset_h = 0x410;
@@ -175,13 +187,14 @@ inline bool test_buffer_handler_atomic_inc() {
             tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
 
             packet_header.routing.flags = INLINE_FORWARD;
-            packet_header.routing.dst_mesh_id = 4;
+            packet_header.routing.dst_mesh_id = dest_device >> 16;
+            packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
             packet_header.routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
             packet_header.session.command = ATOMIC_INC;
             packet_header.session.target_offset_l = target_address;
             packet_header.session.target_offset_h = 0x410;
             packet_header.packet_parameters.atomic_parameters.wrap_boundary = 31;
-            packet_header.packet_parameters.atomic_parameters.increment = 4;
+            packet_header.packet_parameters.atomic_parameters.increment = atomic_increment;
             tt_fabric_add_header_checksum(&packet_header);
             uint32_t words_left = words_to_init - words_initialized;
             bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
@@ -226,9 +239,7 @@ bool test_buffer_handler() {
 }
 
 void kernel_main() {
-
     tt_fabric_init();
-    target_address = 0x100000;
 
     uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
     noc_async_read_one_packet(
@@ -269,12 +280,10 @@ void kernel_main() {
         max_packet_size_mask = (max_packet_size_mask << 1) + 1;
     }
 
-/*
-    if (!wait_all_src_dest_ready(NULL, 0, output_queue_ptr, 1, timeout_cycles)) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
-        return;
-    }
-*/
+    // wait till test sends start signal. This is set by test
+    // once tt_fabric kernels have been launched on all the test devices.
+    while (*(volatile uint32_t*)data_buffer_start_addr == 0);
+
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
 
     uint64_t data_words_sent = 0;

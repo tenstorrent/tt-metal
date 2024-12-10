@@ -22,6 +22,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     routing/test_vc_bi_tunnel_4ep.cpp
     routing/test_vc_loopback_tunnel.cpp
     routing/test_tt_fabric_sanity.cpp
+    routing/test_tt_fabric_multi_hop_sanity.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
     old/matmul/matmul_global_l1.cpp
     old/matmul/matmul_local_l1.cpp
@@ -55,6 +56,9 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     add_executable(${TEST_TARGET} ${TEST_SRC})
     target_link_libraries(${TEST_TARGET} PUBLIC test_metal_common_libs)
     if(${TEST_SRC} STREQUAL "routing/test_tt_fabric_sanity.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE tt_fabric)
+    endif()
+    if(${TEST_SRC} STREQUAL "routing/test_tt_fabric_multi_hop_sanity.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE tt_fabric)
     endif()
     if(${TEST_TARGET} MATCHES "test_dram_read")

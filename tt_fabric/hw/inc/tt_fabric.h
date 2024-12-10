@@ -24,6 +24,12 @@ extern volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table;
 uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
 bool tt_fabric_is_header_valid(packet_header_t* p_header);
 
+inline uint64_t get_timestamp() {
+    uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    return (((uint64_t)timestamp_high) << 32) | timestamp_low;
+}
+
 typedef struct fvc_consumer_state {
     volatile chan_payload_ptr remote_rdptr;
     uint32_t remote_ptr_update_addr;
@@ -275,6 +281,7 @@ typedef struct fvc_producer_state {
     uint32_t words_to_forward;
     bool curr_packet_valid;
     bool packet_corrupted;
+    uint64_t packet_timestamp;
     uint64_t packet_dest;
     packet_header_t current_packet_header;
 
@@ -547,6 +554,7 @@ typedef struct fvc_producer_state {
                     } else {
                         packet_in_progress = 0;
                         curr_packet_valid = false;
+                        packet_timestamp = get_timestamp();
                     }
                 }
             } else if (current_packet_header.routing.flags == INLINE_FORWARD) {
@@ -568,6 +576,7 @@ typedef struct fvc_producer_state {
                 fvc_pull_rdptr = fvc_out_rdptr;
                 update_remote_rdptr_cleared<fvc_mode>();
                 curr_packet_valid = false;
+                packet_timestamp = get_timestamp();
             }
         } else {
             words_processed = pull_data_from_fvc_buffer<fvc_mode>();
@@ -591,12 +600,6 @@ typedef struct router_state {
     uint32_t padding_out[3];
     uint32_t scratch[4];
 } router_state_t;
-
-inline uint64_t get_timestamp() {
-    uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
-    return (((uint64_t)timestamp_high) << 32) | timestamp_low;
-}
 
 inline uint64_t get_timestamp_32b() { return reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L); }
 
@@ -839,9 +842,6 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
 
     uint32_t scratch_addr = ((uint32_t)&router_state->scratch) / PACKET_WORD_SIZE_BYTES;
     router_state->scratch[0] = 0xAA;
-    // send_buf[1] = 0x0;
-    // send_buf[2] = 0x0;
-    // send_buf[3] = 0x0;
 
     while (!src_ready or !dest_ready) {
         if (router_state->sync_out != 0xAA) {
@@ -881,17 +881,18 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
 // we can process other fvcs and come back to check status of this pull request later.
 inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
     uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, wrptr);
-    noc_fast_atomic_increment(
+    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,
         noc_addr,
         NOC_UNICAST_WRITE_VC,
         1,
-        CHAN_REQ_BUF_LOG_SIZE /*wrap*/,
-        false /*linked*/);
+        CHAN_REQ_BUF_LOG_SIZE,
+        false,
+        false,
+        (uint32_t)&local_pull_request->wrptr.ptr);
     while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
-    uint32_t wrptr = *(volatile uint32_t*)MEM_NOC_ATOMIC_RET_VAL_ADDR;
-    local_pull_request->wrptr.ptr = wrptr;
+    uint32_t wrptr = local_pull_request->wrptr.ptr;
     noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
     while (1) {
         noc_async_read_one_packet(noc_addr, (uint32_t)(&local_pull_request->rdptr.ptr), 4);
@@ -899,6 +900,14 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
         if (!req_buf_ptrs_full(wrptr, local_pull_request->rdptr.ptr)) {
             break;
         }
+#if defined(COMPILE_FOR_ERISC)
+        else {
+            // Consumer pull request buffer is full
+            // Context switch to enable base firmware routing
+            // as it might be handling slow dispatch traffic
+            internal_::risc_context_switch();
+        }
+#endif
     }
     uint32_t dest_wr_index = wrptr & CHAN_REQ_BUF_SIZE_MASK;
     noc_addr = dest_addr + offsetof(chan_req_buf, chan_req) + dest_wr_index * sizeof(pull_request_t);
