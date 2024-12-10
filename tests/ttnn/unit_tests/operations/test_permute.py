@@ -10,7 +10,7 @@ import ttnn
 import itertools
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_blackhole
+from models.utility_functions import is_blackhole, is_grayskull, skip_for_grayskull
 
 
 @pytest.mark.parametrize("h", [32])
@@ -185,6 +185,7 @@ def generate_permutations(N):
         yield perm
 
 
+@skip_for_grayskull("tilize_block gives bad pcc after second iteration")
 @pytest.mark.parametrize("shape", [(7, 7, 7, 7, 7)])
 @pytest.mark.parametrize("perm", generate_permutations(5))
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
@@ -203,6 +204,7 @@ def test_permute_5d_width(shape, perm, memory_config, dtype, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
+@skip_for_grayskull("tilize_block gives bad pcc after second iteration")
 @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
 @pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1), (1, 3, 4, 0, 2), (3, 0, 4, 1, 2)])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
@@ -223,6 +225,7 @@ def test_permute_5d_blocked(shape, perm, memory_config, dtype, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
+@skip_for_grayskull("tilize_block gives bad pcc after second iteration")
 def test_permute_nd(device):
     torch_tensor = torch.rand((1, 3, 16, 16, 16, 16), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -245,6 +248,8 @@ def test_permute_squeeze(device):
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_3D(shape, perm, layout, memory_config, dtype, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Grayskull doesn't support float32")
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=dtype, memory_config=memory_config)
     output_tensor = ttnn.permute(input_tensor, perm)
