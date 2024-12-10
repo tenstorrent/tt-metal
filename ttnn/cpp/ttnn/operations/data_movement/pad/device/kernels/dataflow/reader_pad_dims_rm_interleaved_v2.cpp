@@ -104,13 +104,10 @@ void kernel_main() {
                               (curr_n >= front_pad_n and curr_n < N);
             uint64_t read_noc_addr = get_noc_addr(i_stick, s);
 
-            // fill l1_write_addr with pad values
 #if (not_pad_by_zero)
             noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_padded);
-            noc_async_read_barrier();
 #else
             noc_async_read(zeros_noc_addr, l1_write_addr, stick_size_padded);
-            noc_async_read_barrier();
 #endif
             if (read_stick) {
 #if (front_padding)
@@ -125,7 +122,6 @@ void kernel_main() {
 #else
                 noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
 #endif
-            } else {
             }
 
             curr_h++;
