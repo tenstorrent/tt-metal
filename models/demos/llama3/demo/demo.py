@@ -404,7 +404,9 @@ def run_llama3_demo(
                 ttnn.to_torch(
                     tt_out,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=mesh_device.shape
+                        mesh_device,
+                        dims=(3, 1) if model_args.is_galaxy else (1, -1),
+                        mesh_shape=model_args.cluster_shape,
                     ),
                 )[0, 0, (decoding_pos[batch_id] - 1) % 32, :]
             )
@@ -620,7 +622,9 @@ def run_llama3_demo(
                 tt_output_torch = ttnn.to_torch(
                     tt_out_tok.cpu(blocking=True, cq_id=1),
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device, dims=(3, 1) if tt_model.args.is_galaxy else (1, -1), mesh_shape=mesh_device.shape
+                        mesh_device,
+                        dims=(3, 1) if tt_model.args.is_galaxy else (1, -1),
+                        mesh_shape=model_args.cluster_shape,
                     ),
                 )[0, 0, 0, :batch_size]
             else:

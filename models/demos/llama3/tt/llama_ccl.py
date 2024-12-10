@@ -19,7 +19,7 @@ def tt_all_reduce(
     use_composite=False,
 ):
     # N150
-    if mesh_device.shape == (1, 1) or (cluster_axis == 1 and 1 in mesh_device.shape):
+    if list(mesh_device.shape) == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
 
     # Ensure dim 0 and 1 are 1
@@ -30,7 +30,7 @@ def tt_all_reduce(
         )
 
     # N300 and T3K: reduce_scatter
-    if 1 in mesh_device.shape:
+    if 1 in list(mesh_device.shape):
         if input_tensor.is_sharded() and not sharded:
             input_tensor_sharded = input_tensor
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
@@ -119,7 +119,7 @@ def tt_all_gather(
     dtype=ttnn.bfloat16,
 ):
     # N150
-    if mesh_device.shape == (1, 1) or (cluster_axis == 1 and 1 in mesh_device.shape):
+    if list(mesh_device.shape) == (1, 1) or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
 
     # Ensure the input tensor is in the correct memory configuration

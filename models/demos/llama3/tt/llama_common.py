@@ -278,7 +278,8 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
     vocab_size = tt_input.shape[-1]
     if mesh_device:
         pt_input = ttnn.to_torch(
-            tt_input, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=mesh_device.shape)
+            tt_input,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=list(mesh_device.shape)),
         )[:, :1, :, :vocab_size]
     else:  # input already on host
         pt_input = tt_input[..., :vocab_size]

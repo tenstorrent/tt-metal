@@ -69,7 +69,7 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=mesh_device.shape
+            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
         ),
         dtype=ttnn.bfloat8_b,
         memory_config=model_args.model_config["LM_HEAD_INPUT_MEMCFG"],
@@ -81,7 +81,7 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device, mesh_device.shape, dims=(3, 1) if model_args.is_galaxy else (1, 3)
+            mesh_device, model_args.cluster_shape, dims=(3, 1) if model_args.is_galaxy else (1, 3)
         ),
     )
     tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.vocab_size]

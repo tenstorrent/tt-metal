@@ -199,7 +199,7 @@ class TtModelArgs:
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
         device = mesh_device.get_devices()[0] if mesh_device is not None else None
-        self.cluster_shape = mesh_device.shape
+        self.cluster_shape = list(mesh_device.shape)
         self.is_galaxy = self.num_devices == 32
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -828,7 +828,7 @@ class TtModelArgs:
     def is_distributed_norm(self, mode):
         if not self.is_multichip:
             return False
-        if all([dim > 1 for dim in self.mesh_device.shape]):  # 2D grid
+        if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
             return True
         elif self.dim >= 8192 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
             return True

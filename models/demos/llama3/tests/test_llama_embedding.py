@@ -75,7 +75,8 @@ def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache
     )
     tt_output = tt_emb(tt_input)
     tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=model_args.cluster_shape),
     )[:32].view(reference_output.shape)
     logger.info(f"tt_output_torch: {tt_output_torch.shape}")
 

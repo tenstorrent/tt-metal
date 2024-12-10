@@ -261,7 +261,7 @@ class TtLlamaAttention(LightweightModule):
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
-            memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](self.mesh_device.shape[1]),
+            memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
             sharded=True,
             dtype=self.ccl_dtype,
         )
@@ -401,7 +401,7 @@ class TtLlamaAttention(LightweightModule):
                 dim=2,
                 cluster_axis=1,
                 num_links=2,
-                memory_config=self.model_config["GATHER_USERS_MEMCFG"](self.mesh_device.shape[1]),
+                memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
                 sharded=True,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
             )
@@ -441,7 +441,7 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=(
                     self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
                     if self.hidden_size == 8192
-                    else self.model_config["SELF_OUT_GATHERED_MEMCFG"](self.mesh_device.shape[0])
+                    else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
                 )
                 if TG
                 else self.model_config["DECODE_RESIDUAL_MEMCFG"],

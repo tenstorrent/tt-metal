@@ -282,7 +282,7 @@ def test_llama_model_inference(
 
         # Convert ttnn tensor to torch tensor
         mesh_composer = ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=mesh_device.shape
+            mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
         )
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=mesh_composer)

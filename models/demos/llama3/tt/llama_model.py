@@ -215,7 +215,7 @@ class TtTransformer(LightweightModule):
         logits = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device, dims=(3, 1) if self.args.is_galaxy else (1, -1), mesh_shape=self.mesh_device.shape
+                self.mesh_device, dims=(3, 1) if self.args.is_galaxy else (1, -1), mesh_shape=self.args.cluster_shape
             ),
         )[0, 0, last_token_idx, :]
         return logits
