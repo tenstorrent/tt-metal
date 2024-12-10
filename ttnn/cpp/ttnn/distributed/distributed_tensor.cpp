@@ -57,12 +57,7 @@ public:
         return {};
     }
 
-    DistributedTensorConfig config() const override {
-        return DistributedTensorConfig{ShardTensor2D(ShardMesh{
-            .y = mesh_shape_.first,
-            .x = mesh_shape_.second,
-        })};
-    }
+    DistributedTensorConfig config() const override { return DistributedTensorConfig{ShardTensor2D(mesh_shape_)}; }
 
 private:
     MeshDevice& mesh_device_;
