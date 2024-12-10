@@ -43,7 +43,8 @@ ttnn::Tensor prepare_conv_weights(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T *device,
-    const std::optional<const Conv2dConfig>& conv_config_);
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
 template <typename T>
 ttnn::Tensor prepare_conv_bias(
@@ -61,7 +62,8 @@ ttnn::Tensor prepare_conv_bias(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T *device,
-    const std::optional<const Conv2dConfig>& conv_config_);
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
 template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(

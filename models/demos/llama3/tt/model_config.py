@@ -563,7 +563,7 @@ class TtModelArgs:
                 fuse_batch=False,
             )
             self.model_config["VISION_XATTN_DENSE_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=seq_len,
+                m=min(seq_len, 1024),
                 k=self.dim // self.num_devices,
                 n=self.dim,
                 grid_size=(8, 8),
@@ -589,23 +589,21 @@ class TtModelArgs:
                 fuse_batch=seq_len <= max_seq,
             )
 
-            xattn_cache_y_cores = (
-                16 // self.num_devices
-            )  # Based on seqlen, this formula gives us a valid number of y cores
-            xattn_cache_x_cores = 8
-            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
-                # using n_heads since xattn repeats KV to match Q
-                (
-                    nearest_32(
-                        (self.n_heads // self.num_devices) * seq_len // (xattn_cache_y_cores * xattn_cache_x_cores)
+            def _get_xattn_kv_prefill_mem_cfg(seq_len):
+                M = (self.n_kv_heads // self.num_devices) * seq_len
+                cores_x, cores_y = self.find_grid(M // self.tile_size)
+                return ttnn.create_sharded_memory_config(
+                    (
+                        nearest_32(M // (cores_x * cores_y)),
+                        self.head_dim,
                     ),
-                    self.head_dim,
-                ),
-                ttnn.CoreGrid(y=xattn_cache_y_cores, x=xattn_cache_x_cores),
-                ttnn.ShardStrategy.HEIGHT,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+                    ttnn.CoreGrid(y=cores_y, x=cores_x),
+                    ttnn.ShardStrategy.HEIGHT,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+
+            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
             self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
             # RMS NORM
@@ -648,7 +646,7 @@ class TtModelArgs:
             return ttnn.Topology.Linear
         return None
 
-    def prepare_inputs_ttnn_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
+    def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
         """
         Prepare inputs for decode mode.
         x: (batch, seq, dim)
@@ -698,7 +696,7 @@ class TtModelArgs:
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         return x
 
-    def prepare_inputs_ttnn_prefill(self, x_bsh, force_replicated=False):
+    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
         """
         Prepare inputs for prefill mode.
         x: (batch, seq, hidden_dim)
