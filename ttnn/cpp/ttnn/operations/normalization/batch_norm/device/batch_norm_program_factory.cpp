@@ -195,8 +195,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
 
     const auto compute_kernel_file =
         use_large_algorithm
-            ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
-            : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
+            ? "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_large_kernel.cpp"
+            : "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_small_kernel.cpp";
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,
