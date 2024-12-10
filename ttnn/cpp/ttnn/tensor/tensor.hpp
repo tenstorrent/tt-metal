@@ -167,7 +167,7 @@ struct Tensor {
     Tensor to(Layout target_layout, distributed::MeshDevice* mesh_device) const;
 
     Tensor pad(
-        const ttnn::SimpleShape& output_logical_shape,
+        const ttnn::SimpleShape& output_padded_shape,
         const ttnn::SimpleShape& input_tensor_start,
         float pad_value) const;
 

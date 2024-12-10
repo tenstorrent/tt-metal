@@ -309,7 +309,7 @@ ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shape, c
     return tensor.reshape(shape);
 }
 
-ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+ttnn::SimpleShape shape_corrector(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
     //Correct the shape to account for inferred dimensions
     uint32_t input_volume = tensor.get_logical_volume();
     uint32_t output_volume = 1;
@@ -331,23 +331,22 @@ ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape
 
     uint32_t implied_dim_value = (output_volume == 0) ? 0: input_volume/output_volume;
     ttnn::SmallVector<uint32_t> new_shape(shape.size());
-    auto old_shape = shape.logical_shape().view();
+    auto old_shape = shape.view();
     std::copy(old_shape.begin(), old_shape.end(), new_shape.begin());
     new_shape[inferred_dim] = implied_dim_value;
-    return ttnn::Shape(std::move(new_shape));
+    return ttnn::SimpleShape(new_shape);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
-    const ttnn::Shape& input_shape,
-    const std::optional<MemoryConfig> &memory_config,
+    const ttnn::SimpleShape& input_shape,
+    const std::optional<MemoryConfig>& memory_config,
     const uint8_t queue_id,
-    const std::optional<PadValue> &pad_value
-     ) {
+    const std::optional<PadValue>& pad_value) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.get_layout();
-    auto tensor_shape = tensor.get_shape();
-    const ttnn::Shape shape = shape_corrector(tensor, input_shape);
+    auto tensor_shape = tensor.get_logical_shape();
+    const ttnn::SimpleShape shape = shape_corrector(tensor, input_shape);
     // First Case, No reshape Required
     if (tensor_shape == shape) {
         return tensor;
@@ -385,14 +384,9 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     if (this_is_view) {
         return PerformView(tensor,shape, tile_first_dim, tile_second_dim);
     }
-    if(shape.logical_shape().volume() != tensor.get_logical_volume())
-    {
+    if (shape.volume() != tensor.get_logical_volume()) {
         //This is completely incorrect but it is due to issue 15137 or issue 15558
-        bool tile_tensor_view_reshape_possible =
-            (layout == ttnn::Layout::TILE and shape.with_tile_padding().rank() >= 2 and
-            shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0 and
-            shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0 and
-            tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]);
+        bool tile_tensor_view_reshape_possible = layout == ttnn::Layout::TILE && tensor_shape[-1] == shape[-1];
 
         if (tile_tensor_view_reshape_possible) {
             // This case has been allowed in the past though it means introducing padding values to the data
@@ -421,21 +415,20 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         return invoke(tensor, shape,std::nullopt,0,std::nullopt);
      }
 
-ttnn::Tensor ReshapeViewOperation::invoke(
-    const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& shape,
-    const std::optional<MemoryConfig> &memory_config,
-    const uint8_t queue_id,
-    const std::optional<PadValue> &pad_value
-    ) {
-    return invoke(tensor, ttnn::Shape(shape.view()),memory_config,queue_id,pad_value);
-}
+     ttnn::Tensor ReshapeViewOperation::invoke(
+         const ttnn::Tensor& tensor,
+         const ttnn::Shape& shape,
+         const std::optional<MemoryConfig>& memory_config,
+         const uint8_t queue_id,
+         const std::optional<PadValue>& pad_value) {
+         return invoke(tensor, shape.logical_shape(), memory_config, queue_id, pad_value);
+     }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     const ttnn::SimpleShape& shape
     ) {
-    return invoke(tensor, ttnn::Shape(shape.view()),std::nullopt,0,std::nullopt);
+    return invoke(tensor, shape, std::nullopt, 0, std::nullopt);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(

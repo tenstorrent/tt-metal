@@ -22,8 +22,6 @@ using Strides = std::vector<size_t>;
 class TensorLayout {
 public:
     TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
-    TensorLayout(
-        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
     // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a
     // constructor
@@ -33,6 +31,13 @@ public:
         const PageConfig& page_config,
         const MemoryConfig& memory_config,
         const ttnn::Shape& legacy_shape);
+
+    static TensorLayout fromPaddedShape(
+        DataType dtype,
+        const PageConfig& page_config,
+        const MemoryConfig& memory_config,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape);
 
     Layout get_layout() const { return page_config_.get_layout(); }
     PageConfig get_page_config() const { return page_config_; }
@@ -72,6 +77,9 @@ public:
     }
 
 private:
+    TensorLayout(
+        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
+
     void initialize_alignment();
     void validate_alignment() const;
 

@@ -238,12 +238,12 @@ void tensor_print(const Tensor& input_tensor) {
 
 Tensor tensor_pad(
     const Tensor& input_tensor,
-    const ttnn::SimpleShape& output_logical_shape,
+    const ttnn::SimpleShape& output_padded_shape,
     const ttnn::SimpleShape& input_tensor_start,
     float pad_value) {
     ZoneScoped;
     GraphTracker::instance().track_function_start(
-        "Tensor::pad", input_tensor, output_logical_shape, input_tensor_start, pad_value);
+        "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
     TT_ASSERT(
         input_tensor.storage_type() == StorageType::OWNED or
         input_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST or
@@ -257,7 +257,7 @@ Tensor tensor_pad(
         return input_tensor;
     }
 
-    auto output = tensor_impl::pad_wrapper(input_tensor, output_logical_shape, input_tensor_start, pad_value);
+    auto output = tensor_impl::pad_wrapper(input_tensor, output_padded_shape, input_tensor_start, pad_value);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

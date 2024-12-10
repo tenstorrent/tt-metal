@@ -179,7 +179,7 @@ Tensor to_layout_impl(
             tensor_arg.memory_config()));
 
     auto tensor = tensor_arg.pad(result_spec.padded_shape(), ttnn::SimpleShape(std::move(padded_input_start)), 0);
-    tensor = Tensor(
+    /*tensor = Tensor(
         tensor.get_storage(),
         TensorSpec(
             result_spec.logical_shape(),
@@ -187,7 +187,7 @@ Tensor to_layout_impl(
                 tensor.dtype(),
                 PageConfig(Layout::ROW_MAJOR),
                 MemoryConfig{},
-                result_spec.tensor_layout().get_alignment())));
+                result_spec.tensor_layout().get_alignment())));*/
     tensor = tensor.to(layout);
     if (device) {
         tensor = device ? tensor.to(layout, device) : tensor.to(layout);

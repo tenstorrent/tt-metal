@@ -18,25 +18,27 @@ size_t round_up(size_t value, size_t multiple) {
 };
 
 Alignment legacyShapeToAlignment(
-    const ttnn::Shape& shape, const PageConfig& page_config, const MemoryConfig& memory_config) {
-    const auto& logical_shape = shape.logical_shape();
-    const auto& legacy_padded_shape = shape.padded_shape();
-    if (logical_shape == legacy_padded_shape) {
+    const ttnn::SimpleShape& logical_shape,
+    const ttnn::SimpleShape& padded_shape,
+    const PageConfig& page_config,
+    const MemoryConfig& memory_config) {
+    if (logical_shape == padded_shape) {
         return Alignment{};
     }
 
-    const auto rank = legacy_padded_shape.rank();
+    const auto rank = padded_shape.rank();
     bool alignment_can_be_2D = true;
     for (int i = rank - 3; i >= 0; i--) {
-        alignment_can_be_2D &= logical_shape[i] == legacy_padded_shape[i];
+        alignment_can_be_2D &= logical_shape[i] == padded_shape[i];
     }
 
     // SHARDED
     if (memory_config.shard_spec.has_value()) {
         TT_FATAL(
             alignment_can_be_2D,
-            "Tensor with shape {} cannot be sharded because alignment will have rank greater than 2!",
-            shape);
+            "Tensor with shape {} ({}) cannot be sharded because alignment will have rank greater than 2!",
+            logical_shape,
+            padded_shape);
         if (page_config.get_layout() == Layout::ROW_MAJOR) {
             const auto& shard_spec = memory_config.shard_spec.value();
             if (shard_spec.physical_shard_shape.has_value()) {
@@ -52,10 +54,10 @@ Alignment legacyShapeToAlignment(
         ttnn::SmallVector<uint32_t> values(std::min((int)rank, 2));
         const auto alignment_size = values.size();
         if (alignment_size >= 1) {
-            values[alignment_size - 1] = legacy_padded_shape[-1];
+            values[alignment_size - 1] = padded_shape[-1];
         }
         if (alignment_size == 2) {
-            values[alignment_size - 2] = legacy_padded_shape[-2];
+            values[alignment_size - 2] = padded_shape[-2];
         }
         Alignment result(std::move(values));
         return result;
@@ -64,11 +66,11 @@ Alignment legacyShapeToAlignment(
     // INTERLEAVED with (deprecated) non-height/width padding
     // NOTE: Rank > 2 is guaranteed in this case
     ttnn::SmallVector<uint32_t> values(rank);
-    values[rank - 1] = legacy_padded_shape[-1];
-    values[rank - 2] = legacy_padded_shape[-2];
+    values[rank - 1] = padded_shape[-1];
+    values[rank - 2] = padded_shape[-2];
 
     for (int i = rank - 3; i >= 0; i--) {
-        values[i] = legacy_padded_shape[i] * values[i + 1];
+        values[i] = padded_shape[i] * values[i + 1];
     }
 
     for (auto& value : values) {
@@ -101,7 +103,21 @@ TensorLayout TensorLayout::fromLegacyPaddedShape(
         dtype,
         page_config,
         memory_config,
-        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(legacy_shape, page_config, memory_config));
+        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(
+            legacy_shape.logical_shape(), legacy_shape.padded_shape(), page_config, memory_config));
+}
+
+TensorLayout TensorLayout::fromPaddedShape(
+    DataType dtype,
+    const PageConfig& page_config,
+    const MemoryConfig& memory_config,
+    const ttnn::SimpleShape& logical_shape,
+    const ttnn::SimpleShape& padded_shape) {
+    return TensorLayout(
+        dtype,
+        page_config,
+        memory_config,
+        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
 }
 
 void TensorLayout::initialize_alignment() {
