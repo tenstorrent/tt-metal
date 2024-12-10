@@ -7,7 +7,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
-
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_op.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -39,12 +39,27 @@ static ttnn::Tensor pad_impl(
 
         TT_FATAL(rank == 4, "Tensor rank is not 4");
 
-        auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+        using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;
+        using ShardOrientation = tt::tt_metal::ShardOrientation;
+        using Layout = tt::tt_metal::Layout;
+
+        auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+        if (input_tensor.is_sharded()) {
+            output_memory_config = create_sharded_memory_config(
+                output_padded_shape,
+                input_tensor.shard_spec()->grid,  // reuse input cores for now: FIXME: can we do better?
+                ShardStrategy::HEIGHT,            // stay height sharded
+                ShardOrientation::ROW_MAJOR,
+                false,
+                false,
+                Layout::ROW_MAJOR);
+        }
+        std::cout << "[pad_impl] memory_config: " << output_memory_config << std::endl;
         auto output_tensor = operation::run(
                                  Pad{tt::tt_metal::LegacyShape(output_padded_shape),
                                      ttnn::SimpleShape(input_tensor_start),
                                      value,
-                                     memory_config,
+                                     output_memory_config,
                                      use_multicore},
                                  {input_tensor},
                                  {},
@@ -91,20 +106,6 @@ static ttnn::Tensor pad_impl(
     if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
         TT_FATAL(front_padding_is_zero, "ttnn.pad: on device tile padding does not support front padding");
     }
-
-
-    // FIXME: may not be necessary. let's see what we get back.
-    // auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
-    // if (input_tensor.is_sharded() and !output_memory_config.has_value()) {
-    //     auto width_padding = padding.back();
-    //     if (width_padding.first != 0 or width_padding.second != 0) {
-    //         // for sharded tensors with padding on the width dimension, we need
-    //         // to update the shard spec for the output tensor.
-    //         auto [shard_height, shard_width] = output_memory_config.shard_spec->shape;
-    //         shard_width += width_padding.first + width_padding.second;
-    //         output_memory_config.shard_spec->shape = {shard_height, shard_width};
-    //     }
-    // }
 
     if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
         const int target_height = output_padded_shape[padding.size() - 2];
