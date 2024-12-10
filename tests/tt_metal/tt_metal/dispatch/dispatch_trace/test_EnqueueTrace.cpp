@@ -19,7 +19,6 @@
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
 
-
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
@@ -32,15 +31,13 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
         program,
         "tt_metal/kernels/dataflow/reader_unary.cpp",
         worker,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     auto writer_kernel = CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         worker,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     auto sfpu_kernel = CreateKernel(
         program,
@@ -52,7 +49,7 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
             .defines = {{"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}});
 
     CircularBufferConfig input_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_0, 2048);
+                                               .set_page_size(tt::CBIndex::c_0, 2048);
 
     CoreRange core_range({0, 0});
     CreateCircularBuffer(program, core_range, input_cb_config);
@@ -60,24 +57,16 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
     std::shared_ptr<RuntimeArgs> reader_runtime_args = std::make_shared<RuntimeArgs>();
 
     *writer_runtime_args = {
-        &output,
-        (uint32_t)output.noc_coordinates().x,
-        (uint32_t)output.noc_coordinates().y,
-        output.num_pages()
-    };
+        &output, (uint32_t)output.noc_coordinates().x, (uint32_t)output.noc_coordinates().y, output.num_pages()};
 
     *reader_runtime_args = {
-        &input,
-        (uint32_t)input.noc_coordinates().x,
-        (uint32_t)input.noc_coordinates().y,
-        input.num_pages()
-    };
+        &input, (uint32_t)input.noc_coordinates().x, (uint32_t)input.noc_coordinates().y, input.num_pages()};
 
     SetRuntimeArgs(device, detail::GetKernel(program, writer_kernel), worker, writer_runtime_args);
     SetRuntimeArgs(device, detail::GetKernel(program, reader_kernel), worker, reader_runtime_args);
 
     CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_16, 2048);
+                                                .set_page_size(tt::CBIndex::c_16, 2048);
 
     CreateCircularBuffer(program, core_range, output_cb_config);
     return program;
@@ -377,7 +366,9 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueProgramDeviceCapture) {
         ReplayTrace(this->device_, command_queue.id(), tid, true);
 
         EnqueueReadBuffer(command_queue, *output, trace_output_data.data(), true);
-        if (has_eager) EXPECT_TRUE(eager_output_data == trace_output_data);
+        if (has_eager) {
+            EXPECT_TRUE(eager_output_data == trace_output_data);
+        }
     }
 
     // Done
@@ -536,7 +527,7 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     ReleaseTrace(this->device_, tid);
 }
 
-} // end namespace basic_tests
+}  // end namespace basic_tests
 
 TEST_F(RandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -557,7 +548,8 @@ TEST_F(RandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
 
 TEST_F(RandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
     if (!does_device_have_active_eth_cores(this->device_)) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->id() << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device " << this->device_->id()
+                     << " does not have any active ethernet cores";
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -578,7 +570,8 @@ TEST_F(RandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
 
 TEST_F(RandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace) {
     if (!does_device_have_active_eth_cores(this->device_)) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->id() << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device " << this->device_->id()
+                     << " does not have any active ethernet cores";
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -625,7 +618,8 @@ TEST_F(RandomProgramTraceFixture, TensixTestProgramsTrace) {
 
 TEST_F(RandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
     if (!does_device_have_active_eth_cores(this->device_)) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->id() << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device " << this->device_->id()
+                     << " does not have any active ethernet cores";
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -651,7 +645,8 @@ TEST_F(RandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
 
 TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
     if (!does_device_have_active_eth_cores(this->device_)) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->id() << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device " << this->device_->id()
+                     << " does not have any active ethernet cores";
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -803,7 +798,8 @@ TEST_F(RandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
 
 TEST_F(RandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) {
     if (!does_device_have_active_eth_cores(this->device_)) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->id() << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device " << this->device_->id()
+                     << " does not have any active ethernet cores";
     }
 
     std::vector<uint32_t> trace_ids;
@@ -851,7 +847,8 @@ TEST_F(RandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) {
 
 TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
     if (!does_device_have_active_eth_cores(this->device_)) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->id() << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device " << this->device_->id()
+                     << " does not have any active ethernet cores";
     }
 
     std::vector<uint32_t> trace_ids;

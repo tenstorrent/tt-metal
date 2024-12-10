@@ -66,31 +66,39 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     }
 
     tt::tt_metal::InterleavedBufferConfig in_config{
-                    .device=device,
-                    .size = cfg.size_bytes,
-                    .page_size = input_page_size_bytes,
-                    .buffer_type = cfg.input_buffer_type
-        };
+        .device = device,
+        .size = cfg.size_bytes,
+        .page_size = input_page_size_bytes,
+        .buffer_type = cfg.input_buffer_type};
 
     tt::tt_metal::InterleavedBufferConfig out_config{
-                    .device=device,
-                    .size = cfg.size_bytes,
-                    .page_size = output_page_size_bytes,
-                    .buffer_type = cfg.output_buffer_type
-        };
-
+        .device = device,
+        .size = cfg.size_bytes,
+        .page_size = output_page_size_bytes,
+        .buffer_type = cfg.output_buffer_type};
 
     auto input_buffer = CreateBuffer(in_config);
 
     auto output_buffer = CreateBuffer(out_config);
 
-    tt::log_debug(tt::LogTest, "Input buffer: [address: {} B, size: {} B] at noc coord {}", input_buffer->address(), input_buffer->size(), input_buffer->noc_coordinates().str());
-    tt::log_debug(tt::LogTest, "Output buffer: [address: {} B, size: {} B] at noc coord {}", output_buffer->address(), output_buffer->size(), output_buffer->noc_coordinates().str());
+    tt::log_debug(
+        tt::LogTest,
+        "Input buffer: [address: {} B, size: {} B] at noc coord {}",
+        input_buffer->address(),
+        input_buffer->size(),
+        input_buffer->noc_coordinates().str());
+    tt::log_debug(
+        tt::LogTest,
+        "Output buffer: [address: {} B, size: {} B] at noc coord {}",
+        output_buffer->address(),
+        output_buffer->size(),
+        output_buffer->noc_coordinates().str());
 
     TT_FATAL(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes, "Error");
     constexpr uint32_t num_pages_cb = 1;
-    CircularBufferConfig input_buffer_cb_config = CircularBufferConfig(cfg.page_size_bytes, {{cb_id, cfg.l1_data_format}})
-        .set_page_size(cb_id, cfg.page_size_bytes);
+    CircularBufferConfig input_buffer_cb_config =
+        CircularBufferConfig(cfg.page_size_bytes, {{cb_id, cfg.l1_data_format}})
+            .set_page_size(cb_id, cfg.page_size_bytes);
     auto input_buffer_cb = CreateCircularBuffer(program, cfg.logical_core, input_buffer_cb_config);
 
     bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
@@ -100,18 +108,21 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
         program,
         reader_kernel_name,
         cfg.logical_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = {cb_id, uint32_t(input_buffer->page_size()), (uint32_t)input_is_dram}});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::NOC_0,
+            .compile_args = {cb_id, uint32_t(input_buffer->page_size()), (uint32_t)input_is_dram}});
     auto writer_kernel = CreateKernel(
         program,
         writer_kernel_name,
         cfg.logical_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = {cb_id, uint32_t(output_buffer->page_size()), (uint32_t)output_is_dram}});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::NOC_1,
+            .compile_args = {cb_id, uint32_t(output_buffer->page_size()), (uint32_t)output_is_dram}});
 
     if (banked_reader) {
-        reader_runtime_args = {
-            (uint32_t)input_buffer->address(),
-            (uint32_t)cfg.num_tiles
-        };
+        reader_runtime_args = {(uint32_t)input_buffer->address(), (uint32_t)cfg.num_tiles};
     } else {
         reader_runtime_args = {
             (uint32_t)input_buffer->address(),
@@ -121,10 +132,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
         };
     }
     if (banked_writer) {
-        writer_runtime_args = {
-            (uint32_t)output_buffer->address(),
-            (uint32_t)cfg.num_tiles
-        };
+        writer_runtime_args = {(uint32_t)output_buffer->address(), (uint32_t)cfg.num_tiles};
     } else {
         writer_runtime_args = {
             (uint32_t)output_buffer->address(),
@@ -136,7 +144,8 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    auto input_packed = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
+    auto input_packed =
+        tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
     detail::WriteToBuffer(input_buffer, input_packed);
     SetRuntimeArgs(program, reader_kernel, cfg.logical_core, reader_runtime_args);
     SetRuntimeArgs(program, writer_kernel, cfg.logical_core, writer_runtime_args);
@@ -168,30 +177,30 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
     Program program = CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig in_config{
-                    .device=device,
-                    .size = cfg.size_bytes,
-                    .page_size = cfg.page_size_bytes,
-                    .buffer_type = cfg.input_buffer_type
-        };
+        .device = device,
+        .size = cfg.size_bytes,
+        .page_size = cfg.page_size_bytes,
+        .buffer_type = cfg.input_buffer_type};
 
     tt::tt_metal::InterleavedBufferConfig out_config{
-                    .device=device,
-                    .size = cfg.size_bytes,
-                    .page_size = cfg.page_size_bytes,
-                    .buffer_type = cfg.output_buffer_type
-        };
+        .device = device,
+        .size = cfg.size_bytes,
+        .page_size = cfg.page_size_bytes,
+        .buffer_type = cfg.output_buffer_type};
 
     auto input_buffer = CreateBuffer(in_config);
     auto output_buffer = CreateBuffer(out_config);
 
     TT_FATAL(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes, "Error");
     constexpr uint32_t num_pages_cb = 1;
-    CircularBufferConfig l1_input_cb_config = CircularBufferConfig(cfg.page_size_bytes, {{input0_cb_index, cfg.l1_data_format}})
-        .set_page_size(input0_cb_index, cfg.page_size_bytes);
+    CircularBufferConfig l1_input_cb_config =
+        CircularBufferConfig(cfg.page_size_bytes, {{input0_cb_index, cfg.l1_data_format}})
+            .set_page_size(input0_cb_index, cfg.page_size_bytes);
     auto l1_input_cb = CreateCircularBuffer(program, cfg.logical_core, l1_input_cb_config);
 
-    CircularBufferConfig l1_output_cb_config = CircularBufferConfig(cfg.page_size_bytes, {{output_cb_index, cfg.l1_data_format}})
-        .set_page_size(output_cb_index, cfg.page_size_bytes);
+    CircularBufferConfig l1_output_cb_config =
+        CircularBufferConfig(cfg.page_size_bytes, {{output_cb_index, cfg.l1_data_format}})
+            .set_page_size(output_cb_index, cfg.page_size_bytes);
     auto l1_output_cb = CreateCircularBuffer(program, cfg.logical_core, l1_output_cb_config);
 
     bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
@@ -243,8 +252,7 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
         {
             (uint32_t)input_buffer->address(),
             (uint32_t)cfg.num_tiles,
-        }
-    );
+        });
     SetRuntimeArgs(
         program,
         writer_kernel,
@@ -252,9 +260,8 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
         {
             (uint32_t)output_buffer->address(),
             (uint32_t)cfg.num_tiles,
-        }
-    );
-detail::LaunchProgram(device, program);
+        });
+    detail::LaunchProgram(device, program);
     std::vector<uint32_t> dest_buffer_data;
     detail::ReadFromBuffer(output_buffer, dest_buffer_data);
     pass &= input_packed == dest_buffer_data;
@@ -262,7 +269,7 @@ detail::LaunchProgram(device, program);
     return pass;
 }
 
-}   // end namespace local_test_functions
+}  // end namespace local_test_functions
 
 TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedL1ReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -562,4 +569,4 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyL1Wri
     }
 }
 
-}   // end namespace basic_tests::buffer::banked
+}  // end namespace basic_tests::buffer::banked

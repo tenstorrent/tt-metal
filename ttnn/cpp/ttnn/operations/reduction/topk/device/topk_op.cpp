@@ -5,9 +5,6 @@
 #include "topk_op.hpp"
 #include "topk_program_factory.hpp"
 
-// FIXME: ARCH_NAME specific include
-#include "tensix_types.h"  // L1_SIZE
-
 namespace topk_utils {
 
 static inline bool verify_available_cores(
@@ -16,6 +13,7 @@ static inline bool verify_available_cores(
     uint16_t max_dim,
     CoreCoord grid,
     uint16_t k,
+    const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
     const auto max_cores = grid.y - 1;  // reserve one core for the gather - switch to grid.x as it allows for more
@@ -30,7 +28,7 @@ static inline bool verify_available_cores(
             (split_size / tt::constants::TILE_WIDTH) *
             (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
                                                   // as a matching set of indices, is processed by a core
-        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < L1_SIZE && num_cores > 1) {
+        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < l1_size && num_cores > 1) {
             return true;
         }
     }
@@ -79,16 +77,29 @@ void TopK::validate_with_output_tensors(
                 input_shape[this->dim] / 2,
                 device->compute_with_storage_grid_size(),
                 this->k,
+                device->l1_size_per_core(),
                 value_tile_size,
                 index_tile_size),
             "Not enough cores available to run topk operation");
     }
 }
 
-std::vector<ttnn::SimpleShape> TopK::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<TensorSpec> TopK::compute_output_specs(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (output_tensors.size() == 2) {
+        if (output_tensors.at(0).has_value() && output_tensors.at(1).has_value()) {
+            return {output_tensors[0]->get_tensor_spec(), output_tensors[1]->get_tensor_spec()};
+        }
+    }
+    const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensors.at(0).get_logical_shape();
     output_shape[-1] = this->k;
-    return {output_shape, output_shape};
+
+    auto values_spec =
+        TensorSpec(output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
+    auto index_spec =
+        TensorSpec(output_shape, TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), output_mem_config));
+    return {values_spec, index_spec};
 }
 
 std::vector<Tensor> TopK::create_output_tensors(
@@ -98,13 +109,12 @@ std::vector<Tensor> TopK::create_output_tensors(
             return {output_tensors[0].value(), output_tensors[1].value()};
         }
     }
+    auto output_specs = compute_output_specs(input_tensors, output_tensors);
     const auto& input_tensor = input_tensors.at(0);
-    const auto shapes = compute_output_shapes(input_tensors);
-    auto values_tensor = create_device_tensor(
-        shapes[0], input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), this->output_mem_config);
-    auto index_tensor =
-        create_device_tensor(shapes[1], DataType::UINT16, Layout::TILE, input_tensor.device(), this->output_mem_config);
-    return {values_tensor, index_tensor};
+    return {
+        create_device_tensor(output_specs[0], input_tensor.device()),
+        create_device_tensor(output_specs[1], input_tensor.device()),
+    };
 }
 
 operation::ProgramWithCallbacks TopK::create_program(

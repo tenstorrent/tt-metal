@@ -24,8 +24,8 @@ runs:
     - name: Determine Full Docker Image Tag
       shell: bash
       run: |
-        echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/tt-metalium/${{ inputs.image }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
-        echo "TT_METAL_REF_IMAGE_TAG=ghcr.io/${{ github.repository }}/tt-metalium/${{ inputs.image }}:latest" >> $GITHUB_ENV
+        echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ inputs.image }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
+        echo "TT_METAL_REF_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ inputs.image }}:latest" >> $GITHUB_ENV
     - name: Output Docker Image Tag
       shell: bash
       run: |

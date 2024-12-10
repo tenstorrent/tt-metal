@@ -4,6 +4,7 @@
 
 #include "gpt2.hpp"
 
+#include "modules/positional_embeddings.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 
@@ -16,6 +17,7 @@ Transformer::Transformer(const TransformerConfig& config) {
     uint32_t num_heads = config.num_heads;
     float dropout_prob = config.dropout_prob;
     uint32_t num_blocks = config.num_blocks;
+    auto position_embedding_type = config.positional_embedding_type;
     auto use_composite_layernorm = config.experimental.use_composite_layernorm;
 
     fmt::print("Transformer configuration:\n");
@@ -25,6 +27,10 @@ Transformer::Transformer(const TransformerConfig& config) {
     fmt::print("    Num heads: {}\n", num_heads);
     fmt::print("    Dropout probability: {}\n", dropout_prob);
     fmt::print("    Num blocks: {}\n", num_blocks);
+    fmt::print(
+        "    Positional embedding type: {}\n",
+        position_embedding_type == PositionalEmbeddingType::Trainable ? "Trainable" : "Fixed");
+    fmt::print("    Composite layernorm: {}\n", use_composite_layernorm);
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
@@ -40,7 +46,20 @@ Transformer::Transformer(const TransformerConfig& config) {
             embedding_dim));
     }
     tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
-    pos_emb = std::make_shared<ttml::modules::Embedding>(max_sequence_length, embedding_dim);
+
+    auto create_positional_embedding = [position_embedding_type,
+                                        max_sequence_length,
+                                        embedding_dim,
+                                        dropout_prob]() -> std::shared_ptr<modules::PositionalEmbeddingBase> {
+        if (position_embedding_type == PositionalEmbeddingType::Trainable) {
+            return std::make_shared<ttml::modules::TrainablePositionalEmbedding>(
+                embedding_dim, dropout_prob, max_sequence_length);
+        } else {
+            return std::make_shared<ttml::modules::PositionalEmbedding>(
+                embedding_dim, dropout_prob, max_sequence_length);
+        }
+    };
+    pos_emb = create_positional_embedding();
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(
@@ -60,12 +79,9 @@ Transformer::Transformer(const TransformerConfig& config) {
 }
 
 ttml::autograd::TensorPtr Transformer::operator()(
-    const ttml::autograd::TensorPtr& x,
-    const ttml::autograd::TensorPtr& positions,
-    const ttml::autograd::TensorPtr& mask) {
+    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
     auto tok_emb_out = (*tok_emb)(x);
-    auto pos_emb_out = (*pos_emb)(positions);
-    auto out = ttml::ops::add(tok_emb_out, pos_emb_out);
+    auto out = (*pos_emb)(tok_emb_out);
     for (auto& block : blocks) {
         out = (*block)(out, mask);
     }
@@ -73,6 +89,19 @@ ttml::autograd::TensorPtr Transformer::operator()(
     auto logits = (*fc)(out);
     auto log_softmax = ttml::ops::log_softmax(logits, 3);
     return log_softmax;
+}
+
+PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config) {
+    auto positional_embedding_str = config["positional_embedding_type"].as<std::string>("trainable");
+    if (positional_embedding_str == "trainable") {
+        return PositionalEmbeddingType::Trainable;
+    } else if (positional_embedding_str == "fixed") {
+        return PositionalEmbeddingType::Fixed;
+    } else {
+        throw std::runtime_error(fmt::format(
+            "Unknown positional embedding type: {}. Supported positional embedding types [trainable, fixed]",
+            positional_embedding_str));
+    }
 }
 
 TransformerConfig read_config(const YAML::Node& config) {
@@ -83,6 +112,8 @@ TransformerConfig read_config(const YAML::Node& config) {
     transformer_config.num_blocks = config["num_blocks"].as<uint32_t>();
     transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
+    transformer_config.positional_embedding_type = read_positional_embedding_type(config);
+
     if (auto experimental_config = config["experimental"]) {
         transformer_config.experimental.use_composite_layernorm =
             experimental_config["use_composite_layernorm"].as<bool>();

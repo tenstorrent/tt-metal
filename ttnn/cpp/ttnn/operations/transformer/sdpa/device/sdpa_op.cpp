@@ -69,61 +69,43 @@ void ScaledDotProductAttention::validate(
     const auto B = q_shape[0];
     const auto nqh = q_shape[1];
     const auto nkv = k_shape[1];
-    const auto S = q_shape[2];
+    const auto Sq = q_shape[2];
     const auto DH = q_shape[3];
+    const auto Sk = k_shape[2];
+    if (this->is_causal) {
+        TT_FATAL(Sq == Sk, "Causal SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}", Sq, Sk);
+    }
 
     TT_FATAL(k_shape[0] == B && v_shape[0] == B, "K and V batch must match. Got K: {}, V: {}", k_shape[0], v_shape[0]);
     TT_FATAL(v_shape[1] == nkv, "K and V num_heads must match. Got K: {}, V: {}", k_shape[1], v_shape[1]);
-    TT_FATAL(
-        k_shape[2] == S && v_shape[2] == S,
-        "K and V sequence length must match. Got K: {}, V: {}",
-        k_shape[2],
-        v_shape[2]);
-    TT_FATAL(
-        k_shape[3] == DH && v_shape[3] == DH,
-        "K and V hidden dim must match. Got K: {}, V: {}",
-        k_shape[3],
-        v_shape[3]);
-    TT_FATAL(
-        nqh >= nkv && nqh % nkv == 0,
-        "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}",
-        nqh,
-        nkv);
+    TT_FATAL(v_shape[2] == Sk, "K and V sequence length must match. Got K: {}, V: {}", k_shape[2], v_shape[2]);
+    TT_FATAL(k_shape[3] == DH && v_shape[3] == DH, "K and V hidden dim must match. Got K: {}, V: {}", k_shape[3], v_shape[3]);
+    TT_FATAL(nqh >= nkv && nqh % nkv == 0, "Q num_heads must be >= K num_heads and divisible by K num_heads. Got Q: {}, K: {}", nqh, nkv);
 
     if (mask_option.has_value()) {
         const auto mask_shape = mask_option.value().get_legacy_shape();
 
         TT_FATAL(mask_shape[0] == B, "Mask batch dim must match Q batch dim");
         TT_FATAL(mask_shape[1] == 1, "Mask num_heads must be 1 to be broadcasted across all heads");
-        TT_FATAL(mask_shape[2] == S, "Mask sequence length must match Q sequence length");
-        TT_FATAL(mask_shape[3] == S, "Mask sequence length must match Q sequence length");
+        TT_FATAL(mask_shape[2] == Sq, "Mask sequence length must match Q sequence length");
+        TT_FATAL(mask_shape[3] == Sk, "Mask sequence length must match K sequence length");
     }
 
     if (this->program_config.has_value()) {
         auto q_chunk_size = program_config->q_chunk_size;
         auto k_chunk_size = program_config->k_chunk_size;
 
-        TT_FATAL(
-            q_shape[-2] % q_chunk_size == 0,
-            "q_chunk_size must divide q_shape[-2]. Got q_chunk_size: {}, q_shape[-2]: {}",
-            q_chunk_size,
-            q_shape[-2]);
-        TT_FATAL(
-            k_shape[-2] % k_chunk_size == 0,
-            "k_chunk_size must divide k_shape[-2]. Got k_chunk_size: {}, k_shape[-2]: {}",
-            k_chunk_size,
-            k_shape[-2]);
+        TT_FATAL(Sq % q_chunk_size == 0, "q_chunk_size must divide q_shape[-2]. Got q_chunk_size: {}, q_shape[-2]: {}", q_chunk_size, q_shape[-2]);
+        TT_FATAL(Sk % k_chunk_size == 0, "k_chunk_size must divide k_shape[-2]. Got k_chunk_size: {}, k_shape[-2]: {}", k_chunk_size, k_shape[-2]);
+
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttention::compute_output_shapes(
+std::vector<TensorSpec> ScaledDotProductAttention::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_legacy_shape()};
-}
-
-std::vector<Tensor> ScaledDotProductAttention::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config);
+    auto& input = input_tensors.at(0);
+    return {TensorSpec(
+        input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(

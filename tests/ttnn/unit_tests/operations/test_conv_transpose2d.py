@@ -104,18 +104,21 @@ def run_conv_transpose2d(
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
         shard_layout=shard_layout,
         input_channels_alignment=(
             16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
         ),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -139,6 +142,7 @@ def run_conv_transpose2d(
         input_height=input_height,
         input_width=input_width,
         conv_config=conv_config,
+        compute_config=compute_config,
         groups=groups,
     )
     logger.info(f"Conv2d Transpose Input = {(input_height, input_width)} Output = {out_height, out_width}")
@@ -165,6 +169,8 @@ def run_conv_transpose2d(
     assert passing
 
 
+@skip_for_blackhole()
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
@@ -173,26 +179,11 @@ def run_conv_transpose2d(
         (1, 8, 8, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
         (1, 16, 16, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
         (1, 256, 256, 32, 32, 3, 3, 1, 1, 1, 1, 0, 0, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 256, 256, 32, 32, 1, 1, 1, 1, 0, 0, 0, 0, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         # Stride = 2
         (1, 8, 8, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         (1, 128, 128, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (
-            1,
-            16,
-            16,
-            256,
-            256,
-            3,
-            3,
-            2,
-            2,
-            1,
-            1,
-            1,
-            1,
-            None,
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ),  # Fails with error : act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH)
+        (1, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
         # # (1, 16, 16, 32, 32, 3, 3, 2, 2, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED), # Issue with reading block sharded tensor
         # Vanilla Unet
         # Filter Size = 2 not supported in Block sharded
@@ -232,6 +223,8 @@ def test_simple_conv_t2d(
     config,
     shard_layout,
 ):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
     run_conv_transpose2d(
         device,
         math_fidelity=ttnn.MathFidelity.HiFi4,

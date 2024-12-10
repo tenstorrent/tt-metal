@@ -13,18 +13,18 @@
 #include "tt_metal/hostdevcommon/dprint_common.h"
 #include "llrt/hal.hpp"
 
-inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, const tt::tt_metal::Program &program) {
+inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device* device, const tt::tt_metal::Program& program) {
 #if defined(TRACY_ENABLE)
     // TODO: use enums from profiler_common.h
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
     enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
-    auto worker_cores_used_in_program =
-        device->worker_cores_from_logical_cores(program.logical_cores()[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)]);
+    auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(
+        program.logical_cores()[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)]);
     auto device_id = device->id();
     uint64_t min_cycle = -1;
     uint64_t max_cycle = 0;
-    dprint_buf_msg_t *dprint_msg =
-        hal.get_dev_addr<dprint_buf_msg_t *>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DPRINT);
+    dprint_buf_msg_t* dprint_msg =
+        hal.get_dev_addr<dprint_buf_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DPRINT);
 
     // This works for tensix only, will need to be updated for eth
     std::vector<uint64_t> print_buffer_addrs = {
@@ -34,8 +34,8 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
         reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR1]),
         reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR2]),
     };
-    for (const auto &worker_core : worker_cores_used_in_program) {
-        for (const auto &buffer_addr : print_buffer_addrs) {
+    for (const auto& worker_core : worker_cores_used_in_program) {
+        for (const auto& buffer_addr : print_buffer_addrs) {
             std::vector<std::uint32_t> profile_buffer;
             uint32_t end_index;
             uint32_t dropped_marker_counter;
@@ -71,12 +71,12 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
     return t0_to_any_riscfw_end;
 }
 
-inline int get_tt_npu_clock(tt::tt_metal::Device *device) {
+inline int get_tt_npu_clock(tt::tt_metal::Device* device) {
     return tt::Cluster::instance().get_device_aiclk(device->id());
 }
 
 template <typename T>
-inline T calculate_average(const std::vector<T> &vec, bool skip_first_run = true) {
+inline T calculate_average(const std::vector<T>& vec, bool skip_first_run = true) {
     if (vec.empty()) {
         return static_cast<T>(0);
     }

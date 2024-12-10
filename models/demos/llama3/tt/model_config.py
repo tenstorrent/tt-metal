@@ -21,20 +21,33 @@ from typing import Tuple
 from models.utility_functions import nearest_32
 from pathlib import Path
 from tqdm import tqdm
+from dataclasses import dataclass
+
+
+@dataclass
+class LlamaOptimizations:
+    bfp4_mlp: bool
+    # Future fields will go here:
+    # bfp8_activations: bool
+    # bfp8_layernorm: bool
+    # bfp8_ccl: bool
+
+    @classmethod
+    def accuracy(cls, model_name):
+        """Configuration optimized for accuracy
+        Only 3.1-70B uses bfp4 MLPs in this configuration
+        """
+        return cls(bfp4_mlp=model_name == "3.1-70B")
+
+    @classmethod
+    def performance(cls, model_name):
+        """Configuration optimized for performance
+        All models use bfp4 MLPs in this configuration
+        """
+        return cls(bfp4_mlp=True)
 
 
 class TtModelArgs:
-    paged_attention_config = None
-
-    # TODO Update these params. In init we update the max_seq_len to 32k if it's a single device
-    max_batch_size = 1
-    # Context length for Llama models (if single device, reduce to 32k in init)
-    max_seq_len = 8192 * 16  # 128k
-    kv_seq_len = 8192 * 16  # 128k
-    sliding_window = 8192 * 16  # 128k
-
-    tile_size = 32
-
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -68,13 +81,22 @@ class TtModelArgs:
         "LLAMA3_1_70B_PARAMS": "models/demos/llama3/model_params/Llama3.1-70B-Instruct",
     }
 
-    def __init__(self, mesh_device, instruct=False, dummy_weights=False, max_batch_size=1):
-        # Add this near the top of the class, with other class attributes
+    def __init__(
+        self,
+        mesh_device,
+        instruct=False,
+        dummy_weights=False,
+        max_batch_size=1,
+        max_seq_len=1024 * 128,
+        optimizations=LlamaOptimizations.accuracy,
+    ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
-        self.is_large_model = False
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
+        self.max_seq_len = max_seq_len
+        self.max_batch_size = max_batch_size
+        self.tile_size = 32
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
@@ -126,33 +148,19 @@ class TtModelArgs:
         elif "3.1-70B" in LLAMA_DIR:
             local_params = "LLAMA3_1_70B_PARAMS"
             self.model_name = "3.1-70B"
-            self.is_large_model = True
         else:
             raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
+
+        if callable(optimizations):
+            self.optimizations = optimizations(self.model_name)
+        else:
+            self.optimizations = optimizations
 
         # Load model params
         if not dummy_weights:
             self._set_llama_params(self.DEFAULT_CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self._set_llama_params(self.LOCAL_LLAMA_PARAMS[local_params])
-
-        # Reduce full 128k context length for combinations with memory constraints
-        # Currently: n150 8b and t3k 70b with 8b/8b/8b MLPs
-        # Default folder location for weights and cached files
-        # FIXME: Setup the max cache size accordingly depending on the target model, architecture and test type.
-        if (
-            self.num_devices <= 2
-        ):  # for 1-chip or 2-chip devices limit the seqlen to 4K (to avoid OoO on N150/N300 CI tests)
-            self.max_seq_len = 1024 * 4
-            self.kv_seq_len = 1024 * 4
-            self.sliding_window = 1024 * 4
-
-        if (
-            self.n_layers == 1
-        ):  # When running a single layer just reduce the seq len to 128, since we won't be decoding that many iterations
-            self.max_seq_len = 128
-            self.kv_seq_len = 128
-            self.sliding_window = 128
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
@@ -167,7 +175,6 @@ class TtModelArgs:
         if "instruct" in self.DEFAULT_CACHE_PATH.lower():
             self.instruct = True
         self.dummy_weights = dummy_weights
-        self.max_batch_size = max_batch_size
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
         # Enable workarounds by default until di/dt issues are fixed
@@ -250,6 +257,7 @@ class TtModelArgs:
             # Chunk values based on what works best empirically
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
                 q_chunk_size=256 if seqlen >= 2048 else 64,
                 k_chunk_size=256 if seqlen >= 2048 else 64,
             )
@@ -373,6 +381,7 @@ class TtModelArgs:
 
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
                 q_chunk_size=32,
                 k_chunk_size=32,
             )
@@ -415,14 +424,6 @@ class TtModelArgs:
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
-            )
-            self.model_config["ROT_MAT_BMM_PROGCFG"] = lambda m, k, n: ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=grid_by_batch,
-                in0_block_w=math.ceil(k / 32),
-                out_subblock_h=1,
-                out_subblock_w=1,  # TODO How to choose this subblock size?
-                per_core_M=math.ceil(m / 32),
-                per_core_N=math.ceil(n / 32),
             )
             self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -562,7 +563,7 @@ class TtModelArgs:
                 fuse_batch=False,
             )
             self.model_config["VISION_XATTN_DENSE_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=seq_len,
+                m=min(seq_len, 1024),
                 k=self.dim // self.num_devices,
                 n=self.dim,
                 grid_size=(8, 8),
@@ -588,23 +589,21 @@ class TtModelArgs:
                 fuse_batch=seq_len <= max_seq,
             )
 
-            xattn_cache_y_cores = (
-                16 // self.num_devices
-            )  # Based on seqlen, this formula gives us a valid number of y cores
-            xattn_cache_x_cores = 8
-            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
-                # using n_heads since xattn repeats KV to match Q
-                (
-                    nearest_32(
-                        (self.n_heads // self.num_devices) * seq_len // (xattn_cache_y_cores * xattn_cache_x_cores)
+            def _get_xattn_kv_prefill_mem_cfg(seq_len):
+                M = (self.n_kv_heads // self.num_devices) * seq_len
+                cores_x, cores_y = self.find_grid(M // self.tile_size)
+                return ttnn.create_sharded_memory_config(
+                    (
+                        nearest_32(M // (cores_x * cores_y)),
+                        self.head_dim,
                     ),
-                    self.head_dim,
-                ),
-                ttnn.CoreGrid(y=xattn_cache_y_cores, x=xattn_cache_x_cores),
-                ttnn.ShardStrategy.HEIGHT,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+                    ttnn.CoreGrid(y=cores_y, x=cores_x),
+                    ttnn.ShardStrategy.HEIGHT,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+
+            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
             self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
             # RMS NORM
@@ -647,7 +646,7 @@ class TtModelArgs:
             return ttnn.Topology.Linear
         return None
 
-    def prepare_inputs_ttnn_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
+    def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
         """
         Prepare inputs for decode mode.
         x: (batch, seq, dim)
@@ -697,7 +696,7 @@ class TtModelArgs:
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         return x
 
-    def prepare_inputs_ttnn_prefill(self, x_bsh, force_replicated=False):
+    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
         """
         Prepare inputs for prefill mode.
         x: (batch, seq, hidden_dim)

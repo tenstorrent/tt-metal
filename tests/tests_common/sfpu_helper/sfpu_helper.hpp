@@ -3,82 +3,55 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Sfpu golden functions
-#include<cmath>
+#include <cmath>
 
-float exponential(float x) {
-    return exp(x);
-}
+float exponential(float x) { return exp(x); }
 
-float reciprocal(float x) {
-    return 1 / x;
-}
+float reciprocal(float x) { return 1 / x; }
 
 float gelu(float x) {
     static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
-    auto x3 = x*x*x;
-    return x*0.5*( 1.0 + tanhf( alpha * (x + 0.044715*x3) ) );
+    auto x3 = x * x * x;
+    return x * 0.5 * (1.0 + tanhf(alpha * (x + 0.044715 * x3)));
 }
 
-float relu(float x) {
-    return fmaxf(x, 0.0f);
-}
+float relu(float x) { return fmaxf(x, 0.0f); }
 
-float ref_sqrt(float x) {
-    return sqrtf(x);
-}
+float ref_sqrt(float x) { return sqrtf(x); }
 
-float sigmoid(float x) {
-    return 1.0f / (1.0f + exp(-x));
-}
+float sigmoid(float x) { return 1.0f / (1.0f + exp(-x)); }
 
-float ref_log(float x) {
-    return logf(x);
-}
+float ref_log(float x) { return logf(x); }
 
-float ref_log10(float x) {
-    return ref_log(x)*0.4342944819032518;
-}
+float ref_log10(float x) { return ref_log(x) * 0.4342944819032518; }
 
-float ref_log2(float x) {
-    return ref_log(x)*1.4426950408889634f;
-}
+float ref_log2(float x) { return ref_log(x) * 1.4426950408889634f; }
 
-float ref_tanh(float x) {
-    return tanh(x);
-}
-
+float ref_tanh(float x) { return tanh(x); }
 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2_plus_1(uint32_t num_bytes, int seed) {
-  return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed, 1.0f); // 0.0f..2.0f
+    return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed, 1.0f);  // 0.0f..2.0f
 }
 
 namespace helper {
-template <typename T> int sgn(T val) {
+template <typename T>
+int sgn(T val) {
     return (T(0) < val) - (val < T(0));
 }
-}
+}  // namespace helper
 
-float ref_sign(float x) {
-    return helper::sgn(x);
-}
+float ref_sign(float x) { return helper::sgn(x); }
 
-float ref_square(float x) {
-    return x*x;
-}
+float ref_square(float x) { return x * x; }
 
-float ref_abs(float x) {
-    return std::abs(x);
-}
+float ref_abs(float x) { return std::abs(x); }
 
-float ref_identity(float x) {
-    return x;
-}
+float ref_identity(float x) { return x; }
 
-std::vector<uint32_t> sfpu(const std::vector<uint32_t> &src, std::function<float(float)> sfpu_func) {
+std::vector<uint32_t> sfpu(const std::vector<uint32_t>& src, std::function<float(float)> sfpu_func) {
     std::vector<uint32_t> dst;
 
-    for (uint32_t el: src) {
-
+    for (uint32_t el : src) {
         uint32_t top = el & 0xffff0000;
         uint32_t bottom = el << 16;
 
@@ -106,8 +79,7 @@ std::vector<uint32_t> create_random_ones_and_twos_vector_of_bfloat16(uint32_t nu
 
     std::vector<uint32_t> dst;
 
-    for (uint32_t el: src) {
-
+    for (uint32_t el : src) {
         uint32_t top = el & 0xffff0000;
         uint32_t bottom = el << 16;
 
@@ -127,77 +99,64 @@ std::vector<uint32_t> create_random_ones_and_twos_vector_of_bfloat16(uint32_t nu
 }
 
 // Comparison functions
-bool equal_within_two_sig_figs(float a, float b) {
-    return equal_within_n_sig_figs(a, b, 2);
-}
+bool equal_within_two_sig_figs(float a, float b) { return equal_within_n_sig_figs(a, b, 2); }
 
-bool equal_within_absolute_tolerance_of_0p03(float a, float b) {
-    return equal_within_absolute_tolerance(a, b, 0.03);
-}
+bool equal_within_absolute_tolerance_of_0p03(float a, float b) { return equal_within_absolute_tolerance(a, b, 0.03); }
 
-bool is_close_0p015(float a, float b) {
-    return is_close(a, b, 0.015f);
-}
+bool is_close_0p015(float a, float b) { return is_close(a, b, 0.015f); }
 
-bool is_close_rtol_0p06_atol_0p006(float a, float b) {
-    return is_close(a, b, 0.06f, 0.006f);
-}
+bool is_close_rtol_0p06_atol_0p006(float a, float b) { return is_close(a, b, 0.06f, 0.006f); }
 
-bool is_close_rtol_0p175_atol_0p1(float a, float b) {
-    return is_close(a, b, 0.175f, 0.1f);
-}
+bool is_close_rtol_0p175_atol_0p1(float a, float b) { return is_close(a, b, 0.175f, 0.1f); }
 
 // SFPU maps -> relevant kernels, golden functions, comparison functions
-static std::vector<std::string> sfpu_op =
-    { "relu",
-     "exponential",
-     "reciprocal",
-     "gelu",
-     "sqrt",
-     "sigmoid",
-     "log",
-     "log2",
-     "log10",
-     "tanh",
-     "sign",
-     "abs",
-     "square",
-     "identity"
-    };
+static std::vector<std::string> sfpu_op = {
+    "relu",
+    "exponential",
+    "reciprocal",
+    "gelu",
+    "sqrt",
+    "sigmoid",
+    "log",
+    "log2",
+    "log10",
+    "tanh",
+    "sign",
+    "abs",
+    "square",
+    "identity"};
 
 const std::map<std::string, std::function<float(float)>> sfpu_op_to_function = {
-    {"relu",        relu},
+    {"relu", relu},
     {"exponential", exponential},
-    {"reciprocal",  reciprocal},
-    {"gelu",        gelu},
-    {"sqrt",        ref_sqrt},
-    {"sigmoid",     sigmoid},
-    {"log",         ref_log},
-    {"log2",        ref_log2},
-    {"log10",       ref_log10},
-    {"tanh",        ref_tanh},
-    {"sign",        ref_sign},
-    {"abs",         ref_abs},
-    {"square",      ref_square},
-    {"identity",    ref_identity}
-};
+    {"reciprocal", reciprocal},
+    {"gelu", gelu},
+    {"sqrt", ref_sqrt},
+    {"sigmoid", sigmoid},
+    {"log", ref_log},
+    {"log2", ref_log2},
+    {"log10", ref_log10},
+    {"tanh", ref_tanh},
+    {"sign", ref_sign},
+    {"abs", ref_abs},
+    {"square", ref_square},
+    {"identity", ref_identity}};
 
 const std::map<std::string, std::function<std::vector<uint32_t>(uint32_t num_bytes, int seed)>> sfpu_op_to_init_func = {
-    {"relu",        create_random_vector_of_bfloat16_1_1},
+    {"relu", create_random_vector_of_bfloat16_1_1},
     {"exponential", create_random_binary_vector_of_bfloat16},
-    {"reciprocal",  create_random_ones_and_twos_vector_of_bfloat16},
-    {"gelu",        create_random_binary_vector_of_bfloat16},
-    {"sqrt",        create_random_vector_of_bfloat16_0_2},
-    {"sigmoid",     create_random_vector_of_bfloat16_1_1},
-    {"log",         create_random_vector_of_bfloat16_0_2_plus_1},
-    {"log2",         create_random_vector_of_bfloat16_0_2_plus_1},
-    {"log10",         create_random_vector_of_bfloat16_0_2_plus_1},
-    {"tanh",        create_random_vector_of_bfloat16_1_1},
-    {"sign",        create_random_vector_of_bfloat16_1_1},
-    {"abs",         create_random_vector_of_bfloat16_1_1},
-    {"square",      create_random_vector_of_bfloat16_1_1},
-    {"identity",      create_random_vector_of_bfloat16_1_1}
-};
+    {"reciprocal", create_random_ones_and_twos_vector_of_bfloat16},
+    {"gelu", create_random_binary_vector_of_bfloat16},
+    {"sqrt", create_random_vector_of_bfloat16_0_2},
+    {"sigmoid", create_random_vector_of_bfloat16_1_1},
+    {"log", create_random_vector_of_bfloat16_0_2_plus_1},
+    {"log2", create_random_vector_of_bfloat16_0_2_plus_1},
+    {"log10", create_random_vector_of_bfloat16_0_2_plus_1},
+    {"tanh", create_random_vector_of_bfloat16_1_1},
+    {"sign", create_random_vector_of_bfloat16_1_1},
+    {"abs", create_random_vector_of_bfloat16_1_1},
+    {"square", create_random_vector_of_bfloat16_1_1},
+    {"identity", create_random_vector_of_bfloat16_1_1}};
 
 const std::map<std::string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_function = {
     {"exponential", equal_within_two_sig_figs},
@@ -211,7 +170,6 @@ const std::map<std::string, std::function<bool(float a, float b)>> sfpu_op_to_co
     {"log10", is_close_rtol_0p06_atol_0p006},
     {"tanh", is_close_rtol_0p175_atol_0p1},
     {"sign", is_close_rtol_0p175_atol_0p1},
-    {"abs",  is_close_rtol_0p175_atol_0p1},
+    {"abs", is_close_rtol_0p175_atol_0p1},
     {"square", is_close_rtol_0p175_atol_0p1},
-    {"identity", is_close_rtol_0p175_atol_0p1}
-};
+    {"identity", is_close_rtol_0p175_atol_0p1}};

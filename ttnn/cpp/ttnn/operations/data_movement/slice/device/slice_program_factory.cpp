@@ -271,13 +271,9 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
             for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-                {
-                    SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-                }
+                { SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first); }
 
-                {
-                    SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
-                }
+                { SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second); }
             }
         };
 
@@ -727,32 +723,33 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
     uint32_t num_total_Yt = input_shape[-2] / TILE_HEIGHT;
     uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt;
 
-    const auto set_common_reader_args =
-        [&](uint32_t* reader_common_args, uint32_t* num_unpadded_tiles_per_dim, uint32_t* num_padded_tiles_per_dim)
-            __attribute__((always_inline)) {
-                reader_common_args[0] = input_buffer->address();
-                num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
-                num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
-                num_padded_tiles_per_dim[0] = num_padded_Xt;
-                num_padded_tiles_per_dim[1] = num_padded_Yt;
-                accumulated_total_per_dim[0] = num_total_Xt;
-                accumulated_total_per_dim[1] = num_total_Yt * num_total_Xt;
-                for (int32_t i = 2; i < num_dims; ++i) {
-                    uint32_t num_unpadded_dim = output_shape[-(i + 1)];
-                    uint32_t num_total_dim = input_shape[-(i + 1)];
-                    uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
-                    num_unpadded_tiles_per_dim[i] = num_unpadded_dim;
-                    num_padded_tiles_per_dim[i] = num_padded_dim;
-                    accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
-                }
-            };
+    const auto set_common_reader_args = [&](
+        uint32_t * reader_common_args, uint32_t * num_unpadded_tiles_per_dim, uint32_t * num_padded_tiles_per_dim)
+        __attribute__((always_inline)) {
+        reader_common_args[0] = input_buffer->address();
+        num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
+        num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
+        num_padded_tiles_per_dim[0] = num_padded_Xt;
+        num_padded_tiles_per_dim[1] = num_padded_Yt;
+        accumulated_total_per_dim[0] = num_total_Xt;
+        accumulated_total_per_dim[1] = num_total_Yt * num_total_Xt;
+        for (int32_t i = 2; i < num_dims; ++i) {
+            uint32_t num_unpadded_dim = output_shape[-(i + 1)];
+            uint32_t num_total_dim = input_shape[-(i + 1)];
+            uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
+            num_unpadded_tiles_per_dim[i] = num_unpadded_dim;
+            num_padded_tiles_per_dim[i] = num_padded_dim;
+            accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
+        }
+    };
 
-    const auto set_reader_rt_args = [&](uint32_t* reader_rt_args,
-                                        const uint32_t* num_unpadded_tiles_per_dim,
-                                        const uint32_t* num_padded_tiles_per_dim,
-                                        const uint32_t& num_tiles_per_core,
-                                        const uint32_t& start_offset,
-                                        const uint32_t& num_tiles_written) __attribute__((always_inline)) {
+    const auto set_reader_rt_args = [&](
+        uint32_t * reader_rt_args,
+        const uint32_t* num_unpadded_tiles_per_dim,
+        const uint32_t* num_padded_tiles_per_dim,
+        const uint32_t& num_tiles_per_core,
+        const uint32_t& start_offset,
+        const uint32_t& num_tiles_written) __attribute__((always_inline)) {
         reader_rt_args[2] = num_tiles_written % num_unpadded_tiles_per_dim[0];
         uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
         uint32_t start_id = reader_rt_args[2] + start_offset;

@@ -7,6 +7,7 @@
 #include "host_api.hpp"
 #include "llrt/llrt.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -29,6 +30,34 @@ CircularBuffer::CircularBuffer(const CoreRangeSet& core_ranges, const CircularBu
     core_ranges_(core_ranges),
     config_(config),
     locally_allocated_address_(std::nullopt) {
+    this->validate_set_config_attributes();
+    TT_FATAL(
+        this->config_.remote_buffer_indices().empty(),
+        "Remote buffer indices are not supported without a GlobalCircularBuffer");
+    if (globally_allocated()) {
+        globally_allocated_address_ = config.globally_allocated_address().value();
+    }
+}
+
+CircularBuffer::CircularBuffer(
+    const CoreRangeSet& core_ranges,
+    const CircularBufferConfig& config,
+    const v1::experimental::GlobalCircularBuffer& global_circular_buffer) :
+    id_(reinterpret_cast<uintptr_t>(this)),
+    core_ranges_(core_ranges),
+    config_(config),
+    locally_allocated_address_(std::nullopt) {
+    this->validate_set_config_attributes();
+    TT_FATAL(
+        !config.globally_allocated_address().has_value(),
+        "Connot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
+    TT_FATAL(
+        !this->config_.remote_buffer_indices().empty(),
+        "Remote buffer indices should be specified when using a GlobalCircularBuffer");
+    this->set_global_circular_buffer(global_circular_buffer);
+}
+
+void CircularBuffer::validate_set_config_attributes() {
     for (uint8_t buffer_index = 0; buffer_index < NUM_CIRCULAR_BUFFERS; buffer_index++) {
         std::optional<DataFormat> data_format_spec = this->config_.data_formats().at(buffer_index);
         std::optional<uint32_t> page_size_spec = this->config_.page_sizes().at(buffer_index);
@@ -44,14 +73,6 @@ CircularBuffer::CircularBuffer(const CoreRangeSet& core_ranges, const CircularBu
                 df_set_str,
                 ps_set_str);
         }
-
-        if (df_set and ps_set) {
-            this->buffer_indices_.insert(buffer_index);
-        }
-    }
-
-    if (globally_allocated()) {
-        globally_allocated_address_ = config.globally_allocated_address().value();
     }
 }
 
@@ -64,7 +85,7 @@ bool CircularBuffer::is_on_logical_core(const CoreCoord& logical_core) const {
 }
 
 bool CircularBuffer::uses_buffer_index(uint32_t buffer_index) const {
-    return this->buffer_indices_.find(buffer_index) != this->buffer_indices_.end();
+    return this->buffer_indices().find(buffer_index) != this->buffer_indices().end();
 }
 
 uint32_t CircularBuffer::page_size(uint32_t buffer_index) const {
@@ -111,6 +132,18 @@ uint32_t CircularBuffer::address() const {
 void CircularBuffer::assign_global_address() {
     GetBufferAddress(config_.shadow_global_buffer, &globally_allocated_address_);
 }
+
+void CircularBuffer::set_global_circular_buffer(const v1::experimental::GlobalCircularBuffer& global_circular_buffer) {
+    TT_FATAL(
+        global_circular_buffer.all_cores().contains(this->core_ranges_),
+        "Specified cores are not contained in associated GlobalCircularBuffer");
+    this->config().set_globally_allocated_address(global_circular_buffer.cb_buffer());
+    this->shadow_global_circular_buffer_ = &global_circular_buffer;
+    this->globally_allocated_address_ = global_circular_buffer.buffer_address();
+    this->global_circular_buffer_config_address_ = global_circular_buffer.config_address();
+}
+
+DeviceAddr CircularBuffer::config_address() const { return this->global_circular_buffer_config_address_; }
 
 }  // namespace tt_metal
 

@@ -43,18 +43,18 @@ void kernel_main() {
     };
 
     const auto& global_reduce_sender = [&](const uint32_t cb_ex, const uint32_t cb_ex_global)
-                                           __attribute__((always_inline)) {
-                                               uint32_t l1_read_addr_ex = get_read_ptr(cb_ex);
-                                               uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
-                                               noc_async_write_multicast_loopback_src(
-                                                   l1_read_addr_ex,
-                                                   multicast_data_noc | l1_read_addr_ex_global,
-                                                   stats_tiles * num_tiles_per_worker_bytes,
-                                                   num_blocks,
-                                                   false,
-                                                   false);
-                                               noc_async_write_barrier();
-                                           };
+        __attribute__((always_inline)) {
+        uint32_t l1_read_addr_ex = get_read_ptr(cb_ex);
+        uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
+        noc_async_write_multicast_loopback_src(
+            l1_read_addr_ex,
+            multicast_data_noc | l1_read_addr_ex_global,
+            stats_tiles * num_tiles_per_worker_bytes,
+            num_blocks,
+            false,
+            false);
+        noc_async_write_barrier();
+    };
 
     cb_wait_front(cb_stats_reduced, stats_tiles * block_h);
     cb_reserve_back(cb_ex_global, block_h);

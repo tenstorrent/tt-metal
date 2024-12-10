@@ -27,23 +27,23 @@ void MAIN {
     cumsum_tile_init();
 
     for (uint32_t nc = 0; nc < NC; ++nc) {
-        for(uint32_t wt = 0; wt < Wt; ++wt) {
-            for(uint32_t ht = 0; ht < Ht; ++ht) {
+        for (uint32_t wt = 0; wt < Wt; ++wt) {
+            for (uint32_t ht = 0; ht < Ht; ++ht) {
                 cb_reserve_back(tt::CBIndex::c_16, onetile);
                 acquire_dst();
                 cb_wait_front(tt::CBIndex::c_0, onetile);
 
-                #ifndef ROWWISE
-                    copy_tile(tt::CBIndex::c_0, 0, 0);
-                #else
-                    transpose_wh_init_short(tt::CBIndex::c_0);
-                    transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
-                #endif
+#ifndef ROWWISE
+                copy_tile(tt::CBIndex::c_0, 0, 0);
+#else
+                transpose_wh_init_short(tt::CBIndex::c_0);
+                transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
+#endif
                 cumsum_tile(0, ht == 0);
-                #ifdef ROWWISE
-                    transpose_wh_dest_init_short();
-                    transpose_wh_dest(0);
-                #endif
+#ifdef ROWWISE
+                transpose_wh_dest_init_short();
+                transpose_wh_dest(0);
+#endif
 
                 pack_tile(0, tt::CBIndex::c_16);
 
@@ -54,4 +54,4 @@ void MAIN {
         }
     }
 }
-}
+}  // namespace NAMESPACE

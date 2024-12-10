@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "core_config.h"
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 
@@ -21,6 +20,7 @@
 // We don't want to pollute host code with those
 // Including them here within the guard to make FW/KERNEL happy
 // The right thing to do, would be "include what you use" in the other header files
+#include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
 
@@ -97,26 +97,32 @@ struct rta_offset_t {
     volatile uint16_t crta_offset;
 };
 
+// Maximums across all archs
+constexpr auto NUM_PROGRAMMABLE_CORE_TYPES = 3u;
+constexpr auto NUM_PROCESSORS_PER_CORE_TYPE = 5u;
+
 struct kernel_config_msg_t {
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     // Ring buffer of kernel configuration data
-    volatile uint32_t kernel_config_base[static_cast<int>(ProgrammableCoreType::COUNT)];
-    volatile uint16_t sem_offset[static_cast<int>(ProgrammableCoreType::COUNT)];
-    volatile uint16_t cb_offset;
+    volatile uint32_t kernel_config_base[NUM_PROGRAMMABLE_CORE_TYPES];
+    volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
+    volatile uint16_t local_cb_offset;
+    volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
-    volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
+    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
 
     volatile uint16_t host_assigned_id;
 
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
-    volatile uint8_t max_cb_index;
+    volatile uint8_t max_local_cb_end_index;
+    volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t enables;
-    volatile uint8_t pad2[12];
+    volatile uint8_t pad2[9];
 } __attribute__((packed));
 
 struct go_msg_t {
@@ -275,6 +281,16 @@ static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 2;
 struct profiler_msg_t {
     uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
     uint32_t buffer[PROFILER_RISC_COUNT][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
+};
+
+enum class AddressableCoreType : uint8_t {
+    TENSIX = 0,
+    ETH = 1,
+    PCIE = 2,
+    DRAM = 3,
+    HARVESTED = 4,
+    UNKNOWN = 5,
+    COUNT = 6,
 };
 
 struct addressable_core_t {

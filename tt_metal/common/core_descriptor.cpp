@@ -121,7 +121,7 @@ const core_descriptor_t& get_core_descriptor_config(
         }
         dispatch_cores.push_back(coord);
     }
-    TT_ASSERT(dispatch_cores.size(), "Dispatch cores size must be positive");
+    TT_ASSERT(dispatch_cores.size() || std::getenv("TT_METAL_SIMULATOR_EN"), "Dispatch cores size must be positive");
 
     config_by_num_cqs[num_hw_cqs] = core_descriptor_t{
         .compute_grid_size = compute_grid_size,

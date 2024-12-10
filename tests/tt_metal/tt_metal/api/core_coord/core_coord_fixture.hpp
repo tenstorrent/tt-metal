@@ -8,7 +8,7 @@
 #include "tt_metal/host_api.hpp"
 
 class CoreCoordFixture : public ::testing::Test {
-   protected:
+protected:
     CoreRange cr1 = CoreRange({0, 0}, {1, 1});
     CoreRange cr2 = CoreRange({3, 3}, {5, 4});
     CoreRange cr3 = CoreRange({1, 2}, {2, 2});

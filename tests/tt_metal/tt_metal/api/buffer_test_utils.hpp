@@ -7,7 +7,8 @@
 #include "host_api.hpp"
 
 namespace tt::test::buffer::detail {
-inline void writeL1Backdoor(tt::tt_metal::Device* device, CoreCoord coord, uint32_t address, std::vector<uint32_t>& data) {
+inline void writeL1Backdoor(
+    tt::tt_metal::Device* device, CoreCoord coord, uint32_t address, std::vector<uint32_t>& data) {
     tt::log_info("{} -- coord={} address={}", __FUNCTION__, coord.str(), address);
     tt_metal::detail::WriteToDeviceL1(device, coord, address, data);
 }
@@ -16,7 +17,8 @@ inline void readL1Backdoor(
     tt::log_info("{} -- coord={} address={} byte_size={}", __FUNCTION__, coord.str(), address, byte_size);
     tt_metal::detail::ReadFromDeviceL1(device, coord, address, byte_size, data);
 }
-inline void writeDramBackdoor(tt::tt_metal::Device* device, uint32_t channel, uint32_t address, std::vector<uint32_t>& data) {
+inline void writeDramBackdoor(
+    tt::tt_metal::Device* device, uint32_t channel, uint32_t address, std::vector<uint32_t>& data) {
     tt::log_info("{} -- channel={} address={}", __FUNCTION__, channel, address);
     tt_metal::detail::WriteToDeviceDRAMChannel(device, channel, address, data);
 }

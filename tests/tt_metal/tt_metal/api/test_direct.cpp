@@ -27,11 +27,7 @@ namespace unit_tests::dram::direct {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_only(
-    tt_metal::Device* device,
-    const size_t& byte_size,
-    const size_t& l1_byte_address,
-    const CoreCoord& reader_core) {
-
+    tt_metal::Device* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& reader_core) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -39,11 +35,7 @@ bool reader_only(
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
-                    .device=device,
-                    .size = byte_size,
-                    .page_size = byte_size,
-                    .buffer_type = tt::tt_metal::BufferType::DRAM
-        };
+        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = input_dram_buffer->address();
@@ -96,24 +88,15 @@ bool reader_only(
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool writer_only(
-    tt_metal::Device* device,
-    const size_t& byte_size,
-    const size_t& l1_byte_address,
-    const CoreCoord& writer_core) {
-
+    tt_metal::Device* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& writer_core) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-
     tt_metal::InterleavedBufferConfig dram_config{
-                                        .device=device,
-                                        .size = byte_size,
-                                        .page_size = byte_size,
-                                        .buffer_type = tt_metal::BufferType::DRAM
-                                        };
+        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt_metal::BufferType::DRAM};
 
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = output_dram_buffer->address();
@@ -137,7 +120,6 @@ bool writer_only(
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt_metal::detail::WriteToDeviceL1(device, writer_core, l1_byte_address, inputs);
     // tt_metal::detail::WriteToBuffer(l1_buffer, inputs);
-
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -173,7 +155,6 @@ struct ReaderWriterConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_config) {
-
     bool pass = true;
 
     const uint32_t cb_index = 0;
@@ -184,11 +165,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
-                    .device=device,
-                    .size = byte_size,
-                    .page_size = byte_size,
-                    .buffer_type = tt::tt_metal::BufferType::DRAM
-        };
+        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
@@ -197,8 +174,9 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     uint32_t output_dram_byte_address = output_dram_buffer->address();
     auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
-    tt_metal::CircularBufferConfig l1_cb_config = tt_metal::CircularBufferConfig(byte_size, {{cb_index, test_config.l1_data_format}})
-        .set_page_size(cb_index, test_config.tile_byte_size);
+    tt_metal::CircularBufferConfig l1_cb_config =
+        tt_metal::CircularBufferConfig(byte_size, {{cb_index, test_config.l1_data_format}})
+            .set_page_size(cb_index, test_config.tile_byte_size);
     auto l1_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_cb_config);
 
     auto reader_kernel = tt_metal::CreateKernel(
@@ -229,7 +207,6 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     ////////////////////////////////////////////////////////////////////////////
 
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
-
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -271,7 +248,6 @@ struct ReaderDatacopyWriterConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriterConfig& test_config) {
-
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;
@@ -283,11 +259,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
-                    .device=device,
-                    .size = byte_size,
-                    .page_size = byte_size,
-                    .buffer_type = tt::tt_metal::BufferType::DRAM
-        };
+        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
     auto input_dram_buffer = tt_metal::CreateBuffer(dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
     auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
@@ -295,12 +267,14 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     uint32_t output_dram_byte_address = output_dram_buffer->address();
     auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
-    tt_metal::CircularBufferConfig l1_input_cb_config = tt_metal::CircularBufferConfig(byte_size, {{input0_cb_index, test_config.l1_input_data_format}})
-        .set_page_size(input0_cb_index, test_config.tile_byte_size);
+    tt_metal::CircularBufferConfig l1_input_cb_config =
+        tt_metal::CircularBufferConfig(byte_size, {{input0_cb_index, test_config.l1_input_data_format}})
+            .set_page_size(input0_cb_index, test_config.tile_byte_size);
     auto l1_input_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_input_cb_config);
 
-    tt_metal::CircularBufferConfig l1_output_cb_config = tt_metal::CircularBufferConfig(byte_size, {{output_cb_index, test_config.l1_output_data_format}})
-        .set_page_size(output_cb_index, test_config.tile_byte_size);
+    tt_metal::CircularBufferConfig l1_output_cb_config =
+        tt_metal::CircularBufferConfig(byte_size, {{output_cb_index, test_config.l1_output_data_format}})
+            .set_page_size(output_cb_index, test_config.tile_byte_size);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_output_cb_config);
 
     auto reader_kernel = tt_metal::CreateKernel(
@@ -340,7 +314,6 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     ////////////////////////////////////////////////////////////////////////////
 
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
-
 
     tt_metal::SetRuntimeArgs(
         program,

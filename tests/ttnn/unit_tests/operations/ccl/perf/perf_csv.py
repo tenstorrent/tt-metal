@@ -260,6 +260,10 @@ def perf_report(file_path):
 
     shutil.copy(file_path, ccl_perf_file_path)
 
+    logs_dir = "generated/profiler/.logs"
+    os.makedirs(logs_dir, exist_ok=True)
+    shutil.copy(ccl_perf_file_path, logs_dir)
+
     averages_df.to_csv(ccl_perf_file_path, index=False)
     utilization_df.to_csv(utilization_file_path, index=False)
 

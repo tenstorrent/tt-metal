@@ -237,6 +237,14 @@ void SubDeviceManager::populate_sub_allocators() {
         if (compute_cores.empty()) {
             continue;
         }
+        auto compute_cores_vec = corerange_to_cores(compute_cores, std::nullopt, true);
+        // Make sub-device cores have the same bank id as global allocator
+        std::vector<uint32_t> l1_bank_remap;
+        l1_bank_remap.reserve(compute_cores_vec.size());
+        for (const auto& core : compute_cores_vec) {
+            // These are compute cores, so they should have a single bank
+            l1_bank_remap.push_back(this->device_->bank_ids_from_logical_core(BufferType::L1, core)[0]);
+        }
         AllocatorConfig config(
             {.num_dram_channels = global_allocator_config.num_dram_channels,
              .dram_bank_size = 0,
@@ -251,7 +259,7 @@ void SubDeviceManager::populate_sub_allocators() {
              .core_type_from_noc_coord_table = {},  // Populated later
              .worker_log_to_physical_routing_x = global_allocator_config.worker_log_to_physical_routing_x,
              .worker_log_to_physical_routing_y = global_allocator_config.worker_log_to_physical_routing_y,
-             .l1_bank_remap = {},
+             .l1_bank_remap = std::move(l1_bank_remap),
              .compute_grid = compute_cores,
              .alignment = global_allocator_config.alignment,
              .disable_interleaved = true});

@@ -16,10 +16,15 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_power_iterative(const uint exponent) {
 #pragma GCC unroll 8
     for (int d = 0; d < 8; d++) {
+        uint exp = exponent;
         vFloat in = dst_reg[0];
         vFloat result = 1.0f;
-        for (uint i = 0; i < exponent; i++) {
-            result *= in;
+        while (exp > 0) {
+            if (exp & 1){
+                result *= in;
+            }
+            in *= in;
+            exp >>= 1;
         }
         dst_reg[0] = result;
         dst_reg++;

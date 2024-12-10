@@ -10,8 +10,6 @@
 
 #pragma once
 
-#include "core_config.h"
-
 // DataFormat comes from tt_backend_api_types.hpp for SW, and tensix_types.h for HW...
 // But wait there's more, SW also includes tensix_types.h so there's both tt::DataFormat and DataFormat there. Use a
 // different name here so that this header can be included in both.
@@ -19,6 +17,7 @@
 #include "common/tt_backend_api_types.hpp"
 typedef tt::DataFormat CommonDataFormat;
 #else  // HW already includes tensix_types.h
+#include "core_config.h"
 typedef DataFormat CommonDataFormat;
 #endif
 
@@ -98,10 +97,6 @@ static_assert(DPrintTypeID_Count < 64, "Exceeded number of dprint types");
 // These magic values must not be equal to any real wpos/rpos values.
 constexpr uint32_t DEBUG_PRINT_SERVER_STARTING_MAGIC = 0x98989898;
 constexpr uint32_t DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0xf8f8f8f8;
-
-// In case a single argument to operator << (such as a string) is larger than the buffer size
-// (making it impossible to print) we will instead print this message.
-constexpr const char* debug_print_overflow_error_message = "*** INTERNAL DEBUG PRINT BUFFER OVERFLOW ***\n\n";
 
 #define ATTR_PACK __attribute__((packed))
 

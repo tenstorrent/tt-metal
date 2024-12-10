@@ -27,7 +27,7 @@ void bind_non_zero(py::module& module) {
                 queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
-                List of ttnn.Tensor: the output tensor.
+                List of ttnn.Tensor: the output tensors.
 
             Example:
 

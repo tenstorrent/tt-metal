@@ -6,7 +6,10 @@
 
 #include "host_api.hpp"
 
-inline std::tuple<Program, CoreCoord, std::unique_ptr<GlobalSemaphore>> create_single_sync_program(
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+
+inline std::tuple<Program, CoreCoord, std::shared_ptr<GlobalSemaphore>> create_single_sync_program(
     Device* device, SubDevice sub_device) {
     auto syncer_coord = sub_device.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
@@ -23,7 +26,7 @@ inline std::tuple<Program, CoreCoord, std::unique_ptr<GlobalSemaphore>> create_s
     return {std::move(syncer_program), std::move(syncer_coord), std::move(global_sem)};
 }
 
-inline std::tuple<Program, Program, Program, std::unique_ptr<GlobalSemaphore>> create_basic_sync_program(
+inline std::tuple<Program, Program, Program, std::shared_ptr<GlobalSemaphore>> create_basic_sync_program(
     Device* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
@@ -67,7 +70,7 @@ inline std::tuple<Program, Program, Program, std::unique_ptr<GlobalSemaphore>> c
         std::move(waiter_program), std::move(syncer_program), std::move(incrementer_program), std::move(global_sem)};
 }
 
-inline std::tuple<Program, Program, Program, std::unique_ptr<GlobalSemaphore>> create_basic_eth_sync_program(
+inline std::tuple<Program, Program, Program, std::shared_ptr<GlobalSemaphore>> create_basic_eth_sync_program(
     Device* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::ACTIVE_ETH).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));

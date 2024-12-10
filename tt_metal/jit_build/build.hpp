@@ -50,7 +50,6 @@ public:
     tt::ARCH get_arch() const { return arch_; }
     const string& get_root_path() const { return root_; }
     const string& get_out_root_path() const { return out_root_; }
-    const string& get_out_firmware_root_path() const { return out_firmware_root_; }
     const string& get_out_kernel_root_path() const { return out_kernel_root_; }
 
 private:

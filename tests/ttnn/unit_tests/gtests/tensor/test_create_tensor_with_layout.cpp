@@ -31,9 +31,10 @@ struct CreateTensorParams {
     Expected expected;
 };
 
-}
+}  // namespace
 
-class CreateTensorWithLayoutTest : public ttnn::TTNNFixtureWithDevice, public ::testing::WithParamInterface<CreateTensorParams> {};
+class CreateTensorWithLayoutTest : public ttnn::TTNNFixtureWithDevice,
+                                   public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorWithLayoutTest, Tile) {
     CreateTensorParams params = GetParam();
@@ -44,7 +45,8 @@ TEST_P(CreateTensorWithLayoutTest, Tile) {
 }
 
 namespace {
-const tt::tt_metal::MemoryConfig DefaultMemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM, std::nullopt};
+const tt::tt_metal::MemoryConfig DefaultMemoryConfig{
+    tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM, std::nullopt};
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -53,32 +55,18 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         CreateTensorParams{
             Inputs{
-                .shape=ttnn::SimpleShape({1, 1, 32, 32}),
-                .layout=TensorLayout(DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig)
-            },
-            Expected{
-                .padded_shape=ttnn::SimpleShape({1, 1, 32, 32})
-            }
-        },
+                .shape = ttnn::SimpleShape({1, 1, 32, 32}),
+                .layout = TensorLayout(DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig)},
+            Expected{.padded_shape = ttnn::SimpleShape({1, 1, 32, 32})}},
 
         CreateTensorParams{
             Inputs{
-                .shape=ttnn::SimpleShape({1, 1, 16, 10}),
-                .layout=TensorLayout(DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig)
-            },
-            Expected{
-                .padded_shape=ttnn::SimpleShape({1, 1, 32, 32})
-            }
-        },
+                .shape = ttnn::SimpleShape({1, 1, 16, 10}),
+                .layout = TensorLayout(DataType::BFLOAT16, Layout::TILE, DefaultMemoryConfig)},
+            Expected{.padded_shape = ttnn::SimpleShape({1, 1, 32, 32})}},
 
         CreateTensorParams{
             Inputs{
-                .shape=ttnn::SimpleShape({1, 1, 16, 10}),
-                .layout=TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig)
-            },
-            Expected{
-                .padded_shape=ttnn::SimpleShape({1, 1, 16, 10})
-            }
-        }
-    )
-);
+                .shape = ttnn::SimpleShape({1, 1, 16, 10}),
+                .layout = TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig)},
+            Expected{.padded_shape = ttnn::SimpleShape({1, 1, 16, 10})}}));

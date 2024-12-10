@@ -7,25 +7,25 @@
 
 void kernel_main() {
     // Kernel args
-    uint32_t src_addr                      = get_arg_val<uint32_t>(0);
-    uint32_t src_noc_x                     = get_arg_val<uint32_t>(1);
-    uint32_t src_noc_y                     = get_arg_val<uint32_t>(2);
-    uint32_t num_tiles_r                   = get_arg_val<uint32_t>(3);
-    uint32_t num_tiles_c                   = get_arg_val<uint32_t>(4);
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    uint32_t src_noc_x = get_arg_val<uint32_t>(1);
+    uint32_t src_noc_y = get_arg_val<uint32_t>(2);
+    uint32_t num_tiles_r = get_arg_val<uint32_t>(3);
+    uint32_t num_tiles_c = get_arg_val<uint32_t>(4);
 
     // How many bytes along a row in the original tensor
-    uint32_t num_bytes_per_tensor_row      = get_arg_val<uint32_t>(5);
+    uint32_t num_bytes_per_tensor_row = get_arg_val<uint32_t>(5);
 
     /*
         Constants
         Since I am 'constexpr'ing here, I can multiply
     */
-    constexpr uint32_t cb_id_in0                                    = 0;
-    constexpr uint32_t num_bytes_per_tile_row                       = 64; // 32 bfloat16, each 2 bytes
-    constexpr uint32_t num_bytes_for_sending_eight_tile_rows        = num_bytes_per_tile_row * 8;
-    constexpr uint32_t num_bytes_for_sending_seven_tile_rows        = num_bytes_per_tile_row * 7;
-    constexpr uint32_t num_bytes_for_sending_twenty_four_tile_rows  = num_bytes_per_tile_row * 24;
-    uint32_t num_bytes_per_tile                                     = get_tile_size(cb_id_in0);
+    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t num_bytes_per_tile_row = 64;  // 32 bfloat16, each 2 bytes
+    constexpr uint32_t num_bytes_for_sending_eight_tile_rows = num_bytes_per_tile_row * 8;
+    constexpr uint32_t num_bytes_for_sending_seven_tile_rows = num_bytes_per_tile_row * 7;
+    constexpr uint32_t num_bytes_for_sending_twenty_four_tile_rows = num_bytes_per_tile_row * 24;
+    uint32_t num_bytes_per_tile = get_tile_size(cb_id_in0);
 
     // Variables
     uint64_t replicate_dest_addr;
@@ -67,9 +67,9 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, 1);
 
-            } // End num_tiles_c loop
+            }  // End num_tiles_c loop
             start_dram_addr_offset_for_tensor_row += num_bytes_per_tile_row;
-        } // End 32 iter loop
+        }  // End 32 iter loop
         start_dram_addr_offset_for_tensor_row += num_bytes_per_tensor_row;
-    } // End num_tiles_r loop
+    }  // End num_tiles_r loop
 }

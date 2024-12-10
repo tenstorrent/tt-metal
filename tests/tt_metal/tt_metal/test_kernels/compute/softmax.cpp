@@ -25,7 +25,6 @@ ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
 void MAIN {
-
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
     const uint32_t Ht = get_arg_val<uint32_t>(1);
     const uint32_t Wt = get_arg_val<uint32_t>(2);
@@ -47,49 +46,48 @@ void MAIN {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
 
+    cb_wait_front(cb_bcast_scaler, 1);  // comes from the reader
 
-    cb_wait_front(cb_bcast_scaler, 1); // comes from the reader
-
-    #if FUSED_SCALE_MASK
+#if FUSED_SCALE_MASK
     cb_wait_front(cb_fused_scale, 1);
-    #endif
+#endif
 
     constexpr int dst0 = 0;
     uint32_t ht = start_ht;
     bool wait_mask = true;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        #if FUSED_SCALE_MASK
-        for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
+#if FUSED_SCALE_MASK
+        for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             // apply fused scale [*= 1/sqrt(...)]
             ACQ();
             mul_tiles_bcast_scalar_init_short();
             cb_wait_front(cb_in0, ndst);
             cb_reserve_back(cb_scale_mask, ndst);
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, wt8, 0, wt8); // mul bcast-HW -> DST[wt8]
-                pack_tile(wt8, cb_scale_mask); // reuse exps buffer
+                mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, wt8, 0, wt8);  // mul bcast-HW -> DST[wt8]
+                pack_tile(wt8, cb_scale_mask);                                // reuse exps buffer
             }
             cb_push_back(cb_scale_mask, ndst);
             cb_pop_front(cb_in0, ndst);
             REL();
         }
 
-        for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
+        for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             ACQ();
             if (wait_mask) {
-                cb_wait_front(cb_fused_attn, wt+ndst); // cumulative wait for up to Wt tiles, only at first ht
+                cb_wait_front(cb_fused_attn, wt + ndst);  // cumulative wait for up to Wt tiles, only at first ht
             }
             cb_wait_front(cb_scale_mask, ndst);
             add_bcast_rows_init_short();
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt+wt8, wt8); // tile *= 1/(sum(exp(x)))
+                add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt + wt8, wt8);  // tile *= 1/(sum(exp(x)))
             }
             cb_pop_front(cb_scale_mask, ndst);
             cb_reserve_back(cb_exps, ndst);
             exp_tile_init<true>();
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                exp_tile<true>(wt8); // exp on DST[0]
-                pack_tile(wt8, cb_exps); // reuse the exps buffer again, this time in a circular manner
+                exp_tile<true>(wt8);      // exp on DST[0]
+                pack_tile(wt8, cb_exps);  // reuse the exps buffer again, this time in a circular manner
             }
             cb_push_back(cb_exps, ndst);
             REL();
@@ -103,47 +101,45 @@ void MAIN {
             ht = 0;
             wait_mask = true;
         }
-        #else
+#else
 
-        for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
-
+        for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             ACQ();
             cb_wait_front(cb_in0, ndst);
-            copy_tile_init(); // need to copy from CB to DST to be able to run sfpu math
+            copy_tile_init();  // need to copy from CB to DST to be able to run sfpu math
             for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                copy_tile(cb_in0, wt8, wt8); // copy from c_in[0] to DST[0]
+                copy_tile(cb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
             }
             cb_pop_front(cb_in0, ndst);
 
             cb_reserve_back(cb_exps, ndst);
             exp_tile_init<true>();
             for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                exp_tile<true>(wt8); // exp on DST[0]
-                pack_tile(wt8, cb_exps); // DST[0]->cb_id[wt]
+                exp_tile<true>(wt8);      // exp on DST[0]
+                pack_tile(wt8, cb_exps);  // DST[0]->cb_id[wt]
             }
             cb_push_back(cb_exps, ndst);
             REL();
         }
-        #endif
+#endif
 
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
         reduce_init_delta<false>();
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_wait_front(cb_exps, wt+1); // must be a cumulative wait for correctness
-            constexpr uint32_t bcast_scaler0 = 0; // 0th index from bcast_scaler CB
+            cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
+            constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
             reduce_tile(cb_exps, cb_bcast_scaler, wt, bcast_scaler0, dst0);
         }
         reduce_revert_delta();
         recip_tile_init();
-        recip_tile(dst0); // DST[0] = 1/sum(exp(x))
+        recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
         pack_tile(dst0, cb_recipsumexps);
         cb_push_back(cb_recipsumexps, 1);
 
         REL();
 
-
-        cb_wait_front(cb_recipsumexps, 1); // will reuse Wt times for bcast
+        cb_wait_front(cb_recipsumexps, 1);  // will reuse Wt times for bcast
 
         // now cb_sumexps has exp tiles, need to multiply by our DST[2]
         // by now we already did a umulative wait for Wt tiles in cb_exps
@@ -153,7 +149,8 @@ void MAIN {
             cb_reserve_back(tt::CBIndex::c_16, ndst);
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
                 // wt+wt8 since we pop Wt after the entire loop
-                mul_tiles_bcast<BroadcastType::COL>(cb_exps, cb_recipsumexps, wt+wt8, 0, wt8); // tile *= 1/(sum(exp(x)))
+                mul_tiles_bcast<BroadcastType::COL>(
+                    cb_exps, cb_recipsumexps, wt + wt8, 0, wt8);  // tile *= 1/(sum(exp(x)))
                 pack_tile(wt8, tt::CBIndex::c_16);
             }
             cb_push_back(tt::CBIndex::c_16, ndst);
@@ -161,8 +158,8 @@ void MAIN {
         }
         cb_pop_front(cb_recipsumexps, 1);
         cb_pop_front(cb_exps, Wt);
-    } // NCHt loop
-    //cb_pop_front(cb_bcast_scaler, 1); // we don't actually have to do this
-    //cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
+    }  // NCHt loop
+    // cb_pop_front(cb_bcast_scaler, 1); // we don't actually have to do this
+    // cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
 }
-}
+}  // namespace NAMESPACE

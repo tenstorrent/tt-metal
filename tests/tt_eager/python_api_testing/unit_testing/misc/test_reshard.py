@@ -170,6 +170,30 @@ def run_reshard_test(
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
+        (
+            [1, 1, 4, 256],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (3, 0)]],
+            (4, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            [[(0, 0), (0, 1)]],
+            (4, 128),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            [1, 1, 4, 256],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (1, 0)]],
+            (4, 128),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            [[(0, 0), (0, 7)]],
+            (4, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
     ],
 )
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -434,6 +458,62 @@ def test_reshard_with_program_cache(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
         ),
+        (
+            [1, 1, 1, 96],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+            (1, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            (1, 48),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
+        (
+            [1, 1, 32, 512],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            (32, 128),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            (32, 256),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
+        (
+            [1, 1, 2, 256],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            (2, 128),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            (2, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
+        (
+            [1, 1, 16, 256],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            (16, 128),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            (16, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+        ),
     ],
 )
 def test_dram_reshard(
@@ -466,4 +546,79 @@ def test_dram_reshard(
 
     passing, output_log = comp_equal(input, output)
 
-    assert passing, output_log
+
+@skip_for_blackhole("GH Issue #15234")
+@pytest.mark.parametrize(
+    "input_shape, input_layout, input_shard_grid, input_shard_shape, input_shard_orientation, input_sharding_scheme, input_buffer_type, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme, output_buffer_type",
+    [
+        (  # tests reshard_multi_core_same_width
+            [1, 1, 768, 64],
+            ttnn.TILE_LAYOUT,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            (96, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 2))}),
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+        ),
+        (  # test reshard_multi_core_same_height
+            [1, 1, 16, 256],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            (16, 128),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            (16, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+        ),
+    ],
+)
+def test_dram_reshard_with_program_cache(
+    use_program_cache,
+    device,
+    input_shape,
+    input_layout,
+    input_shard_grid,
+    input_shard_shape,
+    input_shard_orientation,
+    input_sharding_scheme,
+    input_buffer_type,
+    output_shard_grid,
+    output_shard_shape,
+    output_shard_orientation,
+    output_sharding_scheme,
+    output_buffer_type,
+):
+    dtype = ttnn.bfloat8_b
+    for _ in range(4):
+        dummy_tensor = (
+            ttnn.Tensor(torch.rand([1, 1, 128, 512]), dtype).to(ttnn.TILE_LAYOUT).to(device, ttnn.L1_MEMORY_CONFIG)
+        )
+        test_dram_reshard(
+            device,
+            input_shape,
+            input_layout,
+            input_shard_grid,
+            input_shard_shape,
+            input_shard_orientation,
+            input_sharding_scheme,
+            input_buffer_type,
+            output_shard_grid,
+            output_shard_shape,
+            output_shard_orientation,
+            output_sharding_scheme,
+            output_buffer_type,
+        )
+        dummy_tensor = (
+            ttnn.Tensor(torch.rand([2, 2, 128, 64]), dtype).to(ttnn.TILE_LAYOUT).to(device, ttnn.L1_MEMORY_CONFIG)
+        )
+
+    assert device.num_program_cache_entries() == 1

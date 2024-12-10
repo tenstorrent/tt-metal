@@ -165,12 +165,8 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
 
         for (uint32_t i = 0; i < num_cores_total; i++) {
             CoreCoord core = {i % num_cores_x, i / num_cores_x};
-            {
-                SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-            }
-            {
-                SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
-            }
+            { SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first); }
+            { SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second); }
         }
     };
 

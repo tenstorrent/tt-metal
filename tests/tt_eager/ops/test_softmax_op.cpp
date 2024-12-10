@@ -24,19 +24,17 @@ void run_softmax(Device* device, tt::tt_metal::LegacyShape shape) {
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char **argv) {
-
+int main(int argc, char** argv) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
     run_softmax(device, {1, 1, TILE_HEIGHT, TILE_WIDTH});
     run_softmax(device, {1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2});
     pass &= CloseDevice(device);
-
 
     if (pass) {
         log_info(LogTest, "Test Passed");

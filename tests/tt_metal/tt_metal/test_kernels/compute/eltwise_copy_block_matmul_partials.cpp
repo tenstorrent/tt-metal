@@ -11,7 +11,6 @@
 
 namespace NAMESPACE {
 void MAIN {
-
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_single_transfer = get_compile_time_arg_val(1);
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(2);
@@ -22,7 +21,7 @@ void MAIN {
     unary_op_init_common(in_cb_id, out_cb_id);
 
     // Run the outer loop
-    for(uint32_t b = 0; b < outer_loop; ++b) {
+    for (uint32_t b = 0; b < outer_loop; ++b) {
         // Wait for num_single_transfer tiles to be available in in_cb
         cb_wait_front(in_cb_id, num_single_transfer);
         // Acquire DEST reg for MATH/PACK
@@ -43,4 +42,4 @@ void MAIN {
         cb_push_back(out_cb_id, num_single_transfer);
     }
 }
-}
+}  // namespace NAMESPACE

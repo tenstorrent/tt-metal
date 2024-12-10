@@ -31,7 +31,7 @@ std::vector<Tensor> run_operation(
     static_assert(
         operation::detail::is_device_operation<OpConfig>(), "ttnn::run_operation can only dispatch Device Operations!");
     // Create output tensor vector by examining the number of output shapes created by the device operation
-    auto output_shapes = operation::DeviceOperation<operation::Tensors>(devop).compute_output_shapes(input_tensors);
+    auto output_shapes = operation::DeviceOperation<operation::Tensors>(devop).compute_output_shapes(input_tensors, {});
     size_t output_shapes_size = 0;
     if (std::holds_alternative<std::vector<ttnn::SimpleShape>>(output_shapes)) {
         output_shapes_size = std::get<std::vector<ttnn::SimpleShape>>(output_shapes).size();
@@ -216,7 +216,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
     auto view = ttnn::MeshDeviceView(*mesh);
     std::vector<Device*> ring_devices = view.get_devices_on_row(0);  // Tunnel 0
     std::vector<Device*> ring_devices_1 =
-        view.get_devices_on_column(mesh_shape.second - 1);  // Orthogonal to tunnel .. no deadlocks
+        view.get_devices_on_column(mesh_shape.num_cols - 1);  // Orthogonal to tunnel .. no deadlocks
     ring_devices_1 = std::vector<Device*>(ring_devices_1.begin() + 1, ring_devices_1.end());
     std::vector<Device*> ring_devices_2 =
         view.get_devices_on_row(7);  // Tunnel 7 .. potential deadlocks with lack of buffering

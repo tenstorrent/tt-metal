@@ -41,24 +41,28 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     const auto q_shape = input_tensor_q.get_legacy_shape();
     const auto k_shape = input_tensor_k.get_legacy_shape();
-    const uint32_t B = q_shape[0], NQH = q_shape[1], S = q_shape[2], DH = q_shape[3];
+    const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
+    const uint32_t Sk = k_shape[2];
     const uint32_t NKH = k_shape[1];
-    const uint32_t St = S / TILE_HEIGHT;
+    const uint32_t Sqt = Sq / TILE_HEIGHT;
+    const uint32_t Skt = Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
-    const uint32_t q_num_chunks = S / q_chunk_size;
-    const uint32_t k_num_chunks = S / k_chunk_size;
+    const uint32_t q_num_chunks = Sq / q_chunk_size;
+    const uint32_t k_num_chunks = Sk / k_chunk_size;
     const bool use_provided_mask = attn_mask.has_value();
 
     // log_debug all of the above
     tt::log_debug("B: {}", B);
     tt::log_debug("NQH: {}", NQH);
 
-    tt::log_debug("S: {}", S);
+    tt::log_debug("Sq: {}", Sq);
+    tt::log_debug("Sk: {}", Sk);
     tt::log_debug("DH: {}", DH);
-    tt::log_debug("St: {}", St);
+    tt::log_debug("Sqt: {}", Sqt);
+    tt::log_debug("Skt: {}", Skt);
     tt::log_debug("DHt: {}", DHt);
     tt::log_debug("Sq_chunk_t: {}", Sq_chunk_t);
     tt::log_debug("Sk_chunk_t: {}", Sk_chunk_t);
@@ -216,60 +220,64 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     scale_union.f = scale.value_or(1.0f);
 
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      B,
-                                                      NQH,
-                                                      NKH,
-                                                      St,
-                                                      DHt,
-                                                      Sq_chunk_t,
-                                                      q_num_chunks,
-                                                      Sk_chunk_t,
-                                                      k_num_chunks,
-                                                      num_cores,
-                                                      (std::uint32_t)is_causal,
-                                                      (std::uint32_t)use_provided_mask};
+        B,
+        NQH,
+        NKH,
+        Sqt,
+        Skt,
+        DHt,
+        Sq_chunk_t,
+        q_num_chunks,
+        Sk_chunk_t,
+        k_num_chunks,
+        num_cores,
+        (std::uint32_t)is_causal,
+        (std::uint32_t)use_provided_mask
+    };
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      B,
-                                                      NQH,
-                                                      NKH,
-                                                      St,
-                                                      DHt,
-                                                      Sq_chunk_t,
-                                                      q_num_chunks,
-                                                      Sk_chunk_t,
-                                                      k_num_chunks,
-                                                      packed_identity_scalar,
-                                                      scale_union.u,
-                                                      num_cores,
-                                                      (std::uint32_t)is_causal,
-                                                      (std::uint32_t)use_provided_mask};
+        B,
+        NQH,
+        NKH,
+        Sqt,
+        DHt,
+        Sq_chunk_t,
+        q_num_chunks,
+        Sk_chunk_t,
+        k_num_chunks,
+        packed_identity_scalar,
+        scale_union.u,
+        num_cores,
+        (std::uint32_t)is_causal,
+        (std::uint32_t)use_provided_mask
+    };
 
     std::vector<uint32_t> compute_compile_time_args = {// matmul args
-                                                       B,
-                                                       NQH,
-                                                       NKH,
-                                                       St,
-                                                       DHt,
-                                                       Sq_chunk_t,
-                                                       q_num_chunks,
-                                                       Sk_chunk_t,
-                                                       k_num_chunks,
-                                                       qk_in0_block_w,
-                                                       qk_out_subblock_w,
-                                                       qk_out_subblock_h,
-                                                       qk_in0_num_subblocks,
-                                                       qk_in1_num_subblocks,
-                                                       qk_num_blocks,
-                                                       out_in0_block_w,
-                                                       out_out_subblock_w,
-                                                       out_out_subblock_h,
-                                                       out_in0_num_subblocks,
-                                                       out_in1_num_subblocks,
-                                                       out_num_blocks,
-                                                       num_cores,
-                                                       (std::uint32_t)is_causal,
-                                                       (std::uint32_t)use_provided_mask};
+        B,
+        NQH,
+        NKH,
+        Skt,
+        DHt,
+        Sq_chunk_t,
+        q_num_chunks,
+        Sk_chunk_t,
+        k_num_chunks,
+        qk_in0_block_w,
+        qk_out_subblock_w,
+        qk_out_subblock_h,
+        qk_in0_num_subblocks,
+        qk_in1_num_subblocks,
+        qk_num_blocks,
+        out_in0_block_w,
+        out_out_subblock_w,
+        out_out_subblock_h,
+        out_in0_num_subblocks,
+        out_in1_num_subblocks,
+        out_num_blocks,
+        num_cores,
+        (std::uint32_t)is_causal,
+        (std::uint32_t)use_provided_mask
+    };
 
     std::map<string, string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);

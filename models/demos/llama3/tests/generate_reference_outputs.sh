@@ -1,12 +1,38 @@
 #!/bin/bash
 
+# Parse command line arguments
+TOTAL_LENGTH=1024  # Default value
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --total-length)
+            TOTAL_LENGTH="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo
+            echo "Generate reference outputs for Llama models"
+            echo
+            echo "Options:"
+            echo "  --total-length N    Set the total sequence length (default: 1024)"
+            echo "  --help, -h          Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help to see available options"
+            exit 1
+            ;;
+    esac
+done
+
 # Define model directories from environment variables with fallbacks
 LLAMA_DIRS=(
-    # "${LLAMA_32_1B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct}"
-#    "${LLAMA_32_3B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct}"
-#    "${LLAMA_31_8B_DIR:-/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct}"
+    "${LLAMA_32_1B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct}"
+    "${LLAMA_32_3B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct}"
+    "${LLAMA_31_8B_DIR:-/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct}"
     "${LLAMA_32_11B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct}"
-#    "${LLAMA_31_70B_DIR:-/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked}"
+    "${LLAMA_31_70B_DIR:-/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked}"
 )
 
 # Create reference_outputs directory if it doesn't exist
@@ -48,7 +74,7 @@ for DIR in "${LLAMA_DIRS[@]}"; do
 
     # Set LLAMA_DIR environment variable and run the Python script
     LLAMA_DIR="$DIR" python3 "${SCRIPT_DIR}/generate_reference_outputs.py" \
-        --total_length 1024 \
+        --total_length "$TOTAL_LENGTH" \
         --output_file "$OUTPUT_FILE"
 done
 

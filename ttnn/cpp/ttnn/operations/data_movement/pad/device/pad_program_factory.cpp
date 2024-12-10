@@ -1189,13 +1189,9 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             for (uint32_t i = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-                {
-                    SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
-                }
+                { SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first); }
 
-                {
-                    SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
-                }
+                { SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second); }
             }
         };
 

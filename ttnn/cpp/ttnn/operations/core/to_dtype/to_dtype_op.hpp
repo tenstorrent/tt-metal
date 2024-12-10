@@ -45,14 +45,20 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
         input_tensor.get_storage());
 
     if (input_dtype == DataType::BFLOAT8_B) {
-        TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
+        TT_ASSERT(
+            std::holds_alternative<OwnedBuffer>(buffer),
+            "Unexpected type {}",
+            tt::stl::get_active_type_name_in_variant(buffer));
         auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
         auto float_unpacked_data =
             unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
         buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
         input_dtype = DataType::FLOAT32;
     } else if (input_dtype == DataType::BFLOAT4_B) {
-        TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
+        TT_ASSERT(
+            std::holds_alternative<OwnedBuffer>(buffer),
+            "Unexpected type {}",
+            tt::stl::get_active_type_name_in_variant(buffer));
         auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
         auto float_unpacked_data =
             unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
@@ -131,21 +137,20 @@ inline Tensor create_tensor_from_buffer(
             auto data = cast<::bfloat16, T>(input_buffer);
             return create_owned_tensor(std::move(data), shape, dtype, Layout::ROW_MAJOR).to(input_layout);
         }
-        case DataType::BFLOAT8_B: {
-            auto data = cast<float, T>(input_buffer);
-            auto uint32_vector = pack_fp32_vec_as_bfp8_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
-            auto storage = OwnedStorage{std::move(buffer)};
-            return Tensor(std::move(storage), shape, dtype, Layout::ROW_MAJOR)
-                .to(ttnn::TILE_LAYOUT);  // has to be in tile layout
-        }
+        case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             auto data = cast<float, T>(input_buffer);
-            auto uint32_vector = pack_fp32_vec_as_bfp4_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
-            auto storage = OwnedStorage{std::move(buffer)};
-            return Tensor(std::move(storage), shape, dtype, Layout::ROW_MAJOR)
-                .to(ttnn::TILE_LAYOUT);  // has to be in tile layout
+            auto buffer = owned_buffer::create<float>(std::move(data));
+            auto tensor =
+                Tensor(OwnedStorage{std::move(buffer)}, shape, DataType::FLOAT32, Layout::ROW_MAJOR).to(Layout::TILE);
+            auto output_float_data = owned_buffer::get_as<float>(tensor).get();
+            auto output_packed_data =
+                dtype == DataType::BFLOAT8_B
+                    ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                    : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+            auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+            return Tensor(
+                OwnedStorage{std::move(output_buffer)}, shape, dtype, Layout::TILE);  // has to be in tile layout
         }
         default: {
             TT_THROW("Unsupported DataType: {}", dtype);
@@ -182,7 +187,8 @@ inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_l
             default: TT_THROW("Unsupported DataType: {}", input_dtype); break;
         }
     };
-    return distributed::is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_dtype) : convert_dtype(input_tensor);
+    return distributed::is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_dtype)
+                                                             : convert_dtype(input_tensor);
 }
 
 }  // namespace detail
@@ -198,7 +204,9 @@ struct ToDtype {
         }
 
         auto row_major_input_tensor = input_tensor.to(ttnn::ROW_MAJOR_LAYOUT);
-        auto intermediate_tensor = distributed::is_multi_device_tensor(row_major_input_tensor) ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype) : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
+        auto intermediate_tensor = distributed::is_multi_device_tensor(row_major_input_tensor)
+                                       ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype)
+                                       : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
         return detail::convert_to_dtype(intermediate_tensor, input_layout, dtype);
     };
 };
