@@ -27,4 +27,14 @@ float LambdaScheduler::get_last_lr() const {
 float LambdaScheduler::get_current_lr() const {
     return get_optimizer()->get_lr();
 }
+void LambdaScheduler::set_state_dict(const serialization::StateDict &dict) {
+    m_last_step = serialization::get_value_type<int>(dict, "m_last_step");
+    m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
+}
+serialization::StateDict LambdaScheduler::get_state_dict() const {
+    serialization::StateDict res;
+    res["m_last_step"] = m_last_step;
+    res["m_last_lr"] = m_last_lr;
+    return res;
+};
 }  // namespace ttml::schedulers

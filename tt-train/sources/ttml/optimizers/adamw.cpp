@@ -12,13 +12,12 @@
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
-
 namespace {
 
-const std::string kFirstMoment = "first_moment/";
-const std::string kSecondMoment = "second_moment/";
-const std::string kKahanCompensation = "kahan_compensation/";
-
+const std::string kFirstMoment = "first_moment";
+const std::string kSecondMoment = "second_moment";
+const std::string kKahanCompensation = "kahan_compensation";
+const std::string kSteps = "steps";
 }  // namespace
 
 namespace ttml::optimizers {
@@ -98,17 +97,17 @@ void MorehAdamW::step() {
 
 [[nodiscard]] serialization::StateDict MorehAdamW::get_state_dict() const {
     serialization::StateDict state_dict;
-    state_dict["first_moment"] = m_first_moment;
-    state_dict["second_moment"] = m_second_moment;
-    state_dict["steps"] = m_steps;
+    state_dict[kFirstMoment] = m_first_moment;
+    state_dict[kSecondMoment] = m_second_moment;
+    state_dict[kSteps] = m_steps;
 
     return state_dict;
 }
 
 void MorehAdamW::set_state_dict(const serialization::StateDict& dict) {
-    m_first_moment = std::get<serialization::NamedParameters>(dict.at("first_moment"));
-    m_second_moment = std::get<serialization::NamedParameters>(dict.at("second_moment"));
-    m_steps = serialization::get_value_type<size_t>(dict, "steps");
+    m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment);
+    m_second_moment = std::get<serialization::NamedParameters>(dict.at(kSecondMoment));
+    m_steps = serialization::get_value_type<size_t>(dict, kSteps);
 }
 
 [[nodiscard]] size_t MorehAdamW::get_steps() const {
@@ -226,21 +225,19 @@ void AdamW::step() {
 
 [[nodiscard]] serialization::StateDict AdamW::get_state_dict() const {
     serialization::StateDict state_dict;
-    state_dict["first_moment"] = m_first_moment;
-    state_dict["second_moment"] = m_second_moment;
-    state_dict["steps"] = m_steps;
-
-    for (const auto& [key, kahan_compensation] : m_kahan_compensation) {
-        state_dict.emplace(kKahanCompensation + key, kahan_compensation);
-    }
+    state_dict[kFirstMoment] = m_first_moment;
+    state_dict[kSecondMoment] = m_second_moment;
+    state_dict[kKahanCompensation] = m_kahan_compensation;
+    state_dict[kSteps] = m_steps;
 
     return state_dict;
 }
 
 void AdamW::set_state_dict(const serialization::StateDict& dict) {
-    m_first_moment = std::get<serialization::NamedParameters>(dict.at("first_moment"));
-    m_second_moment = std::get<serialization::NamedParameters>(dict.at("second_moment"));
-    m_steps = serialization::get_value_type<size_t>(dict, "steps");
+    m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment));
+    m_second_moment = std::get<serialization::NamedParameters>(dict.at(kSecondMoment));
+    m_kahan_compensation = std::get<serialization::NamedParameters>(dict.at(kKahanCompensation));
+    m_steps = serialization::get_value_type<size_t>(dict, kSteps);
 }
 
 [[nodiscard]] size_t AdamW::get_steps() const {

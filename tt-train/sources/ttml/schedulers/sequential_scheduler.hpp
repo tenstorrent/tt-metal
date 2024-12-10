@@ -27,6 +27,9 @@ public:
     [[nodiscard]] float get_last_lr() const override;
 
     [[nodiscard]] float get_current_lr() const override;
+    [[nodiscard]] serialization::StateDict get_state_dict() const override;
+
+    void set_state_dict(const serialization::StateDict &dict) override;
 
 private:
     std::vector<std::unique_ptr<LRSchedulerBase>> m_schedulers;

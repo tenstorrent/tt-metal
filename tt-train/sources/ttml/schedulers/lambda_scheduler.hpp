@@ -19,6 +19,10 @@ public:
 
     [[nodiscard]] float get_current_lr() const override;
 
+    [[nodiscard]] serialization::StateDict get_state_dict() const override;
+
+    void set_state_dict(const serialization::StateDict &dict) override;
+
 private:
     std::function<float(int)> m_lr_lambda;
     int m_last_step = 0;

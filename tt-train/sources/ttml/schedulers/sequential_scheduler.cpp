@@ -58,4 +58,16 @@ float SequentialScheduler::get_current_lr() const {
     // The current LR of the optimizer should reflect the last scheduler's step
     return get_optimizer()->get_lr();
 }
+
+void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
+    m_current_step_in_scheduler = serialization::get_value_type<int>(dict, "m_current_step_in_scheduler");
+    m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
+}
+serialization::StateDict SequentialScheduler::get_state_dict() const {
+    serialization::StateDict res;
+    res["m_current_step_in_scheduler"] = m_current_step_in_scheduler;
+    res["m_last_lr"] = m_last_lr;
+    return res;
+};
+
 }  // namespace ttml::schedulers

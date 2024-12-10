@@ -20,6 +20,10 @@ public:
 
     [[nodiscard]] float get_current_lr() const override;
 
+    [[nodiscard]] serialization::StateDict get_state_dict() const override;
+
+    void set_state_dict(const serialization::StateDict &dict) override;
+
 private:
     int m_step_size = 0;
     float m_gamma = 0;
