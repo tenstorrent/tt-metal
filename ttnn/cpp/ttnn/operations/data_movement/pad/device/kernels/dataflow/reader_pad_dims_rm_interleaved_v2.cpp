@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstring>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
