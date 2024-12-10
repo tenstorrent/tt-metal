@@ -10,9 +10,9 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_in1 = tt::CB::c_in1;
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_out0 = tt::CBIndex::c_2;
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     add_tiles_init();

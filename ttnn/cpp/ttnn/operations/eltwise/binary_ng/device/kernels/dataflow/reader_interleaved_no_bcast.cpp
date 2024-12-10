@@ -18,7 +18,7 @@ void kernel_main() {
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
-    constexpr auto cb_id_src = tt::CB::c_in0;
+    constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr uint32_t onetile = 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
