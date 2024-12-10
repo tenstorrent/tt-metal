@@ -28,8 +28,21 @@ random.seed(0)
 
 parameters = {
     "nightly": {
-        "input_shape": [[1, 23, 40, 64], [1, 32, 128], [1, 7, 64]],
-        "input_a_dtype": [ttnn.float32],
+        "input_shape": [
+            [1, 14, 3072],
+            [1, 15, 1024],
+            [1, 1, 1024],
+            [1, 32, 6144],
+            [1, 5, 4096],
+            [1, 768],
+            [1, 7, 3072],
+            [1, 9, 128],
+            [1, 9, 16384],
+            [1, 9, 3072],
+            [1, 9, 4096],
+            [1, 9, 8192],
+        ],
+        "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -65,7 +78,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.cos)
+    golden_function = ttnn.get_golden_function(ttnn.tanh)
     torch_output_tensor = golden_function(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
@@ -77,7 +90,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.cos(input_tensor_a, memory_config=output_memory_config)
+    result = ttnn.tanh(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
