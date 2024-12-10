@@ -537,8 +537,8 @@ void Allocator::reset() {
 void AllocatorConfig::reset() {
     dram_bank_offsets.clear();
     core_type_from_noc_coord_table.clear();
-    worker_log_to_physical_routing_x.clear();
-    worker_log_to_physical_routing_y.clear();
+    worker_log_to_virtual_routing_x.clear();
+    worker_log_to_virtual_routing_y.clear();
     l1_bank_remap.clear();
 }
 
