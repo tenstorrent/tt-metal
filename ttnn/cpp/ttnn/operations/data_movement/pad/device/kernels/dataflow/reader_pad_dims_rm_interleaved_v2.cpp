@@ -38,6 +38,7 @@ void kernel_main() {
     constexpr uint32_t stick_size_padded_end = get_compile_time_arg_val(10);
     constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(11);
     constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(12);
+    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(21);
 
 #define not_pad_by_zero get_compile_time_arg_val(13) == 1
 #define front_padding get_compile_time_arg_val(9)
@@ -110,7 +111,7 @@ void kernel_main() {
 #endif
             }
             i_stick++;
-            l1_write_addr += stick_size_padded;
+            l1_write_addr += 16;
             curr_h++;
             if (curr_h == H_padded) {
                 curr_c++;

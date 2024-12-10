@@ -1112,13 +1112,15 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         (std::uint32_t)(stick_size_padded_end / row_major_min_bytes),
         (std::uint32_t)(stick_size_padded / row_major_min_bytes),
         (std::uint32_t)src_stick_size_is_power_of_two,
-        (std::uint32_t)src_stick_size_is_power_of_two ? src_log2_stick_size : stick_size};
+        (std::uint32_t)src_stick_size_is_power_of_two ? src_log2_stick_size : stick_size,
+        (std::uint32_t)stick_size_padded_aligned};
     std::vector<uint32_t> writer_ct_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)dst_is_dram,
         (std::uint32_t)stick_size_padded,
         (std::uint32_t)dst_stick_size_is_power_of_two,
-        (std::uint32_t)dst_stick_size_is_power_of_two ? dst_log2_stick_size : stick_size_padded};
+        (std::uint32_t)dst_stick_size_is_power_of_two ? dst_log2_stick_size : stick_size_padded,
+        (std::uint32_t)stick_size_padded_aligned};
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
