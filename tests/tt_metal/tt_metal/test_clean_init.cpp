@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
         ids.push_back(id);
     }
 
-    const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
 

@@ -253,7 +253,7 @@ void initialize_program(tt_metal::Device* device, tt_metal::Program& program, ui
 int main(int argc, char** argv) {
     init(argc, argv);
 
-    tt::llrt::OptionsG.set_kernels_nullified(true);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(true);
 
     bool pass = true;
     try {
@@ -344,7 +344,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");
