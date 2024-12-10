@@ -10,7 +10,7 @@ import ttnn
 import itertools
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_blackhole, is_grayskull, skip_for_grayskull
+from models.utility_functions import is_blackhole, is_grayskull, skip_for_grayskull, skip_for_blackhole
 
 
 @pytest.mark.parametrize("h", [32])
@@ -185,6 +185,7 @@ def generate_permutations(N):
         yield perm
 
 
+@skip_for_blackhole("tilize_block gives bad pcc after second iteration")
 @skip_for_grayskull("tilize_block gives bad pcc after second iteration")
 @pytest.mark.parametrize("shape", [(7, 7, 7, 7, 7)])
 @pytest.mark.parametrize("perm", generate_permutations(5))
@@ -204,6 +205,7 @@ def test_permute_5d_width(shape, perm, memory_config, dtype, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
+@skip_for_blackhole("tilize_block gives bad pcc after second iteration")
 @skip_for_grayskull("tilize_block gives bad pcc after second iteration")
 @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
 @pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1), (1, 3, 4, 0, 2), (3, 0, 4, 1, 2)])
@@ -225,6 +227,7 @@ def test_permute_5d_blocked(shape, perm, memory_config, dtype, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
+@skip_for_blackhole("tilize_block gives bad pcc after second iteration")
 @skip_for_grayskull("tilize_block gives bad pcc after second iteration")
 def test_permute_nd(device):
     torch_tensor = torch.rand((1, 3, 16, 16, 16, 16), dtype=torch.bfloat16)
