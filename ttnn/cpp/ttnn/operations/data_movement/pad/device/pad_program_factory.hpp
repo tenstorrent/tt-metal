@@ -60,6 +60,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
     Tensor& output,
     const tt::tt_metal::LegacyShape& output_tensor_shape,
     const ttnn::SimpleShape& input_tensor_start,
-    const float pad_value);
+    float pad_value);
 
 }  // namespace ttnn::operations::data_movement::detail

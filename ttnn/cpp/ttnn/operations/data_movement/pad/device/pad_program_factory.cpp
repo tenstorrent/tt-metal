@@ -1402,7 +1402,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
     Tensor& output,
     const tt::tt_metal::LegacyShape& output_tensor_shape,
     const ttnn::SimpleShape& input_tensor_start,
-    const float pad_value) {
+    float pad_value) {
     Program program{};
 
     std::cout << "input_tensor.memory_config(): " << input_tensor.memory_config() << std::endl;
@@ -1512,15 +1512,15 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
     std::cout << "pad_value: " << pad_value << std::endl;
     if (input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16) {
         uint16_t bfloat_pad_value_bits = bfloat16(pad_value).to_uint16();
-        padding_value_as_u32 = static_cast<uint32_t>(bfloat_pad_value_bits);
+        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
     } else if (input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32) {
-        padding_value_as_u32 = static_cast<uint32_t>(pad_value);
+        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
     } else {
         // FIXME: what to do for other dtypes?
-        // for int types we need to convert the padding value to the nearest uint{sz}_t first -> probably should be a pad api change
-        // for bf8 I have no idea.
+        // for int types we need to convert the padding value to the nearest uint{sz}_t first -> probably should be a
+        // pad api change for bf8 I have no idea.n
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
-        padding_value_as_u32 = static_cast<uint32_t>(pad_value);
+        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
     }
 
     std::cout << "padding_value_as_u32: " << padding_value_as_u32 << std::endl;
