@@ -227,6 +227,8 @@ class TtAsymmetricAttention(LightweightModule):
         rope_sin: ttnn.Tensor,
         max_seqlen_in_batch: int,
         trans_mat: ttnn.Tensor,
+        x_len: int,
+        y_len: int,
     ):
         """Prepare QKV tensors for attention computation.
 
@@ -253,7 +255,7 @@ class TtAsymmetricAttention(LightweightModule):
         ), f"Visual sequence length must be divisible by {self.X_MM_SEQ_LEN}, got {seq_x}"
         # TODO: This assert doesn't do what I want it to do. Should check padded shapes
         # assert seq_x % 1024 == 0, f"Visual sequence length must be divisible by 1024, got {seq_x}"
-        assert seq_x + seq_y == max_seqlen_in_batch, f"Padded sequence lengths are not yet supported"
+        # assert seq_x + seq_y == max_seqlen_in_batch, f"Padded sequence lengths are not yet supported"
         # Set up compute kernel config for high-fidelity computations
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -298,7 +300,7 @@ class TtAsymmetricAttention(LightweightModule):
 
         # Process text features if present
         if B == 1:
-            text_seqlen = max_seqlen_in_batch - N
+            text_seqlen = max_seqlen_in_batch - x_len
             if text_seqlen > 0:
                 # Process text features
                 # TODO: Removing until we support padded sequences
@@ -307,10 +309,28 @@ class TtAsymmetricAttention(LightweightModule):
                 q_y, k_y, v_y = self.run_qkv_y(y)
 
                 # Concatenate visual and text features on the sequence dimension
+                # Unpad visual features
+                print(f"x_len: {x_len}, y_len: {y_len}")
+                print(f"q_x: {q_x.shape}, k_x: {k_x.shape}, v_x: {v_x.shape}")
+                print(f"q_y: {q_y.shape}, k_y: {k_y.shape}, v_y: {v_y.shape}")
+                breakpoint()
+                q_x = q_x[:, :, :x_len, :]
+                k_x = k_x[:, :, :x_len, :]
+                v_x = v_x[:, :, :x_len, :]
+                print(f"q_x: {q_x.shape}, k_x: {k_x.shape}, v_x: {v_x.shape}")
+                # Unpad text features
+                q_y = q_y[:, :, :y_len, :]
+                k_y = k_y[:, :, :y_len, :]
+                v_y = v_y[:, :, :y_len, :]
+                print(f"q_y: {q_y.shape}, k_y: {k_y.shape}, v_y: {v_y.shape}")
+                breakpoint()
+
+                # TODO: Pad up to necessary length
                 q = ttnn.concat([q_x, q_y], dim=2)
                 k = ttnn.concat([k_x, k_y], dim=2)
                 v = ttnn.concat([v_x, v_y], dim=2)
             else:
+                assert False, "Not supporting empty prompt"
                 q, k, v = q_x, k_x, v_x
         else:
             assert False, "Batch size > 1 not supported"
@@ -324,6 +344,7 @@ class TtAsymmetricAttention(LightweightModule):
         v: ttnn.Tensor,  # (total <= B * (N + L), num_heads, head_dim)
         *,
         B: int,
+        attn_mask,
     ) -> ttnn.Tensor:
         """Run attention computation.
 
@@ -368,6 +389,7 @@ class TtAsymmetricAttention(LightweightModule):
             is_causal=False,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
+            attn_mask=attn_mask,
         )  # (B, num_heads, seq_len, head_dim)
 
         # Reshape output
@@ -466,6 +488,9 @@ class TtAsymmetricAttention(LightweightModule):
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
         packed_indices,
+        attn_mask,
+        x_len,
+        y_len,
     ) -> ttnn.Tensor:
         B, L = y.shape[1], y.shape[2]
         M = x.shape[2]
@@ -479,6 +504,8 @@ class TtAsymmetricAttention(LightweightModule):
             rope_sin=rope_sin,
             max_seqlen_in_batch=packed_indices["max_seqlen_in_batch_kv"],
             trans_mat=trans_mat,
+            x_len=x_len,
+            y_len=y_len,
         )
 
         # Self-attention is expensive, so don't checkpoint it.
@@ -487,6 +514,9 @@ class TtAsymmetricAttention(LightweightModule):
             k,
             v,
             B=B,
+            attn_mask=attn_mask,
+            x_len=x_len,
+            y_len=y_len,
         )
 
         x, y = self.post_attention(
@@ -495,6 +525,8 @@ class TtAsymmetricAttention(LightweightModule):
             M=M,
             L=L,
             dtype=out.dtype,
+            x_len=x_len,
+            y_len=y_len,
         )
 
         return x, y

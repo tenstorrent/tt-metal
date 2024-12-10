@@ -190,6 +190,9 @@ class TtAsymmetricJointBlock(LightweightModule):
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
         packed_indices=None,
+        attn_mask=None,
+        x_len=None,
+        y_len=None,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Forward pass of a block.
 
@@ -265,6 +268,9 @@ class TtAsymmetricJointBlock(LightweightModule):
             rope_sin=rope_sin,
             trans_mat=trans_mat,
             packed_indices=packed_indices,
+            attn_mask=attn_mask,
+            x_len=x_len,
+            y_len=y_len,
         )
 
         assert x_attn.shape[2] == N
