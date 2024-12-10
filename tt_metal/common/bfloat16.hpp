@@ -18,6 +18,7 @@ private:
     uint16_t uint16_data;
 
 public:
+    static constexpr size_t SIZEOF = 2;
     bfloat16() = default;
 
     // create from float: no rounding, just truncate
@@ -37,8 +38,10 @@ public:
 
     float to_float() const {
         // move lower 16 to upper 16 (of 32) and convert to float
-        uint32_t uint32_data = ((uint32_t)uint16_data) << 16;
-        return *reinterpret_cast<float*>(&uint32_data);
+        uint32_t uint32_data = (uint32_t)uint16_data << 16;
+        float f;
+        std::memcpy(&f, &uint32_data, sizeof(f));
+        return f;
     }
     uint16_t to_packed() const { return uint16_data; }
     uint16_t to_uint16() const { return uint16_data; }
