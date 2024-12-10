@@ -28,9 +28,17 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 32, 32], 32)
-        + gen_shapes([1, 1, 1], [2, 6, 128], [1, 1, 32], 32)
-        + gen_shapes([1, 1], [2, 6], [1, 1], 2)
-        + gen_shapes([1], [2, 6], [1, 1], 2),
+        + gen_shapes([1, 1, 1, 1], [2, 6, 110, 130], [1, 1, 32, 32], 31)
+        + gen_shapes([1, 1, 1, 1], [2, 6, 120, 140], [1, 1, 32, 32], 17)
+        + gen_shapes([1, 1, 1], [2, 6, 128], [1, 1, 32], 8)
+        + gen_shapes([1, 1, 1], [2, 7, 100], [1, 1, 64], 16)
+        + gen_shapes([1, 1, 1], [2, 8, 255], [1, 1, 122], 17)
+        + gen_shapes([1, 1], [2, 26], [1, 11], 2)
+        + gen_shapes([1, 1], [2, 36], [1, 12], 3)
+        + gen_shapes([1, 1], [2, 46], [1, 13], 4)
+        + gen_shapes([1], [2, 6], [1, 1], 2)
+        + gen_shapes([1], [2, 6], [1, 1], 2)
+        + gen_shapes([1], [10, 10], [2, 3], 2),
         "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],

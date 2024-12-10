@@ -31,8 +31,11 @@ parameters = {
         + gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 2)
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 2)
         + gen_shapes([1, 1], [256, 256], [1, 1], 2)
-        + gen_shapes([1], [256], [1], 8),
-        "dim": [0, 1, 2, 3],
+        + gen_shapes([1], [256], [1], 8)
+        + gen_shapes([1, 1, 1, 1], [6, 12, 200, 255], [1, 1, 1, 1], 5)
+        + gen_shapes([1, 1, 1], [12, 555, 128], [1, 1, 1], 4)
+        + gen_shapes([1, 1], [32, 32], [1, 1], 32),
+        "dim": [None, 0, 1, 2, 3],
         "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],

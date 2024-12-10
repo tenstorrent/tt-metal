@@ -15,8 +15,8 @@ TIMEOUT = 15
 
 parameters = {
     "default": {
-        "height": [25],
-        "width": [4],
+        "height": [25, 16],
+        "width": [4, 9],
         "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     }

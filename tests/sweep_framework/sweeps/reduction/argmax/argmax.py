@@ -27,9 +27,17 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 1, 1], 32)
+        + gen_shapes([1, 1, 1, 1], [2, 9, 167, 128], [1, 1, 1, 1], 32)
+        + gen_shapes([1, 1, 1, 1], [2, 6, 69, 129], [1, 1, 1, 1], 15)
         + gen_shapes([1, 1, 1], [6, 128, 128], [1, 1, 1], 32)
+        + gen_shapes([1, 1, 1], [6, 128, 128], [1, 2, 3], 3)
+        + gen_shapes([1, 1, 1], [6, 127, 257], [1, 1, 1], 16)
         + gen_shapes([1, 1], [128, 128], [1, 1], 32)
-        + gen_shapes([1], [128], [1], 32),
+        + gen_shapes([1, 1], [8, 100], [2, 3], 7)
+        + gen_shapes([1, 1], [255, 255], [1, 1], 4)
+        + gen_shapes([1], [128], [1], 32)
+        + gen_shapes([1], [128], [1], 7)
+        + gen_shapes([1], [250], [3], 4),
         "dim": [0, 1, 2, 3, None],
         "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],

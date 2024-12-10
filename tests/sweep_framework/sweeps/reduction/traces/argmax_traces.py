@@ -17,7 +17,7 @@ parameters = {
     "default": {
         "height": [1, 2],
         "width": [7, 51865],
-        "dim": [-1],
+        "dim": [-1, -2, None],
         "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     }

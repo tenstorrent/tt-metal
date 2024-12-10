@@ -28,9 +28,17 @@ parameters = {
     "xfail": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
         + gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 2)
+        + gen_shapes([3, 4, 5, 6], [6, 12, 256, 256], [7, 8, 9, 10], 2)
+        + gen_shapes([1, 1, 1, 1], [6, 12, 187, 188], [1, 1, 1, 1], 7)
         + gen_shapes([1, 32, 64], [6, 48, 128], [1, 1, 1], 2)
+        + gen_shapes([1, 32, 64], [6, 77, 128], [1, 1, 1], 7)
+        + gen_shapes([1, 32, 64], [6, 10222, 1023], [1, 1, 1], 8)
         + gen_shapes([1, 1], [6, 6], [1, 1], 2)
-        + gen_shapes([1], [4], [1], 2),
+        + gen_shapes([1, 1], [7, 7], [1, 2], 3)
+        + gen_shapes([1, 1], [8, 8], [1, 3], 4)
+        + gen_shapes([1], [4], [1], 2)
+        + gen_shapes([1], [14], [11], 12)
+        + gen_shapes([1], [24], [21], 22),
         "dim": [0, 1, 2, 3, None],
         "grad_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
