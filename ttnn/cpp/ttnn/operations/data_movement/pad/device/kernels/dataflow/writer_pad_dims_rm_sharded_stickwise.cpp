@@ -99,14 +99,14 @@ void kernel_main() {
         }
         // DPRINT << "wrote padding val to stick " << h << ENDL();
 
-        DPRINT << "output stick f32s after memcpy: " << ENDL();
-        //    noc_async_read_barrier();
-        tt::data_movement::common::print_f32_pages(output_stick_addr, padded_stick_bytes / padding_value_num_bytes, 1);
-        DPRINT << ENDL();
+        // DPRINT << "output stick f32s after memcpy: " << ENDL();
+        // //    noc_async_read_barrier();
+        // tt::data_movement::common::print_f32_pages(output_stick_addr, padded_stick_bytes / padding_value_num_bytes,
+        // 1); DPRINT << ENDL();
 
-        DPRINT << "output stick u8s after memcpy: " << ENDL();
-        tt::data_movement::common::print_u8_pages(output_stick_addr, padded_stick_bytes, 1);
-        DPRINT << ENDL();
+        // DPRINT << "output stick u8s after memcpy: " << ENDL();
+        // tt::data_movement::common::print_u8_pages(output_stick_addr, padded_stick_bytes, 1);
+        // DPRINT << ENDL();
 
         DPRINT << "pushing back output shard cb" << ENDL();
         cb_push_back(output_shard_cb, 1);
