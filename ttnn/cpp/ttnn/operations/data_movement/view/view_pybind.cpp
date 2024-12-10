@@ -61,7 +61,7 @@ void py_bind_view(pybind11::module& module) {
         Example:
 
             >>> tensor = ttnn.from_torch(torch.tensor((2, 1, 1, 1, 4), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.reshape(tensor, (2, 1, 4))
+            >>> output = ttnn.view(tensor, (2, 1, 4))
 
         )doc");
 
