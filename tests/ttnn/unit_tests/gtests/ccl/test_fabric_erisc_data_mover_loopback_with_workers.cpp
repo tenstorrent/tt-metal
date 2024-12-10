@@ -3,11 +3,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "umd/device/types/arch.h"
-// #include "umd/device/tt_arch_types.h"
 #include "common/logger.hpp"
 #include "sub_device/sub_device_types.hpp"
-#include "gtest/gtest.h"
 // #include "tt_backend_api_types.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/math.hpp"
@@ -22,16 +19,21 @@
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+
+#include "tt_metal/impl/tile/tile.hpp"
+
+#include "umd/device/types/arch.h"
+#include "umd/device/types/cluster_descriptor_types.h"
+// #include "umd/device/tt_arch_types.h"
+
+#include "gtest/gtest.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -39,9 +41,6 @@
 #include <limits>
 #include <random>
 #include <unordered_set>
-
-#include "tt_metal/impl/tile/tile.hpp"
-#include "umd/device/tt_cluster_descriptor_types.h"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -874,11 +873,21 @@ bool RunLocalTestWithMultiInputReaders(
     constexpr bool enable_check = true;
     if constexpr (enable_check) {
         log_info(tt::LogTest, "Reading back outputs");
-        auto output0_cpu = output_tensor0_device.cpu();
-        auto output1_cpu = output_tensor1_device.cpu();
+        std::vector<SubDeviceId> out_tensor_worker_subdevice_id =
+            subdevice_managers.has_value() ? std::vector<SubDeviceId>{subdevice_managers->worker_subdevice_id.at(
+                                                 devices.at(output_tensor_dest_device_index)->id())}
+                                           : std::vector<SubDeviceId>{};
+        auto output0_cpu = output_tensor0_device.cpu(true, ttnn::DefaultQueueId, out_tensor_worker_subdevice_id);
+        auto output1_cpu = output_tensor1_device.cpu(true, ttnn::DefaultQueueId, out_tensor_worker_subdevice_id);
 
-        auto in0_tensor_copyback_cpu = input_tensor0_device.cpu();
-        auto in1_tensor_copyback_cpu = input_tensor1_device.cpu();
+        auto in_tensor_worker_subdevice_id =
+            subdevice_managers.has_value()
+                ? std::vector<SubDeviceId>{subdevice_managers->worker_subdevice_id.at(devices.at(0)->id())}
+                : std::vector<SubDeviceId>{};
+        auto in0_tensor_copyback_cpu =
+            input_tensor0_device.cpu(true, ttnn::DefaultQueueId, in_tensor_worker_subdevice_id);
+        auto in1_tensor_copyback_cpu =
+            input_tensor1_device.cpu(true, ttnn::DefaultQueueId, in_tensor_worker_subdevice_id);
 
         auto in0_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(in0_tensor_copyback_cpu);
         auto in1_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(in1_tensor_copyback_cpu);
@@ -1413,20 +1422,6 @@ bool TestMultiInputReaderKernel(
         devices.push_back(test_fixture.devices_.at(i));
     }
 
-    std::vector<Tensor> input0_tensors_device;
-    std::vector<Tensor> input1_tensors_device;
-    std::vector<Tensor> output0_tensors_device;
-    std::vector<Tensor> output1_tensors_device;
-
-    // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
-    // multicast to a consistent destination address
-    for (size_t i = 0; i < devices.size(); i++) {
-        input0_tensors_device.push_back(input_tensor0.to(devices.at(i), input_tensor0_mem_config));
-        input1_tensors_device.push_back(input_tensor1.to(devices.at(i), input_tensor1_mem_config));
-        output0_tensors_device.push_back(output_tensor0.to(devices.at(i), output_tensor0_mem_config));
-        output1_tensors_device.push_back(output_tensor1.to(devices.at(i), output_tensor1_mem_config));
-    }
-
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
@@ -1440,6 +1435,28 @@ bool TestMultiInputReaderKernel(
         fabric_program_ptrs,
         line_fabric,
         enable_persistent_fabric);
+
+    std::vector<Tensor> input0_tensors_device;
+    std::vector<Tensor> input1_tensors_device;
+    std::vector<Tensor> output0_tensors_device;
+    std::vector<Tensor> output1_tensors_device;
+
+    // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
+    // multicast to a consistent destination address
+    for (size_t i = 0; i < devices.size(); i++) {
+        std::vector<SubDeviceId> subdevice_target =
+            subdevice_managers.has_value()
+                ? std::vector<SubDeviceId>{subdevice_managers->worker_subdevice_id.at(devices[i]->id())}
+                : std::vector<SubDeviceId>{};
+        input0_tensors_device.push_back(
+            input_tensor0.to(devices.at(i), input_tensor0_mem_config, ttnn::DefaultQueueId, subdevice_target));
+        input1_tensors_device.push_back(
+            input_tensor1.to(devices.at(i), input_tensor1_mem_config, ttnn::DefaultQueueId, subdevice_target));
+        output0_tensors_device.push_back(
+            output_tensor0.to(devices.at(i), output_tensor0_mem_config, ttnn::DefaultQueueId, subdevice_target));
+        output1_tensors_device.push_back(
+            output_tensor1.to(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId, subdevice_target));
+    }
     TT_FATAL(
         !enable_persistent_fabric || subdevice_managers.has_value(),
         "Subdevice managers must be set if fabric is enabled");

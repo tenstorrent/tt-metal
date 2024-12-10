@@ -1180,7 +1180,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
     }
     for (auto &info : edm_termination_infos) {
         if (info.distance == 0) {
-            log_info(tt::LogOp, "Adding local chip fabric teardown command for termination address {}", info.termination_addr);
+            log_info(tt::LogOp, "Adding local chip fabric teardown command for termination address {},", info.termination_addr);
             teardown_cmd_stream.push_back(
                 cmd::uops::local_chip_noc_absolute_address_semaphore_inc(
                     info.edm_noc_x,
@@ -1188,7 +1188,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
                     info.termination_addr,
                     1));
         } else {
-            log_info(tt::LogOp, "Adding remote chip fabric teardown command for termination address {}", info.termination_addr);
+            log_info(tt::LogOp, "Adding remote chip fabric teardown command for termination address {} of distance {}", info.termination_addr, info.distance);
             teardown_cmd_stream.push_back(
                 ttnn::ccl::cmd::uops::fabric_unicast_absolute_address_semaphore_inc(
                 ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{info.termination_addr},

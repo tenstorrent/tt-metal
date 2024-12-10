@@ -227,7 +227,7 @@ std::vector<tt::tt_metal::GlobalSemaphore> create_global_semaphores(const std::v
         for (auto i = 0; i < semaphores.size(); i++) {
             size_t attempts = 1000;
             size_t attempt = 0;
-            std::vector<std::unique_ptr<tt::tt_metal::GlobalSemaphore>> garbage;
+            std::vector<std::shared_ptr<tt::tt_metal::GlobalSemaphore>> garbage;
             while (semaphores[i].address() != highest_addr) {
                 auto sem = CreateGlobalSemaphore(devices[i], worker_cores, 0, BufferType::L1);
                 if (sem->address() == highest_addr) {
