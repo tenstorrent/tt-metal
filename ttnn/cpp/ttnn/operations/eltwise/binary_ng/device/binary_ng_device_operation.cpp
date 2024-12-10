@@ -90,18 +90,18 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     const auto input_shape_b =
         tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
 
-    constexpr int max_rank = 4;
-    if (input_shape_a.rank() > 0 && input_shape_b.rank() > 0) {
-        for (int i = 1; i <= max_rank; i++) {
-            auto a_dim = i <= input_shape_a.rank() ? input_shape_a[-i] : 1;
-            auto b_dim = i <= input_shape_b.rank() ? input_shape_b[-i] : 1;
-            TT_FATAL(
-                a_dim == b_dim || a_dim == 1 || b_dim == 1,
-                "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
-                i,
-                a_dim,
-                b_dim);
-        }
+    const int rank_a = input_shape_a.rank();
+    const int rank_b = input_shape_b.rank();
+    const int larger_rank = std::max(rank_a, rank_b);
+    for (int i = -1; i >= -larger_rank; --i) {
+        auto a_dim = (i >= -rank_a) ? input_shape_a[i] : 1;
+        auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
+        TT_FATAL(
+            a_dim == b_dim || a_dim == 1 || b_dim == 1,
+            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
+            i,
+            a_dim,
+            b_dim);
     }
 }
 
