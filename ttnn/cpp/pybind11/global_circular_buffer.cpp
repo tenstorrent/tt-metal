@@ -19,12 +19,19 @@ void py_module(py::module& module) {
     // Single Device APIs
     module.def(
         "create_global_circular_buffer",
-        py::overload_cast<Device*, const std::unordered_map<CoreCoord, CoreRangeSet>&, uint32_t, BufferType>(
-            &create_global_circular_buffer),
+        [](Device* device,
+           const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+           uint32_t size,
+           BufferType buffer_type,
+           const std::vector<SubDeviceId>& sub_device_ids) {
+            return ttnn::global_circular_buffer::create_global_circular_buffer(
+                device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
+        },
         py::arg("device"),
         py::arg("sender_receiver_core_mapping"),
         py::arg("size"),
         py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
         R"doc(
             Create a GlobalCircularBuffer Object on a single device.
 
@@ -33,17 +40,26 @@ void py_module(py::module& module) {
                 sender_receiver_core_mapping (dict): The mapping of remote sender to remote receiver cores for the circular buffer.
                 size (int): Size of the global circular buffer per core in bytes.
                 buffer_type (BufferType): The type of buffer to use for the global circular buffer.
+                sub_device_ids (List[ttnn.SubDeviceIds]): Sub-device IDs to wait on before writing the global circular buffer config to device.
+                Defaults to waiting on all sub-devices.
             )doc");
 
     // Multi Device APIs
     module.def(
         "create_global_circular_buffer",
-        py::overload_cast<MeshDevice*, const std::unordered_map<CoreCoord, CoreRangeSet>&, uint32_t, BufferType>(
-            &create_global_circular_buffer),
+        [](MeshDevice* mesh_device,
+           const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+           uint32_t size,
+           BufferType buffer_type,
+           const std::vector<SubDeviceId>& sub_device_ids) {
+            return ttnn::global_circular_buffer::create_global_circular_buffer(
+                mesh_device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
+        },
         py::arg("mesh_device"),
         py::arg("sender_receiver_core_mapping"),
         py::arg("size"),
         py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
         R"doc(
             Create a GlobalCircularBuffer Object on a single device.
 
@@ -52,6 +68,8 @@ void py_module(py::module& module) {
                 sender_receiver_core_mapping (dict): The mapping of remote sender to remote receiver cores for the circular buffer.
                 size (int): Size of the global circular buffer per core in bytes.
                 buffer_type (BufferType): The type of buffer to use for the global circular buffer.
+                sub_device_ids (List[ttnn.SubDeviceIds]): Sub-device IDs to wait on before writing the global circular buffer config to device.
+                Defaults to waiting on all sub-devices.
             )doc");
 }
 
