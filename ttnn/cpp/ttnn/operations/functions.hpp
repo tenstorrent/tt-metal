@@ -17,8 +17,6 @@
 
 namespace ttnn {
 
-namespace numpy {
-
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;
 using tt::tt_metal::Layout;
@@ -554,12 +552,12 @@ static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... arg
     auto tensor_b_buffer = tt::tt_metal::owned_buffer::get_as<DataType>(tensor_b);
 
     for (int index = 0; index < tensor_a_buffer.size(); index++) {
-        if (not detail::nearly_equal(tensor_a_buffer[index], tensor_b_buffer[index], args...)) {
+        using ::ttnn::detail::nearly_equal;
+        if (not nearly_equal(tensor_a_buffer[index], tensor_b_buffer[index], args...)) {
             return false;
         }
     }
     return true;
 }
 
-}  // namespace numpy
 }  // namespace ttnn

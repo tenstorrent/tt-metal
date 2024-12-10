@@ -8,7 +8,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "common/constants.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
         ttnn::Shape shapeb1({1, 1, Kt * TILE_HEIGHT, Nt * TILE_WIDTH});
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = ttnn::numpy::random::random(shapea.value).to(Layout::TILE).to(device);
+        Tensor a = ttnn::random::random(shapea.value).to(Layout::TILE).to(device);
         Tensor b = ttnn::zeros(shapeb, DataType::BFLOAT16, Layout::TILE, *device);
         Tensor b1 = ttnn::zeros(shapeb1, DataType::BFLOAT16, Layout::TILE, *device);
 

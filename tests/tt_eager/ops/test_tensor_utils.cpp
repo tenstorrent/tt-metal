@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -462,8 +463,7 @@ static void test_convert_conv_weight_tensor_to_tiled_layout_block_sharded() {
 static void test_convert_conv_bias_tensor_to_tiled_layout_block_sharded() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     for (auto i = 0; i < bias_tensor_shape.size(); i++) {
-        auto input_tensor =
-            ttnn::numpy::random::random(bias_tensor_shape[i], DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
+        auto input_tensor = ttnn::random::random(bias_tensor_shape[i], DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
         auto input_buffer = owned_buffer::get_as<bfloat16>(input_tensor);
         auto output_tensor =
             convert_conv_bias_tensor_to_tiled_layout_block_sharded(input_tensor, shards[i], DataType::BFLOAT16);
