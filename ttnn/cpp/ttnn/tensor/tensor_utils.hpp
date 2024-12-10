@@ -44,7 +44,7 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 
 // Converts convolution weights to depthwise layout with broadcasted weights
 Tensor convert_conv_weight_tensor_to_depthwise_layout(
-    Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
+    const Tensor& conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
 const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
