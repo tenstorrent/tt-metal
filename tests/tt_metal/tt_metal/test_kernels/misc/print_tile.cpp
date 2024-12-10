@@ -33,11 +33,9 @@ void MAIN {
     // Read out the tile we want to print using BRISC, put it in c_in0
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 #if defined(COMPILE_FOR_BRISC)
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t src_noc_x = get_arg_val<uint32_t>(1);
-    uint32_t src_noc_y = get_arg_val<uint32_t>(2);
-
-    uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr);
+    uint32_t src_addr  = get_arg_val<uint32_t>(0);
+    uint32_t src_bank_id = get_arg_val<uint32_t>(1);
+    uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(src_bank_id, src_addr);
     cb_reserve_back(cb_id, 1);
     noc_async_read(src_noc_addr, get_write_ptr(cb_id), get_tile_size(cb_id));
     noc_async_read_barrier();

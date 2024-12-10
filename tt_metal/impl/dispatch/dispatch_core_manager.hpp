@@ -28,8 +28,8 @@ struct dispatch_worker_build_settings_t{
     std::vector<uint32_t> compile_args;
     std::vector<tt_cxy_pair> upstream_cores;
     std::vector<tt_cxy_pair> downstream_cores;
-    tt_cxy_pair worker_physical_core;
-    tt_cxy_pair eth_partner_physical_core;
+    tt_cxy_pair worker_virtual_core;
+    tt_cxy_pair eth_partner_virtual_core;
     CoreType dispatch_core_type;
     uint32_t command_queue_start_addr;
     uint32_t issue_queue_start_addr;

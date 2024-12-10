@@ -217,7 +217,7 @@ per RISC in the log. If a stack overflow is detected, the core will hang and an 
 
 .. code-block::
 
-    Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D1D|BNt smsg:DDDD k_ids:11|10|0
+    Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D1D|BNt smsg:DDDD k_ids:11|10|0
         brisc stack usage: 228/768, kernel using most stack: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp
         ncrisc stack usage: 192/768, kernel using most stack:  ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp
         trisc0 stack usage: 252/320, kernel using most stack: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp

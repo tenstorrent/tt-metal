@@ -138,7 +138,7 @@ DeviceData::DeviceData(
     auto num_banks = device->num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
         auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        CoreCoord phys_core = device->dram_core_from_dram_channel(dram_channel);
+        CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
         int32_t bank_offset = device->bank_offset(BufferType::DRAM, bank_id);
         this->all_data[phys_core][bank_id] = one_core_data_t();
         this->all_data[phys_core][bank_id].logical_core = phys_core;
@@ -187,7 +187,7 @@ void DeviceData::prepopulate_dram(Device* device, uint32_t size_words) {
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         auto offset = device->bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->dram_core_from_dram_channel(dram_channel);
+        auto bank_core = device->logical_core_from_dram_channel(dram_channel);
         one_core_data_t& data = this->all_data[bank_core][bank_id];
 
         // Generate random or coherent data per bank of specific size.
@@ -212,12 +212,7 @@ void DeviceData::prepopulate_dram(Device* device, uint32_t size_words) {
         }
 
         // Write to device once per bank (appropriate core and offset)
-        tt::Cluster::instance().write_core(
-            static_cast<const void*>(&data.data[0]),
-            data.data.size() * sizeof(uint32_t),
-            tt_cxy_pair(device->id(), bank_core),
-            this->base_data_addr[static_cast<int>(CoreType::DRAM)] + offset);
-        ;
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, this->base_data_addr[static_cast<int>(CoreType::DRAM)], data.data);
 
         this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] =
             this->base_data_addr[static_cast<int>(CoreType::DRAM)] + data.data.size() * sizeof(uint32_t);
@@ -386,8 +381,13 @@ inline bool DeviceData::validate_one_core(
     }
 
     // Read results from device and compare to expected for this core.
-    result_addr += bank_offset;
-    std::vector<uint32_t> results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
+    std::vector<uint32_t> results;
+    if (core_type == CoreType::DRAM) {
+        tt::tt_metal::detail::ReadFromDeviceDRAMChannel(device, bank_id, result_addr, size_bytes, results);
+    } else {
+        result_addr += bank_offset;
+        results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
+    }
 
     log_info(
         tt::LogTest,
@@ -534,28 +534,22 @@ void configure_kernel_variant(
     NOC my_noc_index,
     NOC upstream_noc_index,
     NOC downstream_noc_index) {
-    const auto& grid_size = device->grid_size();
+    auto my_virtual_noc_coords = device->virtual_noc_coordinate(my_noc_index, phys_my_core);
+    auto upstream_virtual_noc_coords = device->virtual_noc_coordinate(upstream_noc_index, phys_upstream_core);
+    auto downstream_virtual_noc_coords = device->virtual_noc_coordinate(downstream_noc_index, phys_downstream_core);
 
     std::map<string, string> defines = {
-        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.x, phys_my_core.x))},
-        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.y, phys_my_core.y))},
+        {"DISPATCH_KERNEL", "1"},
+        {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
+        {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(upstream_noc_index)},
-        {"UPSTREAM_NOC_X",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.x, phys_upstream_core.x))},
-        {"UPSTREAM_NOC_Y",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.y, phys_upstream_core.y))},
-        {"DOWNSTREAM_NOC_X",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, phys_downstream_core.x))},
-        {"DOWNSTREAM_NOC_Y",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, phys_downstream_core.y))},
-        {"DOWNSTREAM_SLAVE_NOC_X",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, 0xff))},
-        {"DOWNSTREAM_SLAVE_NOC_Y",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(
-             downstream_noc_index,
-             grid_size.y,
-             0xff))},  // todo, add testing with dispatch_s once it processes more than go signals
-        {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
+        {"UPSTREAM_NOC_X", std::to_string(upstream_virtual_noc_coords.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(0xff)},
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
+        {"FD_CORE_TYPE", std::to_string(0)},               // todo, support dispatch on eth
     };
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);
@@ -663,7 +657,7 @@ inline void generate_random_paged_payload(
 
         if (is_dram) {
             auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-            bank_core = device->dram_core_from_dram_channel(dram_channel);
+            bank_core = device->logical_core_from_dram_channel(dram_channel);
         } else {
             bank_core = device->logical_core_from_bank_id(bank_id);
         }
@@ -913,8 +907,8 @@ inline void gen_dispatcher_multicast_write_cmd(
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
-    CoreCoord physical_start = device->physical_core_from_logical_core(worker_core_range.start_coord, CoreType::WORKER);
-    CoreCoord physical_end = device->physical_core_from_logical_core(worker_core_range.end_coord, CoreType::WORKER);
+    CoreCoord physical_start = device->worker_core_from_logical_core(worker_core_range.start_coord);
+    CoreCoord physical_end = device->worker_core_from_logical_core(worker_core_range.end_coord);
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
@@ -1119,8 +1113,8 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
         device_data.relevel(range);
 
         CQDispatchWritePackedLargeSubCmd sub_cmd;
-        CoreCoord physical_start = device->physical_core_from_logical_core(range.start_coord, CoreType::WORKER);
-        CoreCoord physical_end = device->physical_core_from_logical_core(range.end_coord, CoreType::WORKER);
+        CoreCoord physical_start = device->worker_core_from_logical_core(range.start_coord);
+        CoreCoord physical_end = device->worker_core_from_logical_core(range.end_coord);
         sub_cmd.noc_xy_addr =
             NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
         sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);

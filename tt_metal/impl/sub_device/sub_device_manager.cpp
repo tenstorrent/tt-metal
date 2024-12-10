@@ -257,8 +257,8 @@ void SubDeviceManager::populate_sub_allocators() {
              .l1_small_size = 0,
              .trace_region_size = 0,
              .core_type_from_noc_coord_table = {},  // Populated later
-             .worker_log_to_physical_routing_x = global_allocator_config.worker_log_to_physical_routing_x,
-             .worker_log_to_physical_routing_y = global_allocator_config.worker_log_to_physical_routing_y,
+             .worker_log_to_virtual_routing_x = global_allocator_config.worker_log_to_virtual_routing_x,
+             .worker_log_to_virtual_routing_y = global_allocator_config.worker_log_to_virtual_routing_y,
              .l1_bank_remap = std::move(l1_bank_remap),
              .compute_grid = compute_cores,
              .alignment = global_allocator_config.alignment,
@@ -303,12 +303,12 @@ void SubDeviceManager::populate_noc_data() {
         this->num_noc_mcast_txns_[i] = tensix_cores.size();
         this->noc_mcast_unicast_data_.resize(idx + this->num_noc_mcast_txns_[i] * 2);
         for (const auto& core_range : tensix_cores.ranges()) {
-            auto physical_start =
-                this->device_->physical_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
-            auto physical_end = this->device_->physical_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
-            auto physical_core_range = CoreRange(physical_start, physical_end);
+            auto virtual_start =
+                this->device_->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+            auto virtual_end = this->device_->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
+            auto virtual_core_range = CoreRange(virtual_start, virtual_end);
             this->noc_mcast_unicast_data_[idx++] =
-                this->device_->get_noc_multicast_encoding(noc_index, physical_core_range);
+                this->device_->get_noc_multicast_encoding(noc_index, virtual_core_range);
             this->noc_mcast_unicast_data_[idx++] = core_range.size();
         }
         this->noc_unicast_data_start_index_[i] = idx;
@@ -317,9 +317,8 @@ void SubDeviceManager::populate_noc_data() {
         for (const auto& core_range : eth_cores.ranges()) {
             this->noc_mcast_unicast_data_.resize(idx + core_range.size());
             for (const auto& core : core_range) {
-                auto physical_core = this->device_->physical_core_from_logical_core(core, CoreType::ETH);
-                this->noc_mcast_unicast_data_[idx++] =
-                    this->device_->get_noc_unicast_encoding(noc_index, physical_core);
+                auto virtual_core = this->device_->virtual_core_from_logical_core(core, CoreType::ETH);
+                this->noc_mcast_unicast_data_[idx++] = this->device_->get_noc_unicast_encoding(noc_index, virtual_core);
             }
         }
         this->num_noc_unicast_txns_[i] = idx - this->noc_unicast_data_start_index_[i];

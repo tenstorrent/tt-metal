@@ -51,9 +51,6 @@ int main(int argc, char** argv) {
         auto dst_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
         int num_cbs = 1;  // works at the moment
         assert(num_tiles % num_cbs == 0);
         int num_tiles_per_cb = num_tiles / num_cbs;
@@ -116,18 +113,16 @@ int main(int argc, char** argv) {
             reader_cb_kernel,
             core,
             {dram_buffer_src_addr,
-             (uint32_t)dram_src_noc_xy.x,
-             (uint32_t)dram_src_noc_xy.y,
-             (uint32_t)num_tiles_per_cb});
+            0,
+            (uint32_t)num_tiles_per_cb});
 
         tt_metal::SetRuntimeArgs(
             program,
             writer_cb_kernel,
             core,
             {dram_buffer_dst_addr,
-             (uint32_t)dram_dst_noc_xy.x,
-             (uint32_t)dram_dst_noc_xy.y,
-             (uint32_t)num_tiles_per_cb});
+            0,
+            (uint32_t)num_tiles_per_cb});
 
         tt_metal::detail::LaunchProgram(device, program);
 

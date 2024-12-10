@@ -300,13 +300,12 @@ void add_prefetcher_paged_read_cmd(
     add_bare_prefetcher_cmd(cmds, cmd, true);
 }
 
-void add_prefetcher_linear_read_cmd(
-    Device* device,
-    vector<uint32_t>& cmds,
-    vector<uint32_t>& sizes,
-    CoreCoord worker_core,
-    uint32_t addr,
-    uint32_t length) {
+void add_prefetcher_linear_read_cmd(Device *device,
+                                    vector<uint32_t>& cmds,
+                                    vector<uint32_t>& sizes,
+                                    CoreCoord worker_core,
+                                    uint32_t addr,
+                                    uint32_t length) {
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
 
     CQPrefetchCmd cmd;
@@ -444,7 +443,7 @@ void add_paged_dram_data_to_device_data(
     for (uint32_t page_idx = start_page; page_idx < last_page; page_idx++) {
         uint32_t dram_bank_id = page_idx % num_dram_banks_g;
         auto dram_channel = device->dram_channel_from_bank_id(dram_bank_id);
-        CoreCoord bank_core = device->dram_core_from_dram_channel(dram_channel);
+        CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
         uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
 
         if (page_idx == last_page - 1) {
@@ -500,7 +499,7 @@ void gen_dram_packed_read_cmd(
         for (uint32_t i = 0; i < length_words; i += page_size_words) {
             uint32_t dram_bank_id = page_idx % num_dram_banks_g;
             auto dram_channel = device->dram_channel_from_bank_id(dram_bank_id);
-            CoreCoord bank_core = device->dram_core_from_dram_channel(dram_channel);
+            CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
             uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
 
             uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
@@ -1050,15 +1049,8 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
     uint32_t index = 0;
     for (uint32_t page_id = 0; page_id < pages; page_id++) {
         uint32_t bank_id = page_id % num_dram_banks_g;
-        auto offset = device->bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->dram_core_from_dram_channel(dram_channel);
-
-        tt::Cluster::instance().write_core(
-            static_cast<const void*>(&exec_buf_cmds[index / sizeof(uint32_t)]),
-            page_size,
-            tt_cxy_pair(device->id(), bank_core),
-            DRAM_EXEC_BUF_DEFAULT_BASE_ADDR + offset + (page_id / num_dram_banks_g) * page_size);
+        std::vector<uint32_t> exec_buf_page(exec_buf_cmds.begin() + index / sizeof(uint32_t), exec_buf_cmds.begin() + (index + page_size) / sizeof(uint32_t));
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, DRAM_EXEC_BUF_DEFAULT_BASE_ADDR + (page_id / num_dram_banks_g) * page_size, exec_buf_page);
 
         index += page_size;
     }
@@ -1629,22 +1621,8 @@ void initialize_dram_banks(Device* device) {
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        auto offset = device->bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->dram_core_from_dram_channel(dram_channel);
-
-        log_info(
-            tt::LogTest,
-            "Initializing DRAM {} bytes for bank_id: {} core: {} at addr: 0x{:x}",
-            bank_size,
-            bank_id,
-            bank_core.str(),
-            offset);
-        tt::Cluster::instance().write_core(
-            static_cast<const void*>(fill.data()),
-            fill.size() * sizeof(uint32_t),
-            tt_cxy_pair(device->id(), bank_core),
-            offset);
+        log_info(tt::LogTest, "Initializing DRAM {} bytes for bank_id: {}", bank_size, bank_id);
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, 0, fill);
     }
 }
 
