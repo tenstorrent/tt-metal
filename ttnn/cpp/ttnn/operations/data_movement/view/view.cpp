@@ -7,10 +7,9 @@
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& input_shape) {
+ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
     auto layout = tensor.get_layout();
     auto tensor_shape = tensor.get_shape();
-    const ttnn::Shape shape = shape_corrector(tensor, input_shape);
     // First Case, No reshape Required
     if (tensor_shape == shape) {
         return tensor;
@@ -22,10 +21,10 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
     // Validate the operation
     TT_FATAL(
-        shape.logical_shape().volume() == tensor.get_logical_volume(),
+        shape.volume() == tensor.get_logical_volume(),
         "Invalid view, logical volumes are changing from {} to {}",
         tensor.get_logical_volume(),
-        shape.logical_shape().volume());
+        shape.volume());
     TT_FATAL(
         ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE),
         "View requires the tensor be stored on device, use reshape instead");
@@ -46,9 +45,6 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape
     return PerformView(tensor, shape, tile_first_dim, tile_second_dim);
 }
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
-    return invoke(tensor, ttnn::Shape(shape.view()));
-}
 ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
     return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector));
 }

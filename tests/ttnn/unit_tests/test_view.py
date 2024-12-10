@@ -56,6 +56,11 @@ def test_view(input_shape, output_shape, layout, device):
             (8, 16, 32, 1, 16),
             ttnn.TILE_LAYOUT,
         ),  # TILE last dimension match but second last does not match, none mult of 32
+        (
+            (16, 8, 1, 32, 16),
+            (8, 16, 31, 16),
+            ttnn.TILE_LAYOUT,
+        ),  # Volume doesn't match but padded volume does
     ],
 )
 def test_invalid_cases(input_shape, output_shape, layout, device):
