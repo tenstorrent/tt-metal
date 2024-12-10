@@ -616,6 +616,9 @@ set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
     Metalium::Metal
     Boost::container
+    xtensor
+    xtensor-blas
+    xtl
 )
 set(TTNN_PUBLIC_LINK_DIRS "")
 
