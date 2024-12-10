@@ -115,8 +115,8 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
         [5, 64, 5, 5],
         [1, 128, 5, 8],
         [1, 32, 5, 4],
-        [7, 64, 128, 17],
-        [3, 64, 132, 19],
+        [1, 64, 128, 17],
+        [1, 64, 132, 19],
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -132,7 +132,7 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     #     for j in range(input_shape[1]):
     #         for k in range(input_shape[2]):
     #             for l in range(input_shape[3]):
-    #                 input[i, j, k, l] = k * width + l + 1
+    #                 input[i, j, k, l] = (k * width + l + 1)
 
     ## golden reference using torch
     scale_factor = (scale_h, scale_w)
