@@ -18,7 +18,7 @@
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/core_coord.hpp"
-#include "umd/device/xy_pair.h"
+#include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
 
 #include "llrt/hal.hpp"
