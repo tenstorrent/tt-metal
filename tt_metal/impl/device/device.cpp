@@ -821,13 +821,13 @@ void Device::initialize_and_launch_firmware() {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
-        this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
-        if (this->arch() == ARCH::BLACKHOLE) {
-            bh_active_eth_cores.insert(phys_eth_core);
-            // if (init_aeric) {
-            not_done_cores.insert(phys_eth_core);
-            // }
-        }
+        // this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
+        // if (this->arch() == ARCH::BLACKHOLE) {
+        //     bh_active_eth_cores.insert(phys_eth_core);
+        //     // if (init_aeric) {
+        //     not_done_cores.insert(phys_eth_core);
+        //     // }
+        // }
     }
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
@@ -1144,6 +1144,17 @@ bool Device::close() {
             } else {
                 log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), this->id());
             }
+        }
+    }
+
+    if (this->arch() == ARCH::BLACKHOLE) {
+        for (const auto& eth_core : this->get_active_ethernet_cores()) {
+            CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+            TensixSoftResetOptions reset_val =
+                TENSIX_ASSERT_SOFT_RESET &
+                static_cast<TensixSoftResetOptions>(
+                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+            tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_eth_core), reset_val);
         }
     }
 
