@@ -33,6 +33,7 @@ void get_max_page_size_and_num_pages(
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& tensors,
     const Tensor& tensor_addrs,
+    const uint32_t num_layers,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     Tensor& output_tensor) {
     TT_FATAL(global_cb != std::nullopt, "Global circular buffer must be provided");
@@ -127,11 +128,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     auto output_cb = CreateCircularBuffer(program, reader_core_range, output_cb_config);
 
     /* Compile time args */
-    std::vector<uint32_t> reader_ct_args = {
-        1,  // num_layers TODO: parametrize this
-        num_tensors,
-        num_blocks,
-        reader_cb_size};
+    std::vector<uint32_t> reader_ct_args = {num_layers, num_tensors, num_blocks, reader_cb_size};
 
     auto reader_kernel_id = CreateKernel(
         program,
@@ -161,6 +158,12 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t bank_start_id = 1;               // TODO: What is this for?
     std::vector<uint32_t> bank_ids;
     const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);
+
+    // std::vector<CoreCoord> reader_cores;
+    // for (const auto& reader_core : reader_core_range) {
+    //     log_info("reader_core: {}", reader_core);
+    //     reader_cores.push_back(reader_core);
+    // }
 
     for (uint32_t core_index = 0; core_index < reader_core_range.num_cores(); core_index++) {
         const auto& core = reader_cores[core_index];
