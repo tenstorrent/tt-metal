@@ -51,6 +51,7 @@ memory::memory(std::string const& path, Packing pack_type, Relocate relo_type) {
         emit_segment(*text);
     }
 
+    text_addr_ = elf.GetSegments()[0].address;
     set_text_size(elf.GetSegments()[0].contents.size() * sizeof(word_t));
     set_packed_size(total_size * sizeof(uint32_t));
 }
@@ -162,9 +163,11 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
         std::vector<word_t> new_data2;
 
         bool text_is_second =
-            link_spans_.size() == 2 && link_spans_[1].addr >= text_start && link_spans_[1].addr < text_end;
+            //            link_spans_.size() == 2 && link_spans_[1].addr >= text_start && link_spans_[1].addr <
+            //            text_end;
+            link_spans_.size() == 2 && link_spans_[1].addr == text_addr_;
         auto const& text = link_spans_[text_is_second];
-        TT_ASSERT(text.addr >= text_start && text.addr < text_end);
+        TT_ASSERT(text.addr >= text_start && text.addr < text_end && text.addr == text_addr_);
 
         span new_span2 = text;
 
@@ -189,6 +192,7 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
         TT_ASSERT(new_span == new_span2);
         TT_ASSERT(new_data == new_data2);
         if (!(new_span == new_span2 && new_data == new_data2)) {
+            std::printf("text addr=%lx\n", long(text_addr_));
             std::printf(
                 "new_span=(%lx,%lu), new_span2=(%lx,%lu), new_data.size=%lu, new_data2.size=%lu\n",
                 (long)new_span.addr,
