@@ -35,14 +35,11 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_data_kb_per_tx = 1024*1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
 
+    constexpr uint32_t default_routing_table_start_addr = 0x7EC00;
     constexpr uint32_t default_tx_queue_start_addr = 0x80000;
     constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
     constexpr uint32_t default_rx_queue_start_addr = 0xa0000;
     constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
-    constexpr uint32_t default_mux_queue_start_addr = 0x80000;
-    constexpr uint32_t default_mux_queue_size_bytes = 0x10000;
-    constexpr uint32_t default_demux_queue_start_addr = 0x90000;
-    constexpr uint32_t default_demux_queue_size_bytes = 0x10000;
 
     constexpr uint32_t default_test_results_addr = 0x100000;
     constexpr uint32_t default_test_results_size = 0x40000;
@@ -97,14 +94,15 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --mux_y: Y coordinate of the starting mux core, default = {}", default_mux_y);
         log_info(LogTest, "  --demux_x: X coordinate of the starting demux core, default = {}", default_demux_x);
         log_info(LogTest, "  --demux_y: Y coordinate of the starting demux core, default = {}", default_demux_y);
+        log_info(
+            LogTest,
+            "  --routing_table_start_addr: Routing Table start address, default = 0x{:x}",
+            default_routing_table_start_addr);
         log_info(LogTest, "  --tx_queue_start_addr: TX queue start address, default = 0x{:x}", default_tx_queue_start_addr);
         log_info(LogTest, "  --tx_queue_size_bytes: TX queue size in bytes, default = 0x{:x}", default_tx_queue_size_bytes);
         log_info(LogTest, "  --rx_queue_start_addr: RX queue start address, default = 0x{:x}", default_rx_queue_start_addr);
-        log_info(LogTest, "  --rx_queue_size_bytes: RX queue size in bytes, default = 0x{:x}", default_rx_queue_size_bytes);
-        log_info(LogTest, "  --mux_queue_start_addr: MUX queue start address, default = 0x{:x}", default_mux_queue_start_addr);
-        log_info(LogTest, "  --mux_queue_size_bytes: MUX queue size in bytes, default = 0x{:x}", default_mux_queue_size_bytes);
-        log_info(LogTest, "  --demux_queue_start_addr: DEMUX queue start address, default = 0x{:x}", default_demux_queue_start_addr);
-        log_info(LogTest, "  --demux_queue_size_bytes: DEMUX queue size in bytes, default = 0x{:x}", default_demux_queue_size_bytes);
+        log_info(
+            LogTest, "  --rx_queue_size_bytes: RX queue size in bytes, default = 0x{:x}", default_rx_queue_size_bytes);
         log_info(LogTest, "  --test_results_addr: test results buf address, default = 0x{:x}", default_test_results_addr);
         log_info(LogTest, "  --test_results_size: test results buf size, default = 0x{:x}", default_test_results_size);
         log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
@@ -132,15 +130,13 @@ int main(int argc, char **argv) {
     uint32_t prng_seed = test_args::get_command_option_uint32(input_args, "--prng_seed", default_prng_seed);
     uint32_t data_kb_per_tx = test_args::get_command_option_uint32(input_args, "--data_kb_per_tx", default_data_kb_per_tx);
     uint32_t max_packet_size_words = test_args::get_command_option_uint32(input_args, "--max_packet_size_words", default_max_packet_size_words);
+    uint32_t routing_table_start_addr = test_args::get_command_option_uint32(
+        input_args, "--routing_table_start_addr", default_routing_table_start_addr);
     uint32_t tx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--tx_queue_start_addr", default_tx_queue_start_addr);
     uint32_t tx_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--tx_queue_size_bytes", default_tx_queue_size_bytes);
     uint32_t rx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--rx_queue_start_addr", default_rx_queue_start_addr);
-    uint32_t rx_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--rx_queue_size_bytes", default_rx_queue_size_bytes);
-    uint32_t mux_queue_start_addr = test_args::get_command_option_uint32(input_args, "--mux_queue_start_addr", default_mux_queue_start_addr);
-    uint32_t mux_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--mux_queue_size_bytes", default_mux_queue_size_bytes);
-    uint32_t demux_queue_start_addr = test_args::get_command_option_uint32(input_args, "--demux_queue_start_addr", default_demux_queue_start_addr);
-    uint32_t demux_queue_size_bytes =
-        test_args::get_command_option_uint32(input_args, "--demux_queue_size_bytes", default_demux_queue_size_bytes);
+    uint32_t rx_queue_size_bytes =
+        test_args::get_command_option_uint32(input_args, "--rx_queue_size_bytes", default_rx_queue_size_bytes);
     uint32_t tunneler_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--tunneler_queue_size_bytes", default_tunneler_queue_size_bytes);
     uint32_t test_results_addr = test_args::get_command_option_uint32(input_args, "--test_results_addr", default_test_results_addr);
     uint32_t test_results_size = test_args::get_command_option_uint32(input_args, "--test_results_size", default_test_results_size);
@@ -226,18 +222,19 @@ int main(int argc, char **argv) {
                 dest_endpoint_start_id,                           // 2:
                 tx_queue_start_addr,                              // 3: queue_start_addr_words
                 (tx_queue_size_bytes >> 4),                       // 4: queue_size_words
-                tunneler_phys_core.x,                             // 5: router_x
-                tunneler_phys_core.y,                             // 6: router_y
-                test_results_addr,                                // 7: test_results_addr
-                test_results_size,                                // 8: test_results_size
-                prng_seed,                                        // 9: prng_seed
-                data_kb_per_tx,                                   // 10: total_data_kb
-                max_packet_size_words,                            // 11: max_packet_size_words
-                timeout_mcycles * 1000 * 1000 * 4,                // 12: timeout_cycles
-                tx_skip_pkt_content_gen,                          // 13: skip_pkt_content_gen
-                tx_pkt_dest_size_choice,                          // 14: pkt_dest_size_choice
-                tx_data_sent_per_iter_low,                        // 15: data_sent_per_iter_low
-                tx_data_sent_per_iter_high,                       // 16: data_sent_per_iter_high
+                routing_table_start_addr,                         // 5: routeing table
+                tunneler_phys_core.x,                             // 6: router_x
+                tunneler_phys_core.y,                             // 7: router_y
+                test_results_addr,                                // 8: test_results_addr
+                test_results_size,                                // 9: test_results_size
+                prng_seed,                                        // 10: prng_seed
+                data_kb_per_tx,                                   // 11: total_data_kb
+                max_packet_size_words,                            // 12: max_packet_size_words
+                timeout_mcycles * 1000 * 1000 * 4,                // 13: timeout_cycles
+                tx_skip_pkt_content_gen,                          // 14: skip_pkt_content_gen
+                tx_pkt_dest_size_choice,                          // 15: pkt_dest_size_choice
+                tx_data_sent_per_iter_low,                        // 16: data_sent_per_iter_low
+                tx_data_sent_per_iter_high,                       // 17: data_sent_per_iter_high
                 fabric_command
 
             };

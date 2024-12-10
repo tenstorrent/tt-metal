@@ -19,6 +19,7 @@ const uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
 
 extern uint64_t xy_local_addr;
 extern volatile local_pull_request_t* local_pull_request;
+extern volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table;
 
 uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
 bool tt_fabric_is_header_valid(packet_header_t* p_header);
@@ -439,6 +440,18 @@ typedef struct fvc_producer_state {
         }
     }
 
+    uint32_t get_next_hop_router_noc_xy() {
+        uint32_t dst_mesh_id = current_packet_header.routing.dst_mesh_id;
+        if (dst_mesh_id != routing_table->my_mesh_id) {
+            uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            return eth_chan_to_noc_xy[noc_index][next_port];
+        } else {
+            uint32_t dst_device_id = current_packet_header.routing.dst_dev_id;
+            uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            return eth_chan_to_noc_xy[noc_index][next_port];
+        }
+    }
+
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     inline uint32_t pull_data_from_fvc_buffer() {
         uint32_t words_available = get_num_words_available();
@@ -461,9 +474,7 @@ typedef struct fvc_producer_state {
             packet_words_remaining -= words_available;
             advance_out_rdptr(words_available);
             // issue noc write to noc target of pull request.
-            // TODO: Allan: Needs to be looked up from routing table
-            //              based on this->current_packet_header.routing. dest mesh/chip
-            uint64_t dest_addr = NOC_XY_ADDR(2, 0, FABRIC_ROUTER_REQ_QUEUE_START);
+            uint64_t dest_addr = ((uint64_t)get_next_hop_router_noc_xy() << 32) | FABRIC_ROUTER_REQ_QUEUE_START;
             packet_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
             if (current_packet_header.routing.flags == INLINE_FORWARD) {
                 curr_packet_valid = false;
@@ -508,50 +519,57 @@ typedef struct fvc_producer_state {
         return words_available;
     }
 
+    inline bool packet_is_for_local_chip() {
+        return (current_packet_header.routing.dst_mesh_id == routing_table->my_mesh_id) &&
+               (current_packet_header.routing.dst_dev_id == routing_table->my_device_id);
+    }
+
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     inline uint32_t process_inbound_packet() {
         uint32_t words_processed = 0;
-        if (current_packet_header.routing.flags == FORWARD && current_packet_header.session.command == ASYNC_WR) {
-            if (packet_in_progress == 0) {
-                packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                              current_packet_header.session.target_offset_l;
+        if (packet_is_for_local_chip()) {
+            if (current_packet_header.routing.flags == FORWARD && current_packet_header.session.command == ASYNC_WR) {
+                if (packet_in_progress == 0) {
+                    packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
+                                  current_packet_header.session.target_offset_l;
+                    packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
+                    advance_out_wrptr(PACKET_HEADER_SIZE_WORDS);
+                    advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
+                    // subtract the header words. Remaining words are the data to be written to packet_dest.
+                    // Remember to account for trailing bytes which may not be a full packet word.
+                    packet_in_progress = 1;
+                    words_processed = PACKET_HEADER_SIZE_WORDS;
+                    words_processed += issue_async_write();
+                } else {
+                    flush_async_writes();
+                    if (packet_words_remaining) {
+                        words_processed = issue_async_write();
+                    } else {
+                        packet_in_progress = 0;
+                        curr_packet_valid = false;
+                    }
+                }
+            } else if (current_packet_header.routing.flags == INLINE_FORWARD) {
+                uint64_t noc_addr = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
+                                    current_packet_header.session.target_offset_l;
+                noc_fast_atomic_increment(
+                    noc_index,
+                    NCRISC_AT_CMD_BUF,
+                    noc_addr,
+                    NOC_UNICAST_WRITE_VC,
+                    current_packet_header.packet_parameters.atomic_parameters.increment,
+                    current_packet_header.packet_parameters.atomic_parameters.wrap_boundary,
+                    false);
+
                 packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
                 advance_out_wrptr(PACKET_HEADER_SIZE_WORDS);
                 advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
-                // subtract the header words. Remaining words are the data to be written to packet_dest.
-                // Remember to account for trailing bytes which may not be a full packet word.
-                packet_in_progress = 1;
                 words_processed = PACKET_HEADER_SIZE_WORDS;
-                words_processed += issue_async_write();
-            } else {
-                flush_async_writes();
-                if (packet_words_remaining) {
-                    words_processed = issue_async_write();
-                } else {
-                    packet_in_progress = 0;
-                    curr_packet_valid = false;
-                }
+                fvc_pull_rdptr = fvc_out_rdptr;
+                update_remote_rdptr_cleared<fvc_mode>();
+                curr_packet_valid = false;
             }
-        } else if (current_packet_header.routing.flags == INLINE_FORWARD) {
-            uint64_t noc_addr = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                                current_packet_header.session.target_offset_l;
-            noc_fast_atomic_increment(
-                noc_index,
-                NCRISC_AT_CMD_BUF,
-                noc_addr,
-                NOC_UNICAST_WRITE_VC,
-                current_packet_header.packet_parameters.atomic_parameters.increment,
-                current_packet_header.packet_parameters.atomic_parameters.wrap_boundary,
-                false);
-
-            packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
-            advance_out_wrptr(PACKET_HEADER_SIZE_WORDS);
-            advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
-            words_processed = PACKET_HEADER_SIZE_WORDS;
-            fvc_pull_rdptr = fvc_out_rdptr;
-            update_remote_rdptr_cleared<fvc_mode>();
-            curr_packet_valid = false;
-        } else if (current_packet_header.routing.flags == FORWARD) {
+        } else {
             words_processed = pull_data_from_fvc_buffer<fvc_mode>();
         }
         return words_processed;

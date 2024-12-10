@@ -17,37 +17,40 @@ constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(2);
 constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(3);
 constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(4);
 
-constexpr uint32_t router_x = get_compile_time_arg_val(5);
-constexpr uint32_t router_y = get_compile_time_arg_val(6);
+constexpr uint32_t routing_table_start_addr = get_compile_time_arg_val(5);
+constexpr uint32_t router_x = get_compile_time_arg_val(6);
+constexpr uint32_t router_y = get_compile_time_arg_val(7);
 
-constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(7);
-constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(8);
+constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(8);
+constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(9);
 
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 
-constexpr uint32_t prng_seed = get_compile_time_arg_val(9);
+constexpr uint32_t prng_seed = get_compile_time_arg_val(10);
 
-constexpr uint32_t total_data_kb = get_compile_time_arg_val(10);
+constexpr uint32_t total_data_kb = get_compile_time_arg_val(11);
 constexpr uint64_t total_data_words = ((uint64_t)total_data_kb) * 1024 / PACKET_WORD_SIZE_BYTES;
 
-constexpr uint32_t max_packet_size_words = get_compile_time_arg_val(11);
+constexpr uint32_t max_packet_size_words = get_compile_time_arg_val(12);
 
 static_assert(max_packet_size_words > 3, "max_packet_size_words must be greater than 3");
 
-constexpr uint32_t timeout_cycles = get_compile_time_arg_val(12);
+constexpr uint32_t timeout_cycles = get_compile_time_arg_val(13);
 
-constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(13);
+constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(14);
 constexpr pkt_dest_size_choices_t pkt_dest_size_choice =
-    static_cast<pkt_dest_size_choices_t>(get_compile_time_arg_val(14));
+    static_cast<pkt_dest_size_choices_t>(get_compile_time_arg_val(15));
 
-constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(15);
-constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(16);
-constexpr uint32_t test_command = get_compile_time_arg_val(17);
+constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
+constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
+constexpr uint32_t test_command = get_compile_time_arg_val(18);
 
 uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
+tt_l1_ptr volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table =
+    reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(routing_table_start_addr);
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
 uint32_t target_address;
@@ -88,6 +91,7 @@ inline bool test_buffer_handler_async_wr() {
 
             packet_header.routing.flags = FORWARD;
             packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
+            packet_header.routing.dst_mesh_id = 4;
             packet_header.session.command = ASYNC_WR;
             packet_header.session.target_offset_l = target_address;
             packet_header.session.target_offset_h = 0x410;
@@ -171,6 +175,7 @@ inline bool test_buffer_handler_atomic_inc() {
             tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
 
             packet_header.routing.flags = INLINE_FORWARD;
+            packet_header.routing.dst_mesh_id = 4;
             packet_header.routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
             packet_header.session.command = ATOMIC_INC;
             packet_header.session.target_offset_l = target_address;
@@ -224,6 +229,11 @@ void kernel_main() {
 
     tt_fabric_init();
     target_address = 0x100000;
+
+    uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
+    noc_async_read_one_packet(
+        router_config_addr, routing_table_start_addr, sizeof(tt::tt_fabric::fabric_router_l1_config_t));
+    noc_async_read_barrier();
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
