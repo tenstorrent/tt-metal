@@ -20,14 +20,15 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const Tensor& tensor_addrs,
     const uint32_t num_layers,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
-    Tensor& output_tensor);
+    std::vector<Tensor>& output_tensor);
 
 struct DramPrefetcher {
     const Tensor tensor_addrs = Tensor();
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
-    const MemoryConfig output_mem_config;
     const uint32_t num_layers;
 
+    const MemoryConfig reader_output_mem_config;
+    const MemoryConfig writer_output_mem_config;
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
