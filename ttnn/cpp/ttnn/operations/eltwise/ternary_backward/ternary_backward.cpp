@@ -7,7 +7,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
-
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
