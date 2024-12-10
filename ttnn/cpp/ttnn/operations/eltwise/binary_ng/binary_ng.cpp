@@ -52,5 +52,22 @@ Tensor BinaryNg<binary_op_type>::invoke(
 }
 
 template struct BinaryNg<BinaryOpType::ADD>;
+template struct BinaryNg<BinaryOpType::SUB>;
+template struct BinaryNg<BinaryOpType::MUL>;
+template struct BinaryNg<BinaryOpType::DIV>;
+template struct BinaryNg<BinaryOpType::GT>;
+template struct BinaryNg<BinaryOpType::LT>;
+template struct BinaryNg<BinaryOpType::LTE>;
+template struct BinaryNg<BinaryOpType::GTE>;
+template struct BinaryNg<BinaryOpType::EQ>;
+template struct BinaryNg<BinaryOpType::NE>;
+template struct BinaryNg<BinaryOpType::SQUARED_DIFFERENCE>;
+template struct BinaryNg<BinaryOpType::BIAS_GELU>;
+template struct BinaryNg<BinaryOpType::LOGICAL_AND>;
+template struct BinaryNg<BinaryOpType::LOGICAL_OR>;
+template struct BinaryNg<BinaryOpType::LOGICAL_XOR>;
+template struct BinaryNg<BinaryOpType::LDEXP>;
+template struct BinaryNg<BinaryOpType::LOGADDEXP>;
+template struct BinaryNg<BinaryOpType::LOGADDEXP2>;
 
 }  // namespace ttnn::operations::binary_ng
