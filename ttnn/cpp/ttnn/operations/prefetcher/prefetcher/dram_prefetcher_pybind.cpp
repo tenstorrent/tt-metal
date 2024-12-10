@@ -18,11 +18,7 @@ void bind_dram_prefetcher_operation(py::module& module) {
             Asyncroneously pre-fetch tensors from DRAM and signal completion through semaphores.
 
         Args:
-            tensors (List[ttnn.Tensor]): the tensors to pre-fetch per layer.
-            tensor_addrs (ttnn.Tensor): all tensor addresses to pre-fetch.
-            num_layers (int): the number of layers, where each layer contains the tensors list.
-            global_cb (tt_metal.GlobalCircularBuffer, optional): the global circular buffer to use for synchronisation.
-            output_mem_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor.
+            tensors (List[ttnn.Tensor]): the tensors to pre-fetch.
 
         )doc",
 
@@ -31,7 +27,8 @@ void bind_dram_prefetcher_operation(py::module& module) {
             py::arg("tensor_addrs"),
             py::arg("num_layers"),
             py::arg("global_cb"),
-            py::arg("output_mem_config"),
+            py::arg("reader_output_mem_config"),
+            py::arg("writer_output_mem_config"),
         });
 }
 

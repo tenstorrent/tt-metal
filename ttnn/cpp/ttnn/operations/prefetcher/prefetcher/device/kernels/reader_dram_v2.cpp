@@ -90,6 +90,7 @@ void kernel_main() {
             DPRINT << "l1_write_addr: " << l1_write_addr << ENDL();
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
+                // TODO: Fix granularity of the CB
                 cb_reserve_back(cb_id, curr_block_num_pages);
                 for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
                     noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);

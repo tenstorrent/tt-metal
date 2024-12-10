@@ -35,7 +35,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const Tensor& tensor_addrs,
     const uint32_t num_layers,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
-    Tensor& output_tensor) {
+    std::vector<Tensor>& output_tensor) {
     TT_FATAL(global_cb != std::nullopt, "Global circular buffer must be provided");
 
     /* Buffers */
@@ -45,7 +45,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     for (const auto& tensor : tensors) {
         tensor_buffers.push_back(tensor.buffer());
     }
-    Buffer* output_buffer = output_tensor.buffer();
+    Buffer* reader_output_buffer = output_tensor[0].buffer();
+    // Buffer* writer_output_buffer = output_tensor[1].buffer();
 
     /* Tiles */
     tt::tt_metal::Tile tensor_addrs_tile = tensor_addrs.get_tensor_spec().tile();
@@ -67,19 +68,25 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     // In validate we make sure that all tensors are on the same device
     tt::tt_metal::Device* device = tensors[0].device();
     uint32_t num_tensors = tensors.size();
+    uint32_t num_receivers_per_reader = global_cb->receiver_cores().num_cores() / global_cb->sender_cores().num_cores();
 
     // TODO: What does this granularity depend on?
     uint32_t num_blocks = global_cb->receiver_cores().num_cores();
     std::vector<uint32_t> tensor_block_num_tiles;
-    // TODO: create a tensor to hold the {height_in_tiles, width_in_tiles} for each tensor
+    std::vector<std::vector<uint32_t>> tensor_block_shapes;
+    std::vector<uint32_t> tensor_tile_sizes;
     for (uint32_t t = 0; t < num_tensors; t++) {
         uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
         uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
+
+        tensor_block_shapes.push_back({height_in_tiles, width_in_tiles});
         tensor_block_num_tiles.push_back(height_in_tiles * width_in_tiles / num_blocks);
+        tensor_tile_sizes.push_back(tensor_tiles[t].get_tile_size(tensor_data_formats[t]));
     }
 
     /* Cores setup */
     auto reader_core_range = global_cb->sender_cores();  // CoreRangeSet({CoreRange(CoreCoord(0, 0))});
+    auto receiver_core_range = global_cb->receiver_cores();
 
     /* read cb setup */
     uint32_t reader_cb_size = global_cb->size();
@@ -98,7 +105,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t tensor_addrs_cb_num_tiles = tensor_addrs_buffer->shard_spec().shape()[0] *
                                          tensor_addrs_buffer->shard_spec().shape()[1];  // TODO: check this
     uint32_t tensor_addrs_cb_size =
-        1 * num_tensors * tensor_addrs_single_tile_size;  // tensor_addrs_cb_num_tiles * tensor_addrs_single_tile_size;
+        num_layers * num_tensors *
+        tensor_addrs_single_tile_size;  // tensor_addrs_cb_num_tiles * tensor_addrs_single_tile_size;
 
     uint32_t tensor_addrs_cb_index = tt::CB::c_in1;
     CircularBufferConfig tensor_addrs_cb_config =
@@ -115,19 +123,45 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     */
 
-    /* output buffer (based on reader_cb) */
-    uint32_t output_single_tile_size = reader_cb_single_tile_size;
-    uint32_t output_cb_size =
-        num_tensors * tensor_block_num_tiles[0] * num_blocks * tensor_tiles[0].get_tile_size(tensor_data_formats[0]);
+    /* remote cb setup */
+    uint32_t remote_cb_size = global_cb->size();
+    uint32_t remote_cb_single_tile_size = reader_cb_single_tile_size;  // 16B aligned
 
-    uint32_t output_cb_index = tt::CB::c_in2;
-    CircularBufferConfig output_cb_config =
-        CircularBufferConfig(output_cb_size, {{output_cb_index, tensor_data_formats[0]}})
-            .set_page_size(output_cb_index, output_single_tile_size)
-            .set_globally_allocated_address(*output_buffer);
-    auto output_cb = CreateCircularBuffer(program, reader_core_range, output_cb_config);
+    // uint32_t remote_cb_index = tt::CBIndex::c_31;
+    // CircularBufferConfig remote_cb_config =
+    //     CircularBufferConfig(remote_cb_size, {{remote_cb_index, reader_cb_data_format}})
+    //     .set_page_size(remote_cb_index, remote_cb_single_tile_size);
+    //     // TODO: set_globally_allocated_address(global_cb_buffer); ?
+    // remote_cb_config.remote_index(remote_cb_index);
+    // auto remote_cb = tt::tt_metal::v1::experimental::CreateCircularBuffer(program, receiver_core_range,
+    // remote_cb_config, *global_cb);
+
+    /* output buffer (based on reader_cb) */
+    uint32_t reader_output_single_tile_size = reader_cb_single_tile_size;
+    uint32_t reader_output_cb_size = num_tensors * tensor_block_num_tiles[0] * num_blocks * tensor_tile_sizes[0];
+
+    uint32_t reader_output_cb_index = tt::CB::c_in2;
+    CircularBufferConfig reader_output_cb_config =
+        CircularBufferConfig(reader_output_cb_size, {{reader_output_cb_index, tensor_data_formats[0]}})
+            .set_page_size(reader_output_cb_index, reader_output_single_tile_size)
+            .set_globally_allocated_address(*reader_output_buffer);
+    auto reader_output_cb = CreateCircularBuffer(program, reader_core_range, reader_output_cb_config);
+
+    /* output buffer (based on writer_cb) */
+    // uint32_t writer_output_single_tile_size = reader_cb_single_tile_size;
+    // uint32_t writer_output_cb_size =
+    //     num_tensors * tensor_block_num_tiles[0] * num_blocks * tensor_tile_sizes[0] / num_receivers_per_reader;
+
+    // uint32_t writer_output_cb_index = tt::CB::c_in3;
+    // CircularBufferConfig writer_output_cb_config =
+    //     CircularBufferConfig(writer_output_cb_size, {{writer_output_cb_index, tensor_data_formats[0]}})
+    //         .set_page_size(writer_output_cb_index, writer_output_single_tile_size)
+    //         .set_globally_allocated_address(*writer_output_buffer);
+    // auto writer_output_cb = CreateCircularBuffer(program, receiver_core_range, writer_output_cb_config);
 
     /* Compile time args */
+
+    // Reader kernel
     std::vector<uint32_t> reader_ct_args = {num_layers, num_tensors, num_blocks, reader_cb_size};
 
     auto reader_kernel_id = CreateKernel(
@@ -140,9 +174,29 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,  // TODO: Is this needed?
             .compile_args = reader_ct_args});
 
+    // // Writer kernel
+    // std::vector<uint32_t> writer_ct_args = {
+    //     num_layers,
+    //     num_tensors,
+    //     num_blocks,
+    //     num_receivers_per_reader};
+
+    // auto writer_kernel_id = CreateKernel(
+    //     program,
+    //     "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/writer_l1.cpp",
+    //     reader_core_range,
+    //     tt::tt_metal::DataMovementConfig{
+    //         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+    //         .noc = tt::tt_metal::NOC::RISCV_0_default,
+    //         .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,  // TODO: Is this needed?
+    //         .compile_args = writer_ct_args});
+
     /* Runtime args */
     std::vector<uint32_t> page_sizes;
     std::vector<uint32_t> block_num_pages;
+
+    std::vector<uint32_t> coalesced_page_sizes;
+    std::vector<uint32_t> coalesced_num_pages;
 
     for (uint32_t t = 0; t < num_tensors; t++) {
         uint32_t page_size, num_pages;
@@ -151,7 +205,13 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         page_sizes.push_back(page_size);
         block_num_pages.push_back(num_pages);
 
-        // TODO: Create new vectors to hold the "coalesced" sizes for the writer kernel
+        uint32_t coalesced_page_size, coalesced_num_page;
+        uint32_t block_width_in_tiles = tensor_block_shapes[t][1];
+        get_max_page_size_and_num_pages(
+            block_width_in_tiles / num_receivers_per_reader,
+            tt::tt_metal::detail::TileSize(tensor_data_formats[t]),
+            coalesced_page_size,
+            coalesced_num_page);
     }
 
     uint32_t total_num_blocks_in_buffer = 3;  // TODO: how big should reader CB be? here it's triple buffered
@@ -159,15 +219,12 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     std::vector<uint32_t> bank_ids;
     const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);
 
-    // std::vector<CoreCoord> reader_cores;
-    // for (const auto& reader_core : reader_core_range) {
-    //     log_info("reader_core: {}", reader_core);
-    //     reader_cores.push_back(reader_core);
-    // }
-
+    // Runtime args for the reader cores
     for (uint32_t core_index = 0; core_index < reader_core_range.num_cores(); core_index++) {
         const auto& core = reader_cores[core_index];
+        uint32_t noc = 1;  // TODO: Update this
 
+        /* reader kernel */
         // TODO: Create a proper mapping for bank_id
         uint32_t bank_id = reader_core_range.num_cores() - core_index;
         uint32_t vc = bank_id & 0x1;
@@ -189,6 +246,19 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         reader_rt_args.insert(reader_rt_args.end(), block_num_pages.begin(), block_num_pages.end());
 
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+
+        // /* writer kernel */
+        // std::vector<uint32_t> writer_rt_args;
+        // writer_rt_args.insert(writer_rt_args.end(), coalesced_page_sizes.begin(), coalesced_page_sizes.end());
+        // writer_rt_args.insert(writer_rt_args.end(), coalesced_num_pages.begin(), coalesced_num_pages.end());
+        // writer_rt_args.insert(writer_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
+        // writer_rt_args.insert(writer_rt_args.end(), tensor_tile_sizes.begin(), tensor_tile_sizes.end());
+        // for (auto block_shape : tensor_block_shapes) { // block_height_in_itles
+        //     writer_rt_args.push_back(block_shape[0]);
+        // }
+        // writer_rt_args.push_back(noc);
+
+        // tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 
     auto override_runtime_arguments_callback = [reader_kernel_id, reader_core_range](
