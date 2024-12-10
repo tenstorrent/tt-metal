@@ -214,7 +214,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& input_tensor_bias = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return multi_core_optimized_conv_sharded_v2_new(
+    return multi_core_conv2d_impl(
         input_tensor_a, input_tensor_b, input_tensor_bias,
         sliding_window_config,
         output_channels,
