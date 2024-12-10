@@ -62,7 +62,7 @@ def num_cores_to_corerangeset(
 def num_cores_to_corerangeset_in_subcoregrids(
     start_core: ttnn.CoreCoord,
     target_num_cores: int,
-    subcoregrids: ttnn.CoreRangeSet,
+    sub_core_grids: ttnn.CoreRangeSet,
     row_wise: bool = False,
 ):
     """
@@ -71,7 +71,7 @@ def num_cores_to_corerangeset_in_subcoregrids(
     return ttnn._ttnn.operations.core.num_cores_to_corerangeset_in_subcoregrids(
         start_core,
         target_num_cores,
-        subcoregrids,
+        sub_core_grids,
         row_wise,
     )
 

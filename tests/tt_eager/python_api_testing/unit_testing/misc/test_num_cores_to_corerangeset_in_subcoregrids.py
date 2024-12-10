@@ -7,9 +7,9 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "start_core, num_cores, subcoregrids, row_wise, expected_core_range_set",
+    "start_core, num_cores, sub_core_grids, row_wise, expected_core_range_set",
     [
-        # Test Case 1: Basic row-wise scenario with enough cores in subcoregrids
+        # Test Case 1: Basic row-wise scenario with enough cores in sub_core_grids
         (
             ttnn.CoreCoord(1, 0),
             32,
@@ -84,8 +84,10 @@ import pytest
         ),
     ],
 )
-def test_numcores_to_corerangeset(start_core, num_cores, subcoregrids, row_wise, expected_core_range_set):
+def test_numcores_to_corerangeset_in_subcoregrids(
+    start_core, num_cores, sub_core_grids, row_wise, expected_core_range_set
+):
     output_corerangeset = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        start_core, num_cores, subcoregrids, row_wise=row_wise
+        start_core, num_cores, sub_core_grids, row_wise=row_wise
     )
     assert output_corerangeset.to_json() == expected_core_range_set.to_json()

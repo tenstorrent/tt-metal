@@ -151,18 +151,18 @@ CoreRangeSet num_cores_to_corerangeset(
 CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     const CoreCoord start_core,
     const uint32_t target_num_cores,
-    const CoreRangeSet subcoregrids,
+    const CoreRangeSet& sub_core_grids,
     const bool row_wise = false) {
     // If target_num_cores is 0 or input_corerangeset is empty, return empty CoreRangeSet
     TT_FATAL(target_num_cores > 0, "Target number of cores must be greater than 0");
     TT_FATAL(
-        target_num_cores <= subcoregrids.num_cores(),
+        target_num_cores <= sub_core_grids.num_cores(),
         "Target number of cores {} is greater than total number of available cores {}",
         target_num_cores,
-        subcoregrids.num_cores());
+        sub_core_grids.num_cores());
 
     // Validate that the start core is contained within the entire CoreRangeSet
-    TT_FATAL(subcoregrids.contains(start_core), "Start core must be contained within the input CoreRangeSet");
+    TT_FATAL(sub_core_grids.contains(start_core), "Start core must be contained within the input CoreRangeSet");
 
     std::vector<CoreRange> result_coreranges;
     bool start_core_found = false;
@@ -241,7 +241,7 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     };
 
     // Iterate over subcoregrids and process based on row_wise
-    for (const auto& subcoregrid : subcoregrids.ranges()) {
+    for (const auto& subcoregrid : sub_core_grids.ranges()) {
         if (subcoregrid.contains(start_core)) {
             start_core_found = true;
         } else {

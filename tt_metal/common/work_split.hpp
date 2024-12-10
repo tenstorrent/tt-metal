@@ -43,7 +43,7 @@ CoreRangeSet num_cores_to_corerangeset(
 CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     const CoreCoord start_core,
     const uint32_t target_num_cores,
-    const CoreRangeSet subcoregrids,
+    const CoreRangeSet& sub_core_grids,
     const bool row_wise = false);
 // This function takes in the core grid size, as well as the number of units of work to divide between the cores
 // This function returns the number of cores, the CoreRangeSet of all cores, and then the CoreRangeSet that does

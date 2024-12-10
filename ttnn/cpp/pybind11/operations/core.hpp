@@ -366,7 +366,7 @@ void py_module(py::module& module) {
 
     module.def(
         "num_cores_to_corerangeset_in_subcoregrids",
-        py::overload_cast<const CoreCoord, const uint32_t, const CoreRangeSet, const bool>(
+        py::overload_cast<const CoreCoord, const uint32_t, const CoreRangeSet&, const bool>(
             &tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids),
         R"doc(Create a CoreRangeSet containing the specified number of cores starting from start_core in given subcoregrids)doc");
 }
