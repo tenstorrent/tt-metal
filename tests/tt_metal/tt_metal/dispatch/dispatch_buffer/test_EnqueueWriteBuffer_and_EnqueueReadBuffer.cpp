@@ -583,6 +583,22 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestWrapCompletionQOnInsufficientSpa
     }
 }
 
+TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBuffer) {
+    const uint32_t page_size = 1024;
+    const uint32_t offset = 2048;
+    const uint32_t size = 4096;
+    for (Device* device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        auto buffer = Buffer::create(device, 32 * page_size, page_size, BufferType::DRAM);
+        auto src1 = local_test_functions::generate_arange_vector(buffer->size());
+        // EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, offset, size, false);
+        EnqueueWriteBuffer(device->command_queue(), *buffer, src1, false);
+        vector<uint32_t> result;
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, offset, size, true);
+        EXPECT_EQ(src1, result);
+    }
+}
+
 // Test that command queue wraps when buffer read needs to be split into multiple enqueue_read_buffer commands and
 // available space in completion region is less than a page
 TEST_F(CommandQueueSingleCardBufferFixture, TestWrapCompletionQOnInsufficientSpace2) {
