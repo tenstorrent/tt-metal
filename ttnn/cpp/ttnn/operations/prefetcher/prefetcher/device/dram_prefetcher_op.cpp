@@ -74,7 +74,8 @@ std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tens
 operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     auto& output_tensor = output_tensors.at(0);
-    return dram_prefetcher_multi_core(input_tensors, this->tensor_addrs, this->global_cb, output_tensor);
+    return dram_prefetcher_multi_core(
+        input_tensors, this->tensor_addrs, this->num_layers, this->global_cb, output_tensor);
 }
 
 }  // namespace ttnn::operations::dram_prefetcher
