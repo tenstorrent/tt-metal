@@ -36,8 +36,8 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
     # Parse the table and find the row for our model and device
     rows = [
         line.split("|")[1:]  # Each row starts with a separator
-        for line in target_section.split("\n")
-        if f"| {model_size} | {device_name} |" in line
+        for line in target_section.replace(" ", "").split("\n")
+        if f"|{model_size}|{device_name}|" in line
     ]
     if not rows:
         raise ValueError(
