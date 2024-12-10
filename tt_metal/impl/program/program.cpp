@@ -128,6 +128,7 @@ class Program_ {
 
     void invalidate_circular_buffer_allocation();
 
+    uint32_t get_max_cb_memory_usage(const Device *device) const;
     void allocate_circular_buffers(const Device *device);
 
     bool is_finalized() const;
@@ -753,6 +754,19 @@ void detail::Program_::invalidate_circular_buffer_allocation() {
 }
 
 void Program::invalidate_circular_buffer_allocation() { pimpl_->invalidate_circular_buffer_allocation(); }
+uint32_t Program::get_max_cb_memory_usage(const Device *device) const { return pimpl_->get_max_cb_memory_usage(device); }
+
+
+uint32_t detail::Program_::get_max_cb_memory_usage(const Device *device) const{
+    uint64_t base_cb_address = device->get_base_allocator_addr(HalMemType::L1);
+    uint64_t end_cb_address = base_cb_address;
+
+    for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
+            end_cb_address = std::max(end_cb_address, cb_allocator.get_cb_region_end());
+    }
+    log_info("Base CB address: {}, End CB Address: {}", base_cb_address,end_cb_address);
+    return end_cb_address - base_cb_address;
+}
 
 void detail::Program_::allocate_circular_buffers(const Device *device) {
     //ZoneScoped;
@@ -1452,6 +1466,19 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
     }
     return sub_device_ids->second;
 }
+
+void Program::set_pre_exec_callback(std::function<void(const Program&)> callback){
+    this->pre_exec_callback_ = std::move(callback);
+}
+
+void Program::call_pre_exec_callback(){
+    if (this->pre_exec_callback_) {
+        this->pre_exec_callback_(*this);
+    } else {
+        log_debug("No pre-exec callback set for program {}", this->get_id());
+    }
+}
+
 
 void detail::Program_::finalize(Device *device) {
     // Store the number of tensix "go signals" for use by CQ

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
@@ -79,6 +80,7 @@ struct OptimizedConvNew {
     bool enable_split_reader;
     bool enable_subblock_padding;
     bool use_non_tile_height;
+    uint32_t pre_op_l1_allocation_size_bytes;
     OptimizedConvNew(const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels, uint32_t groups,
         bool untile_out,
@@ -106,6 +108,8 @@ struct OptimizedConvNew {
             enable_split_reader(enable_split_reader),
             enable_subblock_padding(enable_subblock_padding),
             use_non_tile_height(use_non_tile_height) {}
+
+    std::pair<uint32_t,uint32_t> estimate_L1_usage(tt::ARCH arch, const DataType input_dtype, const DataType weights_dtype, const DataType output_dtype, const tt::tt_metal::LegacyShape weights_shape, bool enable_bias) const;
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
