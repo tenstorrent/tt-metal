@@ -15,7 +15,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 
 /*
 
@@ -42,21 +42,17 @@
 
 */
 
-namespace numpy {
-
 template <typename DataType>
-struct ndarray {
+struct NDArray {
     tt::tt_metal::LegacyShape shape;
     void* data;
 
-    ndarray(tt::tt_metal::LegacyShape shape) :
+    NDArray(tt::tt_metal::LegacyShape shape) :
         shape(shape), data(malloc(tt::tt_metal::compute_volume(shape) * sizeof(DataType))) {}
-    ~ndarray() { free(data); }
+    ~NDArray() { free(data); }
 
     std::size_t size() const { return tt::tt_metal::compute_volume(shape); }
 };
-
-}  // namespace numpy
 
 void test_raw_host_memory_pointer() {
     using tt::tt_metal::BorrowedStorage;
@@ -81,7 +77,7 @@ void test_raw_host_memory_pointer() {
 
     /* Borrow Data from Numpy Start */
     // Create some
-    auto a_np_array = numpy::ndarray<bfloat16>(shape);
+    auto a_np_array = NDArray<bfloat16>(shape);
     void* a_np_array_data = a_np_array.data;
     auto on_creation_callback = [] {};
     auto on_destruction_callback = [] {};
@@ -154,7 +150,7 @@ void test_raw_host_memory_pointer() {
     free(storage_of_alternative_tensor_for_printing);
     /* Alternative Way to Print End */
 
-    auto d_np_array = numpy::ndarray<bfloat16>(shape);
+    auto d_np_array = NDArray<bfloat16>(shape);
     void* d_np_array_data = d_np_array.data;
     Tensor d_cpu = Tensor(
         BorrowedStorage{
