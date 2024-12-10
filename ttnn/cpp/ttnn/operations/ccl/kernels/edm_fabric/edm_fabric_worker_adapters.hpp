@@ -17,6 +17,14 @@
 
 namespace tt::fabric {
 
+void nop(){
+    // Debug loop to let time pass
+    volatile uint32_t i = 0;
+    for (i = 0; i < 1000000; i++) {
+        asm volatile("" : "+r"(i) : : "memory");
+    }
+}
+
 struct WorkerToFabricEdmSender{
 
     static constexpr uint32_t open_connection_value = 1;

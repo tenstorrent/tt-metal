@@ -315,7 +315,8 @@ CclHostLowLevelWorkerCommand local_chip_noc_absolute_address_semaphore_inc(
 }
 
 CclHostLowLevelWorkerCommand fabric_multicast_semaphore_inc(
-    CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    // CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     size_t dest_noc0_x,
     size_t dest_noc0_y,
@@ -329,8 +330,8 @@ CclHostLowLevelWorkerCommand fabric_multicast_semaphore_inc(
         ttnn::ccl::cmd::CclCommandAddrNone(),
 
         // dest
-        ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
-        semaphore_dest_args,
+        get_semaphore_addr_type(semaphore_dest_args), // ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
+        get_semaphore_addr_val(semaphore_dest_args), // semaphore_dest_args,
 
         ttnn::ccl::cmd::CclCommandCoreDescriptorType::NOC_XY,
         ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY{dest_noc0_x, dest_noc0_y},

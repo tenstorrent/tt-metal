@@ -570,6 +570,10 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
     const uint8_t dest_noc0_x = cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL ? my_x[0] : cmd_ctx.core_desc_info.core_desc_args.noc_unicast.x;
     const uint8_t dest_noc0_y = cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL ? my_y[0] : cmd_ctx.core_desc_info.core_desc_args.noc_unicast.y;
 
+    DPRINT << "dest_noc0_y, dest_noc0_x: " << (uint32_t)dest_noc0_y << ", " << (uint32_t)dest_noc0_x << "\n";
+    DPRINT << "dest_bank_addr: " << (uint64_t)dest_bank_addr << "\n";
+    DPRINT << "value: " << (uint32_t)value << "\n";
+
     // PROBLEM: this is local atomic increment but we are implementing the fabric
     // atomic increment too. Should it be here - or should it be separate
     if (is_remote_atomic_inc_over_fabric) {
@@ -678,6 +682,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen> &cmd_
 
     wrapped_worker_slice_read_context &cmd_specific_ctx = cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx;
     const uint16_t max_pages_readable = std::min<size_t>(cmd_ctx.packet_size_in_pages, cmd_ctx.command_tensor.worker_pages_per_slice - cmd_specific_ctx.offset_into_worker_slice);
+    DPRINT << "max_pages_readable: " << (uint32_t)max_pages_readable << "\n";
 
     uint16_t contig_pages_advanced = 1;
     cb_reserve_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages);
@@ -992,6 +997,7 @@ void kernel_main() {
     arg_idx_t command1_start_offset = get_arg_val<address_t>(arg_idx++);
     #endif
 
+    // DPRINT << "ncmds: " << (uint32_t)((num_commands0 << 16) | num_commands1) << "\n";
 
     // Assuming whole page transmissions (which is the only mode we support at the moment)
     // -> however, wanted to call it out here to make it clear that we need to pull this

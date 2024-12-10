@@ -10,10 +10,11 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_device.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "debug/dprint.h"
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include <cstdint>
 
@@ -32,13 +33,13 @@ constexpr uint32_t cb_id = get_compile_time_arg_val(3);
 
 #ifdef SHARDED_MEM_LAYOUT
 static constexpr bool is_sharded_mode = true;
-static constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(5);
-static constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(6);
-static constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(7);
-static constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(8);
-static constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(9);
-static constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(10);
-static constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(11) != 0;
+static constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(4);
+static constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(5);
+static constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(6);
+static constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(7);
+static constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(8);
+static constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(9);
+static constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(10) != 0;
 #else
 static constexpr bool is_sharded_mode = false;
 static constexpr uint32_t input_tensor_shard_grid_height = 0;
@@ -122,18 +123,17 @@ void kernel_main() {
     // -> however, wanted to call it out here to make it clear that we need to pull this
     //    out when we start enabling other modes
     const uint32_t packet_size_in_pages = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t page_size = get_arg_val<uint32_t>(arg_idx++);
-    auto tensor_addrgen = build_source_address_generator<tensor_layout, buffer_type, page_layout>(arg_idx, tensor_address, page_size, tt::CB::c_in0);
+    const uint32_t payload_page_size = get_arg_val<uint32_t>(arg_idx++);
+    auto tensor_addrgen = build_source_address_generator<tensor_layout, buffer_type, page_layout>(arg_idx, tensor_address, payload_page_size, tt::CB::c_in0);
 
     ttnn::ccl::cmd::CclCommandTensor command_tensor;
 
     // Don't use CBs because there appears to be a bug if we have the same producer/consumer core to a given CB
     // Instead, open up the CB and use it as a raw scratch space6
-    const uint32_t local_l1_scratch_buffer_address = get_write_ptr(cb_id);
 
-    // #ifdef DEBUG_PRINT_ENABLED
-    // DPRINT << "ccl_send_reader has " << (uint32_t)num_commands << " commands" << ENDL();
-    // #endif
+    #ifdef DEBUG_PRINT_ENABLED
+    DPRINT << "ccl_send_reader has " << (uint32_t)num_commands << " commands" << ENDL();
+    #endif
 
     for (std::size_t i = 0; i < num_commands; ++i) {
         // Generalized would be to get the command header info and then dispatch accordingly - if the command type is singular
@@ -143,34 +143,23 @@ void kernel_main() {
         std::size_t new_arg_idx = arg_idx;
 
         {
-            // print_tensor_command(i, command_tensor);
+            print_tensor_command(i, command_tensor);
             ASSERT(command_tensor.worker_pages_per_slice > 0);
 
             // CURRENTLY ONLY SUPPORTS WRAPPED TENSOR ITERATION COMMANDS
             // Implemented really inefficiently for now - in the future we can do more efficient packing and also change
             // the tensor read API to require the information in a more efficient way (less intermediate calculations)
-            // const shape_t tensor_slice_start_offset = ttnn::ccl::build_from_args<shape_t>(arg_idx); // Should be RT
             shape_t valid_worker_slice_shape = build_wrapped_row_tensor_slice(command_tensor.worker_pages_per_slice); // Parametrizable by ct arg
 
-            shape_t const worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
-            shape_t const global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
+            shape_t const& global_offset = command_tensor.tensor_slice_offset + command_tensor.worker_start_offset_in_slice;
 
             uint32_t curr_tile_id = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
-
-            // DPRINT << "valid_worker_slice_shape.w: " << valid_worker_slice_shape.w << ENDL();
-            // DPRINT << "valid_worker_slice_shape.z: " << valid_worker_slice_shape.z << ENDL();
-            // DPRINT << "valid_worker_slice_shape.y: " << valid_worker_slice_shape.y << ENDL();
-            // DPRINT << "valid_worker_slice_shape.x: " << valid_worker_slice_shape.x << ENDL();
-            // DPRINT << "global_offset.w: " << global_offset.w << ENDL();
-            // DPRINT << "global_offset.z: " << global_offset.z << ENDL();
-            // DPRINT << "global_offset.y: " << global_offset.y << ENDL();
-            // DPRINT << "global_offset.x: " << global_offset.x << ENDL();
-            // DPRINT << "curr_tile_id: " << curr_tile_id << ENDL();
 
             uint32_t offset_into_worker_slice = 0;
             bool last_page_of_worker = false;
             for (uint32_t p = 0; p < command_tensor.worker_pages_per_slice; p += packet_size_in_pages) {
                 cb_reserve_back(cb_id, packet_size_in_pages);
+                const uint32_t local_l1_scratch_buffer_address = get_write_ptr(cb_id) + sizeof(tt::fabric::PacketHeader);
 
                 uint32_t n_pages = std::min(packet_size_in_pages, command_tensor.worker_pages_per_slice - p);
                 ASSERT(command_tensor.worker_start_offset_in_slice.w == 0);
@@ -182,7 +171,8 @@ void kernel_main() {
                 ASSERT(command_tensor.tensor_slice_shape.w == 1);
                 ASSERT(command_tensor.tensor_slice_shape.z == 1);
 
-                // DPRINT << "iter "<< p << " curr_tile_id: " << curr_tile_id << ENDL();
+                DPRINT << "iter "<< p << " curr_tile_id: " << curr_tile_id << ENDL();
+                DPRINT << "local_l1_scratch_buffer_address: " << local_l1_scratch_buffer_address << ENDL();
 
                 read_wrapped_chunk_from_output_tensor_to_address(
                     curr_tile_id,
@@ -195,7 +185,7 @@ void kernel_main() {
                     local_l1_scratch_buffer_address,
                     tensor_addrgen,
                     n_pages,
-                    page_size,
+                    payload_page_size,
                     last_page_of_worker
                 );
 

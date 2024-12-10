@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/ccl/all_gather_v2/device/all_gather_op.hpp"
 #include "ttnn/operations/math.hpp"
+#include "tt_metal/impl/buffers/global_semaphore.hpp"
 
 #include "tt_metal/host_api.hpp"
 
@@ -21,16 +22,19 @@ AllGatherV2 create_all_gather_struct(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<Device*>& devices,
-    const ttnn::ccl::Topology topology
+    const ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore_handles
 ) {
     uint32_t num_devices = devices.size();
 
     std::optional<Device*> forward_device = std::nullopt;
     std::optional<Device*> backward_device = std::nullopt;
+    const GlobalSemaphore* semaphore_handle = nullptr;
     uint32_t device_index = 0; // Initialize device index
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == input_tensor.device()) {
             device_index = i;
+            semaphore_handle = &semaphore_handles.at(i);  // Get raw pointer
             if (i != 0) {
                 backward_device = devices.at(i - 1);
             }
@@ -41,7 +45,7 @@ AllGatherV2 create_all_gather_struct(
     }
 
     return ttnn::AllGatherV2{
-        forward_device, backward_device, dim, num_links, num_devices, device_index, memory_config.value_or(input_tensor.memory_config()), topology};
+        forward_device, backward_device, dim, num_links, num_devices, device_index, memory_config.value_or(input_tensor.memory_config()), topology, *semaphore_handle};
 }
 } // namespace all_gather_v2_detail
 } // namespace ccl
@@ -98,13 +102,13 @@ std::vector<Tensor> AllGatherV2::create_output_tensors(const std::vector<Tensor>
     } else {
         output_tensors = operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, tile);
     }
-    log_info(tt::LogOp, "DEBUG: output_tensors[0] address: {}", output_tensors.at(0).buffer()->address());
+    log_debug(tt::LogOp, "DEBUG: output_tensors[0] address: {}", output_tensors.at(0).buffer()->address());
     return output_tensors;
 }
 
 operation::ProgramWithCallbacks AllGatherV2::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    tt::log_info(tt::LogOp, "DEBUG: create_program is called");
-    return all_gather_multi_core_with_workers_new(input_tensors[0], this->forward_device, this->backward_device, output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->topology);
+    tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
+    return all_gather_multi_core_with_workers_new(input_tensors[0], this->forward_device, this->backward_device, output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->topology, this->semaphore_handle);
 }
 
 const operation::Hash AllGatherV2::compute_program_hash(
@@ -151,28 +155,36 @@ Tensor all_gather_v2(
     //         program = tt::tt_metal::Program{}; // Initialize each Program
     //         return &program;
     //     });
-    TT_FATAL(num_links == 1, "all_gather op is only supported for num_links == 1, but has {}", num_links);
-    tt::log_info(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
-    tt::log_info(tt::LogOp, "DEBUG: line_fabric is created");
+    tt::log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
+    tt::log_debug(tt::LogOp, "DEBUG: line_fabric is created");
+
+    // create this semaphore for all cores since we don't know which core will be used for teardown draining
+    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
+    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+
+    std::vector<GlobalSemaphore> semaphore_handles;
+    for (const auto& device : devices) {
+        auto handle = GlobalSemaphore::create(device, core_grid, 0);
+        tt::log_info(tt::LogOp, "Created semaphore handle at address {} for device {}",
+            handle->address(), device->id());
+        semaphore_handles.push_back(std::move(*handle));
+    }
+
+    // HACK: assert every handle address is the same
+    TT_FATAL(std::all_of(semaphore_handles.begin(), semaphore_handles.end(), [&](const auto& handle) {
+        return handle.address() == semaphore_handles.front().address();
+    }), "[Hack] All semaphore handles should have the same address");
 
     operation::launch_op(
-        [dim, num_links, num_devices, memory_config, devices, ccl_topology](
+        [dim, num_links, num_devices, memory_config, devices, ccl_topology, semaphore_handles](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
-            // auto drain_sync_core = CoreCoord(8,8);
-            // ttnn::ccl::SyncModeSpec {
-            //     num_devices,
-            //     drain_sync_core,
-            //     {CreateGlobalSemaphore(input_tensor.device(), {drain_sync_core}, 0)},
-            //     {num_devices}
-            // };
-
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                ttnn::ccl::all_gather_detail::create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices, ccl_topology),
+                ttnn::ccl::all_gather_detail::create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices, ccl_topology, semaphore_handles),
                 {input_tensor});
         },
         {input_tensor},
@@ -191,6 +203,7 @@ Tensor all_gather_v2(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const ttnn::ccl::Topology topology) {
 
+    TT_FATAL(false, "not implemented");
     tt::log_info(tt::LogOp, "DEBUG: all_gather with cluster_axis is called");
 
     TT_FATAL(topology == ttnn::ccl::Topology::Linear, "This all_gather API with cluster_axis is currently supported only for the Linear topology");
@@ -219,38 +232,40 @@ Tensor all_gather_v2(
             return &program;
         });
     TT_FATAL(num_links == 1, "all_gather op is only supported for num_links == 1, but has {}", num_links);
-    tt::log_info(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
+    tt::log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     auto line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, program_ptrs, num_links);
-    tt::log_info(tt::LogOp, "DEBUG: line_fabric is created");
+    tt::log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    operation::launch_op(
-        [dim, num_links, memory_config, mesh_view, cluster_axis, num_devices, topology, devices, program_ptrs, line_fabric](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
-            const auto& input_device_tensor = input_tensors.at(0);
 
-            const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
-            const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
-            const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
+    // operation::launch_op(
+    //     [dim, num_links, memory_config, mesh_view, cluster_axis, num_devices, topology, devices, program_ptrs, line_fabric](
+    //         const std::vector<Tensor>& input_tensors,
+    //         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    //         const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
-            auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
-                auto new_coord = coordinate;
-                if (cluster_axis == 0) {
-                    new_coord.row = line_index % num_devices;
-                } else {
-                    new_coord.col = line_index % num_devices;
-                }
-                return mesh_view->find_device_id(new_coord);
-            };
+    //         const auto& input_device_tensor = input_tensors.at(0);
 
-            return operation::run(
-                ttnn::ccl::all_gather_detail::create_all_gather_struct(input_device_tensor, dim, num_links, memory_config, devices, topology),
-                {input_device_tensor});
-        },
-        {input_tensor},
-        output_tensors);
+    //         const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
+    //         const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
+    //         const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
+
+    //         auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+    //             auto new_coord = coordinate;
+    //             if (cluster_axis == 0) {
+    //                 new_coord.row = line_index % num_devices;
+    //             } else {
+    //                 new_coord.col = line_index % num_devices;
+    //             }
+    //             return mesh_view->find_device_id(new_coord);
+    //         };
+
+    //         return operation::run(
+    //             ttnn::ccl::all_gather_detail::create_all_gather_struct(input_device_tensor, dim, num_links, memory_config, devices, topology, semaphore_handle),
+    //             {input_device_tensor});
+    //     },
+    //     {input_tensor},
+    //     output_tensors);
     return output_tensors.at(0);
 
 }

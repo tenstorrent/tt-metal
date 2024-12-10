@@ -59,7 +59,8 @@ using semaphore_id_t = std::variant<uint32_t, GlobalSemaphore>;
     size_t bank_address,
     size_t value);
 [[nodiscard]] CclHostLowLevelWorkerCommand fabric_multicast_semaphore_inc(
-    CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    // CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     size_t dest_noc0_x,
     size_t dest_noc0_y,

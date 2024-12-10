@@ -14,7 +14,6 @@
 
 namespace ttnn::ccl::cmd::builder {
 
-
 std::vector<ttnn::ccl::v2::TensorSlice> generate_tensor_slices(
     const size_t num_slices, const Tensor& tensor, size_t split_dim) {
     return compute_page_aligned_slices(num_slices, tensor, split_dim);

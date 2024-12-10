@@ -15,6 +15,7 @@
 #include "tt_metal/impl/program/program.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -589,6 +590,8 @@ public:
 
     ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index);
 
+    ttnn::ccl::v2::TensorSlice get_worker_slice_v2(std::size_t global_worker_index);
+
     // method to compute offsets in a wrapped layout
     std::vector<tt_xy_pair> compute_worker_slice_offsets(
         const std::vector<tt_xy_pair>& worker_slice_shapes,
@@ -614,10 +617,12 @@ private:
         uint32_t half_cb_n_pages);
 
     tt_xy_pair calculate_tensor_slice_shape(const Tensor& input_tensor, int slice_dim, uint32_t partition_size);
+    Shape4D<uint32_t> calculate_tensor_slice_offset(const Tensor& input_tensor, int slice_dim, uint32_t partition_index);
 
     // Class member variables
     tt_xy_pair flattened_tensor_shape;
     tt_xy_pair tensor_slice_shape;
+    Shape4D<uint32_t> tensor_slice_offset;
     std::vector<tt_xy_pair> worker_slice_shapes;
     std::vector<tt_xy_pair> worker_slice_offsets;
     uint32_t input_page_size;
