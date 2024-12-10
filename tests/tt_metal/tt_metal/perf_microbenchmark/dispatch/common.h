@@ -534,9 +534,9 @@ void configure_kernel_variant(
     NOC my_noc_index,
     NOC upstream_noc_index,
     NOC downstream_noc_index) {
-    auto my_virtual_noc_coords = device->virtual_noc_coordinate(my_noc_index, phys_my_core);
-    auto upstream_virtual_noc_coords = device->virtual_noc_coordinate(upstream_noc_index, phys_upstream_core);
-    auto downstream_virtual_noc_coords = device->virtual_noc_coordinate(downstream_noc_index, phys_downstream_core);
+    auto my_virtual_noc_coords = device->virtual_noc0_coordinate(my_noc_index, phys_my_core);
+    auto upstream_virtual_noc_coords = device->virtual_noc0_coordinate(upstream_noc_index, phys_upstream_core);
+    auto downstream_virtual_noc_coords = device->virtual_noc0_coordinate(downstream_noc_index, phys_downstream_core);
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},

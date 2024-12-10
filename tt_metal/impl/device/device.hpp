@@ -116,9 +116,10 @@ class Device {
     CoreCoord dram_grid_size() const;
 
     CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const;
-
+    // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
     CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const;
-
+    // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
+    CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const;
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment();

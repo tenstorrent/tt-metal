@@ -837,10 +837,10 @@ void Device::configure_kernel_variant(
         is_active_eth_core ? hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) :
         hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
 
-    auto my_virtual_noc_coords = this->virtual_noc_coordinate(my_noc_index, kernel_virtual_core);
-    auto upstream_virtual_noc_coords = this->virtual_noc_coordinate(upstream_noc_index, upstream_virtual_core);
-    auto downstream_virtual_noc_coords = this->virtual_noc_coordinate(downstream_noc_index, downstream_virtual_core);
-    auto downstream_slave_virtual_noc_coords = this->virtual_noc_coordinate(downstream_noc_index, downstream_slave_virtual_core);
+    auto my_virtual_noc_coords = this->virtual_noc0_coordinate(my_noc_index, kernel_virtual_core);
+    auto upstream_virtual_noc_coords = this->virtual_noc0_coordinate(upstream_noc_index, upstream_virtual_core);
+    auto downstream_virtual_noc_coords = this->virtual_noc0_coordinate(downstream_noc_index, downstream_virtual_core);
+    auto downstream_slave_virtual_noc_coords = this->virtual_noc0_coordinate(downstream_noc_index, downstream_slave_virtual_core);
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
@@ -3142,18 +3142,37 @@ CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) con
 }
 
 
-CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
+CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     } else {
         const auto& grid_size = this->grid_size();
-        // Coordinate in Physical Space. Convert to Virtual.
-        CoreCoord phys_coord = {
+        // Coordinate in Physical NOC0 Space. Convert to Virtual.
+        coord = this->virtual_core_from_physical_core(coord, this->core_type_from_physical_core(coord));
+        // Derive virtual coord in noc_index space.
+        CoreCoord virtual_coord = {
             hal.noc_coordinate(noc_index, grid_size.x, coord.x),
             hal.noc_coordinate(noc_index, grid_size.y, coord.y)
         };
-        return this->virtual_core_from_physical_core(phys_coord, this->core_type_from_physical_core(phys_coord));
+        return virtual_coord;
+    }
+}
+
+CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
+     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+        // Coordinate already in virtual space: NOC0 and NOC1 are the same
+        return coord;
+    } else {
+        const auto& grid_size = this->grid_size();
+        // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
+        // the system this coordinate belongs to.
+        // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
+        CoreCoord physical_coord = {
+            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
+            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
+        };
+        return this->virtual_core_from_physical_core(physical_coord, this->core_type_from_physical_core(physical_coord));
     }
 }
 
@@ -3198,7 +3217,7 @@ CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord &ethernet_core
 }
 
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
-    auto virtual_noc_coord = this->virtual_noc_coordinate(noc_index, core);
+    auto virtual_noc_coord = this->virtual_noc0_coordinate(noc_index, core);
     return tt::tt_metal::hal.noc_xy_encoding(
         virtual_noc_coord.x,
         virtual_noc_coord.y
@@ -3206,8 +3225,8 @@ uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& co
 }
 
 uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
-    auto virtual_noc_start = this->virtual_noc_coordinate(noc_index, cores.start_coord);
-    auto virtual_noc_end = this->virtual_noc_coordinate(noc_index, cores.end_coord);
+    auto virtual_noc_start = this->virtual_noc0_coordinate(noc_index, cores.start_coord);
+    auto virtual_noc_end = this->virtual_noc0_coordinate(noc_index, cores.end_coord);
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
@@ -3649,7 +3668,7 @@ void Device::generate_device_bank_to_noc_tables()
     l1_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * l1_noc_coord_per_bank.size());
     for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
-            auto l1_noc_coords = this->virtual_noc_coordinate(noc, l1_noc_coord_per_bank[bank_id]);
+            auto l1_noc_coords = this->virtual_noc0_coordinate(noc, l1_noc_coord_per_bank[bank_id]);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
             uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
