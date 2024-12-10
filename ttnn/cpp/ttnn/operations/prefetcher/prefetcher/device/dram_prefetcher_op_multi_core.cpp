@@ -90,7 +90,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* read cb setup */
     uint32_t reader_cb_size = global_cb->size();
-    uint32_t reader_cb_single_tile_size = 8192;  // 16B aligned
+    uint32_t reader_cb_single_tile_size = 2048;  // 16B aligned
 
     uint32_t reader_cb_index = tt::CB::c_in0;
     CircularBufferConfig reader_cb_config =
@@ -244,6 +244,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         std::vector<uint32_t> reader_rt_args = {bank_id, vc, total_num_blocks_in_buffer};
         reader_rt_args.insert(reader_rt_args.end(), page_sizes.begin(), page_sizes.end());
         reader_rt_args.insert(reader_rt_args.end(), block_num_pages.begin(), block_num_pages.end());
+        reader_rt_args.insert(reader_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
 
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 

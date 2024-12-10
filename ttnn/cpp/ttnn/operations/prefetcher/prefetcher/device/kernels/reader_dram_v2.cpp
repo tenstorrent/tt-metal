@@ -50,6 +50,7 @@ void kernel_main() {
     const uint32_t total_num_blocks_in_buffer = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t* page_sizes = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* block_num_pages = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
+    const uint32_t* block_num_tiles = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
 
     DPRINT << "bank_id: " << bank_id << ENDL();
     DPRINT << "vc: " << vc << ENDL();
@@ -65,6 +66,7 @@ void kernel_main() {
         for (uint32_t t = 0; t < num_tensors; t++) {
             uint32_t curr_page_size = page_sizes[t];
             uint32_t curr_block_num_pages = block_num_pages[t];
+            uint32_t curr_block_num_tiles = block_num_tiles[t];
             uint32_t curr_block_size_bytes = curr_block_num_pages * curr_page_size;
 
             // Address setup
@@ -91,7 +93,7 @@ void kernel_main() {
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 // TODO: Fix granularity of the CB
-                cb_reserve_back(cb_id, curr_block_num_pages);
+                cb_reserve_back(cb_id, curr_block_num_tiles);
                 for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
                     noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
                     src_read_addr += curr_page_size;
@@ -99,7 +101,7 @@ void kernel_main() {
                 }
 
                 noc_async_read_barrier();
-                cb_push_back(cb_id, curr_block_num_pages);
+                cb_push_back(cb_id, curr_block_num_tiles);
 
                 // // Dprint a tile from the buffer
                 // for (uint32_t i = 0; i < 4; i++) {
@@ -113,12 +115,12 @@ void kernel_main() {
             DPRINT << "out_write_addr: " << get_write_ptr(out_cb_id) << ENDL();
             DPRINT << "l1_read_addr: " << l1_read_addr << ENDL();
             for (uint32_t block = 0; block < num_blocks; ++block) {
-                cb_reserve_back(out_cb_id, curr_block_num_pages);
+                cb_reserve_back(out_cb_id, curr_block_num_tiles);
                 auto l1_out_write_addr = get_noc_addr(get_write_ptr(out_cb_id));
 
                 noc_async_write(l1_read_addr, l1_out_write_addr, curr_block_size_bytes);
                 l1_read_addr += curr_block_size_bytes;
-                cb_push_back(out_cb_id, curr_block_num_pages);
+                cb_push_back(out_cb_id, curr_block_num_tiles);
             }
 
             // // TODO: Bring back optimized version of reading from DRAM (@yugao)
