@@ -4,7 +4,7 @@ set -eo pipefail
 
 # Allow overriding Python command via environment variable
 if [ -z "$PYTHON_CMD" ]; then
-    PYTHON_CMD="python3"
+    PYTHON_CMD="python3-dbg"
 else
     echo "Using user-specified Python: $PYTHON_CMD"
 fi

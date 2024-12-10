@@ -98,6 +98,13 @@ struct Tensor {
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
+    Tensor(
+        Storage storage,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape,
+        DataType dtype,
+        Layout layout,
+        const std::optional<Tile>& tile = std::nullopt);
     Tensor(Storage storage, TensorSpec tensor_spec);
 
     // Constructors to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
@@ -160,7 +167,7 @@ struct Tensor {
     Tensor to(Layout target_layout, distributed::MeshDevice* mesh_device) const;
 
     Tensor pad(
-        const tt::tt_metal::LegacyShape& output_tensor_shape,
+        const ttnn::SimpleShape& output_logical_shape,
         const ttnn::SimpleShape& input_tensor_start,
         float pad_value) const;
 
