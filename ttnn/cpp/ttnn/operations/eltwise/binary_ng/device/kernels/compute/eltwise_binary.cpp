@@ -2,24 +2,60 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
 
-#include <cstdint>
-
+#include "eltwise_defines.hpp"
+#include "eltwise_utils.hpp"
 
 namespace NAMESPACE {
 
-ALWI void process_tile(uint32_t cb_bcast, uint32_t cb_other, uint32_t cb_out, uint32_t freq, uint32_t tile_start) {
+ALWI void process_tile(
+    tt::CBIndex cb_pre_lhs,
+    tt::CBIndex cb_post_lhs,
+    tt::CBIndex cb_pre_rhs,
+    tt::CBIndex cb_post_rhs,
+    tt::CBIndex cb_out,
+    uint32_t freq,
+    uint32_t tile_start) {
+    using namespace ckernel;
     constexpr uint32_t onetile = 1;
+
+#if BCAST_INPUT
+    auto cb_bcast = cb_post_rhs;
+    auto cb_other = cb_post_lhs;
+#else
+    auto cb_bcast = cb_post_lhs;
+    auto cb_other = cb_post_rhs;
+#endif
+
+#if PREPROCESS_A && (BCAST_INPUT == 0)
+    PREPROCESS(PREPROCESS_A_INIT, PREPROCESS_A_APPLY, cb_pre_lhs, cb_post_lhs, cb_out, onetile);
+#elif PREPROCESS_B && (BCAST_INPUT == 1)
+    PREPROCESS(PREPROCESS_B_INIT, PREPROCESS_B_APPLY, cb_pre_rhs, cb_post_rhs, cb_out, onetile);
+#endif
 
     cb_wait_front(cb_bcast, onetile);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
+#if PREPROCESS_A && (BCAST_INPUT == 1)
+        PREPROCESS(PREPROCESS_A_INIT, PREPROCESS_A_APPLY, cb_pre_lhs, cb_post_lhs, cb_out, onetile);
+#elif PREPROCESS_B && (BCAST_INPUT == 0)
+        PREPROCESS(PREPROCESS_B_INIT, PREPROCESS_B_APPLY, cb_pre_rhs, cb_post_rhs, cb_out, onetile);
+#endif
         cb_wait_front(cb_other, onetile);
+
         cb_reserve_back(cb_out, onetile);
 
+#if PREPROCESS_A || PREPROCESS_B
+        binary_op_specific_init<true, BINARY_OP_TYPE>();
+#endif
         tile_regs_acquire();
-        add_tiles(cb_bcast, cb_other, 0, 0, 0);
+        BINARY_OP(cb_post_lhs, cb_post_rhs, 0, 0, 0);
+#if POSTPROCESS
+        POSTPROCESS_INIT();
+        POSTPROCESS_APPLY(0);
+#endif
         tile_regs_commit();
 
         tile_regs_wait();
@@ -41,30 +77,28 @@ void MAIN {
         return;
     }
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_out0 = tt::CBIndex::c_2;
+    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
+    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_2;
 
-#if BCAST_INPUT
-    auto cb_bcast = cb_in1;
-    auto cb_other = cb_in0;
-#else
-    auto cb_bcast = cb_in0;
-    auto cb_other = cb_in1;
+    constexpr auto cb_post_lhs = PREPROCESS_A ? tt::CBIndex::c_3 : cb_pre_lhs;
+    constexpr auto cb_post_rhs = PREPROCESS_B ? tt::CBIndex::c_4 : cb_pre_rhs;
+
+    binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+
+#if not(PREPROCESS_A || PREPROCESS_B)
+    binary_op_specific_init<true, BINARY_OP_TYPE>();
 #endif
-
-    binary_op_init_common(cb_bcast, cb_other, cb_out0);
-    add_tiles_init();
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(cb_bcast, cb_other, cb_out0, tile_freq, tile_start);
+        process_tile(cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, tile_freq, tile_start);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(cb_bcast, cb_other, cb_out0, remaining_iterations, tile_start);
+        process_tile(cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, remaining_iterations, tile_start);
     }
 }
 }  // namespace NAMESPACE
