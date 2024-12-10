@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_bitwise.h"
+#include "llk_math_eltwise_binary_sfpu_shift.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -16,8 +16,8 @@
 namespace ckernel {
 
 /**
- * Performs an elementwise binary bitwise operation with the two inputs: y = bitwise(x0,x1)
- * Output overwrites first operand in DST.
+ * Performs an elementwise shift operation to the left on the input at idst0, by input at idst1: y = x0 << x1
+ * Both inputs must be of Int32 data type only. Output overwrites first operand in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
@@ -33,22 +33,17 @@ namespace ckernel {
  * than the size of the DST register buffer | True     | | idst1          | The index of the tile in DST register buffer
  * to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
-enum { AND_BINARY = 0, OR_BINARY = 1, XOR_BINARY = 2 };
-ALWI void and_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, AND_BINARY>(idst0, idst1)));
+ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_shift<APPROX, false /*shift right*/>(idst0, idst1)));
 }
 
-ALWI void or_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, OR_BINARY>(idst0, idst1)));
-}
-
-ALWI void xor_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, XOR_BINARY>(idst0, idst1)));
+ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_shift<APPROX, true /*shift right*/>(idst0, idst1)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void binary_bitwise_tile_init() { MATH((llk_math_eltwise_binary_sfpu_bitwise_init<APPROX>())); }
+ALWI void binary_shift_tile_init() { MATH((llk_math_eltwise_binary_sfpu_shift_init<APPROX>())); }
 
 }  // namespace ckernel
