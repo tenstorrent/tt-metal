@@ -73,9 +73,6 @@ jobs:
       - uses: ./.github/actions/prepare-metal-run
         with:
           arch: ${{ inputs.arch }}
-      - name: cleanup
-        run: |
-          rm -rf ${{ github.workspace }}/python_env
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
