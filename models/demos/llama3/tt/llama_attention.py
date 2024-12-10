@@ -23,6 +23,7 @@ class TtLlamaAttention(LightweightModule):
         transformation_mats,
         configuration,
         paged_attention_config=None,
+        use_paged_kv_cache=False,
     ):
         super().__init__()
 
@@ -56,6 +57,7 @@ class TtLlamaAttention(LightweightModule):
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
 
+        self.layer_num = layer_num
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
@@ -144,6 +146,17 @@ class TtLlamaAttention(LightweightModule):
                 cache_file_name=cache_name("wo_height_sharded"),
             )
 
+        if not use_paged_kv_cache:
+            # vLLM provides its own kv cache
+            self.init_kv_cache(configuration, weight_cache_path)
+
+        self.scale = self.head_dim**-0.5
+
+    def init_kv_cache(self, configuration, weight_cache_path):
+        """
+        Generates empty KV cache and pushed to device memory
+        """
+
         if self.paged_attention_config:
             cache_k = torch.zeros(
                 (
@@ -194,14 +207,13 @@ class TtLlamaAttention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
-        self.scale = self.head_dim**-0.5
-
     def forward_decode(
         self,
         x: ttnn.Tensor,
         current_pos,
         rot_mats=None,
         page_table=None,
+        kv_cache=None,
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -262,8 +274,12 @@ class TtLlamaAttention(LightweightModule):
         ###
         # KV update
         ###
-        keys = self.layer_past[0]
-        values = self.layer_past[1]
+        if kv_cache:
+            keys = kv_cache[self.layer_num][0]
+            values = kv_cache[self.layer_num][1]
+        else:
+            keys = self.layer_past[0]
+            values = self.layer_past[1]
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
@@ -271,9 +287,6 @@ class TtLlamaAttention(LightweightModule):
         ttnn.experimental.paged_update_cache(
             values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
         )
-
-        self.layer_past[0] = keys
-        self.layer_past[1] = values
 
         ttnn.deallocate(k_heads_1BKD)
         ttnn.deallocate(v_heads_1BKD)
@@ -362,7 +375,7 @@ class TtLlamaAttention(LightweightModule):
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
 
-    def forward_prefill(self, x_11SH, rot_mats, user_id: int = 0, page_table=None):
+    def forward_prefill(self, x_11SH, rot_mats, user_id: int = 0, page_table=None, kv_cache=None):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -425,7 +438,10 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
         # Fill KV-Cache
-        keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
+        if kv_cache:
+            keys_BKSD, values_BKSD = kv_cache[self.layer_num][0], kv_cache[self.layer_num][1]
+        else:
+            keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
@@ -451,8 +467,14 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(v_heads_1VSD)
 
         if page_table:
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, page_table, batch_idx=user_id)
+            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
+            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
+            block_size = keys_BKSD.shape[2]
+            page_len = page_table.shape[1] * block_size
+            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
+            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, page_table, batch_idx=user_id)
         else:
             ttnn.fill_cache(
                 keys_BKSD,
@@ -468,8 +490,6 @@ class TtLlamaAttention(LightweightModule):
         if seq_len >= self.min_kv_prefill_shard_seqlen and not page_table:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
-
-        self.layer_past = [keys_BKSD, values_BKSD]
 
         # SDPA
 
@@ -550,8 +570,17 @@ class TtLlamaAttention(LightweightModule):
         else:
             return output_11SH
 
-    def forward(self, x, current_pos, rot_mats=None, user_id=0, mode="decode", page_table=None):
+    def forward(
+        self,
+        x,
+        current_pos,
+        rot_mats=None,
+        user_id=0,
+        mode="decode",
+        page_table=None,
+        kv_cache=None,
+    ):
         if mode == "prefill":
-            return self.forward_prefill(x, rot_mats, user_id, page_table)
+            return self.forward_prefill(x, rot_mats, user_id, page_table=page_table, kv_cache=kv_cache)
         else:
-            return self.forward_decode(x, current_pos, rot_mats, page_table)
+            return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)

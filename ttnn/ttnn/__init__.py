@@ -153,6 +153,7 @@ from ttnn.types import (
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
     MeshShape,
+    MeshOffset,
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,
@@ -208,6 +209,7 @@ from ttnn.core import (
     load_memory_config,
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
+    num_cores_to_corerangeset_in_subcoregrids,
 )
 
 import ttnn.reflection
