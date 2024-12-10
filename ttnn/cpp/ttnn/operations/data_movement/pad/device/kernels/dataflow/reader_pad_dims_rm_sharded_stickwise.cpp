@@ -28,9 +28,12 @@ void kernel_main() {
     constexpr uint32_t input_shard_cb = get_compile_time_arg_val(5);
     constexpr uint32_t output_shard_cb = get_compile_time_arg_val(6);
 
+    auto output_offset_bytes = get_arg_val<uint32_t>(0);
+
     // cb_reserve_back(cb_output_shard, padded_shard_height); // needed? correct?
     uint32_t input_shard_base_addr = get_write_ptr(input_shard_cb);
     uint32_t output_shard_base_addr = get_write_ptr(output_shard_cb);
+    uint32_t output_shard_addr = output_shard_base_addr + output_offset_bytes;
 
     DPRINT << "input_shard_base_addr: " << input_shard_base_addr << ENDL();
     tt::data_movement::common::print_f32_pages(input_shard_base_addr, unpadded_stick_bytes / sizeof(uint32_t), 1);
@@ -52,7 +55,7 @@ void kernel_main() {
         DPRINT << ENDL();
 
         auto input_stick_ptr = reinterpret_cast<u8_vol_ptr>(input_shard_base_addr + h * unpadded_stick_bytes);
-        auto output_stick_ptr = reinterpret_cast<u8_vol_ptr>(output_shard_base_addr + h * padded_stick_bytes);
+        auto output_stick_ptr = reinterpret_cast<u8_vol_ptr>(output_shard_addr + h * padded_stick_bytes);
 
         // read the input stick into the padded output stick starting after the
         // front padding

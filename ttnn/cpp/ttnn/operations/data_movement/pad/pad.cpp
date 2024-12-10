@@ -48,6 +48,8 @@ static ttnn::Tensor pad_impl(
             output_memory_config = create_sharded_memory_config(
                 output_padded_shape,
                 input_tensor.shard_spec()->grid,  // reuse input cores for now: FIXME: can we do better?
+                                                  // it's complicated because we need the input shards to be local to
+                                                  // the core holding the output shard currently.
                 ShardStrategy::HEIGHT,            // stay height sharded
                 ShardOrientation::ROW_MAJOR,
                 false,

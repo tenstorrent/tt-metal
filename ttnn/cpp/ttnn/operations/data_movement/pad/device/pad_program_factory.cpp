@@ -6,6 +6,7 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/math.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_log.h"
@@ -1543,13 +1544,20 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
         all_cores_padded,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    std::vector<uint32_t> reader_rt_args{};
-    std::vector<uint32_t> writer_rt_args{};
+    uint32_t N_front_pad = input_tensor_start[-4];
+    uint32_t first_shard_output_offset = N_front_pad * H_padded * C_padded * padded_stick_bytes;
 
-    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores_padded, reader_rt_args);
-    tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores_padded, writer_rt_args);
+    auto all_cores_padded_vec = corerange_to_cores(all_cores_padded, std::nullopt, true);
 
-    std::cout << "made it here" << std::endl;
+    // Set runtime args for all cores
+    for (const auto& core : all_cores_padded_vec) {
+        // First core gets first_shard_output_offset, others get 0
+        uint32_t offset = (core == *all_cores_padded_vec.begin()) ? first_shard_output_offset : 0;
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {offset});
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {});
+    }
+
+    // FIXME: need to update runtime args?
 
     auto override_runtime_args_callback = [
             input_shard_cb,
