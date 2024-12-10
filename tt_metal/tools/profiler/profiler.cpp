@@ -399,7 +399,7 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (lastDump) {
-                if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
+                if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
                     tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
                 }
             } else {
@@ -494,7 +494,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
 #endif
 }
 
-bool getDeviceProfilerState() { return tt::llrt::OptionsG.get_profiler_enabled(); }
+bool getDeviceProfilerState() { return tt::llrt::RunTimeOptions::get_instance().get_profiler_enabled(); }
 
 }  // namespace tt_metal
 
