@@ -63,35 +63,20 @@ TEST(XTensorTest, XtensorToSpan) {
     }
 }
 
-// Test get_shape_4d
+// Test get_shape_from_xarray
 TEST(XTensorTest, GetShape4D) {
-    // Test a 4D shape
-    xt::xarray<double> arr_4d = xt::xarray<double>::from_shape({2, 3, 4, 5});
-    auto shape4d = ttml::core::get_shape_4d(arr_4d);
-    EXPECT_EQ(shape4d[0], 2);
-    EXPECT_EQ(shape4d[1], 3);
-    EXPECT_EQ(shape4d[2], 4);
-    EXPECT_EQ(shape4d[3], 5);
-
-    // Test a 2D shape, should zero-pad to the left (or right) as per logic
-    xt::xarray<double> arr_2d = xt::xarray<double>::from_shape({10, 20});
-    auto shape2d = ttml::core::get_shape_4d(arr_2d);
-    // dims=2, so shape4d = {1, 1, 10, 20}
-    EXPECT_EQ(shape2d[0], 1);
-    EXPECT_EQ(shape2d[1], 1);
-    EXPECT_EQ(shape2d[2], 10);
-    EXPECT_EQ(shape2d[3], 20);
+    xt::xarray<int> arr_5d = xt::xarray<int>::from_shape({2, 2, 2, 2, 2});
+    auto shape5d = ttnn::experimental::xtensor::get_shape_from_xarray(arr_5d);
+    ASSERT_EQ(shape5d.size(), 5);
+    EXPECT_EQ(shape5d[0], 2);
+    EXPECT_EQ(shape5d[1], 2);
+    EXPECT_EQ(shape5d[2], 2);
+    EXPECT_EQ(shape5d[3], 2);
+    EXPECT_EQ(shape5d[4], 2);
 
     // Test a 1D shape
     xt::xarray<int> arr_1d = xt::xarray<int>::from_shape({7});
-    auto shape1d = ttml::core::get_shape_4d(arr_1d);
-    // dims=1, so shape4d = {1, 1, 1, 7}
-    EXPECT_EQ(shape1d[0], 1);
-    EXPECT_EQ(shape1d[1], 1);
-    EXPECT_EQ(shape1d[2], 1);
-    EXPECT_EQ(shape1d[3], 7);
-
-    // Test throwing an exception for >4D
-    xt::xarray<int> arr_5d = xt::xarray<int>::from_shape({2, 2, 2, 2, 2});
-    EXPECT_THROW(ttml::core::get_shape_4d(arr_5d), std::runtime_error);
+    auto shape1d = ttnn::experimental::xtensor::get_shape_from_xarray(arr_1d);
+    ASSERT_EQ(shape1d.size(), 1);
+    EXPECT_EQ(shape1d[0], 7);
 }

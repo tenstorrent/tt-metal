@@ -8,6 +8,8 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "common/assert.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/xtensor/partition.hpp"
 
 namespace ttnn::distributed::api {
 namespace {
@@ -36,8 +38,7 @@ public:
     ShardTensorToMesh(MeshDevice& mesh_device, int shard_dim) : mesh_device_(mesh_device), shard_dim_(shard_dim) {}
 
     std::vector<Tensor> map(const Tensor& tensor) override {
-        // TODO: implement this
-        return {};
+        return experimental::xtensor::chunk(tensor, mesh_device_.num_devices(), shard_dim_);
     }
 
     DistributedTensorConfig config() const override { return DistributedTensorConfig{ShardTensor{shard_dim_}}; }
@@ -49,18 +50,55 @@ private:
 
 class Shard2dTensorToMesh : public TensorToMesh {
 public:
-    Shard2dTensorToMesh(MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config) :
-        mesh_device_(mesh_device), mesh_shape_(mesh_shape), config_(config) {}
+    Shard2dTensorToMesh(MeshDevice& mesh_device, const Shard2dConfig& config) :
+        mesh_shape_(mesh_device.shape()), config_(config) {}
 
     std::vector<Tensor> map(const Tensor& tensor) override {
-        // TODO: implement this
-        return {};
+        const auto [rows, cols] = mesh_shape_;
+        const auto [row_dim, col_dim] = config_;
+
+        std::vector<Tensor> row_tensors;
+
+        // Shard along rows
+        if (!row_dim.has_value()) {
+            row_tensors.reserve(rows);
+            for (int i = 0; i < rows; ++i) {
+                row_tensors.push_back(tensor);
+            }
+        } else {
+            row_tensors = experimental::xtensor::chunk(tensor, rows, *row_dim);
+        }
+
+        std::vector<Tensor> tensor_shards;
+        tensor_shards.reserve(rows * cols);
+        // Shard along columns
+        if (!col_dim.has_value()) {
+            for (const auto& t : row_tensors) {
+                for (int i = 0; i < cols; ++i) {
+                    tensor_shards.push_back(t);
+                }
+            }
+        } else {
+            for (const auto& t : row_tensors) {
+                auto col_chunks = experimental::xtensor::chunk(t, cols, *col_dim);
+                tensor_shards.insert(tensor_shards.end(), col_chunks.begin(), col_chunks.end());
+            }
+        }
+
+        TT_FATAL(
+            static_cast<int>(tensor_shards.size()) == rows * cols,
+            "ShardTensor2dMesh: Sharding failed. Number of shards should match the product of the mesh "
+            "dimensions. Size: {}, rows: {}, cols: {}",
+            tensor_shards.size(),
+            rows,
+            cols);
+
+        return tensor_shards;
     }
 
     DistributedTensorConfig config() const override { return DistributedTensorConfig{ShardTensor2D(mesh_shape_)}; }
 
 private:
-    MeshDevice& mesh_device_;
     MeshShape mesh_shape_;
     Shard2dConfig config_;
 };
@@ -70,8 +108,7 @@ public:
     ConcatMeshToTensor(int concat_dim) : concat_dim_(concat_dim) {}
 
     Tensor compose(const std::vector<Tensor>& tensors) override {
-        // TODO: implement this
-        return Tensor();
+        return experimental::xtensor::concatenate(tensors, concat_dim_);
     }
 
 private:
@@ -80,14 +117,27 @@ private:
 
 class ConcatMesh2dToTensor : public MeshToTensor {
 public:
-    ConcatMesh2dToTensor(const Concat2dConfig& config) : config_(config) {}
+    ConcatMesh2dToTensor(MeshDevice& mesh_device, const Concat2dConfig& config) :
+        mesh_shape_(mesh_device.shape()), config_(config) {}
 
     Tensor compose(const std::vector<Tensor>& tensors) override {
-        // TODO: implement this
-        return Tensor();
+        const auto [rows, cols] = mesh_shape_;
+        const auto [row_dim, col_dim] = config_;
+
+        std::vector<Tensor> row_concatenated;
+        row_concatenated.reserve(rows);
+        for (int i = 0; i < rows; ++i) {
+            auto row_start = tensors.begin() + i * cols;
+            auto row_end = row_start + cols;
+            std::vector<Tensor> row_tensors(row_start, row_end);
+            row_concatenated.push_back(experimental::xtensor::concatenate(row_tensors, col_dim));
+        }
+
+        return experimental::xtensor::concatenate(row_concatenated, row_dim);
     }
 
 private:
+    MeshShape mesh_shape_;
     Concat2dConfig config_;
 };
 
@@ -103,26 +153,41 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_devic
 
 std::unique_ptr<TensorToMesh> shard_tensor_2d_to_mesh_mapper(
     MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config) {
-    return std::make_unique<Shard2dTensorToMesh>(mesh_device, mesh_shape, config);
+    TT_FATAL(
+        config.row_dim.has_value() || config.col_dim.has_value(),
+        "ShardTensor2dMesh requires at least one dimension to shard");
+    return std::make_unique<Shard2dTensorToMesh>(mesh_device, config);
 }
 
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int concat_dim) {
     return std::make_unique<ConcatMeshToTensor>(concat_dim);
 }
 
-std::unique_ptr<MeshToTensor> concat_mesh_2d_to_tensor_composer(const Concat2dConfig& config) {
-    return std::make_unique<ConcatMesh2dToTensor>(config);
+std::unique_ptr<MeshToTensor> concat_mesh_2d_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config) {
+    TT_FATAL(
+        config.row_dim != config.col_dim,
+        "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
+        config.row_dim,
+        config.col_dim);
+    return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
 }
 
 Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, TensorToMesh& mapper) {
-    TT_ASSERT(tensor.storage_type() == StorageType::OWNED, "TensorToMesh only supports owned tensors");
+    TT_FATAL(
+        tensor.storage_type() == StorageType::OWNED,
+        "TensorToMesh only supports owned tensors; got storage type: {}",
+        tensor.storage_type());
     std::vector<Tensor> tensors = mapper.map(tensor);
     Tensor output = aggregate_as_tensor(tensors, mapper.config());
     return output.to(&mesh_device);
 }
 
 Tensor aggregate_tensor(const Tensor& tensor, MeshToTensor& composer) {
-    TT_ASSERT(tensor.storage_type() == StorageType::MULTI_DEVICE, "MeshToTensor only supports multi device tensors");
+    TT_FATAL(
+        tensor.storage_type() == StorageType::MULTI_DEVICE || tensor.storage_type() == StorageType::DEVICE,
+        "MeshToTensor only supports multi device or device tensors; got storage type: {}",
+        tensor.storage_type());
     return composer.compose(get_tensors_from_multi_device_storage(tensor));
 }
+
 }  // namespace ttnn::distributed::api
