@@ -114,10 +114,10 @@ void MorehAdamW::set_steps(size_t steps) {
     m_steps = steps;
 }
 
-float MorehAdamW::get_learning_rate() const {
+float MorehAdamW::get_lr() const {
     return m_config.lr;
 }
-void MorehAdamW::set_learning_rate(float lr) {
+void MorehAdamW::set_lr(float lr) {
     m_config.lr = lr;
 }
 
@@ -217,10 +217,10 @@ void AdamW::set_steps(size_t steps) {
     m_steps = steps;
 }
 
-float AdamW::get_learning_rate() const {
+float AdamW::get_lr() const {
     return m_config.lr;
 }
-void AdamW::set_learning_rate(float lr) {
+void AdamW::set_lr(float lr) {
     m_config.lr = lr;
 }
 }  // namespace ttml::optimizers

@@ -4,14 +4,15 @@
 
 #pragma once
 
-#include <functional>
+#include <cmath>
 
 #include "scheduler_base.hpp"
 
 namespace ttml::schedulers {
-class LambdaScheduler : public LRSchedulerBase {
+
+class StepScheduler : public LRSchedulerBase {
 public:
-    explicit LambdaScheduler(optimizers::OptimizerBase *optimizer, std::function<float(int)> lr_lambda);
+    StepScheduler(optimizers::OptimizerBase *optimizer, int step_size, float gamma = 0.1f);
 
     void step() override;
 
@@ -20,9 +21,12 @@ public:
     [[nodiscard]] float get_current_lr() const override;
 
 private:
-    std::function<float(int)> m_lr_lambda;
+    int m_step_size = 0;
+    float m_gamma = 0;
     int m_last_step = 0;
-    float m_base_lr = 0.0F;
-    float m_last_lr = 0.0F;
+
+    float m_base_lr = 0.F;
+    float m_last_lr = 0.F;
 };
+
 }  // namespace ttml::schedulers

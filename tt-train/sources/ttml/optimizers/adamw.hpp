@@ -32,8 +32,8 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
-    [[nodiscard]] float get_learning_rate() const override;
-    void set_learning_rate(float lr) override;
+    [[nodiscard]] float get_lr() const override;
+    void set_lr(float lr) override;
 
 private:
     size_t m_steps{0};
@@ -56,9 +56,9 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
-    [[nodiscard]] float get_learning_rate() const override;
+    [[nodiscard]] float get_lr() const override;
 
-    void set_learning_rate(float lr) override;
+    void set_lr(float lr) override;
 
 private:
     size_t m_steps{0};

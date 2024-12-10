@@ -141,22 +141,15 @@ void read_named_parameters(MsgPackFile& file, std::string_view name, ttml::seria
 void write_optimizer(MsgPackFile& file, std::string_view name, const optimizers::OptimizerBase* optimizer) {
     assert(optimizer);
     auto state_dict = optimizer->get_state_dict();
-    for (const auto& [key, value] : state_dict) {
-        ttml::serialization::write_autograd_tensor(file, std::string(name) + "/" + key, value);
-    }
-    file.put(std::string(name) + "/steps", optimizer->get_steps());
+    write_state_dict(file, std::string(name), state_dict);
 }
 
 void read_optimizer(MsgPackFile& file, std::string_view name, optimizers::OptimizerBase* optimizer) {
     assert(optimizer);
     size_t steps = 0;
     auto state_dict = optimizer->get_state_dict();
-    for (auto& [key, value] : state_dict) {
-        ttml::serialization::read_autograd_tensor(file, std::string(name) + "/" + key, value);
-    }
+    read_state_dict(file, name, state_dict);
     optimizer->set_state_dict(state_dict);
-    file.get(std::string(name) + "/steps", steps);
-    optimizer->set_steps(steps);
 }
 
 void write_module(MsgPackFile& file, std::string_view name, const autograd::ModuleBase* module) {

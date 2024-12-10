@@ -27,8 +27,8 @@ public:
     [[nodiscard]] virtual size_t get_steps() const = 0;
     virtual void set_steps(size_t steps) = 0;
 
-    virtual void set_learning_rate(float lr) = 0;
-    [[nodiscard]] virtual float get_learning_rate() const = 0;
+    virtual void set_lr(float lr) = 0;
+    [[nodiscard]] virtual float get_lr() const = 0;
 
     virtual void print_stats() const;
 

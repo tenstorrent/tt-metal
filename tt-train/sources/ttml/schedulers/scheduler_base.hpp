@@ -5,13 +5,16 @@
 #pragma once
 
 #include "core/not_null.hpp"
-#include "optimizers/optimizer_base.hpp"
+
+namespace ttml::optimizers {
+class OptimizerBase;
+}
 
 namespace ttml::schedulers {
 
 class LRSchedulerBase {
 public:
-    explicit LRSchedulerBase(core::not_null<optimizers::OptimizerBase *> optimizer);
+    explicit LRSchedulerBase(optimizers::OptimizerBase *optimizer);
 
     virtual ~LRSchedulerBase() = default;
 

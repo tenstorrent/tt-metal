@@ -36,11 +36,11 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
-    [[nodiscard]] float get_learning_rate() const override {
+    [[nodiscard]] float get_lr() const override {
         return m_config.lr;
     }
 
-    void set_learning_rate(float lr) override {
+    void set_lr(float lr) override {
         m_config.lr = lr;
     }
 
