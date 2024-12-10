@@ -21,6 +21,7 @@ struct BatchNormOperation {
 
     struct tensor_args_t {
         const Tensor& input;
+        const Tensor& batch_mean;
         const std::optional<const Tensor> gamma;
         const std::optional<const Tensor> beta;
         const std::optional<const Tensor> output;
@@ -63,6 +64,7 @@ struct BatchNormOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
+        const Tensor& batch_mean,
         const float eps,
         const std::optional<const Tensor>& gamma,
         const std::optional<const Tensor>& beta,
