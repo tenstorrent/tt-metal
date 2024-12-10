@@ -27,6 +27,8 @@ void kernel_main() {
 
     constexpr uint32_t input_shard_cb = get_compile_time_arg_val(5);
     constexpr uint32_t output_shard_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t unpadded_stick_step = get_compile_time_arg_val(7);
+    constexpr uint32_t padded_stick_step = get_compile_time_arg_val(8);
 
     auto output_offset_bytes = get_arg_val<uint32_t>(0);
 
@@ -42,6 +44,9 @@ void kernel_main() {
     tt::data_movement::common::print_u8_pages(output_shard_base_addr, padded_stick_bytes, padded_shard_height);
     DPRINT << ENDL();
 
+    auto input_stick_ptr = reinterpret_cast<u8_vol_ptr>(input_shard_base_addr);
+    auto output_stick_ptr = reinterpret_cast<u8_vol_ptr>(output_shard_addr);
+
     // fill the sticks that aren't entirely padding with data from the input tensor
     for (uint32_t h = 0; h < unpadded_shard_height; h++) {
         DPRINT << "waiting for writer to fill stick " << h << ENDL();
@@ -51,9 +56,6 @@ void kernel_main() {
         DPRINT << "input_shard current stick: " << h << ENDL();
         tt::data_movement::common::print_u8_pages(input_shard_base_addr, unpadded_stick_bytes, 1, h);
         DPRINT << ENDL();
-
-        auto input_stick_ptr = reinterpret_cast<u8_vol_ptr>(input_shard_base_addr + h * unpadded_stick_bytes);
-        auto output_stick_ptr = reinterpret_cast<u8_vol_ptr>(output_shard_addr + h * padded_stick_bytes);
 
         // read the input stick into the padded output stick starting after the
         // front padding
@@ -74,6 +76,9 @@ void kernel_main() {
         DPRINT << "output_shard_base_addr: " << output_shard_base_addr << ENDL();
         tt::data_movement::common::print_u8_pages(output_shard_base_addr, padded_stick_bytes, 1, h);
         DPRINT << ENDL();
+
+        input_stick_ptr += unpadded_stick_step;
+        output_stick_ptr += padded_stick_step;
     }
     DPRINT << "exiting reader" << ENDL();
 }

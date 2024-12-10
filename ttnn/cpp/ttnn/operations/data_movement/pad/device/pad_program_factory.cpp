@@ -1497,16 +1497,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
 
     uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
 
-    std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)unpadded_stick_bytes,
-        (std::uint32_t)padded_stick_bytes,
-        (std::uint32_t)shard_height_unpadded,
-        (std::uint32_t)shard_height_padded,
-        (std::uint32_t)W_padding_front_bytes,
-        (std::uint32_t)input_shard_cb_index,
-        (std::uint32_t)output_shard_cb_index,
-    };
-
     uint32_t padding_value_as_u32;
     std::cout << "pad_value: " << pad_value << std::endl;
     if (input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16) {
@@ -1524,13 +1514,34 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
 
     std::cout << "padding_value_as_u32: " << padding_value_as_u32 << std::endl;
 
+    // FIXME: assumes that this was sharded using DRAM alignment so that gaps are left in the tensor.
+    // if this changes, we should change the stick step to be 16B (L1 alignment).
+    auto dram_alignment_bytes = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    uint32_t padded_stick_step = tt::round_up(
+        padded_stick_bytes, dram_alignment_bytes);  // round padded_stick bytes to a multiple of dram_alignment_bytes
+    uint32_t unpadded_stick_step = tt::round_up(
+        unpadded_stick_bytes,
+        dram_alignment_bytes);  // round unpadded_stick bytes to a multiple of dram_alignment_bytes
+
+    std::vector<uint32_t> reader_ct_args = {
+        (std::uint32_t)unpadded_stick_bytes,
+        (std::uint32_t)padded_stick_bytes,
+        (std::uint32_t)shard_height_unpadded,
+        (std::uint32_t)shard_height_padded,
+        (std::uint32_t)W_padding_front_bytes,
+        (std::uint32_t)input_shard_cb_index,
+        (std::uint32_t)output_shard_cb_index,
+        (std::uint32_t)unpadded_stick_step,
+        (std::uint32_t)padded_stick_step};
+
     std::vector<uint32_t> writer_ct_args = {
         (std::uint32_t)padded_stick_bytes,
         (std::uint32_t)shard_height_padded,
         (std::uint32_t)padding_value_as_u32,
         (std::uint32_t)output.element_size(),
         (std::uint32_t)output_shard_cb_index,
-        (std::uint32_t)pad_val_cb_index};
+        (std::uint32_t)pad_val_cb_index,
+        (std::uint32_t)padded_stick_step};
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
