@@ -1755,9 +1755,6 @@ std::vector<Tensor> Matmul::create_output_tensors(
     }
 
     return operation::detail::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
-    // return operation::generic_create_output_tensors(
-    //     *this, input_tensors, this->output_dtype.value(), Layout::TILE, this->output_mem_config,
-    //     this->output_tile.value());
 }
 
 operation::ProgramWithCallbacks Matmul::create_program(
