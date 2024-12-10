@@ -14,7 +14,6 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
 )
-from models.demos.bert.tt import ttnn_bert
 from models.demos.bert.tt import ttnn_optimized_bert
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
@@ -42,6 +41,12 @@ def load_inputs(input_path, batch):
         return context, question
 
 
+def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_length=0):
+    mask = input_ids.ne(padding_idx).int()
+    incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
+    return incremental_indices.long() + padding_idx
+
+
 def run_roberta_question_and_answering_inference(
     device,
     use_program_cache,
@@ -60,13 +65,9 @@ def run_roberta_question_and_answering_inference(
     tokenizer = RobertaTokenizer.from_pretrained(model_name)
     config = hugging_face_reference_model.config
     nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
+    config.use_dram = True
 
-    if bert == ttnn_bert:
-        tt_model_name = f"ttnn_{model_name}"
-    elif bert == ttnn_optimized_bert:
-        tt_model_name = f"ttnn_{model_name}_optimized"
-    else:
-        raise ValueError(f"Unknown bert: {bert}")
+    tt_model_name = f"ttnn_{model_name}_optimized"
 
     profiler.start(f"preprocessing_parameter")
     parameters = preprocess_model_parameters(
@@ -105,10 +106,14 @@ def run_roberta_question_and_answering_inference(
 
     profiler.start(f"preprocessing_input")
 
+    position_ids = create_position_ids_from_input_ids(
+        input_ids=roberta_input.input_ids, padding_idx=config.pad_token_id
+    )
     ttnn_roberta_inputs = bert.preprocess_inputs(
         roberta_input["input_ids"],
         roberta_input["token_type_ids"],
-        torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None,
+        position_ids,
+        roberta_input["attention_mask"],
         device=device,
     )
     profiler.end(f"preprocessing_input")
@@ -139,7 +144,8 @@ def run_roberta_question_and_answering_inference(
 
         tt_answer = nlp.postprocess([tt_res], **postprocess_params)
 
-        logger.info(f"answer: {tt_answer['answer']}\n")
+        logger.info(f"Question: {question[i]}")
+        logger.info(f"Answer: {tt_answer['answer']}\n")
         model_answers[i] = tt_answer["answer"]
 
     profiler.end("post_processing_output_to_string")
@@ -175,13 +181,9 @@ def run_roberta_question_and_answering_inference_squad_v2(
     # set up tokenizer
     tokenizer = RobertaTokenizer.from_pretrained(model_name)
     config = hugging_face_reference_model.config
+    config.use_dram = True
 
-    if bert == ttnn_bert:
-        tt_model_name = f"ttnn_{model_name}"
-    elif bert == ttnn_optimized_bert:
-        tt_model_name = f"ttnn_{model_name}_optimized"
-    else:
-        raise ValueError(f"Unknown bert: {bert}")
+    tt_model_name = f"ttnn_{model_name}_optimized"
 
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
@@ -208,10 +210,14 @@ def run_roberta_question_and_answering_inference_squad_v2(
             if i < n_iterations:
                 batch_data = batch[0]
                 curr_batch_size = batch_data["input_ids"].shape[0]
+                position_ids = create_position_ids_from_input_ids(
+                    input_ids=batch_data.input_ids, padding_idx=config.pad_token_id
+                )
                 ttnn_roberta_inputs = bert.preprocess_inputs(
                     batch_data["input_ids"],
                     batch_data["token_type_ids"],
-                    torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None,
+                    position_ids,
+                    batch_data["attention_mask"],
                     device=device,
                 )
 
@@ -250,18 +256,24 @@ def run_roberta_question_and_answering_inference_squad_v2(
             i += 1
         eval_score = squad_metric.compute(predictions=pred_labels, references=true_labels)
         cpu_eval_score = squad_metric.compute(predictions=cpu_pred_labels, references=true_labels)
-        logger.info(f"\tTT_Eval: exact: {eval_score['exact']} --  F1: {eval_score['f1']}")
+        logger.info(f"TT_Eval: exact: {eval_score['exact']} --  F1: {eval_score['f1']}")
+        logger.info(f"CPU_Eval: exact: {cpu_eval_score['exact']} --  F1: {cpu_eval_score['f1']}")
+
+        assert eval_score["exact"] >= cpu_eval_score["exact"] and eval_score["f1"] >= cpu_eval_score["f1"], (
+            f"Expected Exact Match: {cpu_eval_score['exact']}, Actual Exact Match: {eval_score['exact']}; "
+            f"Expected F1 Score: {cpu_eval_score['f1']}, Actual F1 Score: {eval_score['f1']}"
+        )
 
 
-@pytest.mark.parametrize("model_name", ["deepset/roberta-large-squad2"])
-@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
-def test_demo(
-    input_path,
-    model_name,
-    bert,
-    device,
-    use_program_cache,
-):
+@pytest.mark.parametrize(
+    "model_name, input_loc",
+    ((["deepset/roberta-large-squad2", "models/demos/roberta/demo/input_data.json"]),),
+)
+@pytest.mark.parametrize(
+    ("bert", "batch_size", "sequence_size"),
+    ((ttnn_optimized_bert, 8, 384),),
+)
+def test_demo(device, use_program_cache, model_name, input_loc, bert, batch_size, sequence_size):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
@@ -269,25 +281,26 @@ def test_demo(
         device=device,
         use_program_cache=use_program_cache,
         model_name=model_name,
-        batch_size=8,
-        sequence_size=384,
+        batch_size=batch_size,
+        sequence_size=sequence_size,
         bert=bert,
-        input_path=input_path,
+        input_path=input_loc,
     )
 
 
 @pytest.mark.parametrize("model_name", ["deepset/roberta-large-squad2"])
-@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
 @pytest.mark.parametrize(
-    "n_iterations",
-    ((3),),
+    ("bert", "batch_size", "sequence_size", "n_iterations"),
+    ((ttnn_optimized_bert, 8, 384, 3),),
 )
 def test_demo_squadv2(
-    model_name,
-    bert,
-    n_iterations,
     device,
     use_program_cache,
+    model_name,
+    bert,
+    batch_size,
+    sequence_size,
+    n_iterations,
 ):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
@@ -296,8 +309,8 @@ def test_demo_squadv2(
         device=device,
         use_program_cache=use_program_cache,
         model_name=model_name,
-        batch_size=8,
-        sequence_size=384,
+        batch_size=batch_size,
+        sequence_size=sequence_size,
         bert=bert,
         n_iterations=n_iterations,
     )
