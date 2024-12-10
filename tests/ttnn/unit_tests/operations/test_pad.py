@@ -128,101 +128,104 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
-def padding_with_torch_padding(padding):
+def to_torch_padding(padspec):
     def flatten_to_tuple(padding):
         return tuple(sum(padding, ()))
 
-    torch_padding = flatten_to_tuple(list(reversed(padding)))
-    return (padding, torch_padding)
+    def ttnn_pad_spec_to_padding(padspec):
+        input_tensor_start = padspec["input_tensor_start"]
+        pad_to_shape = padspec["pad_to_shape"]
+        input_shape = padspec["input_shape"]
 
+        padding = []
+        for i in range(len(pad_to_shape)):
+            this_dim_padding = (input_tensor_start[i], pad_to_shape[i] - input_shape[i] - input_tensor_start[i])
+            padding.append(this_dim_padding)
+        return padding
 
-import math
+    torch_padding = flatten_to_tuple(reversed(ttnn_pad_spec_to_padding(padspec)))
+    return torch_padding
 
 
 @pytest.mark.parametrize(
-    "input_height, input_width, input_sharded_memory_config_args, output_width",
+    "input_shape, pad_to_shape, input_tensor_start, pad_value, input_sharded_memory_config_args",
     [
-        (1, 4, dict(core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT), 16),
+        [
+            (1, 1, 1, 4),
+            (1, 1, 1, 16),
+            (0, 0, 0, 0),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=1), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # a reduced version of esmal's test case for UNet
+            (1, 1, 4, 4),
+            (1, 1, 4, 16),
+            (0, 0, 0, 0),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=1), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # esmal's test case for UNet
+            (1, 1, 2 * 1056 * 160, 4),
+            (1, 1, 2 * 1056 * 160, 16),
+            (0, 0, 0, 0),
+            0.0,
+            {"core_grid": ttnn.CoreGrid(x=8, y=8), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # borys's first test case
+            (1, 1, 12, 8),
+            (1, 1, 12, 64),
+            (0, 0, 0, 0),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=2, y=6), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # borys's second test case
+            (1, 2, 3, 4),
+            (1, 2, 32, 32),
+            (0, 0, 0, 0),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=6), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
     ],
 )
-def test_wh_sharded(device, input_height, input_width, input_sharded_memory_config_args, output_width):
-    input_shape = (1, 1, 1, 4)
+def test_pad_rm_sharded_stickwise(
+    device, input_shape, pad_to_shape, input_tensor_start, pad_value, input_sharded_memory_config_args
+):
     input_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
 
-    torch_input_tensor = torch.ones(1, 1, 1, 4, dtype=torch.float32)
-    # device RM interleaved Tensor
+    torch_input_tensor = torch.ones(input_shape, dtype=torch.float32)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
     ttnn_sharded_input_tensor = ttnn.to_memory_config(ttnn_input_tensor, input_shard_memory_config)
-    print("sharded input tensor: ", ttnn_sharded_input_tensor)
-    padded_tensor = ttnn.pad(ttnn_sharded_input_tensor, [1, 1, 1, output_width], [0, 0, 0, 0], 3.0)
 
-    print("torch_input_tensor: ", torch_input_tensor)
-    print("torch_input_tensor.shape: ", torch_input_tensor.shape)
-    print("ttnn_input_tensor: ", ttnn_input_tensor)
+    padded_tensor = ttnn.pad(ttnn_sharded_input_tensor, pad_to_shape, input_tensor_start, pad_value)
 
     tt_output_tensor = ttnn.to_memory_config(padded_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-    print("torch_output_tensor: ", torch_output_tensor)
-    print("torch_output_tensor.shape: ", torch_output_tensor.shape)
-    import pdb
 
-    pdb.set_trace()
-
-
-def to_wh_sharded(tensor, device):
-    assert tensor.shape.rank == 4, "tensor must be 4D"
-    n, c, h, w = tensor.shape
-    num_cores_x = 8
-    num_cores_y = 8
-    if num_cores_y > device.core_grid.y:
-        num_cores_y = device.core_grid.y
-    shard_h = math.ceil(n * c * h / (num_cores_x * num_cores_y))
-    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
-    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR, False)
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    padspec = {
+        "input_shape": input_shape,
+        "pad_to_shape": pad_to_shape,
+        "input_tensor_start": input_tensor_start,
+    }
+    torch_padded_tensor = torch.nn.functional.pad(
+        torch_input_tensor, to_torch_padding(padspec), mode="constant", value=pad_value
     )
-    tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)  # ensure we're in RM first.
-    return ttnn.to_memory_config(tensor, sharded_mem_config)
 
-
-# @pytest.mark.parametrize("input_shape",
-#                          [
-#                             (1, 1, 64, 64),
-#                             (1, 1, 128, 128)
-#                          ])
-# @pytest.mark.parametrize("padding,torch_padding", [padding_with_torch_padding([(0, 0), (0, 0), (0, 0), (0, 0)])])
-# @pytest.mark.parametrize("value", [3])
-# @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.ROW_MAJOR])
-def test_pad_rm_sharded_stickwise_first(device, input_shape, padding, torch_padding, value, shard_orient):
-    a = torch.ones(1, 1, 12, 8)
-    b = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    b = to_wh_sharded(b, device)
-    c = ttnn.pad(b, [1, 1, 12, 64], [0, 0, 0, 0], 3.0)
-    print(c)
-    assert 3.0 in ttnn.to_torch(c.cpu()).flatten().tolist()
-
-
-def test_pad_rm_sharded_stickwise_second(device):
-    input_shape = (1, 1, 64, 4)
-    a = torch.ones(input_shape)
-    b = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    b = to_wh_sharded(b, device)
-    c = ttnn.pad(b, [1, 1, 64, 64], [0, 0, 0, 0], value=3.0)
-    print(c)
-    assert 3.0 in ttnn.to_torch(c.cpu()).flatten().tolist()
+    assert torch_output_tensor.shape == torch_padded_tensor.shape
+    assert_with_pcc(torch_padded_tensor, torch_output_tensor, 0.99)
 
 
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [64])
-@pytest.mark.parametrize("padding,torch_padding", [padding_with_torch_padding([(0, 0), (0, 0), (0, 0), (0, 0)])])
+@pytest.mark.parametrize("padding,torch_padding", [(((0, 0), (0, 0), (0, 0), (0, 0)), (0, 0, 0, 0, 0, 0, 0, 0))])
 @pytest.mark.parametrize("value", [8])
 @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR])
 def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, use_program_cache):
