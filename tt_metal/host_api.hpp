@@ -629,6 +629,39 @@ void EnqueueReadBuffer(CommandQueue& cq, std::shared_ptr<Buffer> buffer, std::ve
     EnqueueReadBuffer(cq, *buffer, dst, blocking);
 }
 
+void EnqueueReadSubBuffer(
+    CommandQueue& cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    void* dst,
+    const size_t offset,
+    const size_t size,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
+template <typename DType>
+void EnqueueReadSubBuffer(
+    CommandQueue& cq,
+    Buffer& buffer,
+    std::vector<DType>& dst,
+    const size_t offset,
+    const size_t size,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
+    dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(DType));
+    EnqueueReadSubBuffer(cq, buffer, static_cast<void*>(dst.data()), offset, size, blocking, sub_device_ids);
+}
+template <typename DType>
+void EnqueueReadSubBuffer(
+    CommandQueue& cq,
+    std::shared_ptr<Buffer> buffer,
+    std::vector<DType>& dst,
+    const size_t offset,
+    const size_t size,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
+    EnqueueReadSubBuffer(cq, *buffer, dst, offset, size, blocking, sub_device_ids);
+}
+
 // clang-format off
 /**
  * Writes a buffer to the device
@@ -671,6 +704,27 @@ void EnqueueWriteBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
     bool blocking);
+
+void EnqueueWriteSubBuffer(
+    CommandQueue& cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    HostDataType src,
+    const size_t offset,
+    const size_t size,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
+template <typename DType>
+void EnqueueWriteSubBuffer(
+    CommandQueue& cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    std::vector<DType>& src,
+    const size_t offset,
+    const size_t size,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
+    EnqueueWriteSubBuffer(cq, buffer, src.data(), offset, size, blocking, sub_device_ids);
+}
 
 // clang-format off
 /**
