@@ -21,12 +21,12 @@ TODO:
 */
 void kernel_main() {
     constexpr uint32_t num_layers = get_compile_time_arg_val(0);
-    constexpr uint32_t num_tensors = get_compile_time_arg_val(0);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
-    constexpr uint32_t num_receivers = get_compile_time_arg_val(2);
+    constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
+    constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
 
-    constexpr uint32_t local_cb_id = 0;   // TODO: Set this
-    constexpr uint32_t remote_cb_id = 0;  // TODO: Set this
+    constexpr uint32_t local_cb_id = 0;
+    constexpr uint32_t remote_cb_id = 31;
 
     /*
         Note: Coalesced sizes -> wrt to receiver cores

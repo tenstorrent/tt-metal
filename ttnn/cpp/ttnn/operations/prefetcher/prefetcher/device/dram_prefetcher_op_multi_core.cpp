@@ -124,8 +124,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     remote_cb_config.remote_index(remote_cb_index)
         .set_page_size(remote_cb_single_tile_size)
         .set_data_format(reader_cb_data_format);
-    auto remote_cb = tt::tt_metal::v1::experimental::CreateCircularBuffer(
-        program, receiver_core_range, remote_cb_config, *global_cb);
+    auto remote_cb =
+        tt::tt_metal::v1::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, *global_cb);
 
     /* output buffer (based on reader_cb) */
     uint32_t reader_output_single_tile_size = reader_cb_single_tile_size;

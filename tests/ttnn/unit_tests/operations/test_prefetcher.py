@@ -13,6 +13,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import run_multi_core_matmul_1d
+
 """
 Things to test:
 - BFP8
@@ -60,26 +62,26 @@ def test_run_prefetcher(
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shapes[0]}")
     K, N = input_shapes[0]
 
-    ##### Set up the Global CB #####
+    ##### Set up the prefetcher #####
     dram_cores = [ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)]  # DRAM banks 1 and 2
     sender_cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4)]
     receiver_cores_list = [(1, 0), (2, 0), (1, 4), (2, 4)]
     receiver_cores = [
         ttnn.CoreRangeSet(
-            {
+            [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 0),
                     ttnn.CoreCoord(2, 0),
                 ),
-            }
+            ]
         ),
         ttnn.CoreRangeSet(
-            {
+            [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 4),
                     ttnn.CoreCoord(2, 4),
                 ),
-            }
+            ]
         ),
     ]
 
@@ -94,13 +96,13 @@ def test_run_prefetcher(
     )
 
     sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
-    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 400)
+    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 256)
 
     ##### Set up the input tensors #####
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
-    pt_tensors = [torch.randn(input_shapes[tid]) for tid in range(num_tensors) for _ in range(num_layers)]
+    pt_tensors = [torch.ones(input_shapes[tid]) for tid in range(num_tensors) for _ in range(num_layers)]
     tt_tensors = []
 
     for tid in range(num_tensors):
@@ -168,6 +170,15 @@ def test_run_prefetcher(
         ),
     )
 
+    ##### Setup up sub devices #####
+    prefetcher_sub_device = ttnn.SubDevice([sender_core_range_set])
+    matmul_sub_device = ttnn.SubDevice([receiver_core_range_set])
+    prefetcher_sub_device_manager = device.create_sub_device_manager([prefetcher_sub_device, matmul_sub_device], 0)
+    device.load_sub_device_manager(prefetcher_sub_device_manager)
+    device.clear_loaded_sub_device_manager()
+    device.remove_sub_device_manager(prefetcher_sub_device_manager)
+
+    # Run the prefetcher
     tt_outs = ttnn.dram_prefetcher(
         tt_tensors,
         tt_tensor_addrs,
@@ -188,5 +199,30 @@ def test_run_prefetcher(
         logger.info(output)
 
         all_passing = all_passing and passing
+
+    # Run matmul
+    run_multi_core_matmul_1d(
+        device,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        ttnn.MathFidelity.HiFi4,
+        False,
+        True,
+        True,
+        B=1,
+        M=32,
+        K=K,
+        N=N,
+        activation=None,
+        grid=receiver_cores_list,
+        use_arbitrary_cores=True,
+        num_iters=1,
+        max_dst_tiles=8,
+        pcc_threshold=0.98,
+        mm_chain=False,
+        use_physical_to_logical_mapping=False,
+        global_cb=global_circular_buffer,
+        prefetched_weights_pt=pt_tensors[0],
+    )
 
     assert all_passing
