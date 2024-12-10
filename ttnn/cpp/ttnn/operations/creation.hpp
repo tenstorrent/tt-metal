@@ -13,7 +13,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/any_device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"

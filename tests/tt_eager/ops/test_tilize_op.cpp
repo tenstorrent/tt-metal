@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-#include <ttnn/operations/numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 
 #include "common/constants.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt::tt_metal::LegacyShape shape = {1, 64, 32, 64};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = ttnn::numpy::random::random(shape).to(device);
+        Tensor a = ttnn::random::random(shape).to(device);
         Tensor b = ttnn::tilize(a);
 
         Tensor c = b.cpu();

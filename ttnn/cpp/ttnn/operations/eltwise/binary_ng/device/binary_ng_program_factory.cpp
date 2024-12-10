@@ -302,14 +302,14 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     // How many tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
     auto [a_cb, a_cb_handle] =
-        create_cb(tt::CB::c_in0, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
+        create_cb(tt::CBIndex::c_0, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
     auto [c_cb, c_cb_handle] =
-        create_cb(tt::CB::c_out0, program, all_device_cores, c_single_tile_size, num_tiles_per_cb, c_data_format);
+        create_cb(tt::CBIndex::c_2, program, all_device_cores, c_single_tile_size, num_tiles_per_cb, c_data_format);
 
     // If b is a scalar, we only need one tile in the CB
     uint32_t b_num_tiles_per_cb = b_buffer != nullptr ? num_tiles_per_cb : 1;
     auto [b_cb, b_cb_handle] =
-        create_cb(tt::CB::c_in1, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
+        create_cb(tt::CBIndex::c_1, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
     auto a_is_dram = static_cast<uint32_t>(a_buffer->buffer_type() == tt_metal::BufferType::DRAM);
     bool b_is_dram = false;

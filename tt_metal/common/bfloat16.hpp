@@ -340,7 +340,7 @@ inline bool equal_within_n_sig_figs(float a, float b, int n) {
 
 inline bool equal_within_absolute_tolerance(float a, float b, float tol) { return std::abs(a - b) < tol; }
 
-// this follows the implementation of numpy::is_close
+// this follows the implementation of numpy's is_close
 inline bool is_close(float a, float b, float rtol = 0.01f, float atol = 0.001f) {
     // the idea is near zero we want absolute tolerance since relative doesn't make sense
     // (consider 1e-6f and 1.1e-6f)
