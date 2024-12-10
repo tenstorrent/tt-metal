@@ -159,3 +159,12 @@ uint32_t GlobalCircularBuffer::size() const { return this->size_; }
 }  // namespace v1
 
 }  // namespace tt::tt_metal
+
+namespace std {
+
+std::size_t hash<tt::tt_metal::v1::experimental::GlobalCircularBuffer>::operator()(
+    const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_circular_buffer) const {
+    return tt::stl::hash::hash_objects_with_default_seed(global_circular_buffer);
+}
+
+}  // namespace std
