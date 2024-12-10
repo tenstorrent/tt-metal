@@ -18,7 +18,8 @@ void get_tensor_addrs_l1(
     volatile tt_l1_ptr uint32_t** tensor_addrs_l1) {
     volatile tt_l1_ptr uint32_t* l1_cb_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(addrs_cb_id));
 
-    // TODO: need to loop over layers here?!?
+    // Format of CB: [t1_l1, ..., t1_l80, ..., tn_l1, ..., tn_80]
+    // So only need to store pointer to the tensor addres for the first layer
     for (uint32_t t = 0; t < num_tensors; t++) {
         tensor_addrs_l1[t] = l1_cb_addr;
         l1_cb_addr += num_layers;
