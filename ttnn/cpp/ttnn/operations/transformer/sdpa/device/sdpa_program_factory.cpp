@@ -49,42 +49,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     // Paged cache parameters when in chunked mode
     bool is_chunked = chunk_start_idx.has_value();
-    uint32_t chunk_start_t = 0;
-    uint32_t block_size = 0;
-    uint32_t block_size_t = 0;
-    uint32_t max_blocks_per_seq = 0;
-    uint32_t page_table_stick_size = 0;
-    bool page_table_is_dram = true;
-    tt::DataFormat page_table_df = tt::DataFormat::Int32;
-
-    if (is_chunked) {
-        chunk_start_t = chunk_start_idx.value() / TILE_HEIGHT;  // Q offset in tiles
-        const auto& page_table_tensor = page_table.value();
-        block_size = k_shape[2];  // K's sequence dimension represents block size
-        block_size_t = block_size / TILE_HEIGHT;
-        max_blocks_per_seq = page_table_tensor.get_legacy_shape()[1];
-        page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
-        TT_FATAL(
-            page_table_stick_size % 32 == 0,
-            "page table page size in bytes must be a multiple of 32 due to address alignment");
-        page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-        TT_FATAL(
-            page_table_stick_size % 32 == 0,
-            "page table page size in bytes must be a multiple of 32 due to address alignment");
-    }
-    // Log page table info
-    tt::log_info("is_chunked: {}", is_chunked);
-    if (is_chunked) {
-        tt::log_info("chunk_start_t: {}", chunk_start_t);
-        tt::log_info("block_size: {}", block_size);
-        tt::log_info("block_size_t: {}", block_size_t);
-        tt::log_info("max_blocks_per_seq: {}", max_blocks_per_seq);
-        tt::log_info("page_table_stick_size: {}", page_table_stick_size);
-        tt::log_info("page_table_is_dram: {}", page_table_is_dram);
-        tt::log_info("page_table_df: {}", page_table_df);
-    }
-
     // In chunked mode, we only need to process K/V up to chunk_start_idx + Sq
     const uint32_t Sk = is_chunked ? (chunk_start_idx.value() + Sq) : k_shape[2];
 
@@ -115,6 +79,44 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     tt::log_debug("q_num_chunks: {}", q_num_chunks);
     tt::log_debug("k_num_chunks: {}", k_num_chunks);
     tt::log_debug("NKH: {}", NKH);
+
+    uint32_t chunk_start_t = 0;
+    uint32_t chunk_start_t_in_q_chunks = 0;
+    uint32_t block_size = 0;
+    uint32_t block_size_t = 0;
+    uint32_t max_blocks_per_seq = 0;
+    uint32_t page_table_stick_size = 0;
+    bool page_table_is_dram = true;
+    tt::DataFormat page_table_df = tt::DataFormat::Int32;
+
+    if (is_chunked) {
+        chunk_start_t = chunk_start_idx.value() / TILE_HEIGHT;  // Q offset in tiles
+        chunk_start_t_in_q_chunks = chunk_start_idx.value() / q_chunk_size;
+        const auto& page_table_tensor = page_table.value();
+        block_size = k_shape[2];  // K's sequence dimension represents block size
+        block_size_t = block_size / TILE_HEIGHT;
+        max_blocks_per_seq = page_table_tensor.get_legacy_shape()[1];
+        page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+        TT_FATAL(
+            page_table_stick_size % 32 == 0,
+            "page table page size in bytes must be a multiple of 32 due to address alignment");
+        page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+        TT_FATAL(
+            page_table_stick_size % 32 == 0,
+            "page table page size in bytes must be a multiple of 32 due to address alignment");
+    }
+    // Log page table info
+    tt::log_info("is_chunked: {}", is_chunked);
+    if (is_chunked) {
+        tt::log_info("chunk_start_t: {}", chunk_start_t);
+        tt::log_info("block_size: {}", block_size);
+        tt::log_info("block_size_t: {}", block_size_t);
+        tt::log_info("max_blocks_per_seq: {}", max_blocks_per_seq);
+        tt::log_info("page_table_stick_size: {}", page_table_stick_size);
+        tt::log_info("page_table_is_dram: {}", page_table_is_dram);
+        tt::log_info("page_table_df: {}", page_table_df);
+    }
 
     Program program = CreateProgram();
 
@@ -549,7 +551,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunk_start_t});
+             chunk_start_t_in_q_chunks});
         SetRuntimeArgs(
             program,
             compute_kernels_id,
@@ -581,7 +583,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
          is_causal,
          cb_in0_id,
          cb_out0_id,
-         is_chunked](
+         is_chunked,
+         q_chunk_size](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -602,10 +605,13 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
             uint32_t page_table_addr = 0;
             uint32_t chunk_start_t = 0;
+            uint32_t chunk_start_t_in_q_chunks = 0;
             if (is_chunked) {
                 page_table_addr = optional_input_tensors.at(1).value().buffer()->address();
                 chunk_start_t = static_cast<const ScaledDotProductAttention*>(operation)->chunk_start_idx.value() /
                                 TILE_HEIGHT;  // Q offset in tiles
+                chunk_start_t_in_q_chunks =
+                    static_cast<const ScaledDotProductAttention*>(operation)->chunk_start_idx.value() / q_chunk_size;
             }
 
             auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);

@@ -304,17 +304,17 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 # @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("k_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
 # @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
 # @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
-@pytest.mark.parametrize("q_chunk_size", [32])
-@pytest.mark.parametrize("k_chunk_size", [32])
-@pytest.mark.parametrize("prefill_chunk_size", [32])
-@pytest.mark.parametrize("page_block_size", [32])
+@pytest.mark.parametrize("q_chunk_size", [64, 128])
+@pytest.mark.parametrize("k_chunk_size", [64, 128])
+@pytest.mark.parametrize("prefill_chunk_size", [1024, 2048])
+@pytest.mark.parametrize("page_block_size", [64, 128])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
     (
-        [1, 1, 1, 64, 32],  # Llama2-70B
+        [1, 1, 1, 16 * 1024, 32],  # Llama2-70B
         # [1, 16, 1, 2048, 64],  # Falcon-40B
         # [1, 71, 1, 2048, 64],  # Falcon-7B
     ),
