@@ -474,6 +474,20 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
     }
 }
 
+std::pair<mesh_id_t, chip_id_t> ControlPlane::get_mesh_chip_id_from_physical_chip_id(chip_id_t physical_chip_id) const {
+    for (mesh_id_t mesh_id = 0; mesh_id < logical_mesh_chip_id_to_physical_chip_id_mapping_.size(); ++mesh_id) {
+        for (chip_id_t logical_mesh_chip_id = 0;
+             logical_mesh_chip_id < logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id].size();
+             ++logical_mesh_chip_id) {
+            if (logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_mesh_chip_id] == physical_chip_id) {
+                return {mesh_id, logical_mesh_chip_id};
+            }
+        }
+    }
+    TT_FATAL(false, "Physical chip id not found in logical mesh chip id mapping");
+    return {};
+}
+
 void ControlPlane::configure_routing_tables() const {
     // Configure the routing tables on the chips
     for (mesh_id_t mesh_id = 0; mesh_id < this->intra_mesh_routing_tables_.size(); mesh_id++) {

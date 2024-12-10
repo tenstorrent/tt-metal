@@ -27,7 +27,9 @@ class ControlPlane {
     void print_routing_tables() const;
     void print_ethernet_channels() const;
 
-   private:
+    std::pair<mesh_id_t, chip_id_t> get_mesh_chip_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
+
+private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     // map[mesh_id][chip_id][direction] has a list of ethernet channels in that direction
