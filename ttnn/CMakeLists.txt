@@ -649,7 +649,7 @@ if(WITH_PYTHON_BINDINGS)
     list(
         APPEND
         TTNN_PUBLIC_LINK_LIBRARIES
-        pch_pybinds
+        pybind11::module
         ${Python3_LIBRARIES}
     )
 endif()
