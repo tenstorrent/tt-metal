@@ -123,6 +123,12 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
                 new_data.resize(new_data.size() + delta);
                 new_len += delta;
             }
+            std::printf(
+                "Copying text[%d]@%lu (%lx,%lu)\n",
+                int(&span - &link_spans_[0]),
+                long(offset),
+                long(span.addr),
+                long(span.len));
             memcpy(&new_data[new_len], &this->data_[offset], span.len * sizeof(uint32_t));
             new_len += span.len;
         }
@@ -135,6 +141,12 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
     offset = 0;
     for (const auto& span : this->link_spans_) {
         if (span.addr >= data_start && span.addr < data_end) {
+            std::printf(
+                "Copying data[%d]@%lu (%lx,%lu)\n",
+                int(&span - &link_spans_[0]),
+                long(offset),
+                long(span.addr),
+                long(span.len));
             memcpy(&new_data[new_len], &this->data_[offset], span.len * sizeof(uint32_t));
             new_len += span.len;
         }
@@ -157,12 +169,20 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
         span new_span2 = text;
 
         offset = text_is_second ? link_spans_[0].len : 0;
+        std::printf(
+            "Copying new text[%d]@%lu (%lx,%lu)\n", int(text_is_second), long(offset), long(text.addr), long(text.len));
         new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + text.len);
 
         if (link_spans_.size() == 2) {
             offset = text_is_second ? 0 : text.len;
             auto const& data = link_spans_[!text_is_second];
             TT_ASSERT(data.addr >= data_start && data.addr < data_end);
+            std::printf(
+                "Copying new data[%d]@%lu (%lx,%lu)\n",
+                int(!text_is_second),
+                long(offset),
+                long(data.addr),
+                long(data.len));
             new_span2.len += data.len;
             new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + data.len);
         }
@@ -170,7 +190,7 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
         TT_ASSERT(new_data == new_data2);
         if (!(new_span == new_span2 && new_data == new_data2)) {
             std::printf(
-                "new_span=(%lu,%lu), new_span2=(%lu,%lu), new_data.size=%lu, new_data2.size=%lu\n",
+                "new_span=(%lx,%lu), new_span2=(%lx,%lu), new_data.size=%lu, new_data2.size=%lu\n",
                 (long)new_span.addr,
                 (long)new_span.len,
                 (long)new_span2.addr,
