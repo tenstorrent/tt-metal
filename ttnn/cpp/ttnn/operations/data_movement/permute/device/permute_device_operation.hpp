@@ -30,11 +30,12 @@ struct PermuteDeviceOperation {
 
     using tensor_return_value_t = Tensor;
 
-    struct SingleCore {
+    struct MultiCoreRowInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             KernelHandle unary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
+            CoreRangeSet all_cores;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -72,7 +73,7 @@ struct PermuteDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<SingleCore, MultiCoreBlockedGeneric>;
+    using program_factory_t = std::variant<MultiCoreRowInvariant, MultiCoreBlockedGeneric>;
 
     // Mandatory methods
 

@@ -32,7 +32,7 @@ std::vector<uint32_t> get_row_strides(const ttnn::SimpleShape& shape) {
 
 }  // namespace detail
 
-PermuteDeviceOperation::SingleCore::cached_program_t PermuteDeviceOperation::SingleCore::create(
+PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOperation::MultiCoreRowInvariant::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -60,54 +60,78 @@ PermuteDeviceOperation::SingleCore::cached_program_t PermuteDeviceOperation::Sin
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_pages_to_read = 2;
 
-    CoreRange core({0, 0}, {0, 0});
+    uint32_t num_rows = input_tensor.volume() / input_tensor.get_logical_shape()[-1];
+
+    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
+
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
             num_input_pages_to_read * input_rm_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, input_rm_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t N = operation_attributes.dims.size();
-    uint32_t num_rows = input_tensor.volume() / input_tensor.get_logical_shape()[-1];
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, N, input_rm_page_size, num_rows};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/reader_permute_interleaved_rm.cpp",
-        core,
+        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+        "reader_permute_interleaved_rm_row_invariant.cpp",
+        all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)dst_is_dram, N, output_rm_page_size, num_rows};
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/writer_permute_interleaved_rm.cpp",
-        core,
+        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+        "writer_permute_interleaved_rm_row_invariant.cpp",
+        all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address()};
-
-    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
+    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
 
     auto input_shape_view = input_tensor.get_logical_shape().view();
     auto output_strides = detail::get_row_strides(output_tensor.get_logical_shape());  // in anticipation of RM padding
 
-    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address()};
+    std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
     writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
     writer_runtime_args.insert(
         writer_runtime_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
     writer_runtime_args.insert(writer_runtime_args.end(), output_strides.begin(), output_strides.end());
 
-    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    uint32_t start_row = 0;
+    uint32_t num_rows_per_core = 0;
+    for (const auto& core : cores) {
+        if (core_group_1.contains(core)) {
+            num_rows_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_rows_per_core = num_tiles_per_core_group_2;
+        } else {
+            // no-op
+            num_rows_per_core = 0;
+        }
+        uint32_t end_row = start_row + num_rows_per_core;
+        reader_runtime_args[1] = start_row;
+        reader_runtime_args[2] = end_row;
+        writer_runtime_args[1] = start_row;
+        writer_runtime_args[2] = end_row;
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+        start_row = end_row;
+    }
 
     return {
         std::move(program),
         {.unary_reader_kernel_id = unary_reader_kernel_id, .unary_writer_kernel_id = unary_writer_kernel_id}};
 }
 
-void PermuteDeviceOperation::SingleCore::override_runtime_arguments(
+void PermuteDeviceOperation::MultiCoreRowInvariant::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -121,15 +145,14 @@ void PermuteDeviceOperation::SingleCore::override_runtime_arguments(
 
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
+    auto& all_cores = cached_program.shared_variables.all_cores;
 
-    {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    for (const auto& core : cores) {
+        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
         runtime_args[0] = src_buffer->address();
-    }
-
-    {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, CoreCoord{0, 0});
-        runtime_args[0] = dst_buffer->address();
+        auto& runtime_args_writer = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
+        runtime_args_writer[0] = dst_buffer->address();
     }
 }
 

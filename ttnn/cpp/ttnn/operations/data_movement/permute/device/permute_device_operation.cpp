@@ -12,9 +12,11 @@ namespace ttnn::operations::data_movement {
 
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // If the last dimension is not permuted, we can use the row-invariant kernel
     if (operation_attributes.dims.back() == tensor_args.input_tensor.get_logical_shape().rank() - 1) {
-        return SingleCore{};
+        return MultiCoreRowInvariant{};
     }
+    // Otherwise, we need to use the blocked generic, row moving kernel
     return MultiCoreBlockedGeneric{};
 }
 
@@ -33,7 +35,7 @@ void PermuteDeviceOperation::validate_on_program_cache_hit(
 
 PermuteDeviceOperation::shape_return_value_t PermuteDeviceOperation::compute_output_shapes(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    SmallVector<uint32_t> shape, padded_shape;
+    SmallVector<uint32_t> shape;
     auto input_shape = tensor_args.input_tensor.get_logical_shape();
     shape.reserve(input_shape.rank());
     for (auto dim : attributes.dims) {
