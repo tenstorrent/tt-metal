@@ -46,6 +46,18 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
             "Global circular buffer must have same number of receivers for each sender core");
     }
 }
+
+/*
+TODO fixes for multiple output tensors
+- refactor compute_output_shapes to return a vector of shapes (each shape is same as each input tensor)
+- refactor create_output_tensors to create a vector of output tensors (for-loop over all input shapes
+- Fix pybind to output list of output tensors
+
+How to handle writing to outpu cb? (since now there are multiple output tensors)
+- If create_device_tensor results in contiguous tensor allocation, then create a CB that is sizes for ALL output
+tensors, and then align it to the base of the first tensor
+- If not -- multiple CBs, one for each output tensor?
+*/
 std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // Output shape is the same as the input shape, but the height is multiplied by the number of input tensors
     auto input_shape = input_tensors.at(0).get_legacy_shape();

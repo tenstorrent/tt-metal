@@ -13,6 +13,26 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
+"""
+Things to test:
+- BFP8
+- Different dataformats/shapes
+    - Need to add support for multiple output tenosrs
+    - Base it off of the input tensor shapes
+- Multiple layers
+    - Need to change how output tensor is tested?
+
+
+Testing for writer side:
+- Create and output_memory_config (maybe a new arg) across the receiver cores
+- Alternative: Replace current output_tensor with output tensor
+ sharded on the receiver cores (instead of the sender cores)
+  - Requires a new CB (on just the receiver cores), and a new kernel that copies
+  data on the global cb (local to the receiver cores) to the output cb on those cores
+  -
+
+"""
+
 
 @pytest.mark.parametrize(
     "num_tensors, input_shape",

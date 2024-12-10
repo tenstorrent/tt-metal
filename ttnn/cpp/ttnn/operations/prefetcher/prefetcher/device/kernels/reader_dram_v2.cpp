@@ -43,12 +43,13 @@ void kernel_main() {
     constexpr uint32_t addrs_cb_id = 1;  // Tensor specs
     constexpr uint32_t out_cb_id = 2;    // Output cb
 
+    // TODO: Take noc as input?
     uint32_t rt_args_idx = 0;
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t total_num_blocks_in_buffer = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t* page_sizes = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
-    const uint32_t* block_num_tiles = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
+    const uint32_t* block_num_pages = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
 
     DPRINT << "bank_id: " << bank_id << ENDL();
     DPRINT << "vc: " << vc << ENDL();
@@ -63,13 +64,8 @@ void kernel_main() {
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         for (uint32_t t = 0; t < num_tensors; t++) {
             uint32_t curr_page_size = page_sizes[t];
-            uint32_t curr_block_num_tiles = block_num_tiles[t];
-            uint32_t curr_block_size_bytes = curr_block_num_tiles * curr_page_size;
-
-            // // DPRINT some info
-            // DPRINT << "curr_page_size: " << curr_page_size << ENDL();
-            // DPRINT << "curr_block_num_tiles: " << curr_block_num_tiles << ENDL();
-            // DPRINT << "curr_block_size_bytes: " << curr_block_size_bytes << ENDL();
+            uint32_t curr_block_num_pages = block_num_pages[t];
+            uint32_t curr_block_size_bytes = curr_block_num_pages * curr_page_size;
 
             // Address setup
             uint32_t tensor_base_address = tensor_addrs_l1[t][layer];
@@ -84,7 +80,7 @@ void kernel_main() {
 
             // TODO: In what case does reserve back pass, but then the write ptr
             // is past the end of the buffer?? Why is this check needed here?
-            // cb_reserve_back(cb_id, curr_block_num_tiles);
+            // cb_reserve_back(cb_id, curr_block_num_pages);
             uint32_t l1_write_addr_offset = 0;
             uint32_t l1_write_addr_start = get_write_ptr(cb_id);
             if (l1_write_addr_start >= l1_buffer_end_addr) {
@@ -94,15 +90,15 @@ void kernel_main() {
             DPRINT << "l1_write_addr: " << l1_write_addr << ENDL();
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
-                cb_reserve_back(cb_id, curr_block_num_tiles);
-                for (uint32_t h = 0; h < curr_block_num_tiles; ++h) {
+                cb_reserve_back(cb_id, curr_block_num_pages);
+                for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
                     noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
                     src_read_addr += curr_page_size;
                     l1_write_addr += curr_page_size;
                 }
 
                 noc_async_read_barrier();
-                cb_push_back(cb_id, curr_block_num_tiles);
+                cb_push_back(cb_id, curr_block_num_pages);
 
                 // // Dprint a tile from the buffer
                 // for (uint32_t i = 0; i < 4; i++) {
@@ -116,19 +112,20 @@ void kernel_main() {
             DPRINT << "out_write_addr: " << get_write_ptr(out_cb_id) << ENDL();
             DPRINT << "l1_read_addr: " << l1_read_addr << ENDL();
             for (uint32_t block = 0; block < num_blocks; ++block) {
-                cb_reserve_back(out_cb_id, curr_block_num_tiles);
+                cb_reserve_back(out_cb_id, curr_block_num_pages);
                 auto l1_out_write_addr = get_noc_addr(get_write_ptr(out_cb_id));
 
                 noc_async_write(l1_read_addr, l1_out_write_addr, curr_block_size_bytes);
                 l1_read_addr += curr_block_size_bytes;
-                cb_push_back(out_cb_id, curr_block_num_tiles);
+                cb_push_back(out_cb_id, curr_block_num_pages);
             }
 
+            // // TODO: Bring back optimized version of reading from DRAM (@yugao)
             // for (uint32_t block = 0; block < num_blocks; block++) {
             //     noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
 
             //     uint32_t temp_l1_write_addr = l1_write_addr;
-            //     for (uint32_t h = 0; h < curr_block_num_tiles; ++h) {
+            //     for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
             //         noc_async_read_tile_dram_sharded_with_state_with_trid(
             //             src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
             //         src_read_addr += curr_page_size;
@@ -138,11 +135,11 @@ void kernel_main() {
             //     // TODO: Write comments here explaining what's going on
             //     if (num_free_blocks_in_buffer == 2) {
             //         noc_async_read_barrier_with_trid(block_trid_to_wait);
-            //         cb_push_back(cb_id, curr_block_num_tiles);
+            //         cb_push_back(cb_id, curr_block_num_pages);
             //         // wait for next block trid
             //         block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
             //         // reserve for next block
-            //         cb_reserve_back(cb_id, curr_block_num_tiles * 2);
+            //         cb_reserve_back(cb_id, curr_block_num_pages * 2);
             //     } else {
             //         num_free_blocks_in_buffer -= 1;
             //     }
@@ -162,7 +159,7 @@ void kernel_main() {
 
             // // last block to wait
             // noc_async_read_barrier_with_trid(block_trid_to_wait);
-            // cb_push_back(cb_id, curr_block_num_tiles);
+            // cb_push_back(cb_id, curr_block_num_pages);
         }
     }
 }

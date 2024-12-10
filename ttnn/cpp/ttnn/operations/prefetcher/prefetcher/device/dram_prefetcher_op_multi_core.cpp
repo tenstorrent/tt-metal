@@ -70,6 +70,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     // TODO: What does this granularity depend on?
     uint32_t num_blocks = global_cb->receiver_cores().num_cores();
     std::vector<uint32_t> tensor_block_num_tiles;
+    // TODO: create a tensor to hold the {height_in_tiles, width_in_tiles} for each tensor
     for (uint32_t t = 0; t < num_tensors; t++) {
         uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
         uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
@@ -104,6 +105,14 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             .set_page_size(tensor_addrs_cb_index, tensor_addrs_single_tile_size)
             .set_globally_allocated_address(*tensor_addrs_buffer);
     auto tensor_addrs_cb = CreateCircularBuffer(program, reader_core_range, tensor_addrs_cb_config);
+
+    /*
+    TODO: Set up for writer CB
+     - Align CB to global CB address
+     - what are the CB sizes?
+
+
+    */
 
     /* output buffer (based on reader_cb) */
     uint32_t output_single_tile_size = reader_cb_single_tile_size;
@@ -144,6 +153,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             tensor_block_num_tiles[t], tt::tt_metal::detail::TileSize(tensor_data_formats[t]), page_size, num_pages);
         page_sizes.push_back(page_size);
         block_num_pages.push_back(num_pages);
+
+        // TODO: Create new vectors to hold the "coalesced" sizes for the writer kernel
     }
 
     uint32_t total_num_blocks_in_buffer = 3;  // TODO: how big should reader CB be? here it's triple buffered
@@ -183,6 +194,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
                                                    const std::vector<Tensor>& tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensor) {
+        // TODO: update the CB addrs for the output tensor
+
         // for (const auto& range : reader_core_range.ranges()) {
         //     for (const auto& core_coord : range) {
         //         // TODO: set runtime args for reader and writer
