@@ -100,7 +100,7 @@ void kernel_main() {
         // DPRINT << "wrote padding val to stick " << h << ENDL();
 
         DPRINT << "output stick f32s after memcpy: " << ENDL();
-        noc_async_read_barrier();
+        //    noc_async_read_barrier();
         tt::data_movement::common::print_f32_pages(output_stick_addr, padded_stick_bytes / padding_value_num_bytes, 1);
         DPRINT << ENDL();
 
@@ -112,4 +112,5 @@ void kernel_main() {
 
         output_stick_addr += padded_stick_bytes;
     }
+    DPRINT << "exiting writer" << ENDL();
 }
