@@ -17,7 +17,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 @pytest.mark.parametrize(
     "num_tensors, input_shape",
     [
-        (2, (128, 128)),
+        # (2, (128, 128)),  # Will hang for 2 dram prefetcher cores, because shape is too small
+        (2, (512, 512)),
     ],
 )
 @pytest.mark.parametrize(
@@ -34,11 +35,12 @@ def test_run_prefetcher(
     use_program_cache,
     function_level_defaults,
 ):
+    logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shape}")
     K, N = input_shape
 
     ##### Set up the Global CB #####
-    dram_cores = [ttnn.CoreCoord(1, 0)]  # , ttnn.CoreCoord(2, 0)]  # DRAM banks 1 and 2
-    sender_cores = [ttnn.CoreCoord(0, 0)]  # , ttnn.CoreCoord(0, 4)]
+    dram_cores = [ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)]  # DRAM banks 1 and 2
+    sender_cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4)]
     receiver_cores = [
         ttnn.CoreRangeSet(
             {
@@ -48,14 +50,14 @@ def test_run_prefetcher(
                 ),
             }
         ),
-        # ttnn.CoreRangeSet(
-        #     {
-        #         ttnn.CoreRange(
-        #             ttnn.CoreCoord(1, 4),
-        #             ttnn.CoreCoord(2, 4),
-        #         ),
-        #     }
-        # ),
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 4),
+                    ttnn.CoreCoord(2, 4),
+                ),
+            }
+        ),
     ]
     sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 400)
@@ -129,5 +131,4 @@ def test_run_prefetcher(
 
         all_passing = all_passing and passing
 
-    breakpoint()
     assert all_passing
