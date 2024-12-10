@@ -34,9 +34,7 @@ void DeviceProfiler::readRiscProfilerResults(
     int riscCount;
     profiler_msg_t* profiler_msg;
 
-    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
-    auto ethCores = soc_d.get_physical_ethernet_cores();
-    if (std::find(ethCores.begin(), ethCores.end(), worker_core) == ethCores.end()) {
+    if (tt::Cluster::instance().is_worker_core(worker_core, device_id)) {
         profiler_msg = hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
         CoreType = HalProgrammableCoreType::TENSIX;
         riscCount = 5;
@@ -47,7 +45,7 @@ void DeviceProfiler::readRiscProfilerResults(
         riscCount = 1;
     }
 
-    uint32_t coreFlatID = soc_d.physical_routing_to_profiler_flat_id.at(worker_core);
+    uint32_t coreFlatID = tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(

@@ -47,18 +47,12 @@ std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config
 Next, we allocate memory for each buffer with the specified configuration for each of the input vectors and another buffer for the output vector. The source data will be sent to the corresponding DRAM buffers to be accessed by the cores, and the results of the computation will be sent to the DRAM to be read by the destination vector.
 
 ``` cpp
-auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
-auto src1_dram_noc_coord = src1_dram_buffer->noc_coordinates();
-auto dst_dram_noc_coord = dst_dram_buffer->noc_coordinates();
-uint32_t src0_dram_noc_x = src0_dram_noc_coord.x;
-uint32_t src0_dram_noc_y = src0_dram_noc_coord.y;
-uint32_t src1_dram_noc_x = src1_dram_noc_coord.x;
-uint32_t src1_dram_noc_y = src1_dram_noc_coord.y;
-uint32_t dst_dram_noc_x = dst_dram_noc_coord.x;
-uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
+uint32_t src0_bank_id = 0;
+uint32_t src1_bank_id = 0;
+uint32_t dst_bank_id = 0;
 ```
 
-For this example, we will also specify the NoC coordinates to pass into the kernel functions as runtime arguments. We will use this to ensure that the kernels will access the data at the correct NoC addresses.
+For this example, we will also specify the Buffer Bank IDs to pass into the kernel functions as runtime arguments. We will use this to ensure that the kernels will access the data from the correct DRAM Memory Banks corresponding to each buffer.
 
 ``` cpp
 constexpr uint32_t src0_cb_index = CBIndex::c_0;
@@ -129,9 +123,9 @@ EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
 Next, we create two source vectors, each loaded with a constant value, before queueing the command to feed it to the corresponding DRAM buffers using `EnqueueWriteBuffer`.
 
 ``` cpp
-SetRuntimeArgs(program, binary_reader_kernel_id, core, { src0_dram_buffer->address(), src1_dram_buffer->address(), src0_dram_noc_x, src0_dram_noc_y, src1_dram_noc_x, src1_dram_noc_y});
+SetRuntimeArgs(program, binary_reader_kernel_id, core, { src0_dram_buffer->address(), src1_dram_buffer->address(), src0_bank_id, src1_bank_id});
 SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_dram_noc_x, dst_dram_noc_y});
+SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id});
 
 EnqueueProgram(cq, program, false);
 Finish(cq);
@@ -192,7 +186,7 @@ In the compute kernel, a single tile is read from each of the circular buffers c
 ## Writer kernel function
 
 ``` cpp
-uint64_t dst_noc_addr = get_noc_addr(dst_dram_noc_x, dst_dram_noc_y, dst_addr);
+uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_dram);
 
 constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
 uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);

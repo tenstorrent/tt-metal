@@ -284,7 +284,7 @@ void watcher_init(Device* device) {
                     CoreCoord phys_core;
                     bool valid_logical_core = true;
                     try {
-                        phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+                        phys_core = device->virtual_core_from_logical_core(logical_core, core_type);
                     } catch (std::runtime_error& error) {
                         valid_logical_core = false;
                     }

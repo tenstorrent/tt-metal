@@ -554,7 +554,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
     // flushed from the host.
     for (auto& logical_core : all_cores) {
-        CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
+        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
             WriteInitMagic(device, phys_core, hart_index, false);
         }
@@ -627,7 +627,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                 CoreCoord phys_core;
                 bool valid_logical_core = true;
                 try {
-                    phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+                    phys_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 } catch (std::runtime_error& error) {
                     valid_logical_core = false;
                 }
@@ -658,7 +658,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     uint32_t hart_mask =
         tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
     for (auto& logical_core : print_cores_sanitized) {
-        CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
+        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
             if (hart_mask & (1 << hart_index)) {
                 WriteInitMagic(device, phys_core, hart_index, true);
@@ -707,7 +707,7 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
         // Check all dprint-enabled cores on this device for outstanding prints.
         outstanding_prints = false;
         for (auto& logical_core : device_to_core_range_.at(device)) {
-            CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
+            CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
             for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
                 if (risc_mask & (1 << risc_id)) {
                     // No need to check if risc is not dprint-enabled.
@@ -769,7 +769,7 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
     // When detaching a device, disable prints on it.
     CoreDescriptorSet all_cores = GetAllCores(device);
     for (auto& logical_core : all_cores) {
-        CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
+        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
             WriteInitMagic(device, phys_core, hart_index, false);
         }
@@ -799,7 +799,7 @@ void DebugPrintServerContext::ClearSignals() {
 bool DebugPrintServerContext::PeekOneHartNonBlocking(
     Device* device, const CoreDescriptor& logical_core, int hart_id, bool new_data_this_iter) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
+    CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
     if (!CheckInitMagicCleared(device, phys_core, hart_id)) {
         return false;
     }

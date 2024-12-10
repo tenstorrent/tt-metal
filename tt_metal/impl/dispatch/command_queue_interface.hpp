@@ -479,19 +479,25 @@ public:
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             tt_cxy_pair prefetcher_core =
                 tt::tt_metal::dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
-            tt_cxy_pair prefetcher_physical_core =
-                tt_cxy_pair(prefetcher_core.chip, tt::get_physical_core_coordinate(prefetcher_core, core_type));
-            this->prefetcher_cores[cq_id] = prefetcher_physical_core;
+            auto prefetcher_virtual = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(prefetcher_core.chip, CoreCoord(prefetcher_core.x, prefetcher_core.y), core_type);
+            this->prefetcher_cores[cq_id] = tt_cxy_pair(prefetcher_core.chip, prefetcher_virtual.x, prefetcher_virtual.y);
             this->prefetch_q_writers.emplace_back(
-                tt::Cluster::instance().get_static_tlb_writer(prefetcher_physical_core));
+                tt::Cluster::instance().get_static_tlb_writer(this->prefetcher_cores[cq_id]));
 
             tt_cxy_pair completion_queue_writer_core =
                 tt::tt_metal::dispatch_core_manager::instance().completion_queue_writer_core(device_id, channel, cq_id);
+            auto completion_queue_writer_virtual =
+                tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
+                    completion_queue_writer_core.chip,
+                    CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
+                    core_type);
+
             const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data =
                 tt::Cluster::instance()
                     .get_tlb_data(tt_cxy_pair(
                         completion_queue_writer_core.chip,
-                        tt::get_physical_core_coordinate(completion_queue_writer_core, core_type)))
+                        completion_queue_writer_virtual.x,
+                        completion_queue_writer_virtual.y))
                     .value();
             auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
             this->completion_byte_addrs[cq_id] = completion_tlb_offset + completion_q_rd_ptr % completion_tlb_size;
