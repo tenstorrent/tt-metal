@@ -54,6 +54,9 @@ memory::memory(std::string const& path, Packing pack_type, Relocate relo_type) {
     text_addr_ = elf.GetSegments()[0].address;
     set_text_size(elf.GetSegments()[0].contents.size() * sizeof(word_t));
     set_packed_size(total_size * sizeof(uint32_t));
+    if (text_addr_ == 0xa840) {
+        std::printf("elf is %s\n", path.c_str());
+    }
 }
 
 bool memory::operator==(const memory& other) const { return data_ == other.data_ && link_spans_ == other.link_spans_; }
@@ -91,6 +94,7 @@ void memory::process_spans(
 // Spans get packed for kernels so they can be loaded in one NOC transaction
 // A symbol at the end of the text segment allows the FW to find the data segment to copy into place
 void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_start) {
+    std::printf("text_start=%lx data_start=%lx\n", long(text_start), long(data_start));
     uint64_t text_end, data_end;
     if (text_start > data_start) {
         text_end = std::numeric_limits<uint64_t>::max();
@@ -159,12 +163,12 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
     {
         TT_ASSERT(this->link_spans_.size() != 0);
         TT_ASSERT(link_spans_.size() <= 2);
+        std::printf("text_addr=%lx\n", long(text_addr_));
 
         std::vector<word_t> new_data2;
 
         bool text_is_second =
-            //            link_spans_.size() == 2 && link_spans_[1].addr >= text_start && link_spans_[1].addr <
-            //            text_end;
+            // link_spans_.size() == 2 && link_spans_[1].addr >= text_start && link_spans_[1].addr < text_end;
             link_spans_.size() == 2 && link_spans_[1].addr == text_addr_;
         auto const& text = link_spans_[text_is_second];
         TT_ASSERT(text.addr >= text_start && text.addr < text_end && text.addr == text_addr_);
@@ -192,7 +196,6 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
         TT_ASSERT(new_span == new_span2);
         TT_ASSERT(new_data == new_data2);
         if (!(new_span == new_span2 && new_data == new_data2)) {
-            std::printf("text addr=%lx\n", long(text_addr_));
             std::printf(
                 "new_span=(%lx,%lu), new_span2=(%lx,%lu), new_data.size=%lu, new_data2.size=%lu\n",
                 (long)new_span.addr,
