@@ -109,7 +109,8 @@ void kernel_main() {
                 noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
 #endif
             }
-
+            i_stick++;
+            l1_write_addr += stick_size_padded;
             curr_h++;
             if (curr_h == H_padded) {
                 curr_c++;
