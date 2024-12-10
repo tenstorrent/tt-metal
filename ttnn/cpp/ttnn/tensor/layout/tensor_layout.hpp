@@ -31,7 +31,7 @@ public:
         const PageConfig& page_config,
         const MemoryConfig& memory_config,
         const ttnn::Shape& legacy_shape);
-
+    [[deprecated("Use of Padded Shape is deprecated")]]
     static TensorLayout fromPaddedShape(
         DataType dtype,
         const PageConfig& page_config,
@@ -77,6 +77,7 @@ public:
     }
 
 private:
+    // Private to not expose alignment parameter to the public API
     TensorLayout(
         DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 

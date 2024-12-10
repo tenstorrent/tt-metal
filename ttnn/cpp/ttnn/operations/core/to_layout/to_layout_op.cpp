@@ -47,8 +47,6 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     TensorSpec upd_spec(
         tensor.logical_shape(),
         TensorLayout(tensor.dtype(), PageConfig(layout, std::move(tile)), tensor.memory_config()));
-    std::cout << "requires padding change " << tensor.get_padded_shape() << " " << static_cast<int>(layout) << " "
-              << upd_spec.padded_shape() << std::endl;
     return tensor.get_padded_shape().volume() != upd_spec.padded_shape().volume();
 }
 
@@ -179,19 +177,7 @@ Tensor to_layout_impl(
             tensor_arg.memory_config()));
 
     auto tensor = tensor_arg.pad(result_spec.padded_shape(), ttnn::SimpleShape(std::move(padded_input_start)), 0);
-    /*tensor = Tensor(
-        tensor.get_storage(),
-        TensorSpec(
-            result_spec.logical_shape(),
-            TensorLayout(
-                tensor.dtype(),
-                PageConfig(Layout::ROW_MAJOR),
-                MemoryConfig{},
-                result_spec.tensor_layout().get_alignment())));*/
-    tensor = tensor.to(layout);
-    if (device) {
-        tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-    }
+    tensor = device ? tensor.to(layout, device) : tensor.to(layout);
     return ttnn::reshape(tensor, result_spec.logical_shape());
 }
 }  // namespace detail
