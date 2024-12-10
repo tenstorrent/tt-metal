@@ -99,6 +99,9 @@ def run_multi_core_matmul_1d(
     max_dst_tiles=8,
     pcc_threshold=0.98,
     mm_chain=False,
+    use_physical_to_logical_mapping=False,
+    global_cb=None,
+    prefetched_weights_pt=None,
 ):
     assert not has_bias, "Bias not supported for gather_in0 mode."
     if not isinstance(grid, tuple) and not use_arbitrary_cores:
@@ -142,8 +145,11 @@ def run_multi_core_matmul_1d(
             CORE_RANGE = [(x, y) for y in range(storage_grid[1]) for x in range(storage_grid[0])]
             random.shuffle(CORE_RANGE)
         else:  # Use custom grid
-            mapping = get_physical_to_logical_core_mapping(device)
-            CORE_RANGE = [mapping[physical_coord] for physical_coord in grid]
+            if use_physical_to_logical_mapping:
+                mapping = get_physical_to_logical_core_mapping(device)
+                CORE_RANGE = [mapping[physical_coord] for physical_coord in grid]
+            else:
+                CORE_RANGE = grid
 
         core_range_set = ttnn.CoreRangeSet(
             [
@@ -164,14 +170,14 @@ def run_multi_core_matmul_1d(
             }
         )
 
-    core_range_set = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(1, 1),
-                ttnn.CoreCoord(1, 1),
-            ),
-        }
-    )
+    # core_range_set = ttnn.CoreRangeSet(
+    #     {
+    #         ttnn.CoreRange(
+    #             ttnn.CoreCoord(1, 1),
+    #             ttnn.CoreCoord(1, 1),
+    #         ),
+    #     }
+    # )
 
     print(f"num_cores: {num_cores}")
 
@@ -209,7 +215,7 @@ def run_multi_core_matmul_1d(
     )
 
     in0 = torch.randn(in0_shape)
-    in1 = torch.randn(in1_shape)
+    in1 = torch.randn(in1_shape) if prefetched_weights_pt is None else prefetched_weights_pt
 
     in0_t = ttnn.from_torch(
         in0,
@@ -254,19 +260,20 @@ def run_multi_core_matmul_1d(
         )
 
     # Global CB
-    sender_cores = [ttnn.CoreCoord(0, 0)]
-    receiver_cores = [
-        ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(1, 1),
-                    ttnn.CoreCoord(1, 1),
-                ),
-            }
-        ),
-    ]
-    sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
-    global_cb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 207360)
+    if global_cb is None:
+        sender_cores = [ttnn.CoreCoord(0, 0)]
+        receiver_cores = [
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(1, 1),
+                        ttnn.CoreCoord(1, 1),
+                    ),
+                }
+            ),
+        ]
+        sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
+        global_cb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 207360)
 
     for _ in range(num_iters):
         output_t = ttnn.matmul(
@@ -319,7 +326,7 @@ def run_multi_core_matmul_1d(
     assert passing
 
     # Check program cache
-    assert device.num_program_cache_entries() == 1  # Only 1 op
+    assert device.num_program_cache_entries() == 1 + (int)(global_cb is not None)  # Only 1 op
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
