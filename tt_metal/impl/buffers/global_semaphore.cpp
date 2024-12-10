@@ -82,7 +82,7 @@ namespace std {
 
 std::size_t hash<tt::tt_metal::GlobalSemaphore>::operator()(
     const tt::tt_metal::GlobalSemaphore& global_semaphore) const {
-    return tt::stl::hash::hash_objects_with_default_seed(global_semaphore);
+    return tt::stl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
 }
 
 }  // namespace std
