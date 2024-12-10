@@ -27,6 +27,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     using namespace tt::constants;
 
     const auto& input = tensor_args.input;
+    const auto& batch_mean = tensor_args.batch_mean;
+    const auto& batch_var = tensor_args.batch_var;
     auto gamma = tensor_args.gamma;
     auto beta = tensor_args.beta;
     auto mean = outputs[1];
