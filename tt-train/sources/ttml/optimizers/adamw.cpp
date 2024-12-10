@@ -105,7 +105,7 @@ void MorehAdamW::step() {
 }
 
 void MorehAdamW::set_state_dict(const serialization::StateDict& dict) {
-    m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment);
+    m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment));
     m_second_moment = std::get<serialization::NamedParameters>(dict.at(kSecondMoment));
     m_steps = serialization::get_value_type<size_t>(dict, kSteps);
 }
