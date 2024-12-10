@@ -1405,6 +1405,15 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
     const float pad_value) {
     Program program{};
 
+    std::cout << "input_tensor.memory_config(): " << input_tensor.memory_config() << std::endl;
+    std::cout << "output.memory_config(): " << output.memory_config() << std::endl;
+    std::cout << "output_tensor_shape: " << output_tensor_shape << std::endl;
+    std::cout << "output.shape: " << output.shape() << std::endl;
+
+    TT_ASSERT(
+        output.shard_spec().has_value() and output.shard_spec()->shape[1] == output_tensor_shape[-1],
+        "output must be sharded with shard width equal to output width");
+
     auto output_shape = output_tensor_shape;
     uint32_t W = input_tensor.shape()[3], H = input_tensor.shape()[2], C = input_tensor.shape()[1], N = input_tensor.shape()[0];
     uint32_t num_unpadded_sticks = H * C * N;
@@ -1510,7 +1519,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
         // FIXME: what to do for other dtypes?
         // for int types we need to convert the padding value to the nearest uint{sz}_t first -> probably should be a pad api change
         // for bf8 I have no idea.
-        TT_FATAL(false, "ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
+        TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
         padding_value_as_u32 = static_cast<uint32_t>(pad_value);
     }
 
@@ -1521,7 +1530,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_stickwise(
         (std::uint32_t)shard_height_padded,
         (std::uint32_t)padding_value_as_u32,
         (std::uint32_t)output.element_size(),
-        (std::uint32_t)input_shard_cb_index,
         (std::uint32_t)output_shard_cb_index,
         (std::uint32_t)pad_val_cb_index};
 
