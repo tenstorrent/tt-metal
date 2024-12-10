@@ -103,3 +103,9 @@ FORCE_INLINE RemoteSenderCBInterface& get_remote_sender_cb_interface(uint32_t cb
 FORCE_INLINE RemoteReceiverCBInterface& get_remote_receiver_cb_interface(uint32_t cb_id) {
     return cb_interface[cb_id].remote_receiver_cb_interface;
 }
+
+#if defined(COMPILE_FOR_TRISC)
+constexpr uint32_t cb_addr_shift = CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
+#else
+constexpr uint32_t cb_addr_shift = 0;
+#endif
