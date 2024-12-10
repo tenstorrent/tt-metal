@@ -26,7 +26,7 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape
         shape.logical_shape().volume() == tensor.get_logical_volume(),
         "Invalid view, logical volumes are changing from {} to {}",
         tensor.get_logical_volume(),
-        shape.logical_shape().volume())
+        shape.logical_shape().volume());
     TT_FATAL(
         ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE),
         "View requires the tensor be stored on device, use reshape instead");
