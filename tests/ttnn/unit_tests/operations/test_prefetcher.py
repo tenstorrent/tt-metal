@@ -57,12 +57,13 @@ def test_run_prefetcher(
     use_program_cache,
     function_level_defaults,
 ):
-    logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shape}")
-    K, N = input_shape
+    logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shapes[0]}")
+    K, N = input_shapes[0]
 
     ##### Set up the Global CB #####
     dram_cores = [ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)]  # DRAM banks 1 and 2
     sender_cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4)]
+    receiver_cores_list = [(1, 0), (2, 0), (1, 4), (2, 4)]
     receiver_cores = [
         ttnn.CoreRangeSet(
             {
@@ -81,6 +82,17 @@ def test_run_prefetcher(
             }
         ),
     ]
+
+    receiver_core_range_set = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(x, y),
+                ttnn.CoreCoord(x, y),
+            )
+            for x, y in receiver_cores_list
+        ]
+    )
+
     sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 400)
 
@@ -105,7 +117,7 @@ def test_run_prefetcher(
         )
 
         tt_tensor = ttnn.as_tensor(
-            pt_tensors[tid * num_layers],
+            pt_tensors[tid * num_layers],  # Add a loop for num_layers
             device=device,
             dtype=ttnn.bfloat16,
             memory_config=input_sharded_mem_config,
@@ -131,7 +143,7 @@ def test_run_prefetcher(
     )
 
     ##### Output mem config #####
-    output_mem_config = ttnn.MemoryConfig(
+    reader_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
@@ -145,7 +157,27 @@ def test_run_prefetcher(
         ),
     )
 
-    tt_outs = ttnn.dram_prefetcher(tt_tensors, tt_tensor_addrs, num_layers, global_circular_buffer, output_mem_config)
+    writer_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            receiver_core_range_set,
+            [K * num_tensors, N // receiver_core_range_set.num_cores()],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+
+    breakpoint()
+
+    tt_outs = ttnn.dram_prefetcher(
+        tt_tensors,
+        tt_tensor_addrs,
+        num_layers,
+        global_circular_buffer,
+        reader_output_mem_config,
+        writer_output_mem_config,
+    )
     tt_outs_pt = ttnn.to_torch(tt_outs)
     tt_outs_pt = torch.chunk(tt_outs_pt, num_tensors, dim=0)
 
