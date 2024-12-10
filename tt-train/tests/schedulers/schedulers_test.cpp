@@ -123,10 +123,10 @@ TEST(StepLRSchedulerTest, BasicDecay) {
 // Tests for LinearScheduler
 // ----------------------------------
 TEST(LinearSchedulerTest, DecreasingLR) {
-    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(0.2f);
+    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(0.2F);
 
     // Linearly go from 0.2 to 0.0 in 4 steps
-    ttml::schedulers::LinearScheduler scheduler(optimizer.get(), 0.0f, 4);
+    ttml::schedulers::LinearScheduler scheduler(optimizer.get(), 1.0F, 0.0F, 4);
 
     // step 1: progress = 1/4=0.25 lr = 0.2 + (0.0-0.2)*0.25 = 0.2 - 0.05=0.15
     scheduler.step();
@@ -159,7 +159,7 @@ TEST(SequentialSchedulerTest, ChainSchedulers) {
     auto step_scheduler = std::make_unique<ttml::schedulers::StepScheduler>(optimizer.get(), 1, 0.5F);
 
     // Then: LinearScheduler for 2 steps from current LR to 0.1
-    auto linear_scheduler = std::make_unique<ttml::schedulers::LinearScheduler>(optimizer.get(), 0.1F, 2);
+    auto linear_scheduler = std::make_unique<ttml::schedulers::LinearScheduler>(optimizer.get(), 1.0F, 0.1F, 2);
 
     std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> schedulers;
     std::vector<size_t> milestones;
@@ -193,4 +193,34 @@ TEST(SequentialSchedulerTest, ChainSchedulers) {
     // Further steps do nothing (we finished all schedulers)
     seq_scheduler.step();
     EXPECT_FLOAT_EQ(optimizer->get_lr(), 0.1F);
+}
+
+TEST(SequentialSchedulerTest, WarmupSetup) {
+    auto start_lr = 3.e-4F;
+    auto optimizer = std::make_unique<ttml::optimizers::MockOptimizer>(start_lr);
+
+    // First: LinearScheduler for 10 steps from 0 to start_lr
+    auto warmup_scheduler = std::make_unique<ttml::schedulers::LinearScheduler>(optimizer.get(), 0.0F, 1.0F, 10);
+
+    // Then: LinearScheduler for 50 steps from start_lr to 0.1F * start_lr
+    auto linear_scheduler = std::make_unique<ttml::schedulers::LinearScheduler>(optimizer.get(), 1.F, 0.1F, 50);
+
+    std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> schedulers;
+    std::vector<size_t> milestones;
+    schedulers.push_back(std::move(warmup_scheduler));
+    schedulers.push_back(std::move(linear_scheduler));
+    milestones.push_back(10);
+    milestones.push_back(50);
+    ttml::schedulers::SequentialScheduler seq_scheduler(optimizer.get(), std::move(schedulers), std::move(milestones));
+
+    for (int i = 0; i < 10; i++) {
+        // Linear warmup: 10 steps from 0 to start_lr
+        seq_scheduler.step();
+        EXPECT_FLOAT_EQ(optimizer->get_lr(), start_lr * (i + 1) / 10);
+    }
+    for (int i = 0; i < 50; i++) {
+        // Linear decay: 50 steps from start_lr to 0.1F * start_lr
+        seq_scheduler.step();
+        EXPECT_FLOAT_EQ(optimizer->get_lr(), start_lr * (1.0F - 0.9F * (i + 1) / 50));
+    }
 }

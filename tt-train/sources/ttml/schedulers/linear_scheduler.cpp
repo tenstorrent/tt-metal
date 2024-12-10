@@ -7,45 +7,47 @@
 #include "optimizers/optimizer_base.hpp"
 
 namespace ttml::schedulers {
-LinearScheduler::LinearScheduler(optimizers::OptimizerBase *optimizer, float end_lr, int total_steps) :
+
+LinearScheduler::LinearScheduler(
+    optimizers::OptimizerBase* optimizer, float start_factor, float end_factor, size_t total_steps) :
     LRSchedulerBase(optimizer),
-    m_start_lr(optimizer->get_lr()),
-    m_end_lr(end_lr),
+    m_base_lr(optimizer->get_lr()),
+    m_last_lr(m_base_lr),
+    m_start_factor(start_factor),
+    m_end_factor(end_factor),
     m_total_steps(total_steps),
-    m_current_step(0),
-    m_last_lr(m_start_lr) {
-    if (total_steps <= 0) {
-        throw std::invalid_argument("total_steps must be a positive integer.");
-    }
+    m_last_step(0) {
 }
 void LinearScheduler::step() {
-    m_current_step += 1;
+    m_last_step += 1;
 
-    // Compute progress ratio (clamped at 1.0)
-    float progress = static_cast<float>(m_current_step) / m_total_steps;
+    float progress = static_cast<float>(m_last_step) / m_total_steps;
     progress = std::min(progress, 1.0f);
 
-    // Linearly interpolate between start_lr and end_lr
-    float new_lr = m_start_lr + (m_end_lr - m_start_lr) * progress;
+    float current_factor = m_start_factor + (m_end_factor - m_start_factor) * progress;
+    float new_lr = m_base_lr * current_factor;
 
     get_optimizer()->set_lr(new_lr);
     m_last_lr = new_lr;
 }
+void LinearScheduler::set_state_dict(const serialization::StateDict& dict) {
+    m_last_step = serialization::get_value_type<int>(dict, "m_last_step");
+    m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
+}
+
+serialization::StateDict LinearScheduler::get_state_dict() const {
+    serialization::StateDict res;
+    res["m_last_step"] = m_last_step;
+    res["m_last_lr"] = m_last_lr;
+    return res;
+};
+
 float LinearScheduler::get_last_lr() const {
     return m_last_lr;
 }
+
 float LinearScheduler::get_current_lr() const {
     return get_optimizer()->get_lr();
 }
 
-void LinearScheduler::set_state_dict(const serialization::StateDict &dict) {
-    m_current_step = serialization::get_value_type<int>(dict, "m_current_step");
-    m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
-}
-serialization::StateDict LinearScheduler::get_state_dict() const {
-    serialization::StateDict res;
-    res["m_current_step"] = m_current_step;
-    res["m_last_lr"] = m_last_lr;
-    return res;
-};
 }  // namespace ttml::schedulers
