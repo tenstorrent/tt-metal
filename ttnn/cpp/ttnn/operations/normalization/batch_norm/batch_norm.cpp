@@ -5,6 +5,7 @@
 #include "batch_norm.hpp"
 
 #include "device/batch_norm_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_mean/device/moreh_mean_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -22,8 +23,22 @@ std::vector<std::optional<Tensor>> BatchNorm::invoke(
     const std::optional<MemoryConfig>& mean_memory_config,
     const std::optional<MemoryConfig>& rstd_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    // moreh mean code
+    auto batch_mean = input;
+    ttnn::SmallVector<int64_t> dims = {0, 2, 3};
+    std::sort(dims.begin(), dims.end());
+    for (uint32_t i = dims.size() - 1; i > 0; i--) {
+        auto temp_output =
+            ttnn::prim::moreh_mean(batch_mean, dims[i], true, std::nullopt, std::nullopt, memory_config, std::nullopt);
+        batch_mean = temp_output;
+    }
+    batch_mean =
+        ttnn::prim::moreh_mean(batch_mean, dims.front(), true, std::nullopt, std::nullopt, memory_config, std::nullopt);
+
+    // send mean as one input and check
     return ttnn::prim::batch_norm(
         input,
+        batch_mean,
         eps,
         gamma,
         beta,

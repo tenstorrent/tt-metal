@@ -129,6 +129,7 @@ BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tens
 
 std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tensor_args_t> BatchNormOperation::invoke(
     const Tensor& input,
+    const Tensor& batch_mean,
     const float eps,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -147,7 +148,7 @@ std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tenso
         mean_memory_config.value_or(input.memory_config()),
         rstd_memory_config.value_or(input.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
-    tensor_args_t tensor_args{input, gamma, beta, output, mean, rstd};
+    tensor_args_t tensor_args{input, batch_mean, gamma, beta, output, mean, rstd};
     return {operation_attributes, tensor_args};
 }
 }  // namespace ttnn::operations::normalization
