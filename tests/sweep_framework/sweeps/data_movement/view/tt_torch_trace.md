@@ -1,3 +1,7 @@
+# ttnn.reshape
+
+| Name | Input Shapes | Input Layouts | Attributes | Output Shapes | Output Layouts | Runs on TTNN | PCC | ATOL |
+|------|--------------|---------------|------------|---------------|----------------|--------------|-----|------|
 | ttnn.reshape | tensor<[1,12,10,f32]> | mapping_from: (d0, d1, d2), mapping_to: (d0 * 12 + d1, d2), memory_config: (1, 1, 'tile<32x32, f32>', 'dram') | shape: [1 : i32, 12 : i32, 10 : i32, 1 : i32] | tensor<[1,12,10,1,f32]> | mapping_from: (d0, d1, d2, d3), mapping_to: (d0 * 120 + d1 * 10 + d2, d3), memory_config: (4, 1, 'tile<32x32, f32>', 'dram') | no | nan | nan |
 | ttnn.reshape | tensor<[1,12,10,f32]> | mapping_from: (d0, d1, d2), mapping_to: (d0 * 12 + d1, d2), memory_config: (1, 1, 'tile<32x32, f32>', 'dram') | shape: [1 : i32, 12 : i32, 10 : i32, 1 : i32] | tensor<[1,12,10,1,f32]> | mapping_from: (d0, d1, d2, d3), mapping_to: (d0 * 120 + d1 * 10 + d2, d3), memory_config: (4, 1, 'tile<32x32, f32>', 'dram') | N/A | nan | nan |
 | ttnn.reshape | tensor<[1,12,197,f32]> | mapping_from: (d0, d1, d2), mapping_to: (d0 * 12 + d1, d2), memory_config: (1, 7, 'tile<32x32, f32>', 'dram') | shape: [1 : i32, 12 : i32, 197 : i32, 1 : i32] | tensor<[1,12,197,1,f32]> | mapping_from: (d0, d1, d2, d3), mapping_to: (d0 * 2364 + d1 * 197 + d2, d3), memory_config: (74, 1, 'tile<32x32, f32>', 'dram') | no | nan | nan |

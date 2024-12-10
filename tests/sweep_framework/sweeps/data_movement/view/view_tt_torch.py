@@ -44,13 +44,13 @@ def parse_md_file_simple_no_regex(file_path):
     with open(file_path, "r") as file:
         for line in file.readlines():
             parsed_line = line.split("|")
-            tensor = parsed_line[2].split("[")[1].split("]")[0]
-            target = parsed_line[5].split("[")[1].split("]")[0]
-            tensor_shape = list(map(int, tensor.split(",")[:-1]))
-            target_shape = list(map(int, target.split(",")[:-1]))
-            addition = {"shape": tensor_shape, "size": target_shape}
-            view_specs.append(addition)
-    print(type(view_specs))
+            if parsed_line[0] == " ttnn.reshape ":
+                tensor = parsed_line[2].split("[")[1].split("]")[0]
+                target = parsed_line[5].split("[")[1].split("]")[0]
+                tensor_shape = list(map(int, tensor.split(",")[:-1]))
+                target_shape = list(map(int, target.split(",")[:-1]))
+                addition = {"shape": tensor_shape, "size": target_shape}
+                view_specs.append(addition)
     return view_specs
 
 
