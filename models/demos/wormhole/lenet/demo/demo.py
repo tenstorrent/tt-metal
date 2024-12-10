@@ -43,7 +43,6 @@ def run_demo_dataset(mesh_device, batch_size, iterations, model_location_generat
         x = ttnn.from_torch(x, dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper)
         tt_output = tt_lenet.lenet(
             x,
-            batch_size,
             mesh_device,
             parameters,
             mesh_mapper=inputs_mesh_mapper,

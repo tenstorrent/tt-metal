@@ -11,19 +11,22 @@ def conv(mesh_device, input_tensor, batch_size, parameters):
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
-        math_fidelity=ttnn.MathFidelity.LoFi,
         activation="relu",
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        math_approx_mode_enabled=True,
-        fp32_dest_acc_enabled=False,
-        packer_l1_accum_enabled=False,
         input_channels_alignment=32,
         transpose_shards=False,
         reshard_if_not_optimal=True,
         deallocate_activation=True,
         reallocate_halo_output=True,
     )
-    [x, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    compute_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    x, [out_height, out_width] = ttnn.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight,
         in_channels=input_tensor.shape[3],
@@ -37,15 +40,18 @@ def conv(mesh_device, input_tensor, batch_size, parameters):
         input_height=input_tensor.shape[1],
         input_width=input_tensor.shape[2],
         conv_config=conv_config,
+        compute_config=compute_config,
         conv_op_cache={},
         groups=1,
+        return_output_dim=True,
+        return_weights_and_bias=False,
     )
-    return x, out_height, out_width
+    return x, [out_height, out_width]
 
 
-def lenet(input_tensor, batch_size, mesh_device, parameters, mesh_mapper, mesh_composer):
+def lenet(input_tensor, mesh_device, parameters, mesh_mapper, mesh_composer):
     batch_size = input_tensor.shape[0]
-    conv_1, out_height, out_width = conv(mesh_device, input_tensor, batch_size, parameters.layer1)
+    conv_1, [out_height, out_width] = conv(mesh_device, input_tensor, batch_size, parameters.layer1)
     conv_1 = ttnn.sharded_to_interleaved(conv_1, ttnn.L1_MEMORY_CONFIG)
     conv_1 = ttnn.to_layout(conv_1, layout=ttnn.ROW_MAJOR_LAYOUT)
     conv_1 = ttnn.pad(conv_1, [(0, 10)], value=0.0)
@@ -64,7 +70,7 @@ def lenet(input_tensor, batch_size, mesh_device, parameters, mesh_mapper, mesh_c
 
     maxpool_1 = ttnn.sharded_to_interleaved(maxpool_1, ttnn.L1_MEMORY_CONFIG)
     maxpool_1 = ttnn.reshape(maxpool_1, (batch_size, 14, 14, maxpool_1.shape[3]))
-    conv_2, out_height, out_width = conv(mesh_device, maxpool_1, batch_size, parameters.layer2)
+    conv_2, [out_height, out_width] = conv(mesh_device, maxpool_1, batch_size, parameters.layer2)
     conv_2 = ttnn.to_layout(conv_2, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     maxpool_2 = ttnn.max_pool2d(

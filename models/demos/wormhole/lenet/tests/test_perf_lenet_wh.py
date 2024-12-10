@@ -69,7 +69,6 @@ def test_perf_lenet(mesh_device, batch_size, tt_lenet, model_location_generator,
         ttnn_output = tt_lenet.lenet(
             mesh_device=mesh_device,
             input_tensor=x,
-            batch_size=batch_size,
             parameters=parameters,
             mesh_mapper=inputs_mesh_mapper,
             mesh_composer=output_mesh_composer,
