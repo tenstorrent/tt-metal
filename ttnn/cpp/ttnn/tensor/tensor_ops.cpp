@@ -415,12 +415,9 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
                     if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
                         DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         DeviceBuffer device_buffer = device_storage.get_buffer();
-                        if (new_shape[-1] != 0) {
-                            device_buffer->set_page_size(new_shape[-1] * tensor.element_size());
-                        }
-                        else {
-                            device_buffer->set_page_size(2 * tensor.element_size());
-                        }
+                        const auto& tensor_spec = tensor.tensor_spec();
+                        auto page_size_bytes = tensor_spec.compute_page_size_bytes();
+                        device_buffer->set_page_size(page_size_bytes);
                         device_storage.insert_buffer(device_buffer);
                         return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
                     } else {
