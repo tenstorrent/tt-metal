@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "tt_metal/impl/buffers/global_semaphore.hpp"
 
 
 #include "ttnn/run_operation.hpp"
@@ -34,6 +35,7 @@ struct AllGatherV2 {
     const uint32_t ring_index;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
+    const GlobalSemaphore semaphore_handle;
 
     AllGatherV2(
         std::optional<Device*> forward_device,
@@ -43,7 +45,8 @@ struct AllGatherV2 {
         uint32_t ring_size,
         uint32_t ring_index,
         MemoryConfig output_mem_config,
-        ccl::Topology topology) :
+        ccl::Topology topology,
+        GlobalSemaphore semaphore_handle) :
         forward_device(forward_device),
         backward_device(backward_device),
         dim(dim),
@@ -51,7 +54,8 @@ struct AllGatherV2 {
         ring_size(ring_size),
         ring_index(ring_index),
         output_mem_config(output_mem_config),
-        topology(topology) {}
+        topology(topology),
+        semaphore_handle(semaphore_handle) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -83,7 +87,8 @@ AllGatherV2 create_all_gather_struct(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<Device*>& devices,
-    const ccl::Topology topology
+    const ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore_handles
 );
 } // namespace all_gather_detail
 } // namespace ccl
@@ -98,7 +103,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    ccl::Topology topology);
+    ccl::Topology topology,
+    const GlobalSemaphore semaphore_handle);
 
 
 

@@ -1032,6 +1032,39 @@ tt_xy_pair GenericWrappedTensorSlicer::calculate_tensor_slice_shape(const Tensor
     return tensor_slice_shape;
 }
 
+Shape4D<uint32_t> GenericWrappedTensorSlicer::calculate_tensor_slice_offset(
+    const Tensor& input_tensor,
+    int slice_dim,
+    uint32_t partition_index) {
+
+    auto input_shape = input_tensor.get_legacy_shape();
+    Shape4D<uint32_t> offset(0, 0, 0, 0);
+
+    // Calculate the size of the slice along the given dimension
+    uint32_t dim_size = input_shape[slice_dim];
+    uint32_t slice_size = dim_size / partition_size;
+
+    // Set the offset based on the slice dimension
+    switch(slice_dim) {
+        case 0: // w dimension
+            offset[0] = partition_index * slice_size;
+            break;
+        case 1: // z dimension
+            offset[1] = partition_index * slice_size;
+            break;
+        case 2: // y dimension
+            offset[2] = partition_index * (slice_size/32);
+            break;
+        case 3: // x dimension
+            offset[3] = partition_index * (slice_size/32);
+            break;
+        default:
+            TT_THROW("Invalid slice dimension");
+    }
+
+    return offset;
+}
+
 void GenericWrappedTensorSlicer::initialize(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -1052,6 +1085,9 @@ void GenericWrappedTensorSlicer::initialize(
     TT_FATAL(!this->row_major, "Row major not supported yet");
 
     this->tensor_slice_shape = calculate_tensor_slice_shape(input_tensor, slice_dim, partition_size);
+
+    // Calculate tensor slice offset
+    this->tensor_slice_offset = calculate_tensor_slice_offset(input_tensor, slice_dim, partition_index);
 
     // Calculate worker slice shapes (tile layout)
     this->worker_slice_shapes = create_worker_slice_shapes_for_tile_layout(
@@ -1081,6 +1117,18 @@ ccl::InterleavedTensorWorkerSlice GenericWrappedTensorSlicer::get_worker_slice(s
         this->worker_slice_shapes[global_worker_index],
         this->worker_slice_offsets[global_worker_index],
         true // wrapped
+    );
+}
+
+ttnn::ccl::v2::TensorSlice GenericWrappedTensorSlicer::get_worker_slice_v2(std::size_t global_worker_index) {
+    assert(global_worker_index < this->worker_slice_shapes.size());
+    assert(global_worker_index < this->worker_slice_offsets.size());
+    return ttnn::ccl::v2::TensorSlice(
+        Shape4D<uint32_t>(1, 1, flattened_tensor_shape.y, flattened_tensor_shape.x),
+        Shape4D<uint32_t>(1, 1, tensor_slice_shape.y, tensor_slice_shape.x),
+        this->tensor_slice_offset,
+        Shape4D<uint32_t>(1, 1, worker_slice_shapes[global_worker_index].y, worker_slice_shapes[global_worker_index].x),
+        Shape4D<uint32_t>(0, 0, worker_slice_offsets[global_worker_index].y, worker_slice_offsets[global_worker_index].x)
     );
 }
 
