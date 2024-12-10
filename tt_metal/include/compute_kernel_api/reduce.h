@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
+#include "debug/dprint.h"
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"

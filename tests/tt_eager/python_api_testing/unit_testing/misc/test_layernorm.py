@@ -34,15 +34,15 @@ def ref_rmsnorm(x, gamma, beta, eps):
 def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     epsf = 1e-2
 
-    test_dims = ((1, 1, 32, 128),)
+    test_dims = ((1, 1, 32, 64),)
     for test_shape in test_dims:
-        # in0 = torch.rand(test_shape) * 2 - 0.95
-        in0 = torch.full(test_shape, 30.25)
+        in0 = torch.rand(test_shape) * 2 - 0.95
+        # in0 = torch.full(test_shape, 10.25)
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
 
         if test_id <= 5:
-            # in1 = torch.rand(test_shape) * 2 - 0.8
-            in1 = torch.full(test_shape, 20.5)
+            in1 = torch.rand(test_shape) * 2 - 0.8
+            # in1 = torch.full(test_shape, 20.5)
             in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
 
         if test_id % 3 == 0:
@@ -63,7 +63,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
             compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=True,
-                fp32_dest_acc_en=True if in_dtype == ttnn.float32 else False,
+                fp32_dest_acc_en=True,
             )
 
         if test_id == 0:
@@ -241,6 +241,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 #     ],
 # )
 def test_layernorm_mix_precision(gamma_dtype, in0_mem_config, out_mem_config, device):
+    torch.manual_seed(1234)
     if is_grayskull() and in_dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
     run_layernorm_mix_precision_tests(1, ttnn.bfloat16, gamma_dtype, in0_mem_config, out_mem_config, device)

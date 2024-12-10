@@ -79,8 +79,11 @@ def rms_norm(x, dim, gamma, beta, eps):
 # )
 @pytest.mark.parametrize("width_padding", [False], ids=["no_padding"])
 def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, out_mem_config, device, width_padding):
+    # My params:
     test_id = 1
     in_dtype = ttnn.bfloat16
+    block_w_sclaer = 1
+
     if is_grayskull() and in_dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
@@ -97,7 +100,7 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
     epsf = 1e-2
     batch = grid_size[1]
 
-    width = 128 * grid_size[1]
+    width = block_w_sclaer * 32 * grid_size[1]
     if grid_size[1] > 1 and width_padding:
         width = 128 * (grid_size[1] - 1) + 96  # 4 tiles per core, except last one that has 3
 
@@ -105,8 +108,19 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
     M = in0_shape[2] * batch
     K = in0_shape[3]
 
-    # in0 = torch.rand(in0_shape) * 2 - 0.95
-    in0 = torch.full(in0_shape, 45.25)
+    in0 = torch.rand(in0_shape) * 2 - 0.95
+    # in0 = torch.full(in0_shape, 10.25)
+    # in0 = torch.arange(
+    #     start = 0,
+    #     end=in0_shape[0] * in0_shape[1] * in0_shape[2] * in0_shape[3] / 100,
+    #     step = 0.01).view(in0_shape)
+    # Initialize a tensor with a pattern like an identity matrix or diagonal values
+    # in0 = torch.zeros(in0_shape)
+    # for i in range(in0_shape[2]):  # Traverse along the third dimension (32)
+    #     for j in range(in0_shape[3]):  # Traverse along the fourth dimension (64)
+    #         in0[0, 0, i, j] = float(i * in0_shape[3] + j)  # Assign incremental values
+    # print(in0)
+
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
     shard_shape = [M // grid_size[0], math.ceil(K / grid_size[1] / 32) * 32]
     in0_t_shard = ttnn.interleaved_to_sharded(
@@ -119,7 +133,7 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
 
     if test_id <= 5:
         # in1 = torch.rand(in0_shape) * 2 - 0.8
-        in1 = torch.full(in0_shape, 20.5)
+        in1 = torch.full(in0_shape, 2.0)
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
         in1_t_shard = ttnn.interleaved_to_sharded(
             in1_t,
@@ -134,8 +148,10 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
         beta = torch.zeros(in0_shape[3])
     if test_id % 3 == 1:
         # gamma = torch.rand(in0_shape[3]) * 2 - 1
-        gamma = torch.full((in0_shape[3],), 10.625)
+        # gamma = torch.full((in0_shape[3],), 0.5)
+        gamma = torch.arange(start=0, end=in0_shape[3], step=1.0).view((in0_shape[3],))
         beta = torch.zeros(in0_shape[3])
+        print("gamma: " + " ".join(f"{val.item():.4f}" for val in gamma))
     if test_id % 3 == 2:
         gamma = torch.rand(in0_shape[3]) * 2 - 1
         beta = torch.rand(in0_shape[3]) * 2.0 - 1.1
@@ -158,15 +174,17 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
 
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        subblock_w=4,
+        subblock_w=block_w_sclaer,
         block_h=batch,
-        block_w=4,
+        block_w=block_w_sclaer,
         inplace=True,
     )
 
     if not is_grayskull():
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=True, fp32_dest_acc_en=True
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
         )
 
     if test_id == 0:
@@ -300,11 +318,13 @@ def test_layernorm_sharded_mix_precision_rm(gamma_dtype, gamma_beta_mem_config, 
     num_rows = tt_got_back.size(2) // 32
     num_cols = tt_got_back.size(3) // 32
 
-    for tile_row in range(num_rows):
-        for tile_col in range(num_cols):
-            print(f"Tile ({tile_row}, {tile_col}):")
-            print_tile(tt_got_back, tile_row, tile_col)
-            print_tile(ref_lnorm, tile_row, tile_col)
+    if 2 == 1:
+        for tile_row in range(num_rows):
+            for tile_col in range(num_cols):
+                print(f"Tile ({0}, {0}):")
+                print_tile(in0, 0, 0)
+                print_tile(tt_got_back, 0, 0)
+                print_tile(ref_lnorm, 0, 0)
 
     # logger.info(output)
     assert passing

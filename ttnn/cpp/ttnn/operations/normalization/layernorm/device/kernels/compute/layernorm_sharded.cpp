@@ -13,6 +13,19 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "debug/dprint.h"
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        // Note: TileSlice has different parameters on reader/writer kernels and these are not quite accurate. That may
+        // cause issues in terms of where data appears. But trying proper parameters caused errors in the dprint server.
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
@@ -103,6 +116,16 @@ void MAIN {
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
 
+    // UNPACK (( DPRINT << "IN0:" << ENDL() ));
+    // UNPACK (( print_full_tile(cb_in0, 0, true) ));
+    // UNPACK (( DPRINT << "IN1:" << ENDL() ));
+    // UNPACK (( print_full_tile(cb_in1, 0, true) ));
+
+// PACK (( DPRINT << "num_tiles_per_block: " << (uint16_t)num_tiles_per_block << ENDL() ));
+// PACK (( DPRINT << "block_h: " << (uint16_t)block_h << ENDL() ));
+// PACK (( DPRINT << "num_subblocks_w: " << (uint16_t)num_subblocks_w << ENDL() ));
+// PACK (( DPRINT << "num_blocks_reduce: " << (uint16_t)num_blocks_reduce << ENDL() ));
+// PACK (( DPRINT << "num_reduce_tiles_per_block_h: " << (uint16_t)num_reduce_tiles_per_block_h << ENDL() ));
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(cb_in0, cb_in1);
@@ -126,6 +149,7 @@ void MAIN {
         }
         index_h_offset += block_w;
     }
+
     cb_push_back(cb_in, num_tiles_per_block);
 #ifndef RMSNORM
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
@@ -156,6 +180,8 @@ void MAIN {
         tile_regs_release();
         index_h_offset += block_w;
     }
+    // PACK (( DPRINT << "cb_ex_partial:" << ENDL() ));
+    // PACK (( print_full_tile(cb_ex_partial, 0, true) ));
     reduce_revert_delta();
     cb_push_back(cb_ex_partial, block_h);
 
@@ -345,12 +371,16 @@ void MAIN {
         reconfig_data_format(cb_xmm, cb_ex_global);
     }
 #endif
+    // UNPACK (( DPRINT << "cb_xmm:" << ENDL() ));
+    // UNPACK (( print_full_tile(cb_xmm, 0, true) ));
     mul_bcast_cols_init_short();
     index_h_offset = 0;
     cb_reserve_back(cb_im, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         cb_wait_front(cb_ex_global, 1);
+        // UNPACK (( DPRINT << "cb_ex_global:" << ENDL() ));
+        // UNPACK (( print_full_tile(cb_ex_global, 0, true) ));
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
@@ -374,7 +404,6 @@ void MAIN {
 
     cb_pop_front(cb_xmm, num_tiles_per_block);
     cb_wait_front(cb_im, num_tiles_per_block);
-
     if constexpr (do_gamma) {
         reconfig_data_format(cb_im, cb_gamma);
         if constexpr (do_beta == 0) {
@@ -382,8 +411,12 @@ void MAIN {
         }
         mul_bcast_rows_init_short();
         cb_wait_front(cb_gamma, block_w);
+        UNPACK((DPRINT << "cb_gamma:" << ENDL()));
+        UNPACK((print_full_tile(cb_gamma, 0, true)));
         index_h_offset = 0;
         cb_reserve_back(cb_outgamma, num_tiles_per_block);
+        UNPACK((DPRINT << "cb_im:" << ENDL()));
+        UNPACK((print_full_tile(cb_im, 0, true)));
         for (uint32_t i = 0; i < block_h; i++) {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -403,6 +436,8 @@ void MAIN {
             index_h_offset += block_w;
         }
         cb_push_back(cb_outgamma, num_tiles_per_block);
+        // PACK (( DPRINT << "cb_outgamma:" << ENDL() ));
+        // PACK (( print_full_tile(cb_outgamma, 0, true) ));
         cb_pop_front(cb_im, num_tiles_per_block);
         cb_wait_front(cb_outgamma, num_tiles_per_block);
     }
