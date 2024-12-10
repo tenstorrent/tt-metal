@@ -18,7 +18,7 @@ void MAIN {
     constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(5) == 1;
     constexpr bool is_groupnorm = get_compile_time_arg_val(6) == 1;
 
-    binary_op_init_common(tt::CBIndex::c_1, tt::CBIndex::c_2);
+    binary_op_init_common(tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
     constexpr auto cb_dy = tt::CBIndex::c_0;         // output_grad(==dy)
     constexpr auto cb_x = tt::CBIndex::c_1;          // input(==x)
