@@ -210,6 +210,33 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en);
 
+std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
+    tt::tt_metal::Program& program,
+    const Tensor& input,
+    CoreRange core,
+    uint32_t num_cb0_tiles,
+    uint32_t num_cb0_second_reader_tiles,
+    uint32_t num_cb1_tiles,
+    uint32_t num_cb0_tilized_tiles,
+    uint32_t num_output_tiles,
+    uint32_t num_reblock_cb_tiles,
+    uint32_t num_writer_output_tiles,
+    bool untilize_out,
+    tt::DataFormat act_df,
+    tt::DataFormat weight_df,
+    tt::DataFormat tilized_act_df,
+    tt::DataFormat out_df,
+    tt::DataFormat bias_df,
+    bool weight_width_sliced,
+    const Tensor& output,
+    uint32_t bias_ntiles,
+    bool with_bias,
+    bool split_reader,
+    bool fp32_dest_acc_en,
+    bool packer_l1_acc_en,
+    bool use_non_tile_height);
+
+
 }  // namespace conv2d
 
 }  // namespace operations::conv
