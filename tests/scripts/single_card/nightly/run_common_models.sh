@@ -9,7 +9,7 @@ fi
 fail=0
 
 echo "Running common models for archs"
-
+env pytest models/experimental/functional_mobilenetv2/test/test_ttnn_mobilenetv2.py ; fail+=$?
 env pytest -n auto tests/nightly/single_card/common_models/ ; fail+=$?
 
 if [[ $fail -ne 0 ]]; then
