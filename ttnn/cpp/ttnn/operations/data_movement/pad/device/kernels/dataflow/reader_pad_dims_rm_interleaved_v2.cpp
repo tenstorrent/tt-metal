@@ -6,20 +6,6 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
-#define ENABLE_DEBUG 1
-
-#if ENABLE_DEBUG
-#include "debug/dprint.h"
-
-inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-    for (uint32_t page = 0; page < npages; ++page) {
-        for (uint32_t j = 0; j < pagelen; ++j, ++ptr) {
-        }
-    }
-}
-#endif
-
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
