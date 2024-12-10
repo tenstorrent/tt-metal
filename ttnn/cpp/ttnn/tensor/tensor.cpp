@@ -656,21 +656,12 @@ std::vector<uint32_t> Tensor::host_page_ordering() {
 
 StorageType Tensor::storage_type() const {
     return std::visit(
-        [](auto&& storage) -> StorageType {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, OwnedStorage>) {
-                return StorageType::OWNED;
-            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return StorageType::DEVICE;
-            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                return StorageType::BORROWED;
-            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                return StorageType::MULTI_DEVICE;
-            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                return StorageType::MULTI_DEVICE_HOST;
-            } else {
-                raise_unsupported_storage<T>();
-            }
+        tt::stl::overloaded{
+            [](const OwnedStorage&) { return StorageType::OWNED; },
+            [](const DeviceStorage&) { return StorageType::DEVICE; },
+            [](const BorrowedStorage&) { return StorageType::BORROWED; },
+            [](const MultiDeviceStorage& s) { return StorageType::MULTI_DEVICE; },
+            [](const MultiDeviceHostStorage&) { return StorageType::MULTI_DEVICE_HOST; },
         },
         this->get_storage());
 }
@@ -873,18 +864,20 @@ Tensor allocate_tensor_on_devices(
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id) {
     // Top level wrapper to copy a host tensor to a preallocated device tensor
     TT_ASSERT(device_tensor.workers.size(), "Workers must be specified for device_tensor in write_tensor");
+
     Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(device_tensor.workers.at(0), host_tensor);
+    TT_FATAL(
+        async_safe_tensor.storage_type() == StorageType::BORROWED or
+            async_safe_tensor.storage_type() == StorageType::OWNED or
+            async_safe_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
+        "write_tensor only supports host_tensor to device_tensor data transfer");
+
     uint32_t host_tensor_ref_count = async_safe_tensor.tensor_attributes->record_main_thread_ref_count();
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
 
     for (int worker_index = 0; worker_index < device_tensor.workers.size(); ++worker_index) {
         auto& worker = device_tensor.workers[worker_index];
         worker->push_work([cq_id, worker, worker_index, async_safe_tensor, device_tensor]() mutable {
-            TT_FATAL(
-                async_safe_tensor.storage_type() == StorageType::BORROWED or
-                    async_safe_tensor.storage_type() == StorageType::OWNED or
-                    async_safe_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
-                "write_tensor only supports host_tensor to device_tensor data transfer");
             TT_FATAL(
                 device_tensor.storage_type() == StorageType::DEVICE or
                     device_tensor.storage_type() == StorageType::MULTI_DEVICE,
@@ -895,33 +888,49 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id
                 async_safe_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(),
                 "Error");
             std::visit(
-                [worker_index, worker, cq_id, &async_safe_tensor](auto&& s) {
-                    void* host_data = nullptr;
-                    using StorageType = std::decay_t<decltype(s)>;
-                    if constexpr (std::is_same_v<DeviceStorage, StorageType>) {
-                        if (std::holds_alternative<BorrowedStorage>(async_safe_tensor.get_storage())) {
-                            // Handle case when writing borrowed tensor single device tensor (only allowed for sync
-                            // mode)
-                            auto host_storage = std::get<BorrowedStorage>(async_safe_tensor.get_storage());
-                            std::visit([&host_data](auto&& b) { host_data = b.data(); }, host_storage.buffer);
-                        } else {
-                            TT_ASSERT(
-                                std::holds_alternative<OwnedStorage>(async_safe_tensor.get_storage()),
-                                "Unexpected type {}",
-                                tt::stl::get_active_type_name_in_variant(async_safe_tensor.get_storage()));
-                            auto host_storage = std::get<OwnedStorage>(async_safe_tensor.get_storage());
-                            std::visit([&host_data](auto&& b) { host_data = b.begin(); }, host_storage.get_buffer());
-                        }
-                        EnqueueWriteBuffer(worker->command_queue(cq_id), s.get_buffer(), host_data, false);
-                    } else if constexpr (std::is_same_v<MultiDeviceStorage, StorageType>) {
-                        auto host_storage = std::get<MultiDeviceHostStorage>(async_safe_tensor.get_storage());
-                        std::visit(
-                            [worker_index, &host_data](auto&& b) { host_data = b.begin(); },
-                            host_storage.get_buffer(worker_index));
+                tt::stl::overloaded{
+                    [worker, worker_index, cq_id, &async_safe_tensor](const DeviceStorage& device_storage) {
+                        // Copying from host to a single device.
+                        void* host_data = std::visit(
+                            tt::stl::overloaded{
+                                [](BorrowedStorage s) {
+                                    return std::visit([](auto&& b) { return b.data(); }, s.buffer);
+                                },
+                                [](OwnedStorage s) {
+                                    return std::visit([](auto&& b) { return static_cast<void*>(b.begin()); }, s.buffer);
+                                },
+                                [](const MultiDeviceHostStorage& host_storage) {
+                                    TT_ASSERT(
+                                        host_storage.num_buffers() == 1,
+                                        "Cannot copy multi-buffer host storage to a single device");
+                                    return std::visit(
+                                        [](auto&& b) -> void* { return b.begin(); }, host_storage.get_buffer(0));
+                                },
+                                [](auto&&) -> void* { TT_THROW("Unreachable"); },
+                            },
+                            async_safe_tensor.get_storage());
                         EnqueueWriteBuffer(
-                            worker->command_queue(cq_id), s.get_buffer_for_device(worker), host_data, false);
-                    }
-                },
+                            worker->command_queue(cq_id),
+                            device_storage.get_buffer(),
+                            host_data,
+                            /*blocking=*/false);
+                    },
+                    [worker, worker_index, cq_id, &async_safe_tensor](const MultiDeviceStorage& device_storage) {
+                        // Copying from host to multi-device.
+                        TT_ASSERT(
+                            std::holds_alternative<MultiDeviceHostStorage>(async_safe_tensor.get_storage()),
+                            "Unexpected type {}",
+                            tt::stl::get_active_type_name_in_variant(async_safe_tensor.get_storage()));
+                        auto host_storage = std::get<MultiDeviceHostStorage>(async_safe_tensor.get_storage());
+                        void* host_data = std::visit(
+                            [](auto&& b) -> void* { return b.begin(); }, host_storage.get_buffer(worker_index));
+                        EnqueueWriteBuffer(
+                            worker->command_queue(cq_id),
+                            device_storage.get_buffer_for_device(worker),
+                            host_data,
+                            /*blocking=*/false);
+                    },
+                    [](auto&& s) { TT_THROW("Unreachable"); }},
                 device_tensor.get_storage());
         });
     }
