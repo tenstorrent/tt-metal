@@ -37,8 +37,9 @@ void kernel_main() {
     DPRINT << "num_blocks: " << num_blocks << ENDL();
     DPRINT << "read_cb_size: " << read_cb_size << ENDL();
 
-    constexpr uint32_t cb_id = 0;        // Output cb
+    constexpr uint32_t cb_id = 0;        // Reader cb
     constexpr uint32_t addrs_cb_id = 1;  // Tensor specs
+    constexpr uint32_t out_cb_id = 2;    // Output cb
 
     uint32_t rt_args_idx = 0;
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -63,11 +64,16 @@ void kernel_main() {
             uint32_t curr_block_num_tiles = block_num_tiles[t];
             uint32_t curr_block_size_bytes = curr_block_num_tiles * curr_page_size;
 
+            // // DPRINT some info
+            // DPRINT << "curr_page_size: " << curr_page_size << ENDL();
+            // DPRINT << "curr_block_num_tiles: " << curr_block_num_tiles << ENDL();
+            // DPRINT << "curr_block_size_bytes: " << curr_block_size_bytes << ENDL();
+
             // Address setup
             uint32_t tensor_base_address = tensor_addrs_l1[t][layer];
             DPRINT << "tensor_base_address: " << tensor_base_address << ENDL();
             uint32_t src_base_addr =
-                noc_async_read_tile_dram_sharded_set_state<false>(tensor_base_address, curr_page_size, bank_id, vc);
+                noc_async_read_tile_dram_sharded_set_state<true>(tensor_base_address, curr_page_size, bank_id, vc);
             uint32_t src_read_addr = 0;
 
             uint32_t num_free_blocks_in_buffer = total_num_blocks_in_buffer;
@@ -76,7 +82,7 @@ void kernel_main() {
 
             // TODO: In what case does reserve back pass, but then the write ptr
             // is past the end of the buffer?? Why is this check needed here?
-            cb_reserve_back(cb_id, curr_block_num_tiles);
+            // cb_reserve_back(cb_id, curr_block_num_tiles);
             uint32_t l1_write_addr_offset = 0;
             uint32_t l1_write_addr_start = get_write_ptr(cb_id);
             if (l1_write_addr_start >= l1_buffer_end_addr) {
@@ -86,10 +92,7 @@ void kernel_main() {
             DPRINT << "l1_write_addr: " << l1_write_addr << ENDL();
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
-                // Operand 1
                 cb_reserve_back(cb_id, curr_block_num_tiles);
-                auto l1_write_addr = get_write_ptr(cb_id);
-
                 for (uint32_t h = 0; h < curr_block_num_tiles; ++h) {
                     noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
                     src_read_addr += curr_page_size;
@@ -97,15 +100,26 @@ void kernel_main() {
                 }
 
                 noc_async_read_barrier();
-
                 cb_push_back(cb_id, curr_block_num_tiles);
 
                 // // Dprint a tile from the buffer
-                // for (uint32_t i = 0; i < 32; i++) {
-                //     // uint32_t value = (uint32_t)float16_to_uint16(*(volatile uint32_t*)(l1_write_addr_start + i));
+                // for (uint32_t i = 0; i < 4; i++) {
                 //     uint32_t value = *(volatile uint32_t*)(l1_write_addr_start + i);
                 //     DPRINT << "tile[" << i << "]: " << value << ENDL();
                 // }
+            }
+
+            // Copy from reader to output
+            auto l1_read_addr = l1_write_addr_start;
+            DPRINT << "out_write_addr: " << get_write_ptr(out_cb_id) << ENDL();
+            DPRINT << "l1_read_addr: " << l1_read_addr << ENDL();
+            for (uint32_t block = 0; block < num_blocks; ++block) {
+                cb_reserve_back(out_cb_id, curr_block_num_tiles);
+                auto l1_out_write_addr = get_noc_addr(get_write_ptr(out_cb_id));
+
+                noc_async_write(l1_read_addr, l1_out_write_addr, curr_block_size_bytes);
+                l1_read_addr += curr_block_size_bytes;
+                cb_push_back(out_cb_id, curr_block_num_tiles);
             }
 
             // for (uint32_t block = 0; block < num_blocks; block++) {
