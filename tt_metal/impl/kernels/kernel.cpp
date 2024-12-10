@@ -414,7 +414,7 @@ void EthernetKernel::read_binaries(Device *device) {
         erisc_core_type,
         erisc_id,
         dm_class_idx,
-        ll_api::memory::Packing::CONTIGUOUS,
+        relo_type != ll_api::memory::Relocate::XIP ? ll_api::memory::Packing::SEPARATE : ll_api::memory::Packing::CONTIGUOUS,
         relo_type);
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
