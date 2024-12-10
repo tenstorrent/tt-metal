@@ -1077,7 +1077,9 @@ CBHandle CreateCircularBuffer(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const CircularBufferConfig &config) {
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-    return program.add_circular_buffer(core_ranges, config);
+    auto cb_handle = program.add_circular_buffer(core_ranges, config);
+    TRACE_FUNCTION_CALL(captureCreateCircularBuffer, cb_handle, program, core_spec, config);
+    return cb_handle;
 }
 
 const CircularBufferConfig &GetCircularBufferConfig(Program &program, CBHandle cb_handle) {

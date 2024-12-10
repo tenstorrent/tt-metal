@@ -143,6 +143,33 @@ uint32_t LightMetalCaptureContext::getGlobalId(const KernelHandle handle) {
     }
 }
 
+// Public Object Maps Accessors - CBHandle
+
+bool LightMetalCaptureContext::isInMap(const CBHandle handle) {
+    return cbHandleToGlobalIdMap_.find(handle) != cbHandleToGlobalIdMap_.end();
+}
+
+uint32_t LightMetalCaptureContext::addToMap(const CBHandle handle) {
+    if (isInMap(handle)) log_warning(tt::LogMetalTrace, "CBHandle already exists in global_id map.");
+    uint32_t global_id = nextGlobalId_++;
+    cbHandleToGlobalIdMap_[handle] = global_id;
+    return global_id;
+}
+
+void LightMetalCaptureContext::removeFromMap(const CBHandle handle) {
+    if (!isInMap(handle)) log_warning(tt::LogMetalTrace, "CBHandle not found in global_id map.");
+    cbHandleToGlobalIdMap_.erase(handle);
+}
+
+uint32_t LightMetalCaptureContext::getGlobalId(const CBHandle handle) {
+    auto it = cbHandleToGlobalIdMap_.find(handle);
+    if (it != cbHandleToGlobalIdMap_.end()) {
+        return it->second;
+    } else {
+        throw std::runtime_error("CBHandle not found in global_id map.");
+    }
+}
+
 ////////////////////////////////////////////
 // Non-Class Helper Functions             //
 ////////////////////////////////////////////

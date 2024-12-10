@@ -9,6 +9,8 @@
 #include <map>
 #include <optional>
 #include <unordered_set>
+#include <flatbuffers/flatbuffers.h>
+#include "flatbuffers/flatbuffer_builder.h"
 
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
@@ -17,12 +19,25 @@
 
 #include "tt_metal/hw/inc/circular_buffer.h"
 
+// Forward declarations for external flatbuffer serialization function
+namespace tt::target { class CircularBufferConfig; }
+namespace tt::tt_metal {
+inline namespace v0 {
+    class CircularBufferConfig;
+}
+inline flatbuffers::Offset<tt::target::CircularBufferConfig> toFlatBuffer(const tt::tt_metal::CircularBufferConfig &config, flatbuffers::FlatBufferBuilder &builder);
+inline CircularBufferConfig fromFlatBuffer(const tt::target::CircularBufferConfig *config_fb);
+}
+
 namespace tt::tt_metal {
 inline namespace v0 {
 
 using CBHandle = uintptr_t;
 
 class CircularBufferConfig {
+   friend flatbuffers::Offset<tt::target::CircularBufferConfig> tt::tt_metal::toFlatBuffer(const tt::tt_metal::CircularBufferConfig &config, flatbuffers::FlatBufferBuilder &builder);
+   friend CircularBufferConfig fromFlatBuffer(const tt::target::CircularBufferConfig *config_fb);
+
    public:
     // Static circular buffer spec
     CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat> &data_format_spec) :

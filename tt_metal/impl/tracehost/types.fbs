@@ -128,3 +128,28 @@ union KernelConfig {
     ComputeConfig,
     EthernetConfig
 }
+
+
+table Tile {
+  tile_shape: [uint32]; // Shape of the tile (e.g., height, width)
+  face_shape: [uint32]; // Shape of the face
+  tile_hw: uint32;      // Tile hardware size
+  face_hw: uint32;      // Face hardware size
+  num_faces: uint32;    // Number of faces
+  partial_face: uint32; // Indicates if this is a partial face
+  narrow_tile: uint32;  // Indicates if this is a narrow tile
+  transpose_within_face: bool; // Transpose within each face
+  transpose_of_faces: bool;    // Transpose face order
+}
+
+table CircularBufferConfig {
+  total_size: uint32;
+  globally_allocated_address: uint32; // Optional behavior can be handled with a default value (or union)
+  data_formats: [uint8]; // Optional arrays are naturally nullable in FlatBuffers
+  page_sizes: [uint32];
+  tiles: [Tile];
+  // FIXME - buffer pointer
+  buffer_indices: [uint8];
+  dynamic_cb: bool;
+  max_size: uint32;
+}

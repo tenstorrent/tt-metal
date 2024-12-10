@@ -22,6 +22,7 @@ inline namespace v0 {
 
 class Buffer;
 class Program;
+using CBHandle = uintptr_t;
 
 class LightMetalCaptureContext {
 public:
@@ -50,6 +51,11 @@ public:
     uint32_t addToMap(const KernelHandle handle);
     void removeFromMap(const KernelHandle handle);
     uint32_t getGlobalId(const KernelHandle handle);
+    // Public Object Maps Accessors - CBHandles
+    bool isInMap(const CBHandle handle);
+    uint32_t addToMap(const CBHandle handle);
+    void removeFromMap(const CBHandle handle);
+    uint32_t getGlobalId(const CBHandle handle);
 
     void reset();
 
@@ -66,6 +72,7 @@ private:
     std::unordered_map<Buffer*, uint32_t> bufferToGlobalIdMap_;
     std::unordered_map<const Program*, uint32_t> programToGlobalIdMap_;
     std::unordered_map<KernelHandle, uint32_t> kernelHandleToGlobalIdMap_;
+    std::unordered_map<CBHandle, uint32_t> cbHandleToGlobalIdMap_;
     // FIXME - Add one for CommandQueue object.
 
     // Delete copy constructor and assignment operator

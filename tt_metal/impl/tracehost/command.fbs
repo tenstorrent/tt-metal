@@ -80,6 +80,13 @@ table SetRuntimeArgsCommand {
     args: [uint32];             // Arguments to be passed to kernel
 }
 
+table CreateCircularBufferCommand {
+    global_id: uint32;          // Reference to CBHandle
+    program_global_id: uint32;  // Reference to Program
+    core_spec: CoreSpec;
+    config: CircularBufferConfig;
+}
+
 union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
@@ -93,7 +100,8 @@ union CommandType {
     CreateProgramCommand,
     EnqueueProgramCommand,
     CreateKernelCommand,
-    SetRuntimeArgsCommand
+    SetRuntimeArgsCommand,
+    CreateCircularBufferCommand,
 }
 
 table Command {

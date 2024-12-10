@@ -21,6 +21,8 @@
     #define TRACE_FUNCTION_CALL(capture_func, ...) do { } while (0)
 #endif
 
+namespace tt::tt_metal {
+
 //////////////////////////////////////////////////////////////
 // Debug Code                                               //
 //////////////////////////////////////////////////////////////
@@ -295,8 +297,82 @@ inline std::pair<tt::target::KernelConfig, flatbuffers::Offset<void>> toFlatbuff
     return toFlatbuffer(builder, base_config);
 }
 
+inline flatbuffers::Offset<tt::target::Tile> toFlatBuffer(
+    const Tile &tile,
+    flatbuffers::FlatBufferBuilder &builder) {
 
-// MathFidelity : base_types.hpp
+    auto tile_shape_fb = builder.CreateVector(tile.get_tile_shape().data(), tile.get_tile_shape().size());
+    auto face_shape_fb = builder.CreateVector(tile.get_face_shape().data(), tile.get_face_shape().size());
+
+    return tt::target::CreateTile(
+        builder,
+        tile_shape_fb,
+        face_shape_fb,
+        tile.get_tile_hw(),
+        tile.get_face_hw(),
+        tile.get_num_faces(),
+        tile.get_partial_face(),
+        tile.get_narrow_tile(),
+        tile.get_transpose_within_face(),
+        tile.get_transpose_of_faces());
+}
+
+inline flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<tt::target::Tile>>> toFlatBuffer(
+    const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> &tiles,
+    flatbuffers::FlatBufferBuilder &builder) {
+
+    std::vector<flatbuffers::Offset<tt::target::Tile>> tiles_fb;
+    for (const auto &tile_opt : tiles) {
+        if (tile_opt) {
+            tiles_fb.push_back(toFlatBuffer(*tile_opt, builder));
+        }
+    }
+
+    return builder.CreateVector(tiles_fb);
+}
+
+inline flatbuffers::Offset<tt::target::CircularBufferConfig> toFlatBuffer(
+    const tt::tt_metal::CircularBufferConfig &config,
+    flatbuffers::FlatBufferBuilder &builder) {
+
+    // Note: std::optional is not supported by FlatBuffers, so we need to serialize it as a uint32_t with a default value of 0
+    auto global_address = config.globally_allocated_address_ ? *config.globally_allocated_address_ : 0;
+
+    std::vector<uint8_t> data_formats_vector;
+    for (const auto& format : config.data_formats_) {
+        data_formats_vector.push_back(format ? static_cast<uint8_t>(*format) : 0);
+    }
+    auto data_formats_fb = builder.CreateVector(data_formats_vector);
+
+    std::vector<uint32_t> page_sizes_vector;
+    for (const auto& size : config.page_sizes_) {
+        page_sizes_vector.push_back(size ? *size : 0);
+    }
+    auto page_sizes_fb = builder.CreateVector(page_sizes_vector);
+    auto tiles_fb = toFlatBuffer(config.tiles_, builder);
+    // FIXME - Handle const Buffer* shadow_global_buffer; too
+
+    // Serialize buffer_indices_ as a FlatBuffer vector
+    std::vector<uint8_t> buffer_indices_vector(config.buffer_indices_.begin(), config.buffer_indices_.end());
+    auto buffer_indices_fb = builder.CreateVector(buffer_indices_vector);
+
+    // Serialize max_size_
+    auto max_size = config.max_size_ ? *config.max_size_ : 0;
+
+    // Create the FlatBuffer object
+    return tt::target::CreateCircularBufferConfig(
+        builder,
+        config.total_size_,
+        global_address,
+        data_formats_fb,
+        page_sizes_fb,
+        tiles_fb,
+        buffer_indices_fb,
+        config.dynamic_cb_,
+        max_size
+    );
+}
+
 
 //////////////////////////////////////////////////////////////
 // Host API tracing helper functions                        //
@@ -503,3 +579,26 @@ inline void captureSetRuntimeArgs(
     auto cmd_offset = tt::target::CreateSetRuntimeArgsCommand(fbb, program_global_id, kernel_global_id, core_spec_type, core_spec_offset, rt_args_offset);
     captureCommand(tt::target::CommandType::SetRuntimeArgsCommand, cmd_offset.Union());
 }
+
+inline void captureCreateCircularBuffer(
+    CBHandle &cb_handle,
+    Program &program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const CircularBufferConfig &config)
+{
+
+    auto& ctx = LightMetalCaptureContext::getInstance();
+    if (!ctx.isTracing()) return;
+
+    auto& fbb = ctx.getBuilder();
+    uint32_t cb_global_id = ctx.addToMap(cb_handle);
+    uint32_t program_global_id = ctx.getGlobalId(&program);
+    auto [core_spec_type, core_spec_offset] = toFlatbuffer(fbb, core_spec);
+    auto cb_config_offset = toFlatBuffer(config, fbb);
+    log_info(tt::LogMetalTrace, "captureCreateCircularBuffer: cb_global_id: {} program_global_id: {} ", cb_global_id, program_global_id);
+
+    auto cmd_offset = tt::target::CreateCreateCircularBufferCommand(fbb, cb_global_id, program_global_id, core_spec_type, core_spec_offset, cb_config_offset);
+    captureCommand(tt::target::CommandType::CreateCircularBufferCommand, cmd_offset.Union());
+}
+
+} // namespace tt::tt_metal

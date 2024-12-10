@@ -242,6 +242,83 @@ inline std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> fromFlatb
     }
 }
 
+inline Tile fromFlatBuffer(const tt::target::Tile *tile_fb) {
+    if (!tile_fb) {
+        throw std::runtime_error("Invalid Tile FlatBuffer object");
+    }
+
+    // Convert FlatBuffer vectors to std::array
+    std::array<uint32_t, 2> tile_shape = {tile_fb->tile_shape()->Get(0), tile_fb->tile_shape()->Get(1)};
+    std::array<uint32_t, 2> face_shape = {tile_fb->face_shape()->Get(0), tile_fb->face_shape()->Get(1)};
+
+    // Create and return the Tile object, explicitly initializing the members
+    Tile tile;
+    tile.tile_shape = tile_shape;
+    tile.face_shape = face_shape;
+    tile.tile_hw = tile_fb->tile_hw();
+    tile.face_hw = tile_fb->face_hw();
+    tile.num_faces = tile_fb->num_faces();
+    tile.partial_face = tile_fb->partial_face();
+    tile.narrow_tile = tile_fb->narrow_tile();
+    tile.transpose_within_face = tile_fb->transpose_within_face();
+    tile.transpose_of_faces = tile_fb->transpose_of_faces();
+
+    return tile;
+}
+
+
+inline std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> fromFlatBuffer(
+    const flatbuffers::Vector<flatbuffers::Offset<tt::target::Tile>> *tiles_fb) {
+
+    std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> tiles = {};
+    if (tiles_fb) {
+        for (size_t i = 0; i < tiles_fb->size() && i < NUM_CIRCULAR_BUFFERS; ++i) {
+            tiles[i] = fromFlatBuffer(tiles_fb->Get(i));
+        }
+    }
+
+    return tiles;
+}
+
+inline CircularBufferConfig fromFlatBuffer(const tt::target::CircularBufferConfig *config_fb) {
+    if (!config_fb) {
+        throw std::runtime_error("Invalid CircularBufferConfig FlatBuffer object");
+    }
+
+    // Create a CircularBufferConfig. Constructor doesn't matter much, since we serialized all
+    // members, will deserialize them here to get fully formed object.
+    CircularBufferConfig config(0, {});
+    config.total_size_ = config_fb->total_size();
+
+    // Note: std::optional is not supported by FlatBuffers, so nullopt was serialized as value 0 in FlatBuffer.
+    config.globally_allocated_address_ = config_fb->globally_allocated_address() == 0 ? std::nullopt : std::optional<uint32_t>(config_fb->globally_allocated_address());
+
+    if (config_fb->data_formats()) {
+        for (size_t i = 0; i < config_fb->data_formats()->size(); ++i) {
+            // Big Hack for now until FBS supports DataFormat.
+            // config.data_formats_[i] = config_fb->data_formats()->Get(i);
+            config.data_formats_[i] = static_cast<tt::DataFormat>(config_fb->data_formats()->Get(i));
+        }
+    }
+
+    if (config_fb->page_sizes()) {
+        for (size_t i = 0; i < config_fb->page_sizes()->size(); ++i) {
+            config.page_sizes_[i] = config_fb->page_sizes()->Get(i);
+        }
+    }
+
+    config.tiles_ = fromFlatBuffer(config_fb->tiles());
+
+    if (config_fb->buffer_indices()) {
+        config.buffer_indices_.insert(config_fb->buffer_indices()->begin(), config_fb->buffer_indices()->end());
+    }
+
+    config.dynamic_cb_ = config_fb->dynamic_cb();
+    config.max_size_ = config_fb->max_size();
+
+    return config;
+}
+
 //////////////////////////////////////
 // LightMetalReplay Class           //
 //////////////////////////////////////
@@ -346,6 +423,25 @@ void LightMetalReplay::removeKernelHandleFromMap(uint32_t global_id) {
     kernelHandleMap_.erase(global_id);
 }
 
+
+void LightMetalReplay::addCBHandleToMap(uint32_t global_id, ::tt::tt_metal::CBHandle cb_handle) {
+    if (cbHandleMap_.find(global_id) != cbHandleMap_.end()) {
+        log_warning(tt::LogMetalTrace, "CBHandle with global_id: {} already exists in map.", global_id);
+    }
+    cbHandleMap_[global_id] = cb_handle; // Shared ownership
+}
+
+::tt::tt_metal::CBHandle LightMetalReplay::getCBHandleFromMap(uint32_t global_id) const {
+    if (auto it = cbHandleMap_.find(global_id); it != cbHandleMap_.end()) {
+        return it->second; // Return CBHandle.
+    }
+    throw std::runtime_error(fmt::format("CBHandle with global_id: {} used but doesn't exist.", global_id));
+}
+
+void LightMetalReplay::removeCBHandleFromMap(uint32_t global_id) {
+    cbHandleMap_.erase(global_id);
+}
+
 void LightMetalReplay::setupDevices() {
     log_info(tt::LogMetalTrace, "Setting up system now...");
 
@@ -422,6 +518,10 @@ void LightMetalReplay::execute(tt::target::Command const *command) {
   }
   case ::tt::target::CommandType::SetRuntimeArgsCommand: {
     execute(command->cmd_as_SetRuntimeArgsCommand());
+    break;
+  }
+  case ::tt::target::CommandType::CreateCircularBufferCommand: {
+    execute(command->cmd_as_CreateCircularBufferCommand());
     break;
   }
   default:
@@ -575,6 +675,19 @@ void LightMetalReplay::execute(tt::target::SetRuntimeArgsCommand const *cmd) {
     stl::Span<const uint32_t> args_span(cmd->args()->data(), cmd->args()->size());
     auto core_spec = fromFlatbuffer(cmd->core_spec_type(), cmd->core_spec());
     SetRuntimeArgs(*program, kernel_id, core_spec, args_span);
+}
+
+void LightMetalReplay::execute(tt::target::CreateCircularBufferCommand const *cmd) {
+    log_info(tt::LogMetalTrace, "LightMetalReplay CreateCircularBufferCommand(). global_id: {} program_global_id: {}", cmd->global_id(), cmd->program_global_id());
+    auto program = getProgramFromMap(cmd->program_global_id());
+    if (!program) {
+        throw std::runtime_error("Program with global_id: " + std::to_string(cmd->program_global_id()) + " not previously created");
+    }
+
+    auto core_spec = fromFlatbuffer(cmd->core_spec_type(), cmd->core_spec());
+    auto config = fromFlatBuffer(cmd->config());
+    auto cb_handle = CreateCircularBuffer(*program, core_spec, config);
+    addCBHandleToMap(cmd->global_id(), cb_handle);
 }
 
 
