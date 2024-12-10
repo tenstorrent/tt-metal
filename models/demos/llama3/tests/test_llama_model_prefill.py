@@ -186,7 +186,6 @@ def test_llama_model_inference(
 
     tt_prefill_input = model_args.prepare_residual_tensor_prefill(
         pt_prefill_input,
-        force_replicated=False if model_args.is_galaxy else True,
     )
     for i in range(1):
         start_pos = 0
