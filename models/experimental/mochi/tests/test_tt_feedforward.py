@@ -17,14 +17,6 @@ from models.experimental.mochi.common import get_mochi_dir, get_cache_path, comp
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "seq_len",
-    (
-        # 64 * 1024,
-        32 * 1024,
-        # 32,
-    ),
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -34,13 +26,13 @@ from models.experimental.mochi.common import get_mochi_dir, get_cache_path, comp
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "ff_path, in_feat, hidden_size",
+    "ff_path, in_feat, seq_len",
     [
-        ("blocks.0.mlp_x", 3072, 12288),
-        # ("blocks.0.mlp_y", 1536, 6144),
+        ("blocks.0.mlp_x", 3072, 44 * 1024),
+        ("blocks.0.mlp_y", 1536, 256),
     ],
 )
-def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ff_path, in_feat, hidden_size):
+def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ff_path, in_feat):
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
@@ -50,10 +42,15 @@ def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset
     state_dict = load_file(weights_path)
     partial_state_dict = {k[len(ff_path) + 1 :]: v for k, v in state_dict.items() if k.startswith(ff_path)}
     print(partial_state_dict.keys())
+
+    multiple_of = 256
+    mlp_ratio = 4.0
+    mlp_hidden_dim = int(in_feat * mlp_ratio)
+
     reference_model = RefFeedForward(
         in_features=in_feat,
-        hidden_size=hidden_size,
-        multiple_of=256,
+        hidden_size=mlp_hidden_dim,
+        multiple_of=multiple_of,
         ffn_dim_multiplier=None,
     )
     reference_model.load_state_dict(partial_state_dict)
@@ -66,8 +63,8 @@ def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset
         layer_num=0,
         dtype=dtype,
         in_features=in_feat,
-        hidden_size=hidden_size,
-        multiple_of=256,
+        hidden_size=mlp_hidden_dim,
+        multiple_of=multiple_of,
         ffn_dim_multiplier=None,
         state_dict_prefix=ff_path,
     )
