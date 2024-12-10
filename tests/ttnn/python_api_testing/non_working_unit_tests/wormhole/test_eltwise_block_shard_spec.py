@@ -69,7 +69,7 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [320, 192],  # shard shape
         ttnn.ShardOrientation.COL_MAJOR,
-        0,  # halo
+        False,  # halo
     ),
     (
         (256, 2, 5, 1536),
@@ -80,7 +80,7 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [320, 192],
         ttnn.ShardOrientation.ROW_MAJOR,
-        0,  # halo
+        False,  # halo
     ),
     (
         (256, 2, 5, 1536),
@@ -91,7 +91,7 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [320, 192],
         ttnn.ShardOrientation.COL_MAJOR,
-        0,  # halo
+        False,  # halo
     ),
     (
         (1, 256, 2, 2304),
@@ -102,7 +102,7 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [64, 288],
         ttnn.ShardOrientation.COL_MAJOR,
-        0,  # halo
+        False,  # halo
     ),
     (
         (1, 256, 2, 2304),
@@ -113,7 +113,7 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [64, 288],
         ttnn.ShardOrientation.ROW_MAJOR,
-        0,  # halo
+        False,  # halo
     ),
     (
         (1, 256, 2, 2304),
@@ -124,7 +124,7 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [64, 288],
         ttnn.ShardOrientation.COL_MAJOR,
-        0,  # halo
+        False,  # halo
     ),
     (
         (32, 4, 8, 768),
@@ -135,7 +135,7 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [128, 96],
         ttnn.ShardOrientation.COL_MAJOR,
-        0,  # halo
+        False,  # halo
     ),
     (
         (32, 4, 8, 768),
@@ -146,7 +146,7 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [128, 96],
         ttnn.ShardOrientation.ROW_MAJOR,
-        0,  # halo
+        False,  # halo
     ),
     (
         (32, 4, 8, 768),
@@ -157,7 +157,7 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [128, 96],
         ttnn.ShardOrientation.COL_MAJOR,
-        0,  # halo
+        False,  # halo
     ),
 ]
 
