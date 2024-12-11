@@ -93,13 +93,11 @@ void kernel_main() {
                               (curr_n >= front_pad_n and curr_n < N);
             uint64_t read_noc_addr = get_noc_addr(i_stick, s);
             noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_padded);
-            noc_async_read_barrier();
 
             if (read_stick) {
 #if (front_padding)
                 // Read noc into cb_pad_align l1
                 noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
-                noc_async_read_barrier();
 
                 memmove(
                     (void*)(l1_write_addr + stick_size_padded_front),
@@ -107,11 +105,9 @@ void kernel_main() {
                     (size_t)(stick_size_bytes));
 #else
                 noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
-                noc_async_read_barrier();
 #endif
                 i_stick++;
             }
-            noc_async_read_barrier();
             l1_write_addr += stick_size_padded_aligned;
             curr_h++;
             if (curr_h == H_padded) {
