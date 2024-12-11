@@ -173,16 +173,16 @@ Tensor to_layout_impl(
     for (int index = 0; index < tensor_arg.get_logical_shape().rank(); ++index) {
         padded_input_start.push_back(0);
     }
-    TensorSpec result_spec(
-        tensor_arg.logical_shape(),
+    TensorSpec padded_spec(
+        tensor_arg.padded_shape(),
         TensorLayout(
             tensor_arg.dtype(),
             PageConfig(layout, std::move(tensor_arg.tensor_spec().tile())),
             tensor_arg.memory_config()));
 
-    auto tensor = tensor_arg.pad(result_spec.padded_shape(), ttnn::SimpleShape(std::move(padded_input_start)), 0);
+    auto tensor = tensor_arg.pad(padded_spec.padded_shape(), ttnn::SimpleShape(std::move(padded_input_start)), 0);
     tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-    return ttnn::reshape(tensor, result_spec.logical_shape());
+    return ttnn::reshape(tensor, tensor_arg.logical_shape());
 }
 }  // namespace detail
 
