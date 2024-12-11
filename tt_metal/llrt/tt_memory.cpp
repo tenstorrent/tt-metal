@@ -29,34 +29,34 @@ memory::memory(std::string const& path, Packing pack_type, Relocate relo_type) {
         elf.MakeExecuteInPlace();
     }
 
-    // The ELF file puts the text segment first, but memory wants
-    // ordered spans.
-    // FIXME: Perhaps we can relax that?
-    uint32_t total_size = 0;
-    auto emit_segment = [&](ElfFile::Segment const& segment) {
-        TT_ASSERT(segment.relocs.empty(), "Unexpected dynamic relocations");
-        link_spans_.emplace_back(segment.address, segment.contents.size());
-        data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
-        total_size += segment.contents.size();
-    };
-    auto* text = &elf.GetSegments()[0];
-    for (auto& segment : std::span(elf.GetSegments()).subspan(1)) {
-        if (text && segment.address > text->address) {
-            emit_segment(*text);
-            text = nullptr;
-        }
-        emit_segment(segment);
-    }
-    if (text) {
-        emit_segment(*text);
-    }
+    auto const& segments = elf.GetSegments();
 
-    text_addr_ = elf.GetSegments()[0].address;
-    set_text_size(elf.GetSegments()[0].contents.size() * sizeof(word_t));
-    set_packed_size(total_size * sizeof(uint32_t));
-    if (text_addr_ == 0xa840) {
-        std::printf("elf is %s\n", path.c_str());
+    // The ELF file puts the text segment first, but one set of
+    // binaries (ncrisc) places data a lower address, and at least one
+    // consumer (unknown) requires spans in order.  So generate a
+    // mapping table.
+    // TODO: Perhaps we can relax this?
+    std::vector<unsigned> map;
+    map.reserve(segments.size());
+    for (unsigned ix = 0; ix != segments.size(); ix++) {
+        map.push_back(ix);
     }
+    std::sort(
+        map.begin(), map.end(), [&](unsigned a, unsigned b) { return segments[a].address < segments[b].address; });
+
+    for (unsigned ix : map) {
+        auto const& segment = segments[map[ix]];
+        if (!segment.relocs.empty()) {
+            TT_THROW("{}: contains dynamic relocations", path);
+        }
+        if (segment.contents.size()) {
+            link_spans_.emplace_back(segment.address, segment.contents.size());
+            data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
+        }
+    };
+    text_addr_ = segments[0].address;
+    set_text_size(segments[0].contents.size() * sizeof(word_t));
+    set_packed_size(data_.size() * sizeof(uint32_t));
 }
 
 bool memory::operator==(const memory& other) const { return data_ == other.data_ && link_spans_ == other.link_spans_; }
