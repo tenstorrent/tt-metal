@@ -42,10 +42,16 @@ jobs:
       matrix:
         test-group: [
           {
-            name: "TG unit tests",
+            name: "TG Llama3-small unit tests",
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-functional"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode ""'
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode "" --model llama3-small'
+          },
+          {
+            name: "TG Llama3-70b unit tests",
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-functional"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode "" --model llama3-70b'
           },
         ]
     name: ${{ matrix.test-group.name }}

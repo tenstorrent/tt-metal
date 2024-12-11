@@ -250,8 +250,9 @@ unit_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
-    ./tests/scripts/tg/run_tg_unit_tests.sh
+    ./tests/scripts/tg/run_tg_unit_tests.sh --model "$model"
 }
 
 # Run tg frequent tests
@@ -324,6 +325,7 @@ run_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
     # Add your logic here for pipeline-specific tests
     echo "Running tests for pipeline: $pipeline_type with tt-arch: $tt_arch"
@@ -443,6 +445,10 @@ main() {
                 shift
                 ;;
             --pipeline-type)
+                pipeline_type=$2
+                shift
+                ;;
+            --model)
                 pipeline_type=$2
                 shift
                 ;;
