@@ -5,7 +5,10 @@
 #include "sequential_scheduler.hpp"
 
 #include "optimizers/optimizer_base.hpp"
-
+#include "serialization/serializable.hpp"
+namespace {
+const std::string kCurrentScheduler = "current_scheduler/";
+}
 namespace ttml::schedulers {
 SequentialScheduler::SequentialScheduler(
     optimizers::OptimizerBase *optimizer,
@@ -62,11 +65,23 @@ float SequentialScheduler::get_current_lr() const {
 void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
     m_current_step_in_scheduler = serialization::get_value_type<int>(dict, "m_current_step_in_scheduler");
     m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
+    m_current_scheduler_index = serialization::get_value_type<size_t>(dict, "m_current_scheduler_index");
+    serialization::StateDict current_scheduler_dict;
+    for (auto &[key, value] : dict) {
+        if (key.find(kCurrentScheduler) == 0) {
+            current_scheduler_dict[key.substr(kCurrentScheduler.length())] = value;
+        }
+    }
+    m_schedulers[m_current_scheduler_index]->set_state_dict(current_scheduler_dict);
 }
 serialization::StateDict SequentialScheduler::get_state_dict() const {
     serialization::StateDict res;
     res["m_current_step_in_scheduler"] = m_current_step_in_scheduler;
     res["m_last_lr"] = m_last_lr;
+    res["m_current_scheduler_index"] = m_current_scheduler_index;
+    for (auto &[key, value] : m_schedulers[m_current_scheduler_index]->get_state_dict()) {
+        res[kCurrentScheduler + key] = value;
+    }
     return res;
 };
 

@@ -18,6 +18,7 @@ LinearScheduler::LinearScheduler(
     m_total_steps(total_steps),
     m_last_step(0) {
 }
+
 void LinearScheduler::step() {
     m_last_step += 1;
 
@@ -30,8 +31,9 @@ void LinearScheduler::step() {
     get_optimizer()->set_lr(new_lr);
     m_last_lr = new_lr;
 }
+
 void LinearScheduler::set_state_dict(const serialization::StateDict& dict) {
-    m_last_step = serialization::get_value_type<int>(dict, "m_last_step");
+    m_last_step = serialization::get_value_type<size_t>(dict, "m_last_step");
     m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
 }
 

@@ -39,7 +39,7 @@ std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_warmup_with_linear_sch
 std::string read_file_to_str(const std::string &file_path);
 
 template <typename Model>
-void save_model_and_optimizer(
+void save_training_state(
     std::string &model_path,
     const std::shared_ptr<Model> &model,
     const std::unique_ptr<ttml::schedulers::LRSchedulerBase> &scheduler,
@@ -47,13 +47,13 @@ void save_model_and_optimizer(
     const std::string &optimizer_name) {
     ttml::serialization::MsgPackFile serializer;
     ttml::serialization::write_module(serializer, model_name, model.get());
-    ttml::serialization::write_optimizer(serializer, optimizer_name, &optimizer);
+    ttml::serialization::write_optimizer(serializer, optimizer_name, scheduler->get_optimizer().get());
     ttml::serialization::write_state_dict(serializer, "scheduler", scheduler->get_state_dict());
     serializer.serialize(model_path);
 }
 
 template <typename Model>
-void load_model_and_optimizer(
+void load_training_state(
     std::string &model_path,
     const std::shared_ptr<Model> &model,
     const std::unique_ptr<ttml::schedulers::LRSchedulerBase> &scheduler,

@@ -8,18 +8,15 @@
 
 namespace ttml::schedulers {
 
-StepScheduler::StepScheduler(optimizers::OptimizerBase *optimizer, int step_size, float gamma) :
+StepScheduler::StepScheduler(optimizers::OptimizerBase *optimizer, size_t step_size, float gamma) :
     LRSchedulerBase(optimizer),
     m_step_size(step_size),
     m_gamma(gamma),
     m_last_step(0),
     m_base_lr(optimizer->get_lr()),
     m_last_lr(m_base_lr) {
-    if (step_size <= 0) {
-        throw std::invalid_argument("step_size must be a positive integer.");
-    }
     if (gamma <= 0.0f) {
-        throw std::invalid_argument("gamma must be greater than zero.");
+        throw std::invalid_argument(fmt::format("gamma = {} must be greater than zero.", gamma));
     }
 }
 void StepScheduler::step() {
@@ -40,7 +37,7 @@ float StepScheduler::get_current_lr() const {
 }
 
 void StepScheduler::set_state_dict(const serialization::StateDict &dict) {
-    m_last_step = serialization::get_value_type<int>(dict, "m_last_step");
+    m_last_step = serialization::get_value_type<size_t>(dict, "m_last_step");
     m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
 }
 serialization::StateDict StepScheduler::get_state_dict() const {

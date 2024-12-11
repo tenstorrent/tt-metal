@@ -12,7 +12,7 @@ namespace ttml::schedulers {
 
 class StepScheduler : public LRSchedulerBase {
 public:
-    StepScheduler(optimizers::OptimizerBase *optimizer, int step_size, float gamma = 0.1f);
+    StepScheduler(optimizers::OptimizerBase *optimizer, size_t step_size, float gamma = 0.1f);
 
     void step() override;
 
@@ -25,9 +25,9 @@ public:
     void set_state_dict(const serialization::StateDict &dict) override;
 
 private:
-    int m_step_size = 0;
+    size_t m_step_size = 0;
     float m_gamma = 0;
-    int m_last_step = 0;
+    size_t m_last_step = 0;
 
     float m_base_lr = 0.F;
     float m_last_lr = 0.F;

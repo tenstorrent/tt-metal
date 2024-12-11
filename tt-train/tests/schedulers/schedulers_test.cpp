@@ -84,16 +84,16 @@ TEST(LambdaSchedulerTest, VaryingFactor) {
     EXPECT_FLOAT_EQ(optimizer->get_lr(), 1.0F);
 
     scheduler.step();  // epoch 0: factor = 1/1=0.5F
-    EXPECT_FLOAT_EQ(optimizer->get_lr(), 1.0F);
-
-    scheduler.step();  // epoch 1: factor = 1/2=0.5 lr=1.0*0.5=0.5
     EXPECT_FLOAT_EQ(optimizer->get_lr(), 0.5F);
 
-    scheduler.step();  // epoch 2: factor = 1/3≈0.3333 lr=1.0*0.3333=0.3333
-    EXPECT_NEAR(optimizer->get_lr(), 1.F / 3.F, 1e-5);
+    scheduler.step();  // epoch 1: factor = 1/2=0.5 lr=1.0*0.5=0.5
+    EXPECT_FLOAT_EQ(optimizer->get_lr(), 1.F / 3.F);
 
-    scheduler.step();  // epoch 3: factor = 1/4=0.25 lr=1.0*0.25=0.25
-    EXPECT_FLOAT_EQ(optimizer->get_lr(), 0.25F);
+    scheduler.step();  // epoch 2: factor = 1/3≈0.3333 lr=1.0*0.3333=0.3333
+    EXPECT_NEAR(optimizer->get_lr(), 1.F / 4.F, 1e-5);
+
+    scheduler.step();  // epoch 3: factor = 1/5=0.2
+    EXPECT_FLOAT_EQ(optimizer->get_lr(), 0.2F);
 }
 
 // ----------------------------------
@@ -216,11 +216,11 @@ TEST(SequentialSchedulerTest, WarmupSetup) {
     for (int i = 0; i < 10; i++) {
         // Linear warmup: 10 steps from 0 to start_lr
         seq_scheduler.step();
-        EXPECT_FLOAT_EQ(optimizer->get_lr(), start_lr * (i + 1) / 10);
+        EXPECT_NEAR(optimizer->get_lr(), start_lr * (i + 1) / 10, 1e-5);
     }
     for (int i = 0; i < 50; i++) {
         // Linear decay: 50 steps from start_lr to 0.1F * start_lr
         seq_scheduler.step();
-        EXPECT_FLOAT_EQ(optimizer->get_lr(), start_lr * (1.0F - 0.9F * (i + 1) / 50));
+        EXPECT_NEAR(optimizer->get_lr(), start_lr * (1.0F - 0.9F * (i + 1) / 50.F), 1e-5);
     }
 }

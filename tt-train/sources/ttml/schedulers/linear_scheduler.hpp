@@ -26,7 +26,7 @@ private:
     float m_start_factor = 0.F;
     float m_end_factor = 0.F;
     int m_total_steps = 0;
-    int m_last_step = 0;
+    size_t m_last_step = 0;
     float m_last_lr = 0.F;
 };
 }  // namespace ttml::schedulers

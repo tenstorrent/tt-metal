@@ -317,7 +317,7 @@ int main(int argc, char **argv) {
     auto scheduler = schedule_func(&optimizer, config.max_steps);
     if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
         fmt::print("Loading model from {}\n", config.model_path);
-        load_model_and_optimizer(config.model_path, model, optimizer, "transformer", "adamw");
+        load_training_state(config.model_path, model, scheduler, "transformer", "adamw");
         fmt::print("Model loaded after {} steps\n", optimizer.get_steps());
     }
 
@@ -369,7 +369,7 @@ int main(int argc, char **argv) {
                     loss_meter.reset();
                 }
                 if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
-                    save_model_and_optimizer(config.model_path, model, optimizer, "transformer", "adamw");
+                    save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
                 }
 
                 if (global_step >= config.max_steps) {
@@ -391,7 +391,7 @@ int main(int argc, char **argv) {
     }
 
     if (!config.model_path.empty()) {
-        save_model_and_optimizer(config.model_path, model, optimizer, "transformer", "adamw");
+        save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
     }
 
     auto end_timer = std::chrono::high_resolution_clock::now();

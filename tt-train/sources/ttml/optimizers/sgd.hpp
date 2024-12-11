@@ -4,11 +4,6 @@
 
 #pragma once
 
-#include <ttnn/tensor/tensor.hpp>
-
-#include "autograd/module_base.hpp"
-#include "autograd/tensor.hpp"
-#include "core/tt_tensor_utils.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
 

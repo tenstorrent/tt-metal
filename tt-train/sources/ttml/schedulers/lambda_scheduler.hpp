@@ -25,7 +25,7 @@ public:
 
 private:
     std::function<float(int)> m_lr_lambda;
-    int m_last_step = 0;
+    size_t m_last_step = 0;
     float m_base_lr = 0.0F;
     float m_last_lr = 0.0F;
 };
