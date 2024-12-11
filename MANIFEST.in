@@ -37,6 +37,9 @@ prune tt_metal/**/.git/
 prune tt_metal/**/.github/
 prune docs/doxygen_build/
 prune docs/build/
+# Remove unneeded third party files
+prune tt_metal/third_party/taskflow
+prune tt_metal/third_party/pybind11/tests
 exclude .pre-commit-config.yaml
 
 # Some sources we want to exclude and not advertise
