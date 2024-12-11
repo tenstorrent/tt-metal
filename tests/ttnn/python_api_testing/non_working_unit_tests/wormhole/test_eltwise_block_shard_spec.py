@@ -159,6 +159,83 @@ test_sweep_args = [
         ttnn.ShardOrientation.COL_MAJOR,
         False,  # halo
     ),
+    (
+        (1, 25, 160, 32),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
+        [32, 160],
+        ttnn.ShardOrientation.COL_MAJOR,
+        False,  # halo
+    ),
+    (
+        (1, 25, 160, 32),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
+        [32, 160],
+        ttnn.ShardOrientation.COL_MAJOR,
+        False,  # halo
+    ),
+    (
+        (1, 2, 1248, 32),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
+        [32, 1248],
+        ttnn.ShardOrientation.COL_MAJOR,
+        False,  # halo
+    ),
+    (
+        (1, 2, 1248, 32),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
+        [32, 1248],
+        ttnn.ShardOrientation.COL_MAJOR,
+        False,  # halo
+    ),
+    (
+        (1, 2, 1472, 32),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
+        [32, 1472],
+        ttnn.ShardOrientation.COL_MAJOR,
+        False,  # halo
+    ),
+    (
+        (1, 2, 1472, 32),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
+        [32, 1472],
+        ttnn.ShardOrientation.COL_MAJOR,
+        False,  # halo
+    ),
+    (
+        (2, 1, 224, 128),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
+        [128, 224],
+        ttnn.ShardOrientation.COL_MAJOR,
+        False,  # halo
+    ),
 ]
 
 
