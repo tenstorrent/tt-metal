@@ -9,7 +9,7 @@
 #include "reshape_common.hpp"
 #include "tt_metal/common/constants.hpp"
 #include <functional>
-#include <ttnn/operations/numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -51,36 +51,6 @@ ttnn::Tensor convert_tile_to_rm(
     new_tensor =
         (tensor.get_dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(new_tensor, tensor.get_dtype()) : new_tensor;
     return new_tensor;
-}
-ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    //This function is due to embedding issue 15558, once the issue is fixed we want to delete it
-    tt::log_warning("host_reshape is deprecated and will be removed in the near future");
-    if (!ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) {
-        return tensor.reshape(shape);
-    }
-    auto tensor_shape = tensor.shape();
-    auto layout = tensor.layout();
-    auto device = tensor.device();
-    auto memory_config = tensor.memory_config();
-    auto host_tensor = tensor.cpu();
-    auto rm_tensor = ttnn::to_layout(host_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
-
-    if (tensor_shape.has_tile_padding()) {
-        ttnn::Tensor slice_input;
-        auto host_tensor_4d = unsqueeze_to_4D(rm_tensor);
-        auto tensor_shape_4d = host_tensor_4d.shape();
-        ttnn::SmallVector<uint32_t> begins({0, 0, 0, 0});
-        ttnn::SmallVector<uint32_t> ends(
-            {tensor_shape_4d[0], tensor_shape_4d[1], tensor_shape_4d[2], tensor_shape_4d[3]});
-        ttnn::SmallVector<uint32_t> step({1, 1, 1, 1});
-        host_tensor_4d = ttnn::slice(host_tensor_4d, begins, ends, step, std::nullopt);
-        host_tensor = squeeze_from_4D(host_tensor_4d, tensor_shape.rank());
-    }
-    auto host_reshape_tensor = rm_tensor.reshape(shape);
-    auto final_layout_tensor =
-        ttnn::to_layout(host_reshape_tensor, layout, std::nullopt, std::nullopt, (Device*)nullptr);
-    auto device_tensor = ttnn::data_transfer_to_device(final_layout_tensor, device, memory_config);
-    return device_tensor;
 }
 
 //Wrapper to turn the ND-> MD problem into 3D->3D for tiled and 2D->2D for Row Major
@@ -399,7 +369,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
             return tensor.reshape(shape);
         }
         //This is a completely incorrect test but it is due to issue 15558
-        return detail::host_reshape(tensor, shape);
+        TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
     }
     // Catch-all
     // Do the reshape in row-major

@@ -44,7 +44,7 @@ run_perf_models_other() {
     env pytest -n auto models/demos/squeezebert/tests/test_performance.py -m $test_marker
 
     ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
+    env python3 models/perf/merge_perf_results.py
 }
 
 run_perf_models_llm_javelin() {
@@ -64,7 +64,7 @@ run_perf_models_llm_javelin() {
         env pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker
     fi
     ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
+    env python3 models/perf/merge_perf_results.py
 }
 
 run_perf_models_cnn_javelin() {
@@ -76,7 +76,7 @@ run_perf_models_cnn_javelin() {
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=480
 
     ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
+    env python3 models/perf/merge_perf_results.py
 }
 
 run_device_perf_models() {
@@ -128,7 +128,7 @@ run_device_perf_models() {
     fi
 
     ## Merge all the generated reports
-    env python models/perf/merge_device_perf_results.py
+    env python3 models/perf/merge_device_perf_results.py
 }
 
 run_device_perf_ops() {
