@@ -4,6 +4,8 @@
 
 #include "tensor_layout.hpp"
 
+#include "ttnn/tensor/tensor_utils.hpp"
+
 namespace tt::tt_metal {
 
 namespace {
@@ -312,27 +314,8 @@ Size TensorLayout::compute_page_shape(const Size& physical_size) const {
 }
 
 Strides TensorLayout::compute_strides(const ttnn::SimpleShape& shape) const {
-    const int rank = static_cast<int>(std::max(shape.rank(), alignment_.size()));
-    const int alignment_rank = static_cast<int>(alignment_.size());
-    const int shape_rank = static_cast<int>(shape.size());
-
-    Strides strides(rank, 1);
-    for (int i = rank - 2; i >= 0; i--) {
-        const int alignment_index = i - (rank - alignment_rank) + 1;
-        const int shape_index = i - (rank - shape_rank) + 1;
-
-        if (shape_index >= 0) {
-            strides[i] = strides[i + 1] * shape[shape_index];
-        } else {
-            strides[i] = strides[i + 1];
-        }
-
-        if (alignment_index >= 0) {
-            strides[i] = CMAKE_UNIQUE_NAMESPACE::round_up(strides[i], alignment_[alignment_index]);
-        }
-    }
-
-    return strides;
+    auto padded_shape = compute_padded_shape(shape);
+    return tt::tt_metal::compute_strides(padded_shape);
 }
 
 ttnn::SimpleShape TensorLayout::compute_padded_shape(const ttnn::SimpleShape& shape) const {
