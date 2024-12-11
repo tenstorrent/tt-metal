@@ -53,7 +53,7 @@ namespace ttnn::graph {
         void track_function_start(std::string_view function_name, std::span<std::any> args) override;
 
         void track_function_end() override;
-        void track_function_end(const std::any& output) override;
+        void track_function_end(const std::any output) override;
 
         void begin_capture(RunMode mode) override;
 

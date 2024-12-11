@@ -250,7 +250,7 @@ void GraphProcessor::track_function_end() {
     current_op_id.pop();
 }
 
-void GraphProcessor::track_function_end(const std::any& output_tensors) {
+void GraphProcessor::track_function_end(const std::any output_tensors) {
     const std::lock_guard<std::mutex> lock(mutex);
     this->track_function_end_impl();
 
