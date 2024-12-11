@@ -8,6 +8,10 @@ void kernel_main() {
     int i{0};
     const auto input_addr = get_arg_val<uint32_t>(i++);
     const bool input_is_dram = get_arg_val<uint32_t>(i++) == 1;
+    const auto batch_mean_addr = get_arg_val<uint32_t>(i++);
+    const bool batch_mean_is_dram = get_arg_val<uint32_t>(i++) == 1;
+    const auto batch_var_addr = get_arg_val<uint32_t>(i++);
+    const bool batch_var_is_dram = get_arg_val<uint32_t>(i++) == 1;
 
     const auto gamma_addr = get_arg_val<uint32_t>(i++);
     const bool gamma_is_dram = get_arg_val<uint32_t>(i++) == 1;
@@ -28,6 +32,7 @@ void kernel_main() {
     const auto origin_h = get_arg_val<uint32_t>(i++);
     const auto origin_w = get_arg_val<uint32_t>(i++);
     const auto block_size = get_arg_val<uint32_t>(i++);
+    const auto block_size_batch = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t onetile = 1;
 
@@ -43,14 +48,15 @@ void kernel_main() {
 
     uint32_t cb_id{0};
     const auto cb_id_input = cb_id++;
-    const auto cb_id_scaler = cb_id++;
+    const auto cb_id_batch_mean = cb_id++;
     const auto cb_id_eps = cb_id++;
     const auto cb_id_gamma = cb_id++;
     const auto cb_id_beta = cb_id++;
     const auto cb_id_mask_h = cb_id++;
     const auto cb_id_mask_w = cb_id++;
+    const auto cb_id_batch_var = cb_id++;
 
-    fill_cb_with_value(cb_id_scaler, scaler);
+    // fill_cb_with_value(cb_id_scaler, scaler);
     fill_cb_with_value(cb_id_eps, eps);
 
     const bool do_mask_h = (origin_h % TILE_H) != 0;
@@ -75,6 +81,30 @@ void kernel_main() {
 
     const InterleavedAddrGenFast<false> l1_input_addrg = {
         .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+
+    // batch_mean
+    const uint32_t batch_mean_tile_bytes = get_tile_size(cb_id_batch_mean);
+    const auto batch_mean_data_format = get_dataformat(cb_id_batch_mean);
+
+    const InterleavedAddrGenFast<true> dram_batch_mean_addrg = {
+        .bank_base_address = batch_mean_addr,
+        .page_size = batch_mean_tile_bytes,
+        .data_format = batch_mean_data_format};
+
+    const InterleavedAddrGenFast<false> l1_batch_mean_addrg = {
+        .bank_base_address = batch_mean_addr,
+        .page_size = batch_mean_tile_bytes,
+        .data_format = batch_mean_data_format};
+
+    // batch_var
+    const uint32_t batch_var_tile_bytes = get_tile_size(cb_id_batch_var);
+    const auto batch_var_data_format = get_dataformat(cb_id_batch_var);
+
+    const InterleavedAddrGenFast<true> dram_batch_var_addrg = {
+        .bank_base_address = batch_var_addr, .page_size = batch_var_tile_bytes, .data_format = batch_var_data_format};
+
+    const InterleavedAddrGenFast<false> l1_batch_var_addrg = {
+        .bank_base_address = batch_var_addr, .page_size = batch_var_tile_bytes, .data_format = batch_var_data_format};
 
     // gamma
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
@@ -112,6 +142,48 @@ void kernel_main() {
         }  // inner_idx loop
         noc_async_read_barrier();
         cb_push_back(cb_id_input, num_inner_tiles);
+
+        // batch_mean
+        const auto batch_mean_l1_write_ptr = get_write_ptr(cb_id_batch_mean);
+        uint32_t batch_mean_tile_idx;
+        cb_reserve_back(cb_id_batch_mean, num_inner_tiles);
+        for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; ++inner_idx) {
+            cb_reserve_back(cb_id_batch_mean, num_inner_tiles);
+            batch_mean_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx;
+            if (batch_mean_is_dram) {
+                noc_async_read_tile(
+                    batch_mean_tile_idx,
+                    dram_batch_mean_addrg,
+                    batch_mean_l1_write_ptr + inner_idx * batch_mean_tile_bytes);
+            } else {
+                noc_async_read_tile(
+                    batch_mean_tile_idx,
+                    l1_batch_mean_addrg,
+                    batch_mean_l1_write_ptr + inner_idx * batch_mean_tile_bytes);
+            }
+        }  // batch_mean_idx loop
+        noc_async_read_barrier();
+        cb_push_back(cb_id_batch_mean, num_inner_tiles);
+
+        // batch_var
+        const auto batch_var_l1_write_ptr = get_write_ptr(cb_id_batch_var);
+        uint32_t batch_var_tile_idx;
+        cb_reserve_back(cb_id_batch_var, num_inner_tiles);
+        for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; ++inner_idx) {
+            cb_reserve_back(cb_id_batch_var, num_inner_tiles);
+            batch_var_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx;
+            if (batch_var_is_dram) {
+                noc_async_read_tile(
+                    batch_var_tile_idx,
+                    dram_batch_var_addrg,
+                    batch_var_l1_write_ptr + inner_idx * batch_var_tile_bytes);
+            } else {
+                noc_async_read_tile(
+                    batch_var_tile_idx, l1_batch_var_addrg, batch_var_l1_write_ptr + inner_idx * batch_var_tile_bytes);
+            }
+        }  // batch_var_idx loop
+        noc_async_read_barrier();
+        cb_push_back(cb_id_batch_var, num_inner_tiles);
 
         // input (N, C, H, W)
         // input_tile_idx = n * C * Ht * Wt + c * Ht * Wt + h * Wt + w

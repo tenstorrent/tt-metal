@@ -16,7 +16,7 @@ def data_gen_with_range_batch_norm(input_shapes, low, high, device, required_gra
     torch.manual_seed(213919)
     channels = input_shapes[1]
     pt_tensor = torch.rand(channels, requires_grad=required_grad).bfloat16() * (high - low) + low
-    reshaped_tensor = pt_tensor.view(1, channels, 1, 1).expand(input_shapes)
+    reshaped_tensor = pt_tensor.view(1, channels, 1, 1).expand(1, channels, 32, 32)
     if is_row_major:
         tt_tensor = ttnn.Tensor(reshaped_tensor, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
     else:
