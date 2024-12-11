@@ -42,6 +42,12 @@ jobs:
       matrix:
         test-group: [
           {
+            name: "TG unit tests",
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-functional"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode "" --model unit'
+          },
+          {
             name: "TG Llama3-small unit tests",
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-functional"],
