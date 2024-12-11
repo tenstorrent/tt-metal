@@ -73,7 +73,10 @@ parameters = {
             [120, 1],
             [1, 19200, 256],
         ],
-        "input_a_dtype": [["ttnn.int32", "ttnn.float32"]],
+        "input_a_dtype": [
+            ttnn.int32,
+            ttnn.float32,
+        ],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],

@@ -28,9 +28,9 @@ random.seed(0)
 
 parameters = {
     "nightly": {
-        "input_shape": [[19, 1], [1, 1], [15, 15]],
+        "input_shape": [[1, 23, 40]],
         "input_a_dtype": [
-            ttnn.float32,
+            ttnn.bfloat16,
         ],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -67,7 +67,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.log)
+    golden_function = ttnn.get_golden_function(ttnn.logical_not)
     torch_output_tensor = golden_function(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
@@ -79,7 +79,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.log(input_tensor_a, memory_config=output_memory_config)
+    result = ttnn.logical_not(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
