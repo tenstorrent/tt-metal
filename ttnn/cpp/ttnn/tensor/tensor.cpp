@@ -130,7 +130,7 @@ Tensor::Tensor(
 
 Tensor::Tensor(
     Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(storage, shape.logical_shape(), shape.padded_shape(), dtype, layout, tile) {}
+    Tensor(std::move(storage), shape.logical_shape(), shape.padded_shape(), dtype, layout, tile) {}
 
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec) { init(std::move(storage), std::move(tensor_spec)); }
 
