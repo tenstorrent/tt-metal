@@ -9,13 +9,11 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
-    get_rot_transformation_mat,
     HostEmbedding,
     PagedAttentionConfig,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3.demo.demo import preprocess_inputs_prefill
 from pathlib import Path
@@ -141,28 +139,6 @@ def test_tt_model_accuracy(
     N = prefill_len + decode_len
     input_ids = reference_tokens[:, : N + 1]  # Shape [1, N+1]
 
-    # Setup RoPE transformation matrices
-    rope_setup = TtLlamaRotarySetup(
-        mesh_device,
-        model_args.max_batch_size,
-        model_args.head_dim,
-        model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.use_scaled_rope,
-    )
-    transformation_mats_decode = rope_setup.get_trans_mats()
-
-    transformation_mats_prefill_torch = get_rot_transformation_mat(model_args.head_dim)
-    transformation_mats_prefill = ttnn.from_torch(
-        transformation_mats_prefill_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    transformation_mats = {"decode": transformation_mats_decode, "prefill": transformation_mats_prefill}
-
     page_table_tt = None
     paged_attention_config = None
 
@@ -193,7 +169,6 @@ def test_tt_model_accuracy(
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
     )
     # Initialize embedding
@@ -226,7 +201,7 @@ def test_tt_model_accuracy(
             model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_lens[0]
         )
 
-        prefill_input = model_args.prepare_inputs_ttnn_prefill(
+        prefill_input = model_args.prepare_residual_tensor_prefill(
             pt_prefill_input[batch_id],
         )
 
@@ -256,7 +231,7 @@ def test_tt_model_accuracy(
     )
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats = rope_setup.get_rot_mats(current_pos)
+    rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
     # Print table header
     logger.info(f"{'Progress':<15}{'Correct':<8}{'True':<15}{'Actual':<15}{'Top 5 Predictions':<75}")
@@ -276,7 +251,7 @@ def test_tt_model_accuracy(
         # Get embedding
         pt_decode_input = embd(ref_token).view(1, 1, -1)
         # Prepare input for TT model
-        decode_input = model_args.prepare_inputs_ttnn_decode(
+        decode_input = model_args.prepare_residual_tensor_decode(
             pt_decode_input,
             model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
@@ -309,7 +284,7 @@ def test_tt_model_accuracy(
 
         # Update rot_mats for next iteration
         current_pos += 1
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
         # Get reference top5 tokens and probabilities for this position
         ref_top5_tokens = top5_tokens[prefill_len + i]

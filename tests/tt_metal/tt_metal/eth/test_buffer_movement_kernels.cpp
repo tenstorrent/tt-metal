@@ -62,22 +62,19 @@ bool chip_to_chip_dram_buffer_transfer(
     // Create source buffer on sender device
     auto input_dram_buffer = CreateBuffer(sender_dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
 
     // Create dest buffer on receiver device
     auto output_dram_buffer = CreateBuffer(receiver_dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     log_info(
         tt::LogTest,
-        "Sending {} bytes from device {} dram {} addr {} to device {} dram {} addr {}, using eth core {} and {}",
+        "Sending {} bytes from device {} dram bank 0 addr {} to device {} dram bank 0 addr {}, using eth core {} and "
+        "{}",
         byte_size,
         sender_device->id(),
-        input_dram_noc_xy.str(),
         input_dram_byte_address,
         receiver_device->id(),
-        output_dram_noc_xy.str(),
         output_dram_byte_address,
         eth_sender_core.str(),
         eth_receiver_core.str());
@@ -113,8 +110,7 @@ bool chip_to_chip_dram_buffer_transfer(
         eth_sender_core,
         {
             (uint32_t)input_dram_byte_address,
-            (uint32_t)input_dram_noc_xy.x,
-            (uint32_t)input_dram_noc_xy.y,
+            0,
             (uint32_t)remaining_bytes,
             (uint32_t)num_loops,
             (uint32_t)MAX_BUFFER,
@@ -137,8 +133,7 @@ bool chip_to_chip_dram_buffer_transfer(
         eth_receiver_core,
         {
             (uint32_t)output_dram_byte_address,
-            (uint32_t)output_dram_noc_xy.x,
-            (uint32_t)output_dram_noc_xy.y,
+            0,
             (uint32_t)remaining_bytes,
             (uint32_t)num_loops,
             (uint32_t)MAX_BUFFER,
@@ -169,7 +164,7 @@ bool chip_to_chip_dram_buffer_transfer(
     fixture->ReadBuffer(receiver_device, output_dram_buffer, dest_dram_data);
     pass &= (dest_dram_data == inputs);
     if (not pass) {
-        std::cout << "Mismatch at Core: " << output_dram_noc_xy.str() << std::endl;
+        std::cout << "Mismatch" << std::endl;
         std::cout << dest_dram_data[0] << std::endl;
     }
     return pass;

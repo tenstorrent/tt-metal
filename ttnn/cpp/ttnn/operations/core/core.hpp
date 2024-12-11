@@ -24,10 +24,19 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
 
 ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank);
 
-ttnn::Tensor to_device(const ttnn::Tensor& tensor, Device* device, const std::optional<MemoryConfig>& memory_config);
+ttnn::Tensor to_device(
+    const ttnn::Tensor& tensor,
+    Device* device,
+    const std::optional<MemoryConfig>& memory_config,
+    uint8_t cq_id = ttnn::DefaultQueueId,
+    const std::vector<SubDeviceId>& = {});
 
 ttnn::Tensor to_device(
-    const ttnn::Tensor& tensor, MeshDevice* mesh_device, const std::optional<MemoryConfig>& memory_config);
+    const ttnn::Tensor& tensor,
+    MeshDevice* mesh_device,
+    const std::optional<MemoryConfig>& memory_config,
+    uint8_t cq_id = ttnn::DefaultQueueId,
+    const std::vector<SubDeviceId>& = {});
 
 ttnn::Tensor allocate_tensor_on_device(
     const Shape& shape,
@@ -44,9 +53,16 @@ ttnn::Tensor allocate_tensor_on_device(
     const std::optional<MemoryConfig>& memory_config);
 
 void copy_host_to_device_tensor(
-    const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
+    const ttnn::Tensor& host_tensor,
+    ttnn::Tensor device_tensor,
+    uint8_t cq_id = ttnn::DefaultQueueId,
+    const std::vector<SubDeviceId>& sub_device_ids = {});
 
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
+ttnn::Tensor from_device(
+    const ttnn::Tensor& tensor,
+    bool blocking = true,
+    uint8_t cq_id = ttnn::DefaultQueueId,
+    const std::vector<SubDeviceId>& sub_device_ids = {});
 
 void deallocate(Tensor& tensor, bool force = true);
 

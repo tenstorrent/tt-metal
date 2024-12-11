@@ -255,7 +255,7 @@ namespace tt {
 
 void RecordDispatchData(Program& program, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled()) {
+    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
         return;
     }
 
@@ -265,7 +265,7 @@ void RecordDispatchData(Program& program, data_collector_t type, uint32_t transa
 
 void RecordKernelGroups(Program& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled()) {
+    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
         return;
     }
 
@@ -275,7 +275,7 @@ void RecordKernelGroups(Program& program, CoreType core_type, std::vector<Kernel
 
 void RecordProgramRun(Program& program) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled()) {
+    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
         return;
     }
 

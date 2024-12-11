@@ -35,7 +35,7 @@ def convnet_mnist(
         packer_l1_acc=False,
     )
     x = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-    [x, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    x = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=parameters.conv1.weight,
         in_channels=1,
@@ -53,6 +53,8 @@ def convnet_mnist(
         conv_op_cache={},
         debug=True,
         groups=1,
+        return_output_dim=False,
+        return_weights_and_bias=False,
     )
     x = ttnn.relu(x)
 
@@ -79,7 +81,7 @@ def convnet_mnist(
             dilation=[1, 1],
         )
 
-    [x, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    x, [out_height, out_width] = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=parameters.conv2.weight,
         in_channels=32,
@@ -96,6 +98,8 @@ def convnet_mnist(
         conv_op_cache={},
         debug=False,
         groups=1,
+        return_output_dim=True,
+        return_weights_and_bias=False,
     )
 
     x = ttnn.relu(x)

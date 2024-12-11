@@ -12,7 +12,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -43,7 +43,7 @@ Tensor _tanhshrink(const Tensor& x, const std::optional<MemoryConfig>& output_me
 }
 
 // power - floating point exponent
-Tensor _power(
+Tensor ExecutePower::invoke(
     uint8_t queue_id,
     const Tensor& input_a,
     float exponent,
@@ -79,14 +79,71 @@ Tensor _power(
     return result;
 }
 
+// power - floating point exponent
+Tensor ExecutePower::invoke(
+    const Tensor& input_a,
+    float exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input_a, exponent, output_mem_config, std::move(output_tensor));
+}
+
 // power - integer exponent
-Tensor _power(
+Tensor ExecutePower::invoke(
     uint8_t queue_id,
     const Tensor& input,
     uint32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
     return ttnn::power(queue_id, input, exponent, output_mem_config, output_tensor);
+}
+
+// power - integer exponent
+Tensor ExecutePower::invoke(
+    const Tensor& input,
+    uint32_t exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input, exponent, output_mem_config, std::move(output_tensor));
+}
+
+// power - tensor exponent
+Tensor ExecutePower::invoke(
+    uint8_t queue_id,
+    const Tensor& input,
+    const Tensor& exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return ttnn::power_binary(queue_id, input, exponent, std::nullopt, output_mem_config, output_tensor);
+}
+
+// power - tensor exponent
+Tensor ExecutePower::invoke(
+    const Tensor& input,
+    const Tensor& exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input, exponent, output_mem_config, std::move(output_tensor));
+}
+
+// power - scalar input
+Tensor ExecutePower::invoke(
+    uint8_t queue_id,
+    float input_a,
+    const Tensor& exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+        Tensor input = ttnn::full_like(exponent, input_a);
+        return ExecutePower::invoke(queue_id, input, exponent, output_mem_config, std::move(output_tensor));
+}
+
+// power - scalar input
+Tensor ExecutePower::invoke(
+    float input_a,
+    const Tensor& exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input_a, exponent, output_mem_config, std::move(output_tensor));
 }
 
 // acosh(x) = log(x + sqrt(x^2 - 1))
@@ -721,7 +778,7 @@ Tensor _swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryCon
 
 // tril : select lower triangular region of input matrix
 Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_l = numpy::index_tril<::bfloat16>(
+    Tensor index_l = ttnn::index_tril<::bfloat16>(
         input_a.get_legacy_shape(),
         diag,
         DataType::BFLOAT16,
@@ -733,7 +790,7 @@ Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConf
 
 // triu : select upper triangular region of input matrix
 Tensor _triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_u = numpy::index_triu<::bfloat16>(
+    Tensor index_u = ttnn::index_triu<::bfloat16>(
         input_a.get_legacy_shape(),
         diag,
         DataType::BFLOAT16,

@@ -252,7 +252,7 @@ class transformer_2d_model:
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=self.compute_kernel_config.fp32_dest_acc_en,
         )
-        [hidden_states, _out_height, _out_width, self.proj_in_conv_weights, self.proj_in_conv_bias] = ttnn.conv2d(
+        [hidden_states, [self.proj_in_conv_weights, self.proj_in_conv_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             in_channels=self.proj_in_in_channels,
             out_channels=self.proj_in_out_channels,
@@ -268,6 +268,8 @@ class transformer_2d_model:
             conv_config=conv_config,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
+            return_output_dim=False,
+            return_weights_and_bias=True,
         )
 
         inner_dim = hidden_states.shape[-1]
@@ -297,10 +299,8 @@ class transformer_2d_model:
                 # hidden_states = ttnn.to_memory_config(hidden_states, self.proj_out.conv.input_sharded_memory_config)
                 [
                     hidden_states,
-                    _out_height,
-                    _out_width,
-                    self.proj_out_conv_weights,
-                    self.proj_out_conv_bias,
+                    [_out_height, _out_width],
+                    [self.proj_out_conv_weights, self.proj_out_conv_bias],
                 ] = ttnn.conv2d(
                     input_tensor=hidden_states,
                     in_channels=self.proj_out_in_channels,
@@ -316,6 +316,8 @@ class transformer_2d_model:
                     bias_tensor=self.proj_out_conv_bias,
                     conv_config=conv_config,
                     conv_op_cache=conv_cache,
+                    return_output_dim=True,
+                    return_weights_and_bias=True,
                 )
 
                 if output_bfloat16:

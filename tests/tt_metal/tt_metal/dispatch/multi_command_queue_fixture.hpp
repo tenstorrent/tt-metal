@@ -22,7 +22,7 @@ protected:
     void SetUp() override {
         this->validate_dispatch_mode();
 
-        this->num_cqs_ = tt::llrt::OptionsG.get_num_hw_cqs();
+        this->num_cqs_ = tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs();
         if (this->num_cqs_ != 2) {
             tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
@@ -88,7 +88,7 @@ protected:
     void SetUp() override {
         this->validate_dispatch_mode();
 
-        this->num_cqs_ = tt::llrt::OptionsG.get_num_hw_cqs();
+        this->num_cqs_ = tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs();
         if (this->num_cqs_ != 2) {
             tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
@@ -118,7 +118,7 @@ protected:
             GTEST_SKIP();
         }
 
-        auto num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
+        auto num_cqs = tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs();
         if (num_cqs != 2) {
             tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();

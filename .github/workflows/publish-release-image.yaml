@@ -91,6 +91,7 @@ jobs:
         uses: ./.github/actions/docker-run
         with:
           docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.test_group.arch }}
+          docker_version: ${{ inputs.version }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           run_args: |
             ${{ matrix.test_group.cmd }}

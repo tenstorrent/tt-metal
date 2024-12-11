@@ -51,6 +51,7 @@ enum class HalL1MemAddrType : uint8_t {
     LAUNCH_MSG_BUFFER_RD_PTR,
     FW_VERSION_ADDR,  // Really only applicable to active eth core right now
     LOCAL,
+    BANK_TO_NOC_SCRATCH,
     COUNT             // Keep this last so it always indicates number of enum options
 };
 
@@ -148,6 +149,9 @@ private:
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
     uint32_t num_nocs_;
+    bool coordinate_virtualization_enabled_;
+    uint32_t virtual_worker_start_x_;
+    uint32_t virtual_worker_start_y_;
 
     void initialize_gs();
     void initialize_wh();
@@ -177,6 +181,9 @@ public:
         return noc_multicast_encoding_func_(x_start, y_start, x_end, y_end);
     }
 
+    bool is_coordinate_virtualization_enabled() const { return this->coordinate_virtualization_enabled_; };
+    std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
+    std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;

@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check kernel count in base metal is less than maximum
-        run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 7 )); then exit 1; fi
+        run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 8 )); then exit 1; fi
   check-doc:
     runs-on: ubuntu-latest
     steps:

@@ -44,8 +44,7 @@ using DramBuffer = std::shared_ptr<Buffer>;
 static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer& dram_buffer, size_t num_tiles) {
     return {
         static_cast<uint32_t>(dram_buffer->address()),
-        static_cast<uint32_t>(dram_buffer->noc_coordinates().x),
-        static_cast<uint32_t>(dram_buffer->noc_coordinates().y),
+        static_cast<uint32_t>(0),
         static_cast<uint32_t>(num_tiles),
     };
 }

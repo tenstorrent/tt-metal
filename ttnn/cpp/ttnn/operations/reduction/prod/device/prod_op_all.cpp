@@ -8,7 +8,7 @@
 #include "prod_op_all.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_metal/common/constants.hpp"
-#include <ttnn/operations/numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 
@@ -45,11 +45,11 @@ Tensor prod_all(const Tensor& input, const MemoryConfig& output_mem_config) {
         operation::run(Prod_op{.output_mem_config = output_mem_config}, {input}).at(0), output_mem_config);
     auto arch_env = tt_ClusterDescriptor::detect_arch((chip_id_t)0);
     if (arch_env == tt::ARCH::WORMHOLE_B0) {
-        return ttnn::numpy::prod_result_computation_WH_B0<bfloat16>(
+        return ttnn::prod_result_computation_WH_B0<bfloat16>(
             result, result.get_dtype(), result.get_layout(), result.device(), output_mem_config);
     }
     // else --> GS Arch
-    return ttnn::numpy::prod_result_computation_GS<bfloat16>(
+    return ttnn::prod_result_computation_GS<bfloat16>(
         result, result.get_dtype(), result.get_layout(), result.device(), output_mem_config);
 }
 

@@ -309,6 +309,7 @@ def get_ops(timeseries):
                 opsDict[opID].append(ts)
 
     ordered_ops = list(opsDict.keys())
+    # sort over timestamps
     ordered_ops.sort(key=lambda x: opsDict[x][0][1])
 
     ops = []
@@ -327,9 +328,7 @@ def get_ops(timeseries):
                     if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START") or (
                         risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START"
                     ):
-                        for opDuration in coresOp.values():
-                            assert len(opDuration) == 2, "Unexpected FW start"
-
+                        assert len(coresOp[core]) == 2, "Unexpected FW end"
                         ops.append({"timeseries": []})
                         coresOp = {}
                     elif (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END") or (

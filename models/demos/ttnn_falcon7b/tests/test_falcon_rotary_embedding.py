@@ -29,7 +29,7 @@ def get_model_prefix(layer_index: int = 0):
 @pytest.fixture(scope="module")
 def torch_model():
     hugging_face_reference_model = transformers.FalconForCausalLM.from_pretrained(
-        PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True
+        PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True, device_map="auto"
     ).eval()
     state_dict = hugging_face_reference_model.state_dict()
     filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())

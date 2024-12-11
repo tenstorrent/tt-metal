@@ -6,7 +6,7 @@
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace tt {
 
@@ -31,6 +31,55 @@ Tensor convert_tensor(const Tensor& input_tensor, compute_& compute) {
 
     return ttnn::distributed::is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_tensor)
                                                                    : convert_tensor(input_tensor);
+}
+template <typename Func, typename... Args>
+Tensor convert_tensor_to_tiled_layout_common(
+    const Tensor& input_tensor,
+    std::optional<DataType> output_dtype,
+    const std::unordered_map<DataType, Func>& function_map,
+    Args&&... args) {
+    TT_ASSERT(
+        input_tensor.get_layout() == Layout::ROW_MAJOR &&
+        "Tensor(weight/bias) should be in row major layout for conversion to tilized layout.");
+
+    if (output_dtype.has_value()) {
+        if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
+            TT_ASSERT(input_tensor.get_dtype() == DataType::FLOAT32);
+        } else {
+            TT_ASSERT(input_tensor.get_dtype() == input_tensor.get_dtype());
+        }
+    }
+    auto entry = function_map.find(input_tensor.get_dtype());
+    if (entry == function_map.end()) {
+        TT_THROW("Unsupported data type");
+    }
+    return entry->second(input_tensor, std::forward<Args>(args)..., output_dtype.value_or(input_tensor.get_dtype()));
+}
+
+template <typename T>
+Tensor create_tensor_from_owned_buffer(
+    owned_buffer::Buffer<T>& buf, DataType& output_dtype, ttnn::SimpleShape& output_shape) {
+    if constexpr (std::is_same<T, float>::value) {
+        if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
+            auto tensor =
+                Tensor(std::move(OwnedStorage{std::move(buf)}), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR)
+                    .to(Layout::TILE);
+            auto output_float_data = owned_buffer::get_as<float>(tensor).get();
+            auto output_packed_data =
+                output_dtype == DataType::BFLOAT8_B
+                    ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                    : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+            auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+            return Tensor(
+                std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
+        }
+    } else {
+        TT_FATAL(
+            (output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B),
+            "Unsupported output datatype");
+    }
+    auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(buf)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+    return rm_tensor.to(Layout::TILE);
 }
 
 template <typename T>
@@ -65,29 +114,7 @@ Tensor to_weight_special_padding_tile_layout(
                 }
             }
         }
-        if constexpr (std::is_same<T, float>::value) {
-            if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
-                auto tensor = Tensor(
-                                  std::move(OwnedStorage{std::move(output_buffer)}),
-                                  output_shape,
-                                  DataType::FLOAT32,
-                                  Layout::ROW_MAJOR)
-                                  .to(Layout::TILE);
-                auto output_float_data = owned_buffer::get_as<float>(tensor).get();
-                auto output_packed_data =
-                    output_dtype == DataType::BFLOAT8_B
-                        ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
-                        : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                return Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
-            }
-        } else {
-            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
-        }
-        auto rm_tensor =
-            Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
-        return rm_tensor.to(Layout::TILE);
+        return create_tensor_from_owned_buffer<T>(output_buffer, output_dtype, output_shape);
     };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
@@ -126,29 +153,7 @@ Tensor to_weight_tile_layout(
                 }
             }
         }
-        if constexpr (std::is_same<T, float>::value) {
-            if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
-                auto tensor = Tensor(
-                                  std::move(OwnedStorage{std::move(output_buffer)}),
-                                  output_shape,
-                                  DataType::FLOAT32,
-                                  Layout::ROW_MAJOR)
-                                  .to(Layout::TILE);
-                auto output_float_data = owned_buffer::get_as<float>(tensor).get();
-                auto output_packed_data =
-                    output_dtype == DataType::BFLOAT8_B
-                        ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
-                        : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                return Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
-            }
-        } else {
-            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
-        }
-        auto rm_tensor =
-            Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
-        return rm_tensor.to(Layout::TILE);
+        return create_tensor_from_owned_buffer<T>(output_buffer, output_dtype, output_shape);
     };
 
     return convert_tensor<T>(conv_weight_tensor, compute);
@@ -161,30 +166,14 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype) {
-    TT_ASSERT(
-        conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
-        "Convolution weights should be in row major layout for conversion to tilized layout.");
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, uint32_t, DataType)>>
+        to_w_tile_layout_map = {
+            {DataType::BFLOAT16, &to_weight_tile_layout<bfloat16>},
+            {DataType::FLOAT32, &to_weight_tile_layout<float>},
+            {DataType::UINT32, &to_weight_tile_layout<uint32_t>}};
 
-    if (output_dtype.has_value()) {
-        if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
-            TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
-        } else {
-            TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
-        }
-    }
-
-    switch (conv_weight_tensor.get_dtype()) {
-        case DataType::BFLOAT16:
-            return to_weight_tile_layout<bfloat16>(
-                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
-        case DataType::FLOAT32:
-            return to_weight_tile_layout<float>(
-                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
-        case DataType::UINT32:
-            return to_weight_tile_layout<uint32_t>(
-                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
-        default: TT_THROW("Unsupported data type");
-    }
+    return convert_tensor_to_tiled_layout_common(
+        conv_weight_tensor, output_dtype, to_w_tile_layout_map, in1_block_h, in1_block_w);
 }
 
 template <typename T>
@@ -236,41 +225,7 @@ Tensor to_weight_tile_layout_block_sharded(
                 }
             }
         }
-        if constexpr (std::is_same<T, float>::value) {
-            if (output_dtype == DataType::BFLOAT8_B) {
-                auto tensor = Tensor(
-                                  std::move(OwnedStorage{std::move(output_buffer)}),
-                                  output_shape,
-                                  DataType::FLOAT32,
-                                  Layout::ROW_MAJOR)
-                                  .to(Layout::TILE);
-                auto output_float_data = owned_buffer::get_as<float>(tensor).get();
-                auto output_packed_data =
-                    pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                return Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
-            }
-            if (output_dtype == DataType::BFLOAT4_B) {
-                auto tensor = Tensor(
-                                  std::move(OwnedStorage{std::move(output_buffer)}),
-                                  output_shape,
-                                  DataType::FLOAT32,
-                                  Layout::ROW_MAJOR)
-                                  .to(Layout::TILE);
-                auto output_float_data = owned_buffer::get_as<float>(tensor).get();
-                auto output_packed_data =
-                    pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                return Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
-            }
-        } else {
-            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
-        }
-        auto rm_tensor =
-            Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
-        return rm_tensor.to(Layout::TILE);
+        return create_tensor_from_owned_buffer<T>(output_buffer, output_dtype, output_shape);
     };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
@@ -279,25 +234,14 @@ Tensor to_weight_tile_layout_block_sharded(
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
     const Tensor& conv_weight_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype) {
-    TT_ASSERT(
-        conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
-        "Convolution weights should be in row major layout for conversion to tilized layout.");
-    const static std::
-        map<DataType, std::function<Tensor(const Tensor&, uint32_t num_channel_shards, DataType output_dtype)>>
-            to_w_tile_layout_map = {
-                {DataType::BFLOAT16, &to_weight_tile_layout_block_sharded<bfloat16>},
-                {DataType::FLOAT32, &to_weight_tile_layout_block_sharded<float>},
-                {DataType::UINT32, &to_weight_tile_layout_block_sharded<uint32_t>},
-            };
-    if (output_dtype.has_value()) {
-        if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
-            TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
-        } else {
-            TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
-        }
-    }
-    return to_w_tile_layout_map.at(conv_weight_tensor.get_dtype())(
-        conv_weight_tensor, num_channel_shards, output_dtype.value_or(conv_weight_tensor.get_dtype()));
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, DataType)>>
+        to_w_tile_layout_map = {
+            {DataType::BFLOAT16, &to_weight_tile_layout_block_sharded<bfloat16>},
+            {DataType::FLOAT32, &to_weight_tile_layout_block_sharded<float>},
+            {DataType::UINT32, &to_weight_tile_layout_block_sharded<uint32_t>}};
+
+    return convert_tensor_to_tiled_layout_common(
+        conv_weight_tensor, output_dtype, to_w_tile_layout_map, num_channel_shards);
 }
 
 template <typename T>
@@ -327,41 +271,7 @@ Tensor to_bias_tile_layout_block_sharded(
                 output_buffer[matrix_idx] = input_buffer[idx];
             }
         }
-        if constexpr (std::is_same<T, float>::value) {
-            if (output_dtype == DataType::BFLOAT8_B) {
-                auto tensor = Tensor(
-                                  std::move(OwnedStorage{std::move(output_buffer)}),
-                                  output_shape,
-                                  DataType::FLOAT32,
-                                  Layout::ROW_MAJOR)
-                                  .to(Layout::TILE);
-                auto output_float_data = owned_buffer::get_as<float>(tensor).get();
-                auto output_packed_data =
-                    pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                return Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
-            }
-            if (output_dtype == DataType::BFLOAT4_B) {
-                auto tensor = Tensor(
-                                  std::move(OwnedStorage{std::move(output_buffer)}),
-                                  output_shape,
-                                  DataType::FLOAT32,
-                                  Layout::ROW_MAJOR)
-                                  .to(Layout::TILE);
-                auto output_float_data = owned_buffer::get_as<float>(tensor).get();
-                auto output_packed_data =
-                    pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-                return Tensor(
-                    std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
-            }
-        } else {
-            TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
-        }
-        auto rm_tensor =
-            Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
-        return rm_tensor.to(Layout::TILE);
+        return create_tensor_from_owned_buffer<T>(output_buffer, output_dtype, output_shape);
     };
 
     return convert_tensor<T>(conv_bias_tensor, compute);
@@ -371,25 +281,16 @@ Tensor to_bias_tile_layout_block_sharded(
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_bias_tensor_to_tiled_layout_block_sharded(
     const Tensor& conv_bias_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype) {
-    TT_ASSERT(
-        conv_bias_tensor.get_layout() == Layout::ROW_MAJOR &&
-        "Convolution weights should be in row major layout for conversion to tilized layout.");
-    const static std::
-        map<DataType, std::function<Tensor(const Tensor&, uint32_t num_channel_shards, DataType output_dtype)>>
-            to_b_tile_layout_map = {
-                {DataType::BFLOAT16, &to_bias_tile_layout_block_sharded<bfloat16>},
-                {DataType::FLOAT32, &to_bias_tile_layout_block_sharded<float>},
-                {DataType::UINT32, &to_bias_tile_layout_block_sharded<uint32_t>},
-            };
-    if (output_dtype.has_value()) {
-        if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
-            TT_ASSERT(conv_bias_tensor.get_dtype() == DataType::FLOAT32);
-        } else {
-            TT_ASSERT(conv_bias_tensor.get_dtype() == conv_bias_tensor.get_dtype());
-        }
-    }
-    return to_b_tile_layout_map.at(conv_bias_tensor.get_dtype())(
-        conv_bias_tensor, num_channel_shards, output_dtype.value_or(conv_bias_tensor.get_dtype()));
+    const static std::unordered_map<
+        DataType,
+        std::function<Tensor(const Tensor&, uint32_t num_channel_shards, DataType output_dtype)>>
+        to_b_tile_layout_map = {
+            {DataType::BFLOAT16, &to_bias_tile_layout_block_sharded<bfloat16>},
+            {DataType::FLOAT32, &to_bias_tile_layout_block_sharded<float>},
+            {DataType::UINT32, &to_bias_tile_layout_block_sharded<uint32_t>},
+        };
+    return convert_tensor_to_tiled_layout_common(
+        conv_bias_tensor, output_dtype, to_b_tile_layout_map, num_channel_shards);
 }
 
 // Converts convolution weights to tilized 2d matrix layout.
@@ -399,30 +300,14 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
     uint32_t in1_block_h,
     uint32_t in1_block_w,
     std::optional<DataType> output_dtype) {
-    TT_ASSERT(
-        conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
-        "Convolution weights should be in row major layout for conversion to tilized layout.");
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, uint32_t, DataType)>>
+        to_w_tile_layout_map = {
+            {DataType::BFLOAT16, &to_weight_special_padding_tile_layout<bfloat16>},
+            {DataType::FLOAT32, &to_weight_special_padding_tile_layout<float>},
+            {DataType::UINT32, &to_weight_special_padding_tile_layout<uint32_t>}};
 
-    if (output_dtype.has_value()) {
-        if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
-            TT_ASSERT(conv_weight_tensor.get_dtype() == DataType::FLOAT32);
-        } else {
-            TT_ASSERT(conv_weight_tensor.get_dtype() == conv_weight_tensor.get_dtype());
-        }
-    }
-
-    switch (conv_weight_tensor.get_dtype()) {
-        case DataType::BFLOAT16:
-            return to_weight_special_padding_tile_layout<bfloat16>(
-                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
-        case DataType::FLOAT32:
-            return to_weight_special_padding_tile_layout<float>(
-                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
-        case DataType::UINT32:
-            return to_weight_special_padding_tile_layout<uint32_t>(
-                conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.get_dtype()));
-        default: TT_THROW("Unsupported data type");
-    }
+    return convert_tensor_to_tiled_layout_common(
+        conv_weight_tensor, output_dtype, to_w_tile_layout_map, in1_block_h, in1_block_w);
 }
 
 /*
@@ -478,7 +363,7 @@ Helper function to aid in converting depthwise weight tensor to broadcasted weig
 */
 template <typename T>
 static Tensor conv_depthwise_weight_bcast_helper(
-    Tensor& conv_weight_tensor,
+    const Tensor& conv_weight_tensor,
     const ttnn::SimpleShape& original_weight_shape,
     const ttnn::SimpleShape& output_weight_shape,
     DataType output_dtype) {
@@ -514,10 +399,6 @@ divided into num_groups for each groupped filter
 */
 Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
-    TT_ASSERT(
-        conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
-        "Convolution weights should be in row major layout for adding the required padding");
-
     // Define output tensor shape. This is going to be channel dimension of weight tensor * num_groups - this value
     // should match number of input channels being convolved with the weight tensor
     auto original_conv_weight_tensor_shape_test = conv_weight_tensor.get_shape();
@@ -532,52 +413,27 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
         original_conv_weight_tensor_shape[2],
         original_conv_weight_tensor_shape[3]};
 
-    // Create newly allocated buffer all initialized to 0 depending on the datatype of the weight tensor
-    if (output_dtype == DataType::INT32) {
-        return conv_group_weight_zero_pad_helper<int32_t>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            num_groups,
-            output_dtype);
-    } else if (output_dtype == DataType::FLOAT32) {
-        return conv_group_weight_zero_pad_helper<float>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            num_groups,
-            output_dtype);
-    } else if (output_dtype == DataType::BFLOAT16) {
-        return conv_group_weight_zero_pad_helper<bfloat16>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            num_groups,
-            output_dtype);
-    } else if (output_dtype == DataType::UINT16) {
-        return conv_group_weight_zero_pad_helper<uint16_t>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            num_groups,
-            output_dtype);
-    } else if (output_dtype == DataType::BFLOAT8_B) {
-        return conv_group_weight_zero_pad_helper<float>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            num_groups,
-            DataType::FLOAT32);
-    } else {
-        return conv_group_weight_zero_pad_helper<uint32_t>(
-            conv_weight_tensor,
-            original_conv_weight_tensor_shape,
-            output_conv_weight_tensor_shape,
-            num_groups,
-            output_dtype);
-    }
+    const static std::unordered_map<
+        DataType,
+        std::function<Tensor(const Tensor&, ttnn::SimpleShape, ttnn::SimpleShape, uint32_t, DataType)>>
+        to_w_tile_layout_map = {
+            {DataType::INT32, &conv_group_weight_zero_pad_helper<int32_t>},
+            {DataType::FLOAT32, &conv_group_weight_zero_pad_helper<float>},
+            {DataType::BFLOAT16, &conv_group_weight_zero_pad_helper<bfloat16>},
+            {DataType::UINT16, &conv_group_weight_zero_pad_helper<uint16_t>},
+            {DataType::BFLOAT8_B, &conv_group_weight_zero_pad_helper<float>},
+            {DataType::UINT32, &conv_group_weight_zero_pad_helper<uint32_t>},
+            {DataType::BFLOAT4_B, &conv_group_weight_zero_pad_helper<uint32_t>},
+        };
+    output_dtype = output_dtype == DataType::BFLOAT8_B ? DataType::FLOAT32 : output_dtype;
 
-    TT_THROW("Unsupported weight data type given when trying to add zero padding to weight tensor");
+    return convert_tensor_to_tiled_layout_common(
+        conv_weight_tensor,
+        output_dtype,
+        to_w_tile_layout_map,
+        original_conv_weight_tensor_shape,
+        output_conv_weight_tensor_shape,
+        num_groups);
 }
 
 /*
@@ -587,10 +443,7 @@ allocated output tensor with shape [out_channels, act_block_h, H, W] The extra c
 from the original weight tensor - it would be convolving act_block in conv_matrix in one go
 */
 Tensor convert_conv_weight_tensor_to_depthwise_layout(
-    Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype) {
-    TT_ASSERT(
-        conv_weight_tensor.get_layout() == Layout::ROW_MAJOR &&
-        "Convolution weights should be in row major layout for repeating the required dimensions");
+    const Tensor& conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype) {
     auto original_conv_weight_tensor_shape_test = conv_weight_tensor.get_shape();
     uint32_t num_input_channels_to_repeat = act_block_h_ntiles * constants::TILE_HEIGHT;
     ttnn::SimpleShape original_conv_weight_tensor_shape{
@@ -605,27 +458,26 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
         original_conv_weight_tensor_shape[3]};
 
     // Create newly allocated buffer all initialized to 0 depending on the datatype of the weight tensor
-    if (output_dtype == DataType::INT32) {
-        return conv_depthwise_weight_bcast_helper<int32_t>(
-            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, output_dtype);
-    } else if (output_dtype == DataType::FLOAT32) {
-        return conv_depthwise_weight_bcast_helper<float>(
-            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, output_dtype);
-    } else if (output_dtype == DataType::BFLOAT16) {
-        return conv_depthwise_weight_bcast_helper<bfloat16>(
-            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, output_dtype);
-    } else if (output_dtype == DataType::UINT16) {
-        return conv_depthwise_weight_bcast_helper<uint16_t>(
-            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, output_dtype);
-    } else if (output_dtype == DataType::BFLOAT8_B) {
-        return conv_depthwise_weight_bcast_helper<float>(
-            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, DataType::FLOAT32);
-    } else {
-        return conv_depthwise_weight_bcast_helper<float>(
-            conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, DataType::FLOAT32);
-    }
+    const static std::
+        unordered_map<DataType, std::function<Tensor(const Tensor&, ttnn::SimpleShape, ttnn::SimpleShape, DataType)>>
+            to_w_tile_layout_map = {
+                {DataType::INT32, &conv_depthwise_weight_bcast_helper<int32_t>},
+                {DataType::FLOAT32, &conv_depthwise_weight_bcast_helper<float>},
+                {DataType::BFLOAT16, &conv_depthwise_weight_bcast_helper<bfloat16>},
+                {DataType::UINT16, &conv_depthwise_weight_bcast_helper<uint16_t>},
+                {DataType::BFLOAT8_B, &conv_depthwise_weight_bcast_helper<float>},
+                {DataType::UINT32, &conv_depthwise_weight_bcast_helper<uint32_t>},
+                {DataType::BFLOAT4_B, &conv_depthwise_weight_bcast_helper<uint32_t>},
+            };
+    output_dtype = ((output_dtype == DataType::BFLOAT8_B) || (output_dtype == DataType::BFLOAT4_B)) ? DataType::FLOAT32
+                                                                                                    : output_dtype;
 
-    TT_THROW("Unsupported weight data type given when trying to add zero padding to weight tensor");
+    return convert_tensor_to_tiled_layout_common(
+        conv_weight_tensor,
+        output_dtype,
+        to_w_tile_layout_map,
+        original_conv_weight_tensor_shape,
+        output_conv_weight_tensor_shape);
 }
 
 const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {

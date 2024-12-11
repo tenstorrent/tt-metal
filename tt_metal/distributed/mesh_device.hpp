@@ -18,7 +18,10 @@ namespace tt::tt_metal::distributed {
 
 using DeviceIds = std::vector<int>;
 using MeshDeviceID = size_t;
-using MeshOffset = std::pair<size_t, size_t>;
+struct MeshOffset {
+    size_t row = 0;
+    size_t col = 0;
+};
 class MeshDeviceView;
 
 struct MeshSubDeviceManagerId;
@@ -134,6 +137,8 @@ public:
 
     MeshSubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
+    MeshSubDeviceManagerId create_sub_device_manager(
+        const std::vector<std::vector<SubDevice>>& mesh_sub_devices, DeviceAddr local_l1_size);
     void load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
     void clear_loaded_sub_device_manager();
     void remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);

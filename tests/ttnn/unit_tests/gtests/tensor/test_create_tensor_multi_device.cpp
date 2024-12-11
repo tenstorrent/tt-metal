@@ -170,6 +170,25 @@ TEST_P(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
     EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
 }
 
+TEST_P(MultiDeviceTensorCreationTest, Arange) {
+    MeshDevice* mesh_device = this->mesh_device_.get();
+    mesh_device->enable_async(GetParam());
+
+    Tensor tensor = ttnn::arange(
+        /*start=*/0,
+        /*end=*/1024,
+        /*step=*/1,
+        ttnn::DataType::BFLOAT16,
+        std::ref(*mesh_device));
+
+    EXPECT_EQ(tensor.storage_type(), StorageType::MULTI_DEVICE);
+    EXPECT_EQ(tensor.get_workers().size(), mesh_device->num_devices());
+    EXPECT_EQ(tensor.shape(), ttnn::SimpleShape({1, 1, 1, 1024}));
+
+    const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(tensor);
+    EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
+}
+
 INSTANTIATE_TEST_SUITE_P(AllTests, MultiDeviceTensorCreationTest, ::testing::Bool());
 
 }  // namespace
