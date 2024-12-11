@@ -98,7 +98,7 @@ void kernel_main() {
 #if (front_padding)
                 // Read noc into cb_pad_align l1
                 noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
-
+                noc_async_read_barrier();
                 memmove(
                     (void*)(l1_write_addr + stick_size_padded_front),
                     (void*)(get_read_ptr(cb_pad_align)),
