@@ -19,7 +19,7 @@ set_up_end_to_end_tests_env() {
   python -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
 
   python -m pip install -r requirements.txt
-  python -m pip install ../../tt_metalium-*.whl
+  python -m pip install ../../ttnn-*.whl
 
   cd ../../
   rm -rf tt_metal tt_eager ttnn models

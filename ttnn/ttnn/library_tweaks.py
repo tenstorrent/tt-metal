@@ -30,7 +30,7 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
     metal_home.mkdir(exist_ok=True)
 
     version_file = metal_home / ".METAL_VERSION"
-    current_version = version("tt-metalium").strip()
+    current_version = version("ttnn").strip()
 
     runtime_src = ttnn_package_path.parent / "runtime"
     assert (
