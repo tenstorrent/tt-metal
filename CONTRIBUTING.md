@@ -96,7 +96,7 @@ set up for users.
 
 Please refer to the [README](README.md) for source installation and environment
 setup instructions, then please read the [Getting Started
-page](docs/source/get_started/get_started.rst).
+page](docs/source/tt-metalium/get_started/get_started.rst).
 
 ### Setting logger level
 
@@ -112,7 +112,7 @@ TT_METAL_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 ### Building and viewing the documentation locally
 
 1. First, ensure that you have [built the project and activated the Python
-environment](docs/source/get_started/get_started.rst), along with any required
+environment](docs/source/tt-metalium/get_started/get_started.rst), along with any required
 `PYTHONPATH` variables.
 
 2. Build the HTML documentation.
@@ -300,7 +300,7 @@ running such tests.
   - To debug the C++ binding file itself:
     - Ensure the python file you wish to debug is standalone and has a main function.
     - Run `gdb --args python <python file>`
-  - Breakpoints can be added for future loaded libraries. For example, to add a breakpoint to `Device` object construtor:
+  - Breakpoints can be added for future loaded libraries. For example, to add a breakpoint to `Device` object constructor:
 ```
 (gdb) b device.cpp:Device::Device
 No source file named device.cpp.
@@ -353,7 +353,7 @@ TT_METAL_WATCHER=10 ./your_program
   - If no such error is reported, but the program is hanging, check the watcher log generated in `generated/watcher/watcher.log`. There is a legend at the top of the log showing how to interpret it, and a sample portion of a log is shown below:
 ```
 Legend:
-    Comma separated list specifices waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2
+    Comma separated list specifies waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2
     I=initialization sequence
     W=wait (top of spin loop)
     R=run (entering kernel)
@@ -528,7 +528,7 @@ To set up pre-commit on your local machine, follow these steps:
   on the link to [all post-commit workflows](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
   selecting your branch, and pressing "Run workflow".
 
-  ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/_static/all-post-commit-workflows-button.png)
+  ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/common/_static/all-post-commit-workflows-button.png)
 
   You can see the status of your CI run by clicking on the specific run you
   dispatched.
