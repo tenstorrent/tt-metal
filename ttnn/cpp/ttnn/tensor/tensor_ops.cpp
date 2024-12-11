@@ -280,21 +280,21 @@ Tensor tensor_unpad(
 Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
-    uint32_t height = input_tensor.get_legacy_shape()[-2];
-    uint32_t width = input_tensor.get_legacy_shape()[-1];
+    uint32_t height = input_tensor.get_logical_shape()[-2];
+    uint32_t width = input_tensor.get_logical_shape()[-1];
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
     uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
     ttnn::SmallVector<uint32_t> shape;
     ttnn::SmallVector<uint32_t> input_tensor_start;
 
-    for (auto index = 0; index < input_tensor.get_legacy_shape().rank() - 2; index++) {
-        shape.push_back(input_tensor.get_legacy_shape().without_padding()[index]);
+    for (auto index = 0; index < input_tensor.get_logical_shape().rank() - 2; index++) {
+        shape.push_back(input_tensor.get_logical_shape()[index]);
         input_tensor_start.push_back(0);
     }
 
-    shape.push_back(height);
-    shape.push_back(width);
+    shape.push_back(padded_height);
+    shape.push_back(padded_width);
     input_tensor_start.push_back(0);
     input_tensor_start.push_back(0);
 
