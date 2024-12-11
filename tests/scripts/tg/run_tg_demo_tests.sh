@@ -34,6 +34,9 @@ run_tg_llama3_tests() {
 }
 
 run_tg_tests() {
+  # Run llama3 tests
+  run_tg_llama3_tests
+  
   fail=0
 
   # Falcon7B demo (perf verification for 128/1024/2048 seq lens and output token verification)
@@ -44,8 +47,6 @@ run_tg_tests() {
     exit 1
   fi
 
-  # Run llama3 tests
-  run_tg_llama3_tests
 }
 
 main() {
