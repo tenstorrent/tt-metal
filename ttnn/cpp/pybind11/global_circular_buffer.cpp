@@ -19,7 +19,7 @@ void py_module(py::module& module) {
     // Single Device APIs
     module.def(
         "create_global_circular_buffer",
-        py::overload_cast<Device*, const std::unordered_map<CoreCoord, CoreRangeSet>&, uint32_t, BufferType>(
+        py::overload_cast<Device*, const std::vector<std::pair<CoreCoord, CoreRangeSet>>&, uint32_t, BufferType>(
             &create_global_circular_buffer),
         py::arg("device"),
         py::arg("sender_receiver_core_mapping"),
@@ -38,7 +38,7 @@ void py_module(py::module& module) {
     // Multi Device APIs
     module.def(
         "create_global_circular_buffer",
-        py::overload_cast<MeshDevice*, const std::unordered_map<CoreCoord, CoreRangeSet>&, uint32_t, BufferType>(
+        py::overload_cast<MeshDevice*, const std::vector<std::pair<CoreCoord, CoreRangeSet>>&, uint32_t, BufferType>(
             &create_global_circular_buffer),
         py::arg("mesh_device"),
         py::arg("sender_receiver_core_mapping"),

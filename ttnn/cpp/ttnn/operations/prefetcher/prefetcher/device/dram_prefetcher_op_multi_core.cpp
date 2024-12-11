@@ -238,7 +238,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         reader_rt_args.insert(reader_rt_args.end(), block_num_pages.begin(), block_num_pages.end());
         reader_rt_args.insert(reader_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
 
-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         // /* writer kernel */
         std::vector<uint32_t> writer_rt_args;
@@ -251,7 +251,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         }
         writer_rt_args.push_back(noc);
 
-        tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 
     auto override_runtime_arguments_callback = [reader_kernel_id, reader_core_range](

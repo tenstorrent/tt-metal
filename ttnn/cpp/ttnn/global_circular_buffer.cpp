@@ -19,7 +19,7 @@ MultiDeviceGlobalCircularBuffer::MultiDeviceGlobalCircularBuffer(MeshDevice* mes
 
 std::shared_ptr<GlobalCircularBuffer> create_global_circular_buffer(
     Device* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) {
     std::shared_ptr<GlobalCircularBuffer> global_cb;
@@ -34,7 +34,7 @@ std::shared_ptr<GlobalCircularBuffer> create_global_circular_buffer(
 
 MultiDeviceGlobalCircularBuffer create_global_circular_buffer(
     MeshDevice* mesh_device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) {
     MultiDeviceGlobalCircularBuffer multi_device_global_cb(mesh_device);

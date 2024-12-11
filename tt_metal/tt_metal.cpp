@@ -1382,7 +1382,7 @@ namespace experimental {
 
 std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
     Device* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) {
     return GlobalCircularBuffer::create(device, sender_receiver_core_mapping, size, buffer_type);

@@ -28,7 +28,7 @@ class GlobalCircularBuffer {
 public:
     GlobalCircularBuffer(
         Device* device,
-        const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type);
 
@@ -40,7 +40,7 @@ public:
 
     static std::shared_ptr<GlobalCircularBuffer> create(
         Device* device,
-        const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type = BufferType::L1);
 
@@ -52,7 +52,7 @@ public:
     DeviceAddr buffer_address() const;
     DeviceAddr config_address() const;
     uint32_t size() const;
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping() const;
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("sender_receiver_core_mapping", "size");
     const auto attribute_values() const { return std::make_tuple(this->sender_receiver_core_mapping_, this->size_); }
@@ -65,7 +65,7 @@ private:
     std::shared_ptr<Buffer> cb_buffer_;
     std::shared_ptr<Buffer> cb_config_buffer_;
     Device* device_;
-    std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping_;
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
