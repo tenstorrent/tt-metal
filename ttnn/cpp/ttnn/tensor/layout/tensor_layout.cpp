@@ -123,11 +123,22 @@ TensorLayout TensorLayout::fromPaddedShape(
 }
 
 void TensorLayout::initialize_alignment() {
-    if (!alignment_.empty()) {
+    auto default_alignment = page_config_.create_default_alignment(dtype_, memory_config_);
+    if (alignment_.empty()) {
+        alignment_ = default_alignment;
         return;
     }
 
-    alignment_ = page_config_.create_default_alignment(dtype_, memory_config_);
+    ttnn::SmallVector<uint32_t> result(std::max(alignment_.size(), default_alignment.size()), 1);
+    for (size_t i = 0; i < alignment_.size(); i++) {
+        result[i + result.size() - alignment_.size()] = alignment_[i];
+    }
+    for (size_t i = 0; i < default_alignment.size(); i++) {
+        size_t result_idx = i + result.size() - default_alignment.size();
+        result[result_idx] = CMAKE_UNIQUE_NAMESPACE::round_up(result[result_idx], default_alignment[i]);
+    }
+
+    alignment_ = Alignment(std::move(result));
 }
 
 void TensorLayout::validate_alignment() const {
