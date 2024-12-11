@@ -290,7 +290,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32;
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xh_rm_single_tile_size.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
