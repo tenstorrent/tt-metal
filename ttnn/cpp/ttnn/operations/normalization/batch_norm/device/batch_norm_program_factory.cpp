@@ -75,10 +75,10 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     const auto num_rows = n;
     const auto num_inner_tiles = (num_channels)*Ht * Wt;
 
-    const auto f_c = static_cast<float>(num_channels);
-    const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
-    const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
-    auto scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * std::sqrt(f_c * f_ht * f_wt));
+    // const auto f_c = static_cast<float>(num_channels);
+    // const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
+    // const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
+    // auto scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * std::sqrt(f_c * f_ht * f_wt));
 
     const bool gamma_has_value = gamma.has_value();
     const bool beta_has_value = beta.has_value();
@@ -87,6 +87,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
 
     constexpr uint32_t MAX_BLOCK_SIZE = 8;
     const uint32_t block_size = get_block_size(num_inner_tiles, MAX_BLOCK_SIZE);
+    const uint32_t block_size_batch = get_block_size(num_channels, MAX_BLOCK_SIZE);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -111,76 +112,68 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     uint32_t in0_t = num_inner_tiles;                         // input
-    const uint32_t in1_t = 1;                                 // scaler
+    // const uint32_t in1_t = 1;                                 // scaler
     const uint32_t in2_t = 1;                                 // epsilon
     const uint32_t in3_t = gamma_has_value ? block_size : 0;  // gamma
     const uint32_t in4_t = beta_has_value ? block_size : 0;   // beta
     const uint32_t in5_t = do_mask_h ? 1 : 0;                 // mask_h
     const uint32_t in6_t = do_mask_w ? 1 : 0;                 // mask_w
+    uint32_t in1_t = block_size_batch;                        // batch_mean
+    uint32_t in7_t = block_size_batch;                        // batch_var
 
     const uint32_t out0_t = block_size;              // output
     const uint32_t out1_t = mean_has_value ? 1 : 0;  // mean
     const uint32_t out2_t = rstd_has_value ? 1 : 0;  // rstd
 
-    const uint32_t im0_t = 1;                                                         // E[x]
+    // const uint32_t im0_t = 1;                                                         // E[x]
     uint32_t im1_t = num_inner_tiles;                                                 // x - E[x]
-    uint32_t im2_t = 1;                                                               // (x - E[x])^2
-    const uint32_t im3_t = 1;                                                         // Sum[(x - E[x])^2]
-    const uint32_t im4_t = 1;                                                         // E[(x - E[x])^2] = Var[x]
-    const uint32_t im5_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
-    const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
-    const uint32_t im7_t = 2;                                                         // Sum[x]
+    // uint32_t im2_t = 1;                                                               // (x - E[x])^2
+    // const uint32_t im3_t = 1;                                                         // Sum[(x - E[x])^2]
+    // const uint32_t im4_t = 1;                                                         // E[(x - E[x])^2] = Var[x]
+    const uint32_t im0_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
+    const uint32_t im2_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
+    const uint32_t im3_t = 2;                                                         // Sum[x]
 
     const auto cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t + im0_t +
-                           im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
+    const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out1_t + out2_t + im1_t +
+                           im0_t + im2_t + im3_t) *
                           single_tile_size;
     const auto available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
-    const bool use_large_algorithm = cb_usage >= available_L1;
-
-    if (use_large_algorithm) {
-        log_info(LogTest, "Large batch_norm algorithm is selected.");
-        in0_t = block_size;
-        im1_t = 2 * block_size;
-        im2_t = 2 * block_size;
-    } else {
-        log_info(LogTest, "Small batch_norm algorithm is selected.");
-    }
 
     CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
         {
-            {CBIndex::c_0, in0_t},    // input
-            {CBIndex::c_1, in1_t},    // scaler
+            {CBIndex::c_0, in0_t},  // input
+            // {CBIndex::c_1, in1_t},    // scaler
+            {CBIndex::c_1, in1_t},    // batch_mean
             {CBIndex::c_2, in2_t},    // eps
             {CBIndex::c_3, in3_t},    // gamma
             {CBIndex::c_4, in4_t},    // beta
             {CBIndex::c_5, in5_t},    // mask_h
             {CBIndex::c_6, in6_t},    // mask_w
+            {CBIndex::c_7, in7_t},    // batch_var
             {CBIndex::c_16, out0_t},  // output
             {CBIndex::c_17, out1_t},  // mean
             {CBIndex::c_18, out2_t},  // rstd
-            {CBIndex::c_24, im0_t},   // E[x]
-            {CBIndex::c_25, im1_t},   // x - E[x]
-            {CBIndex::c_26, im2_t},   // (x - E[x])^2
-            {CBIndex::c_27, im3_t},   // Sum[(x - E[x])^2]
-            {CBIndex::c_28, im4_t},   // E[(x - E[x])^2] = Var[x]
-            {CBIndex::c_29, im5_t},   // 1.0/(sqrt(Var[x] + eps))
-            {CBIndex::c_30, im6_t},   // y * gamm + beta
-            {CBIndex::c_31, im7_t},   // Sum[x]
+            // {CBIndex::c_24, im0_t},   // E[x]
+            {CBIndex::c_24, im0_t},  // 1.0/(sqrt(Var[x] + eps))
+            {CBIndex::c_25, im1_t},  // x - E[x]
+            {CBIndex::c_26, im2_t},  // y * gamm + beta
+            // {CBIndex::c_26, im2_t},   // (x - E[x])^2
+            // {CBIndex::c_27, im3_t},   // Sum[(x - E[x])^2]
+            // {CBIndex::c_28, im4_t},   // E[(x - E[x])^2] = Var[x]
+            {CBIndex::c_27, im3_t},  // Sum[x]
         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        use_large_algorithm
-            ? "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm_large.cpp"
-            : "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm_small.cpp";
+        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm_small.cpp";
 
     const std::string writer_kernel_file(
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp");
@@ -196,9 +189,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const auto compute_kernel_file =
-        use_large_algorithm
-            ? "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_large_kernel.cpp"
-            : "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_small_kernel.cpp";
+        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_small_kernel.cpp";
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,
@@ -206,6 +197,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         origin_w,
         num_inner_tiles,
         block_size,
+        block_size_batch,
         static_cast<uint32_t>(gamma_has_value),
         static_cast<uint32_t>(beta_has_value),
         static_cast<uint32_t>(mean_has_value),
@@ -223,6 +215,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
             origin_w,
             num_inner_tiles,
             block_size,
+            block_size_batch,
             static_cast<uint32_t>(gamma_has_value),
             static_cast<uint32_t>(beta_has_value),
             static_cast<uint32_t>(mean_has_value),
@@ -241,6 +234,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto input_addr = input.buffer()->address();
+    const auto batch_mean_addr = batch_mean.buffer()->address();
+    const auto batch_var_addr = batch_var.buffer()->address();
 
     const auto output_addr = output.buffer()->address();
     const auto mean_addr = mean_has_value ? mean.value().buffer()->address() : 0;
@@ -265,13 +260,17 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         const std::vector<uint32_t> reader_runtime_args{
             input_addr,
             static_cast<uint32_t>(is_dram(input)),
+            batch_mean_addr,
+            static_cast<uint32_t>(is_dram(batch_mean)),
+            batch_var_addr,
+            static_cast<uint32_t>(is_dram(batch_var)),
             gamma_addr,
             static_cast<uint32_t>(is_dram(gamma)),
             static_cast<uint32_t>(gamma_has_value),
             beta_addr,
             static_cast<uint32_t>(is_dram(beta)),
             static_cast<uint32_t>(beta_has_value),
-            *reinterpret_cast<uint32_t*>(&scaler),
+            // *reinterpret_cast<uint32_t*>(&scaler),
             *reinterpret_cast<uint32_t*>(&eps),
             tile_offset,
             num_rows_per_core,
@@ -280,6 +279,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
             origin_h,
             origin_w,
             block_size,
+            block_size_batch,
         };
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
@@ -312,6 +312,8 @@ void BatchNormOperation::BatchNormFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto input_buffer = tensor_args.input.buffer();
+    auto batch_mean_buffer = tensor_args.batch_mean.buffer();
+    auto batch_var_buffer = tensor_args.batch_var.buffer();
     auto gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
     auto beta_buffer = tensor_args.beta.has_value() ? tensor_args.beta.value().buffer() : nullptr;
 
@@ -330,11 +332,13 @@ void BatchNormOperation::BatchNormFactory::override_runtime_arguments(
         {
             auto& runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
             runtime_args[0] = input_buffer->address();
+            runtime_args[2] = batch_mean_buffer->address();
+            runtime_args[4] = batch_var_buffer->address();
             if (gamma_buffer != nullptr) {
-                runtime_args[2] = gamma_buffer->address();
+                runtime_args[6] = gamma_buffer->address();
             }
             if (beta_buffer != nullptr) {
-                runtime_args[5] = beta_buffer->address();
+                runtime_args[9] = beta_buffer->address();
             }
         }
 
