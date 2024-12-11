@@ -7,6 +7,7 @@ import pytest
 import ttnn
 import random
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -30,3 +31,26 @@ def test_binary_scalar_ops(input_shapes, device):
 
     comp_pass = compare_pcc([out_tt], [out_pt])
     assert comp_pass
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 4, 32)])
+@pytest.mark.parametrize("activations", [None, [ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT)]])
+def test_add_and_apply_activations(device, shape, activations):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16) + 2
+    torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16) + 2
+    torch_output_tensor = torch_input_tensor_a + 2
+    if activations is not None:
+        # for activation in activations:
+        #     if activation == "relu":
+        torch_output_tensor = torch.sqrt(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.experimental.add(input_tensor_a, input_tensor_b, activations=activations)
+    output_tensor = ttnn.to_torch(output_tensor)
+    print("torch_output_tensor", torch_output_tensor)
+    print("output_tensor", output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    assert output_tensor.shape == shape

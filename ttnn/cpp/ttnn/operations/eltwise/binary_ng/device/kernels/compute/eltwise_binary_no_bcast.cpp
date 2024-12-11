@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+
 #include "dprint.h"
 
 namespace NAMESPACE {
@@ -26,6 +28,9 @@ void MAIN {
 
         tile_regs_acquire();
         add_tiles(cb_in0, cb_in1, 0, 0, 0);
+#ifdef SFPU_OP_CHAIN_0
+        SFPU_OP_CHAIN_0
+#endif
         tile_regs_commit();
 
         tile_regs_wait();

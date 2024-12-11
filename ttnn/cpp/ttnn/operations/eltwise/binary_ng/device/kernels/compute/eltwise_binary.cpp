@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #include <cstdint>
 
@@ -20,6 +21,9 @@ ALWI void process_tile(uint32_t cb_bcast, uint32_t cb_other, uint32_t cb_out, ui
 
         tile_regs_acquire();
         add_tiles(cb_bcast, cb_other, 0, 0, 0);
+#ifdef SFPU_OP_CHAIN_0
+        SFPU_OP_CHAIN_0
+#endif
         tile_regs_commit();
 
         tile_regs_wait();

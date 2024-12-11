@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::binary_ng {
 
@@ -31,6 +32,8 @@ struct BinaryNgDeviceOperation {
 
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
+        const std::optional<unary::FusedActivations> activations;
+        const std::optional<unary::UnaryWithParam> input_tensor_a_activation;
         std::optional<float> scalar;
         MemoryConfig memory_config;
         DataType input_dtype;
@@ -86,7 +89,9 @@ struct BinaryNgDeviceOperation {
         BinaryOpType binary_op_type,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor);
+        std::optional<Tensor> optional_output_tensor,
+        std::optional<unary::FusedActivations> activations,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation);
 
     // tensor-scalar invocation
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -95,7 +100,9 @@ struct BinaryNgDeviceOperation {
         BinaryOpType binary_op_type,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor);
+        std::optional<Tensor> optional_output_tensor,
+        std::optional<unary::FusedActivations> activations,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation);
 };
 
 }  // namespace ttnn::operations::binary_ng

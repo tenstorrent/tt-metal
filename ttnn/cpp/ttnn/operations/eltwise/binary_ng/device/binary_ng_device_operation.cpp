@@ -195,7 +195,9 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    std::optional<unary::FusedActivations> activations,
+    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     auto subtile_broadcast_type = get_subtile_broadcast_type(
         input_tensor_a_arg.get_logical_shape()[-2],
         input_tensor_a_arg.get_logical_shape()[-1],
@@ -205,6 +207,8 @@ BinaryNgDeviceOperation::invoke(
     return {
         operation_attributes_t{
             binary_op_type,
+            std::move(activations),
+            std::move(input_tensor_a_activation),
             std::nullopt,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             input_tensor_a_arg.get_dtype(),
@@ -221,10 +225,14 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    std::optional<unary::FusedActivations> activations,
+    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     return {
         operation_attributes_t{
             binary_op_type,
+            std::move(activations),
+            std::move(input_tensor_a_activation),
             scalar,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             input_tensor_a_arg.get_dtype(),

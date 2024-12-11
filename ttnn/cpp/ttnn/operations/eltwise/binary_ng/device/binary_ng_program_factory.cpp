@@ -5,6 +5,7 @@
 #include "binary_ng_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/eltwise/binary_ng/common/binary_ng_utils.hpp"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -344,6 +345,14 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
                             c_data_format == tt::DataFormat::Float32;
 
+    std::map<std::string, std::string> eltwise_defines = ttnn::operations::binary_ng::utils::get_defines(
+        operation_attributes.binary_op_type,
+        a.get_dtype(),
+        operation_attributes.input_dtype,
+        operation_attributes.activations,
+        operation_attributes.input_tensor_a_activation);
+    std::map<std::string, std::string> new_defines = {{"BCAST_INPUT", kernel_config.bcast_input_str()}};
+    eltwise_defines.merge(new_defines);
     // Compute kernel needs to know which op it's going to perform
     // This has to be passed as a compile-time argument
     // For now we're just going to do addition
@@ -351,8 +360,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         get_kernel_file_path(compute_kernel),
         all_device_cores,
-        tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en, .defines = {{"BCAST_INPUT", kernel_config.bcast_input_str()}}});
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .defines = eltwise_defines});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
