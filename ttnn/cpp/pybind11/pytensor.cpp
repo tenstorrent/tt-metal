@@ -105,8 +105,6 @@ Tensor convert_float_vector_to_tt_tensor(
     Device* device,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tile>& tile) {
-    auto result_cpu_spec =
-        TensorSpec(ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{}));
     if (data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B) {
         if (layout != Layout::TILE) {
             log_warning(
@@ -116,6 +114,8 @@ Tensor convert_float_vector_to_tt_tensor(
                 Layout::TILE,
                 layout);
         }
+        auto result_cpu_spec = TensorSpec(
+            ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(Layout::TILE, tile), MemoryConfig{}));
         auto owned_buffer = create_owned_buffer_from_vector_of_floats(std::move(data), DataType::FLOAT32);
         auto float_tensor = Tensor(OwnedStorage{owned_buffer}, shape, DataType::FLOAT32, Layout::ROW_MAJOR, tile);
         if (result_cpu_spec.logical_shape() != result_cpu_spec.padded_shape()) {
@@ -134,6 +134,8 @@ Tensor convert_float_vector_to_tt_tensor(
         }
         return tensor;
     }
+    auto result_cpu_spec =
+        TensorSpec(ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{}));
     auto owned_buffer = create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
     auto tensor = Tensor(OwnedStorage{owned_buffer}, result_cpu_spec);
     if (device) {
