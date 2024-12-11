@@ -226,17 +226,17 @@ def get_core_ranges(num_reader_cores):
     ]
     all_receiver_cores_list = [
         (1, 9),
-        # (2, 9),
+        (2, 9),
         (1, 0),
-        # (2, 0),
+        (2, 0),
         (1, 4),
-        # (2, 4),
+        (2, 4),
         (1, 5),
-        # (2, 5),
+        (2, 5),
         (5, 0),
-        # (6, 0),
+        (6, 0),
         (5, 9),
-        # (6, 9),
+        (6, 9),
         (5, 1),
         (6, 1),
         (5, 7),
@@ -255,8 +255,8 @@ def get_core_ranges(num_reader_cores):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 9),
-                    ttnn.CoreCoord(1, 9),
-                    # ttnn.CoreCoord(2, 9),
+                    # ttnn.CoreCoord(1, 9),
+                    ttnn.CoreCoord(2, 9),
                 ),
             ]
         ),
@@ -264,8 +264,8 @@ def get_core_ranges(num_reader_cores):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 0),
-                    ttnn.CoreCoord(1, 0),
-                    # ttnn.CoreCoord(2, 0),
+                    # ttnn.CoreCoord(1, 0),
+                    ttnn.CoreCoord(2, 0),
                 ),
             ]
         ),
@@ -273,8 +273,8 @@ def get_core_ranges(num_reader_cores):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 4),
-                    ttnn.CoreCoord(1, 4),
-                    # ttnn.CoreCoord(2, 4),
+                    # ttnn.CoreCoord(1, 4),
+                    ttnn.CoreCoord(2, 4),
                 ),
             ]
         ),
@@ -282,8 +282,8 @@ def get_core_ranges(num_reader_cores):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 5),
-                    ttnn.CoreCoord(1, 5),
-                    # ttnn.CoreCoord(2, 5),
+                    # ttnn.CoreCoord(1, 5),
+                    ttnn.CoreCoord(2, 5),
                 ),
             ]
         ),
@@ -291,8 +291,8 @@ def get_core_ranges(num_reader_cores):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 0),
-                    ttnn.CoreCoord(5, 0),
-                    # ttnn.CoreCoord(6, 0),
+                    # ttnn.CoreCoord(5, 0),
+                    ttnn.CoreCoord(6, 0),
                 ),
             ]
         ),
@@ -300,8 +300,8 @@ def get_core_ranges(num_reader_cores):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 9),
-                    ttnn.CoreCoord(5, 9),
-                    # ttnn.CoreCoord(6, 9),
+                    # ttnn.CoreCoord(5, 9),
+                    ttnn.CoreCoord(6, 9),
                 ),
             ]
         ),
@@ -309,8 +309,8 @@ def get_core_ranges(num_reader_cores):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 1),
-                    ttnn.CoreCoord(5, 1),
-                    # ttnn.CoreCoord(6, 1),
+                    # ttnn.CoreCoord(5, 1),
+                    ttnn.CoreCoord(6, 1),
                 ),
             ]
         ),
@@ -365,8 +365,8 @@ def get_core_ranges(num_reader_cores):
 
     dram_cores = all_dram_cores[:num_reader_cores]
     sender_cores = all_sender_cores[:num_reader_cores]
-    # receiver_cores_list = all_receiver_cores_list[: num_reader_cores * 2]
-    receiver_cores_list = all_receiver_cores_list[:num_reader_cores]
+    receiver_cores_list = all_receiver_cores_list[: num_reader_cores * 2]
+    # receiver_cores_list = all_receiver_cores_list[:num_reader_cores]
     receiver_cores = all_receiver_cores[:num_reader_cores]
 
     return dram_cores, sender_cores, receiver_cores_list, receiver_cores, worker_cores_range_set
@@ -380,7 +380,7 @@ def get_core_ranges(num_reader_cores):
         # (2, 2, [(128, 128), (128, 128)], 1),
         # (2, 2, [(256, 1024), (256, 1024)], 1),
         # (2, 2, [(512, 512), (512, 512)], 1),  # good PCC
-        (6, 1, [(384, 768), (384, 768)], 1),  # bad PCC
+        (12, 1, [(768, 768), (768, 768)], 1),  # bad PCC
         # (12, 1, [(2304, 768), (2304, 768)], 1),  # bad PCC
         #
         # (2, 2, [(192, 320), (192, 320)], 1),  # passes (1/2 banks)
@@ -441,7 +441,7 @@ def test_run_prefetcher(
     print(f"receiver_cores: {receiver_cores}")
     print(f"receiver_cores_list: {receiver_cores_list}")
 
-    sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
+    sender_receiver_mapping = list(zip(sender_cores, receiver_cores))
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * (576))
     # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 1088 * (360))
     # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 576 * (360))
