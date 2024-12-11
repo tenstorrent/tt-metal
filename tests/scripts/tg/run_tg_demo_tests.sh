@@ -33,19 +33,16 @@ run_tg_llama3_tests() {
   fi
 }
 
-run_tg_tests() {
+run_tg_falcon7b_tests() {
   fail=0
 
   # Falcon7B demo (perf verification for 128/1024/2048 seq lens and output token verification)
   pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/tg/falcon7b/input_data_tg.json' models/demos/tg/falcon7b/demo_tg.py --timeout=1500 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
-    echo "LOG_METAL: run_tg_demo_tests failed"
+    echo "LOG_METAL: run_tg_falcon7b_demo_tests failed"
     exit 1
   fi
-
-  # Run llama3 tests
-  run_tg_llama3_tests
 }
 
 main() {
@@ -63,7 +60,11 @@ main() {
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
 
-  run_tg_tests
+  # Run llama3 tests
+  run_tg_llama3_tests
+
+  # Run Falcon7B tests
+  run_tg_falcon7b_tests
 }
 
 main "$@"
