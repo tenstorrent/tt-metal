@@ -64,9 +64,11 @@ run_post_commit_pipeline_tests() {
     # Switch to modules only soon
     # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
     if [[ $dispatch_mode == "slow" ]]; then
-        ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
+        ./tests/scripts/run_cpp_fd2_tests.sh
+        ./tests/scripts/run_cpp_unit_tests.sh
     elif [[ $dispatch_mode == "fast" ]]; then
-        ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
+        ./tests/scripts/run_python_api_unit_tests.sh
+        ./tests/scripts/run_cpp_unit_tests.sh
     fi
 }
 
@@ -125,9 +127,11 @@ run_stress_post_commit_pipeline_tests() {
         echo "Info: [stress] Doing iteration $iter"
         start_time=$(date +%s%N) # capture nanoseconds
         if [[ $dispatch_mode == "slow" ]]; then
-            ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
+            ./tests/scripts/run_cpp_fd2_tests.sh
+            ./tests/scripts/run_cpp_unit_tests.sh
         else
-            ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
+            ./tests/scripts/run_python_api_unit_tests.sh
+            ./tests/scripts/run_cpp_unit_tests.sh
         fi
         end_time=$(date +%s%N)
         elapsed=$((end_time - start_time))/1000000000
