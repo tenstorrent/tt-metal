@@ -182,6 +182,14 @@ def to_torch_padding(padspec):
             {"core_grid": ttnn.CoreGrid(x=2, y=6), "strategy": ttnn.ShardStrategy.HEIGHT},
         ],
         [
+            # minimized borys second test case
+            (1, 1, 2, 4),
+            (1, 1, 4, 8),
+            (0, 0, 0, 0),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=2), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
             # borys's second test case
             (1, 2, 3, 4),
             (1, 2, 32, 32),
