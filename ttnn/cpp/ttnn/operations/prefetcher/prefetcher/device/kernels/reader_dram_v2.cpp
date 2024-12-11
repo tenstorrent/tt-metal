@@ -15,11 +15,6 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     constexpr uint32_t read_cb_size = get_compile_time_arg_val(3);
 
-    DPRINT << "num_layers: " << num_layers << ENDL();
-    DPRINT << "num_tensors: " << num_tensors << ENDL();
-    DPRINT << "num_blocks: " << num_blocks << ENDL();
-    DPRINT << "read_cb_size: " << read_cb_size << ENDL();
-
     constexpr uint32_t cb_id = 0;        // Reader cb
     constexpr uint32_t addrs_cb_id = 1;  // Tensor specs
     constexpr uint32_t out_cb_id = 2;    // Output cb
@@ -32,10 +27,6 @@ void kernel_main() {
     const uint32_t* page_sizes = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* block_num_pages = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* block_num_tiles = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
-
-    DPRINT << "bank_id: " << bank_id << ENDL();
-    DPRINT << "vc: " << vc << ENDL();
-    DPRINT << "total_num_blocks_in_buffer: " << total_num_blocks_in_buffer << ENDL();
 
     uint32_t l1_buffer_start_addr = get_write_ptr(cb_id);
     uint32_t l1_buffer_end_addr = get_write_ptr(cb_id) + read_cb_size;
@@ -52,7 +43,6 @@ void kernel_main() {
 
             // Address setup
             uint32_t tensor_base_address = tensor_addrs_l1[t * num_layers + layer];  // tensor_addrs_l1[t][layer];
-            DPRINT << "tensor_base_address: " << tensor_base_address << ENDL();
             uint32_t src_base_addr =
                 noc_async_read_tile_dram_sharded_set_state<true>(tensor_base_address, curr_page_size, bank_id, vc);
             uint32_t src_read_addr = 0;
@@ -70,7 +60,6 @@ void kernel_main() {
                 l1_write_addr_start = l1_buffer_start_addr;
             }
             uint32_t l1_write_addr = l1_write_addr_start;
-            DPRINT << "l1_write_addr: " << l1_write_addr << ENDL();
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 // TODO: Fix granularity of the CB
@@ -93,8 +82,6 @@ void kernel_main() {
 
             // Copy from reader to output
             auto l1_read_addr = l1_write_addr_start;
-            DPRINT << "out_write_addr: " << get_write_ptr(out_cb_id) << ENDL();
-            DPRINT << "l1_read_addr: " << l1_read_addr << ENDL();
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 cb_reserve_back(out_cb_id, curr_block_num_tiles);
                 auto l1_out_write_addr = get_noc_addr(get_write_ptr(out_cb_id));
