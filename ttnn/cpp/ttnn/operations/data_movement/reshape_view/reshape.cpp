@@ -246,7 +246,7 @@ ttnn::Shape tiling_reshape_corrector(const ttnn::Shape& shape, const uint32_t ti
     const int8_t correction_1 =(tile_first_dim - (int)padded[-1] % tile_first_dim) % tile_first_dim;
     if(rank == 1)
     {
-        return ttnn::Shape({1,shape[0]},{32,padded[0]+correction_1});
+        return ttnn::Shape({1, shape[0]}, {32, padded[0] + correction_1});
     }
     const int8_t correction_2 =(tile_second_dim - (int)padded[-2] % tile_second_dim) % tile_second_dim;
     switch(rank)
