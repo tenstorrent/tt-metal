@@ -251,7 +251,7 @@ void py_bind_conv2d(py::module& module) {
            bool enable_channels_padding,
            bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
            return determine_parallel_config(
-                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, compute_grid_size, block_shard_orientation, enable_channels_padding, is_out_tiled);
+                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, compute_grid_size, block_shard_orientation, enable_channels_padding, is_out_tiled, false);
         },
         py::arg("shard_layout"),
         py::arg("batch_size"),
