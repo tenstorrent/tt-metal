@@ -15,6 +15,69 @@ namespace ttnn {
 namespace operations::conv {
 namespace conv2d {
 
+struct Conv2dConfig {
+    DataType dtype = DataType::BFLOAT16;
+    DataType weights_dtype = DataType::BFLOAT16;
+    string activation = "";
+    uint32_t input_channels_alignment = 32;
+    bool deallocate_activation = false;
+    bool reallocate_halo_output = false;
+    uint32_t act_block_h_override = 0; // This argument is ignored when shard_layout == WIDTH_SHARDED.
+    uint32_t act_block_w_div = 1; // Amount by which the maximum possible act_block_width is divided. Max act_block_w = in_channels / (total_num_cores * TILE_WIDTH);
+                                  // Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
+    bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
+    bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
+    std::optional<TensorMemoryLayout> shard_layout;
+    std::optional<CoreRangeSet> core_grid = std::nullopt; // used only if override_sharding_config is true
+    bool transpose_shards = true; // used only if override_sharding_config is true and if height sharding is false
+    Layout output_layout = Layout::TILE;
+    bool enable_act_double_buffer = false;
+    bool enable_weights_double_buffer = false; // Used on for block sharded convolutions
+    bool enable_split_reader = false;
+    bool enable_subblock_padding = false;
+    static constexpr auto attribute_names = std::make_tuple(
+        "dtype",
+        "weights_dtype",
+        "activation",
+        "input_channels_alignment",
+        "deallocate_activation",
+        "reallocate_halo_output",
+        "act_block_h_override",
+        "act_block_w_div",
+        "reshard_if_not_optimal",
+        "override_sharding_config",
+        "shard_layout",
+        "core_grid",
+        "transpose_shards",
+        "output_layout",
+        "enable_act_double_buffer",
+        "enable_weights_double_buffer",
+        "enable_split_reader",
+        "enable_subblock_padding");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->dtype),
+            std::cref(this->weights_dtype),
+            std::cref(this->activation),
+            std::cref(this->input_channels_alignment),
+            std::cref(this->deallocate_activation),
+            std::cref(this->reallocate_halo_output),
+            std::cref(this->act_block_h_override),
+            std::cref(this->act_block_w_div),
+            std::cref(this->reshard_if_not_optimal),
+            std::cref(this->override_sharding_config),
+            std::cref(this->shard_layout),
+            std::cref(this->core_grid),
+            std::cref(this->transpose_shards),
+            std::cref(this->output_layout),
+            std::cref(this->enable_act_double_buffer),
+            std::cref(this->enable_weights_double_buffer),
+            std::cref(this->enable_split_reader),
+            std::cref(this->enable_subblock_padding));
+    }
+};
+
+
 // TODO: Accept parallelization
 enum class OptimizedConvOpParallelizationStrategy {
     MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE
@@ -109,8 +172,6 @@ struct OptimizedConvNew {
             enable_subblock_padding(enable_subblock_padding),
             use_non_tile_height(use_non_tile_height) {}
 
-    std::pair<uint32_t,uint32_t> estimate_L1_usage(tt::ARCH arch, const DataType input_dtype, const DataType weights_dtype, const DataType output_dtype, const tt::tt_metal::LegacyShape weights_shape, bool enable_bias) const;
-
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
@@ -169,6 +230,16 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool enable_subblock_padding = false,
     bool use_non_tile_height = false
 );
+
+std::pair<uint32_t,uint32_t> estimate_L1_usage(
+    tt::ARCH arch, TensorMemoryLayout shard_layout,
+    const DataType input_dtype, const DataType weights_dtype, const DataType output_dtype,
+    const sliding_window::SlidingWindowConfig& sliding_window_config, const DeviceComputeKernelConfig& compute_kernel_config,
+    const OptimizedConvBlockConfig& block_config, const OptimizedConvParallelizationConfig& pconfig,
+    const Shape& input_shape, const Shape& weights_shape,
+    uint32_t output_channels, uint32_t groups,
+    const Conv2dConfig& conv_config, bool enable_bias, bool use_non_tile_height
+    );
 
 }  // namespace conv2d
 
