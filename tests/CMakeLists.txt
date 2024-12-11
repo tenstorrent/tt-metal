@@ -7,6 +7,7 @@ target_link_libraries(
         pthread
         gtest
         gtest_main
+        gmock
         magic_enum
         fmt::fmt-header-only
         span
