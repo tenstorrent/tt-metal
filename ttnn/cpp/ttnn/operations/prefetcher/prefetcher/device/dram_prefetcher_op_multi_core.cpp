@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* output buffer (based on reader_cb) */
     uint32_t reader_output_single_tile_size = reader_cb_single_tile_size;
-    uint32_t reader_output_cb_size = num_tensors * tensor_block_num_tiles[0] * num_blocks * tensor_tile_sizes[0];
+    uint32_t reader_output_cb_size = tensor_block_num_tiles[0] * num_blocks * tensor_tile_sizes[0];
 
     uint32_t reader_output_cb_index = tt::CB::c_in2;
     CircularBufferConfig reader_output_cb_config =
