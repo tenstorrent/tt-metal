@@ -32,17 +32,17 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
-    parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
+    parameters = create_unet_model_parameters(model, torch_input, groups=groups)
     ttnn_model = unet_shallow_ttnn.UNet(parameters, device=mesh_device, mesh_mapper=weights_mesh_mapper)
 
     num_devices = len(mesh_device.get_device_ids())
     logger.info(f"Using {num_devices} devices for this test")
 
     torch_input, ttnn_input = create_unet_input_tensors(
-        num_devices * batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
+        num_devices * batch, groups, channel_order="first", pad=True, mesh_mapper=inputs_mesh_mapper
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(
