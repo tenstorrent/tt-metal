@@ -73,13 +73,13 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     // TODO: What does this granularity depend on?
     uint32_t num_blocks = global_cb->receiver_cores().num_cores();
     std::vector<uint32_t> tensor_block_num_tiles;
-    std::vector<std::vector<uint32_t>> tensor_block_shapes;
+    std::vector<std::vector<uint32_t>> tensor_shapes;
     std::vector<uint32_t> tensor_tile_sizes;
     for (uint32_t t = 0; t < num_tensors; t++) {
         uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
         uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
 
-        tensor_block_shapes.push_back({height_in_tiles, width_in_tiles});
+        tensor_shapes.push_back({height_in_tiles, width_in_tiles});
         tensor_block_num_tiles.push_back(height_in_tiles * width_in_tiles / num_blocks);
         tensor_tile_sizes.push_back(tensor_tiles[t].get_tile_size(tensor_data_formats[t]));
     }
@@ -193,7 +193,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         block_num_pages.push_back(num_pages);
 
         uint32_t coalesced_page_size, coalesced_num_page;
-        uint32_t block_width_in_tiles = tensor_block_shapes[t][1];
+        uint32_t block_width_in_tiles = tensor_shapes[t][1];
         get_max_page_size_and_num_pages(
             block_width_in_tiles / num_receivers_per_reader,
             tt::tt_metal::detail::TileSize(tensor_data_formats[t]),
@@ -243,8 +243,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         writer_rt_args.insert(writer_rt_args.end(), coalesced_num_pages.begin(), coalesced_num_pages.end());
         writer_rt_args.insert(writer_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
         writer_rt_args.insert(writer_rt_args.end(), tensor_tile_sizes.begin(), tensor_tile_sizes.end());
-        for (auto block_shape : tensor_block_shapes) {  // block_height_in_itles
-            writer_rt_args.push_back(block_shape[0]);
+        for (auto tensor_shape : tensor_shapes) {  // block_height_in_itles
+            writer_rt_args.push_back(tensor_shape[0] / num_blocks);
         }
         writer_rt_args.push_back(noc);
 
