@@ -1989,7 +1989,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     }
 
     auto override_runtime_arguments_callback =
-        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores](
+        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores, global_cb](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -2011,7 +2011,9 @@ operation::ProgramWithCallbacks create_program_gather_in0(
                 UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
             }
             if (src1_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
+                if (!global_cb.has_value()) {  // TODO: Check if this is correct
+                    UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
+                }
             }
             if (out_sharded) {
                 UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
