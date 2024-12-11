@@ -27,10 +27,19 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 1, 1], 32)
+        + gen_shapes([1, 1, 1, 1], [2, 9, 167, 128], [1, 1, 1, 1], 32)
+        + gen_shapes([1, 1, 1, 1], [2, 6, 69, 129], [1, 1, 1, 1], 15)
         + gen_shapes([1, 1, 1], [6, 128, 128], [1, 1, 1], 32)
-        + gen_shapes([1, 1], [128, 128], [1, 1], 32),
+        + gen_shapes([1, 1, 1], [6, 128, 128], [1, 2, 3], 3)
+        + gen_shapes([1, 1, 1], [6, 127, 257], [1, 1, 1], 16)
+        + gen_shapes([1, 1], [128, 128], [1, 1], 32)
+        + gen_shapes([1, 1], [8, 100], [2, 3], 7)
+        + gen_shapes([1, 1], [255, 255], [1, 1], 4)
+        + gen_shapes([1], [128], [1], 32)
+        + gen_shapes([1], [128], [1], 7)
+        + gen_shapes([1], [250], [3], 4),
         "dim": [0, 1, 2, 3, None],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -53,8 +62,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             return True, "Absolute value of dim must be less or equal than the rank of input tensor"
     if test_vector["input_layout"] == ttnn.TILE_LAYOUT:
         return True, "Tiled layout not supported"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
+        test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
+    ):
+        return True, "Row major is only supported for fp32 & fp16"
     return False, None
 
 

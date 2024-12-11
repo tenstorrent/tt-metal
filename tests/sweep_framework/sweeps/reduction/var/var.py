@@ -27,13 +27,35 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "xfail": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 32, 32], 32),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_layout": [ttnn.TILE_LAYOUT],
+        "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 32, 32], 32)
+        + gen_shapes([1, 1, 1, 1], [2, 6, 128, 255], [1, 1, 132, 132], 42)
+        + gen_shapes([1, 1, 1, 1], [2, 6, 128, 255], [1, 1, 132, 132], 52)
+        + gen_shapes([1, 1, 1], [2, 6, 128], [1, 1, 32], 32)
+        + gen_shapes([1, 1, 1], [2, 16, 129], [1, 1, 64], 16)
+        + gen_shapes([1, 1, 1], [2, 26, 130], [1, 1, 128], 8)
+        + gen_shapes([1, 1], [2, 6], [1, 1], 4)
+        + gen_shapes([1, 1], [2, 16], [1, 1], 5)
+        + gen_shapes([1, 1], [2, 26], [1, 1], 6)
+        + gen_shapes([1], [8], [1], 2)
+        + gen_shapes([1], [18], [1], 2)
+        + gen_shapes([1], [28], [1], 2),
+        "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
+        test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
+    ):
+        return True, "Row major is only supported for fp32 & fp16"
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.
