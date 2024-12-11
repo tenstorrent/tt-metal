@@ -17,7 +17,7 @@ class memory {
   typedef std::uint64_t address_t;
   typedef std::uint32_t word_t;
     enum class Packing : std::uint8_t { SEPARATE, CONTIGUOUS };
-    enum class Relocate : std::uint8_t { ABS, XIP };
+    enum class Relocating : std::uint8_t { ABS, XIP };
 
  private:
   struct span {
@@ -31,14 +31,13 @@ class memory {
   std::vector<word_t> data_;
   std::vector<struct span> link_spans_;
   uint32_t text_size_ = 0;
-  uint32_t packed_size_ = 0;
   uint32_t text_addr_ = 0;
     Packing packing_;
-    Relocate relocate_;
+    Relocating relocating_;
 
  public:
   memory();
-  memory(std::string const &path, Packing packing, Relocate relo_type);
+  memory(std::string const &path, Packing packing, Relocating relocating);
 
   public:
   // These can be large objects, so ban copying ...
@@ -51,13 +50,12 @@ class memory {
   public:
   const std::vector<word_t>& data() const { return this->data_; }
 
-  // memory& operator=(memory &&src);
+    Packing get_packing() const {return packing_;}
+    Relocating get_relocating() const {return relocating_;}
   bool operator==(const memory& other) const;
 
-  void set_text_size(uint32_t size) { this->text_size_ = size; }
-  void set_packed_size(uint32_t size) { this->packed_size_ = size; }
   uint32_t get_text_size() const { return this->text_size_; }
-  uint32_t get_packed_size() const { return this->packed_size_; }
+  uint32_t get_packed_size() const { return data_.size() * sizeof(word_t); }
   uint32_t get_text_addr() const { return this->text_addr_; }
 
   size_t size() const { return data_.size(); }
@@ -71,8 +69,6 @@ public:
   // Iterate over spans_ to act on data_ (eg., to device)
   void process_spans(const std::function<void (std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const;
   void process_spans(const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
-
-  void pack_data_into_text(std::uint64_t text_start, std::uint64_t data_start);
 };
 
 }  // namespace ll_api

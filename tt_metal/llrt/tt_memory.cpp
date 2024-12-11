@@ -21,11 +21,12 @@ memory::memory() {
     link_spans_.reserve(initial_span_space_);
 }
 
-memory::memory(std::string const& path, Packing pack_type, Relocate relo_type) {
+memory::memory(std::string const& path, Packing packing, Relocating relocating) :
+    packing_(packing), relocating_(relocating) {
     ElfFile elf;
 
     elf.ReadImage(path);
-    if (relo_type == Relocate::XIP) {
+    if (relocating == Relocating::XIP) {
         elf.MakeExecuteInPlace();
     }
 
@@ -41,8 +42,10 @@ memory::memory(std::string const& path, Packing pack_type, Relocate relo_type) {
     for (unsigned ix = 0; ix != segments.size(); ix++) {
         map.push_back(ix);
     }
-    std::sort(
-        map.begin(), map.end(), [&](unsigned a, unsigned b) { return segments[a].address < segments[b].address; });
+    if (packing != Packing::CONTIGUOUS) {
+        std::sort(
+            map.begin(), map.end(), [&](unsigned a, unsigned b) { return segments[a].address < segments[b].address; });
+    }
 
     for (unsigned ix : map) {
         auto const& segment = segments[map[ix]];
@@ -55,10 +58,9 @@ memory::memory(std::string const& path, Packing pack_type, Relocate relo_type) {
         }
     };
     text_addr_ = segments[0].address;
-    set_text_size(segments[0].contents.size() * sizeof(word_t));
-    set_packed_size(data_.size() * sizeof(uint32_t));
+    text_size_ = segments[0].contents.size() * sizeof(word_t);
 
-    if (pack_type == Packing::CONTIGUOUS) {
+    if (packing == Packing::CONTIGUOUS) {
         TT_ASSERT(this->link_spans_.size() != 0);
         TT_ASSERT(link_spans_.size() <= 2);
 
@@ -113,38 +115,6 @@ void memory::process_spans(
         callback(it, span.addr, span.len);
         offset += span.len;
     }
-}
-
-// Takes spans and merges the data to the text span
-// Used for kernels (not firmware)
-// Spans get packed for kernels so they can be loaded in one NOC transaction
-// A symbol at the end of the text segment allows the FW to find the data segment to copy into place
-void memory::pack_data_into_text(std::uint64_t, std::uint64_t) {
-#if 0
-    TT_ASSERT(this->link_spans_.size() != 0);
-    TT_ASSERT(link_spans_.size() <= 2);
-
-    std::vector<word_t> new_data2;
-
-    bool text_is_second = link_spans_.size() == 2 && link_spans_[1].addr == text_addr_;
-    auto const& text = link_spans_[text_is_second];
-
-    span new_span2 = text;
-
-    uint32_t offset = text_is_second ? link_spans_[0].len : 0;
-    new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + text.len);
-
-    if (link_spans_.size() == 2) {
-        offset = text_is_second ? 0 : text.len;
-        auto const& data = link_spans_[!text_is_second];
-        new_span2.len += data.len;
-        new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + data.len);
-    }
-
-    this->link_spans_.resize(1);
-    this->link_spans_[0] = new_span2;
-    this->data_ = new_data2;
-#endif
 }
 
 }  // namespace ll_api

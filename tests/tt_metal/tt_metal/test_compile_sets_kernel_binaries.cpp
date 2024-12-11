@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
                             0,
                             0,
                             ll_api::memory::Packing::CONTIGUOUS,
-                            ll_api::memory::Relocate::XIP);
+                            ll_api::memory::Relocating::XIP);
                         TT_FATAL(
                             brisc_binary == *brisc_binaries.at(mask).at(0),
                             "Expected saved BRISC binary to be the same as binary in persistent cache");
@@ -226,10 +226,10 @@ int main(int argc, char** argv) {
                             dm_class_idx,
                             1,
                             get_latest_kernel_binary_path(mask, riscv1_kernel));
-                        ll_api::memory::Relocate relo_type =
+                        ll_api::memory::Relocating relo_type =
                             (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0)
-                                ? ll_api::memory::Relocate::ABS
-                                : ll_api::memory::Relocate::XIP;
+                                ? ll_api::memory::Relocating::ABS
+                                : ll_api::memory::Relocating::XIP;
 
                         ll_api::memory const& ncrisc_binary = llrt::get_risc_binary(
                             ncrisc_hex_path, 0, 1, 0, ll_api::memory::Packing::CONTIGUOUS, relo_type);
@@ -249,7 +249,7 @@ int main(int argc, char** argv) {
                                 2,
                                 trisc_id,
                                 ll_api::memory::Packing::CONTIGUOUS,
-                                ll_api::memory::Relocate::XIP);
+                                ll_api::memory::Relocating::XIP);
                             TT_FATAL(
                                 trisc_binary == *compute_binaries.at(mask).at(trisc_id),
                                 "Expected saved TRISC binary for {} to be the same as binary in persistent cache",
