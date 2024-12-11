@@ -38,7 +38,6 @@ enum class HalProcessorClassType : uint8_t {
 
 enum class HalL1MemAddrType : uint8_t {
     BASE,
-    BARRIER,
     MAILBOX,
     LAUNCH,
     WATCHER,
@@ -52,7 +51,7 @@ enum class HalL1MemAddrType : uint8_t {
     FW_VERSION_ADDR,  // Really only applicable to active eth core right now
     LOCAL,
     BANK_TO_NOC_SCRATCH,
-    COUNT             // Keep this last so it always indicates number of enum options
+    COUNT  // Keep this last so it always indicates number of enum options
 };
 
 enum class HalDramMemAddrType : uint8_t { DRAM_BARRIER = 0, COUNT = 1 };
