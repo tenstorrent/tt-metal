@@ -2,11 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <core/xtensor_all_includes.hpp>
 
 #include "core/distributed_mapping.hpp"
+
+namespace {
+
+using ::testing::SizeIs;
 
 template <typename T>
 class MeshOpsTest : public ::testing::Test {
@@ -25,7 +30,7 @@ TYPED_TEST(MeshOpsTest, ChunkBasicNonDivisible3) {
     // Chunk into 3 parts along dimension 0
     auto chunks = ttml::core::chunk(tensor, 3, 0);
 
-    ASSERT_EQ(chunks.size(), 3u);
+    ASSERT_THAT(chunks, SizeIs(3));
     EXPECT_EQ(chunks[0].shape()[0], 4u);  // first chunk size 4
     EXPECT_EQ(chunks[1].shape()[0], 4u);  // next chunk size 4
     EXPECT_EQ(chunks[2].shape()[0], 2u);  // last chunk size 2
@@ -38,7 +43,7 @@ TYPED_TEST(MeshOpsTest, ChunkBasicLessChunksThanProvided) {
     // Chunk into 6 parts along dimension 0
     auto chunks = ttml::core::chunk(tensor, 6, 0);
 
-    ASSERT_EQ(chunks.size(), 5u);
+    ASSERT_THAT(chunks, SizeIs(5));
     EXPECT_EQ(chunks[0].shape()[0], 3u);  // first chunk size 3
     EXPECT_EQ(chunks[1].shape()[0], 3u);  // next chunk size 3
     EXPECT_EQ(chunks[2].shape()[0], 3u);  // next chunk size 3
@@ -56,7 +61,7 @@ TYPED_TEST(MeshOpsTest, ShardXTensorToMeshBasicShard) {
     auto shards = sharder.map(tensor);
 
     // With 4 shards, each shard should have size 2
-    ASSERT_EQ(shards.size(), 4u);
+    ASSERT_THAT(shards, SizeIs(4));
     for (auto& s : shards) {
         EXPECT_EQ(s.size(), 2u);
     }
@@ -73,7 +78,7 @@ TYPED_TEST(MeshOpsTest, ShardTensor2dMeshTwoDimSharding) {
     ttml::core::ShardTensor2dMesh<TypeParam> sharder(mesh_shape, {0, 1});
     auto shards = sharder.map(tensor);
 
-    ASSERT_EQ(shards.size(), 4u);
+    ASSERT_THAT(shards, SizeIs(4));
     // Check shapes of shards
     for (auto& shard : shards) {
         EXPECT_EQ(shard.shape()[0], 2u);
@@ -90,7 +95,7 @@ TYPED_TEST(MeshOpsTest, ReplicateXTensorToMeshReplication) {
     ttml::core::ReplicateXTensorToMesh<TypeParam> replicator(mesh_shape);
     auto replicas = replicator.map(tensor);
 
-    ASSERT_EQ(static_cast<int>(replicas.size()), num_devices);
+    ASSERT_THAT(replicas, SizeIs(num_devices));
     for (const auto& t : replicas) {
         EXPECT_TRUE(xt::allclose(t, tensor));
     }
@@ -243,3 +248,4 @@ TYPED_TEST(MeshOpsTest, ConcatenateSameParametersAsCompose) {
         TypeParam(0), TypeParam(1), TypeParam(2), TypeParam(3), TypeParam(4), TypeParam(5)};
     EXPECT_TRUE(xt::allclose(composed, expected));
 }
+}  // namespace
