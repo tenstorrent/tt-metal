@@ -4,7 +4,8 @@ These instructions will guide you through the installation of Tenstorrent system
 
 > [!IMPORTANT]
 >
-> If you are using a release version of this software, check installation instructions packaged with it. You can find them in either the release assets for that version, or in the [source files for that version tag](https://github.com/tenstorrent/tt-metal/tags).
+> If you are using a release version of this software, check installation instructions packaged with it.
+> You can find them in either the release assets for that version, or in the source files for that [version tag](https://github.com/tenstorrent/tt-metal/tags).
 
 ---
 
@@ -17,6 +18,14 @@ Once you have setup the hardware move on to step 2.
 ---
 
 ### 2: Install Driver & Firmware
+
+Note the current compatibility matrix:
+
+| Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
+|---------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
+| Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.9.0.0 (v80.9.0.0)               | v2.2.0 or above       | N/A                            |
+| Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | N/A                            |
+| T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | v1.1.3 or above, `mesh` config |
 
 #### Install System-level Dependencies
 ```
@@ -33,7 +42,7 @@ sudo ./install_dependencies.sh
 | OS              | Command                |
 |------------------------|----------------------------------------------------|
 | Ubuntu / Debian        | ```apt install dkms```                             |
-| Fedora                 | ```apt install dkms```                             |
+| Fedora                 | ```dnf install dkms```                             |
 | Enterprise Linux Based | ```dnf install epel-release && dnf install dkms``` |
 
 - Install the driver TT-KMD:
