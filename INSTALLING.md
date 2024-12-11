@@ -2,6 +2,10 @@
 
 These instructions will guide you through the installation of Tenstorrent system tools and drivers, followed by the installation of TT-Metalium and TT-NN.
 
+> [!IMPORTANT]
+>
+> If you are using a release version of this software, check installation instructions packaged with it. You can find them in either the release assets for that version, or in the [source files for that version tag](https://github.com/tenstorrent/tt-metal/tags).
+
 ---
 
 ## Prerequisites:
@@ -133,11 +137,7 @@ Once hardware and system software are installed, verify that the system has been
 
 ---
 
-## TT-Metalium Installation:
-
-> [!IMPORTANT]
->
-> If you are using a release version of this software, check installation insttructions packaged with it.
+## TT-Metalium Installation
 
 #### There are three options for installing TT-Metalium:
 
@@ -166,9 +166,8 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 ### Step 2. Setup Environment Variables and Invoke our Build Scripts:
 
 - Note: Some advanced build configurations like unity builds require `CMake 3.20`.
-  To install `CMake 3.20` run:
+  To upgrade Cmake run:
     ```sh
-    sudo apt remove cmake -y
     pip3 install cmake --upgrade
     hash -r
     cmake --version
@@ -249,7 +248,6 @@ To try our pre-built models in `models/`, you must:
   sudo apt-get install cpufrequtils
   sudo cpupower frequency-set -g performance
   ```
-
 
 #### You are All Set!
 
