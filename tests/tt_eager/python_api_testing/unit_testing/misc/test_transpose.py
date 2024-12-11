@@ -379,7 +379,7 @@ def run_tranpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache):
 def test_tranpose_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     for _ in range(2):
         run_tranpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache)
-        # # dummy tensor to change tensor alloc
+        # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.from_torch(

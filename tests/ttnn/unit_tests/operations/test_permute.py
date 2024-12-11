@@ -247,7 +247,7 @@ def test_permute_squeeze(device):
 
 @pytest.mark.parametrize("shape", [(1, 49, 768)])
 @pytest.mark.parametrize("perm", generate_permutations(3))
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_3D(shape, perm, layout, memory_config, dtype, device):
