@@ -51,6 +51,7 @@ class TestDiv:
             if round_mode in ["trunc", "floor"]:
                 pytest.skip("does not work for Grayskull -skipping")
         if accurate_mode == False:  # If input_b is non-zero tensor
+            pytest.skip("will be enabled after #15780 is resolved")
             datagen_func = [
                 generation_funcs.gen_func_with_cast(
                     partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16

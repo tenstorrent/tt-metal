@@ -5,9 +5,8 @@
 #include <string>
 #include <thread>
 #include "tt_metal/device.hpp"
-#include "common/core_coord.hpp"
+#include "common/core_assignment.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
@@ -28,6 +27,7 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/types.hpp"
+#include "noc/noc_parameters.h"
 
 // FIXME: ARCH_NAME specific
 #include "eth_l1_address_map.h"
@@ -70,21 +70,12 @@ uint32_t Device::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId
     return this->active_sub_device_manager_->sub_device(sub_device_id).num_cores(core_type);
 }
 
-std::vector<uint32_t> Device::get_noc_encoding_for_active_eth_cores(NOC noc_index) {
-    auto active_ethernet_cores = this->get_active_ethernet_cores(true);
-    std::vector<uint32_t> noc_encodings = {};
-    noc_encodings.reserve(active_ethernet_cores.size());
-    for (const auto& core : active_ethernet_cores) {
-        noc_encodings.push_back(this->get_noc_unicast_encoding(noc_index, ethernet_core_from_logical_core(core)));
-    }
-    return noc_encodings;
-}
 /* Get all dispatch cores associated with this device. On return, my_dispatch_cores contains dispatch cores used by
  * this device (split between cores on this device itself and if this is a remote device, the mmio device dispatch
  * cores being used by this device). On return, other_dispatch_cores contains dispatch cores on this device that are
  * used by other (remote) devices.
 */
-void Device::get_associated_dispatch_phys_cores(
+void Device::get_associated_dispatch_virtual_cores(
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
     std::unordered_map<chip_id_t,std::unordered_set<CoreCoord>> &other_dispatch_cores) {
     if (this->is_mmio_capable()) {
@@ -96,54 +87,54 @@ void Device::get_associated_dispatch_phys_cores(
                 if (device_id == this->id_) {
                     //mmio device.
                     bool dispatch_hd_allocated = false;
-                    CoreCoord phys_core_dispatch_hd;
+                    CoreCoord virtual_core_dispatch_hd;
                     if (dispatch_core_manager::instance().is_dispatcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, curr_channel, cq_id);
-                        phys_core_dispatch_hd = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
-                        my_dispatch_cores[this->id_].insert(phys_core_dispatch_hd);
+                        virtual_core_dispatch_hd = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+                        my_dispatch_cores[this->id_].insert(virtual_core_dispatch_hd);
                         dispatch_hd_allocated = true;
-                        log_debug(tt::LogMetal, "MMIO Device Dispatch core: Logical: {} - Physical: {}", dispatch_location.str(), phys_core_dispatch_hd.str());
+                        log_debug(tt::LogMetal, "MMIO Device Dispatch core: Logical: {} - Physical: {}", dispatch_location.str(), virtual_core_dispatch_hd.str());
                     }
                     // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_hd
                     if (dispatch_core_manager::instance().is_dispatcher_s_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core_dispatch_s = get_physical_core_coordinate(dispatch_s_location, dispatch_core_type);
-                        if ((!dispatch_hd_allocated) or (phys_core_dispatch_s != phys_core_dispatch_hd)) {
-                            my_dispatch_cores[dispatch_s_location.chip].insert(phys_core_dispatch_s);
+                        CoreCoord virtual_core_dispatch_s = this->virtual_core_from_logical_core(dispatch_s_location, dispatch_core_type);
+                        if ((!dispatch_hd_allocated) or (virtual_core_dispatch_s != virtual_core_dispatch_hd)) {
+                            my_dispatch_cores[dispatch_s_location.chip].insert(virtual_core_dispatch_s);
                         }
                     }
                     if (dispatch_core_manager::instance().is_prefetcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
-                        my_dispatch_cores[this->id_].insert(phys_core);
-                        log_debug(tt::LogMetal, "MMIO Device Prefetch core: Logical: {} - Physical: {}", prefetch_location.str(), phys_core.str());
+                        CoreCoord virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
+                        my_dispatch_cores[this->id_].insert(virtual_core);
+                        log_debug(tt::LogMetal, "MMIO Device Prefetch core: Logical: {} - Physical: {}", prefetch_location.str(), virtual_core.str());
                     }
                 } else if (tt::DevicePool::instance().is_device_active(device_id)) {
                     //non mmio devices serviced by this mmio capable device.
                     //skip remote dispatch cores only if respective remote device is active.
                     if (dispatch_core_manager::instance().is_dispatcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(phys_core);
-                        log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will keep running on MMIO Device.", dispatch_location.str(), phys_core.str());
+                        CoreCoord virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+                        other_dispatch_cores[this->id_].insert(virtual_core);
+                        log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will keep running on MMIO Device.", dispatch_location.str(), virtual_core.str());
                     }
                     if (dispatch_core_manager::instance().is_prefetcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(phys_core);
-                        log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will keep running on MMIO Device.", prefetch_location.str(), phys_core.str());
+                        CoreCoord virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
+                        other_dispatch_cores[this->id_].insert(virtual_core);
+                        log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will keep running on MMIO Device.", prefetch_location.str(), virtual_core.str());
                     }
                     if (dispatch_core_manager::instance().is_mux_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(mux_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(phys_core);
-                        log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will keep running on MMIO Device.", mux_location.str(), phys_core.str());
+                        CoreCoord virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
+                        other_dispatch_cores[this->id_].insert(virtual_core);
+                        log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will keep running on MMIO Device.", mux_location.str(), virtual_core.str());
                     }
                     if (dispatch_core_manager::instance().is_demux_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(demux_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(phys_core);
-                        log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will keep running on MMIO Device.", demux_location.str(), phys_core.str());
+                        CoreCoord virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
+                        other_dispatch_cores[this->id_].insert(virtual_core);
+                        log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will keep running on MMIO Device.", demux_location.str(), virtual_core.str());
                     }
                 }
             }
@@ -157,54 +148,54 @@ void Device::get_associated_dispatch_phys_cores(
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             if (dispatch_core_manager::instance().is_dispatcher_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(phys_core);
-                log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will be reset on MMIO Device.", dispatch_location.str(), phys_core.str());
+                CoreCoord virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
+                log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will be reset on MMIO Device.", dispatch_location.str(), virtual_core.str());
             }
             if (dispatch_core_manager::instance().is_prefetcher_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
-                my_dispatch_cores[prefetch_location.chip].insert(phys_core);
-                log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will be reset on MMIO Device.", prefetch_location.str(), phys_core.str());
+                CoreCoord virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
+                my_dispatch_cores[prefetch_location.chip].insert(virtual_core);
+                log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will be reset on MMIO Device.", prefetch_location.str(), virtual_core.str());
             }
             if (dispatch_core_manager::instance().is_mux_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(mux_location, dispatch_core_type);
-                my_dispatch_cores[mux_location.chip].insert(phys_core);
-                log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will be reset on MMIO Device.", mux_location.str(), phys_core.str());
+                CoreCoord virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
+                my_dispatch_cores[mux_location.chip].insert(virtual_core);
+                log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will be reset on MMIO Device.", mux_location.str(), virtual_core.str());
             }
             if (dispatch_core_manager::instance().is_demux_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(demux_location, dispatch_core_type);
-                my_dispatch_cores[demux_location.chip].insert(phys_core);
-                log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will be reset on MMIO Device.", demux_location.str(), phys_core.str());
+                CoreCoord virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
+                my_dispatch_cores[demux_location.chip].insert(virtual_core);
+                log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will be reset on MMIO Device.", demux_location.str(), virtual_core.str());
             }
-                CoreCoord phys_core;
+                CoreCoord virtual_core;
                 tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(phys_core);
+                virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
                 // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_d
                 tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core_dispatch_s = get_physical_core_coordinate(dispatch_s_location, dispatch_core_type);
-                if (phys_core_dispatch_s != phys_core) {
-                    my_dispatch_cores[dispatch_s_location.chip].insert(phys_core_dispatch_s);
+                CoreCoord virtual_core_dispatch_s = this->virtual_core_from_logical_core(dispatch_s_location, dispatch_core_type);
+                if (virtual_core_dispatch_s != virtual_core) {
+                    my_dispatch_cores[dispatch_s_location.chip].insert(virtual_core_dispatch_s);
                 }
                 tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(phys_core);
+                virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
+                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
                 tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(mux_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(phys_core);
+                virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
+                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
                 tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(demux_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(phys_core);
+                virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
+                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
         }
     }
 }
 
 void Device::initialize_cluster() {
     ZoneScoped;
-    if (llrt::OptionsG.get_clear_l1()) {
+    if (llrt::RunTimeOptions::get_instance().get_clear_l1()) {
         this->clear_l1_state();
     }
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
@@ -248,8 +239,8 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::L1)),
          .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
-         .worker_log_to_physical_routing_x = soc_desc.worker_log_to_physical_routing_x,
-         .worker_log_to_physical_routing_y = soc_desc.worker_log_to_physical_routing_y,
+         .worker_log_to_virtual_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(this->id()),
+         .worker_log_to_virtual_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(this->id()),
          .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
          .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1)),
@@ -266,7 +257,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     }
     // Initialize core_type_from_noc_coord_table table
     for (const auto& core: soc_desc.physical_cores) {
-        config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
+        config.core_type_from_noc_coord_table.insert({this->virtual_core_from_physical_core(core.first, core.second.type), AllocCoreType::Invalid});
     }
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
@@ -280,7 +271,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
     for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_config)) {
-        const auto noc_coord = this->physical_core_from_logical_core(core, dispatch_core_type);
+        const auto noc_coord = this->virtual_core_from_logical_core(core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
     for (const auto &core : soc_desc.get_logical_ethernet_cores()) {
@@ -324,15 +315,10 @@ void Device::initialize_device_kernel_defines()
     auto pcie_cores = soc_d.get_pcie_cores();
     auto grid_size = this->grid_size();
 
-    // Workaround for Simulator integration as they use a 2x2 grid which would underflow PCIE_NOC1*
     CoreCoord pcie_core = pcie_cores.empty() ? grid_size : pcie_cores[0];
-    auto pcie_noc1_x = pcie_cores.empty() ? 14 : tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x);
-    auto pcie_noc1_y = pcie_cores.empty() ? 11 : tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y);
 
     this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));
     this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_core.y));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(pcie_noc1_x));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(pcie_noc1_x));
 }
 
 void Device::initialize_build() {
@@ -412,19 +398,42 @@ void Device::build_firmware() {
     log_debug(tt::LogMetal, "Building base firmware for device {}", this->id_);
     ZoneScoped;
 
-    this->generate_device_headers(this->build_env_.get_out_firmware_root_path());
     jit_build_set(this->firmware_build_states_, nullptr);
 }
 
-void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg) {
+void Device::initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core)
+{
+    const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_.size() * sizeof(uint16_t);
+    const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_.size() * sizeof(uint16_t);
+    const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_.size() * sizeof(int32_t);
+    const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_.size() * sizeof(int32_t);
+
+    const uint64_t mem_bank_to_noc_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+    const uint32_t mem_bank_to_noc_size = hal.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+
+    TT_ASSERT((dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes) <= mem_bank_to_noc_size,
+        "Size of bank_to_noc table is greater than available space");
+
+    tt::Cluster::instance().write_core(&dram_bank_to_noc_xy_[0], dram_to_noc_sz_in_bytes, tt_cxy_pair(this->id(), virtual_core), mem_bank_to_noc_addr);
+    uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
+    tt::Cluster::instance().write_core(&l1_bank_to_noc_xy_[0], l1_to_noc_sz_in_bytes, tt_cxy_pair(this->id(), virtual_core), l1_noc_addr);
+
+    uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
+    tt::Cluster::instance().write_core(&dram_bank_offset_map_[0], dram_offset_sz_in_bytes, tt_cxy_pair(this->id(), virtual_core), dram_offset_addr);
+    uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
+    tt::Cluster::instance().write_core(&l1_bank_offset_map_[0], l1_offset_sz_in_bytes, tt_cxy_pair(this->id(), virtual_core), l1_offset_addr);
+}
+
+void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg) {
     ZoneScoped;
 
+    this->initialize_device_bank_to_noc_tables(core_type, virtual_core);
     uint32_t core_type_idx = hal.get_programmable_core_type_index(core_type);
     uint32_t processor_class_count = hal.get_processor_classes_count(core_type);
 
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
-            llrt::program_risc_startup_addr(this->id(), phys_core);
+            llrt::program_risc_startup_addr(this->id(), virtual_core);
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                 auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                 for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
@@ -439,8 +448,9 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                         launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
                     }
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
-                    if (not llrt::OptionsG.get_skip_loading_fw()) {
-                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, core_type_idx, processor_class, (riscv_id - build_idx));
+
+                    if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw())  {
+                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), virtual_core, core_type_idx, processor_class, (riscv_id - build_idx));
                     }
                 }
             }
@@ -453,7 +463,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                 if (dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER) {
                     physical_dispatch_cores = this->worker_cores_from_logical_cores(dispatch_core_manager::instance().get_all_logical_dispatch_cores(this->id()));
                 }
-                if (std::find(physical_dispatch_cores.begin(), physical_dispatch_cores.end(), phys_core) != physical_dispatch_cores.end()) {
+                if (std::find(physical_dispatch_cores.begin(), physical_dispatch_cores.end(), virtual_core) != physical_dispatch_cores.end()) {
                     // Dispatch cores - Host writes launch messages
                     launch_msg->kernel_config.mode = DISPATCH_MODE_HOST;
                 } else {
@@ -468,9 +478,9 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             if (is_idle_eth) {
-                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
+                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), virtual_core));
             }
-            if (not llrt::OptionsG.get_skip_loading_fw()) {
+            if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = build_idx; eriscv_id < (build_idx + num_build_states); eriscv_id++) {
@@ -481,14 +491,14 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                             (eriscv_id - build_idx));
                         uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
-                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, core_type_idx, processor_class, (eriscv_id - build_idx));
+                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), virtual_core, core_type_idx, processor_class, (eriscv_id - build_idx));
                     }
                 }
             }
             if (is_idle_eth) {
-                llrt::program_risc_startup_addr(this->id(), phys_core);
+                llrt::program_risc_startup_addr(this->id(), virtual_core);
             } else {
-                llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
+                llrt::launch_erisc_app_fw_on_core(this->id(), virtual_core);
             }
             // Ethernet worker core. Launch messages will be sent by FD infra if it's enabled
             // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
@@ -510,12 +520,12 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
     // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
     std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, *launch_msg);
-    tt::Cluster::instance().write_core(init_launch_msg_data.data(), launch_msg_buffer_num_entries * sizeof(launch_msg_t), tt_cxy_pair(this->id(), phys_core), this->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
-    uint32_t go_addr = this->get_dev_addr(phys_core, HalL1MemAddrType::GO_MSG);
-    tt::Cluster::instance().write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(this->id(), phys_core), go_addr);
-    uint64_t launch_msg_buffer_read_ptr_addr = this->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+    tt::Cluster::instance().write_core(init_launch_msg_data.data(), launch_msg_buffer_num_entries * sizeof(launch_msg_t), tt_cxy_pair(this->id(), virtual_core), this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
+    uint32_t go_addr = this->get_dev_addr(virtual_core, HalL1MemAddrType::GO_MSG);
+    tt::Cluster::instance().write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(this->id(), virtual_core), go_addr);
+    uint64_t launch_msg_buffer_read_ptr_addr = this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
     uint32_t zero = 0;
-    tt::Cluster::instance().write_core(&zero, sizeof(uint32_t), tt_cxy_pair(this->id(), phys_core), launch_msg_buffer_read_ptr_addr);
+    tt::Cluster::instance().write_core(&zero, sizeof(uint32_t), tt_cxy_pair(this->id(), virtual_core), launch_msg_buffer_read_ptr_addr);
 }
 
 void Device::reset_cores() {
@@ -531,16 +541,16 @@ void Device::reset_cores() {
     go_msg_t go_msg;
     std::memset(&go_msg, 0, sizeof(go_msg_t));
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+        CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
         std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
         std::vector<uint32_t> go_signal_data(sizeof(go_msg_t) / sizeof(uint32_t));
         DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
         DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
 
         data = tt::llrt::read_hex_vec_from_core(
-            this->id(), physical_core, launch_addr, sizeof(launch_msg_t));
+            this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
         go_signal_data = tt::llrt::read_hex_vec_from_core(
-            this->id(), physical_core, go_signal_addr, sizeof(go_msg_t));
+            this->id(), virtual_core, go_signal_addr, sizeof(go_msg_t));
         launch_msg_t *launch_msg = (launch_msg_t *)(&data[0]);
         go_msg_t * go_signal = (go_msg_t *)(&go_signal_data[0]);
         if (kernel_still_running(launch_msg, go_signal)) {
@@ -548,30 +558,30 @@ void Device::reset_cores() {
                 tt::LogMetal,
                 "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running, issuing exit signal.",
                 this->id(),
-                physical_core.str(),
+                virtual_core.str(),
                 this->id());
             launch_msg->kernel_config.exit_erisc_kernel = 1;
-            llrt::write_launch_msg_to_core(this->id(), physical_core, launch_msg, &go_msg, launch_addr, false);
-            device_to_early_exit_cores[this->id()].insert(physical_core);
+            llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
+            device_to_early_exit_cores[this->id()].insert(virtual_core);
         }
     }
 
-    this->get_associated_dispatch_phys_cores(dispatch_cores, other_dispatch_cores);
+    this->get_associated_dispatch_virtual_cores(dispatch_cores, other_dispatch_cores);
     // Ignore other_dispatch_cores, they will be reset by the devices that use them.
     for (auto &id_and_cores : dispatch_cores) {
         for (auto it = id_and_cores.second.begin(); it != id_and_cores.second.end(); it++) {
-            const auto &phys_core = *it;
+            const auto &virtual_core = *it;
             // Only need to manually reset ethernet dispatch cores, tensix cores are all reset below.
-            if (llrt::is_ethernet_core(phys_core, id_and_cores.first)) {
+            if (tt::Cluster::instance().is_ethernet_core(virtual_core, id_and_cores.first)) {
                 // Ethernet cores won't be reset, so just signal the dispatch cores to early exit.
                 std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
                 std::vector<uint32_t> go_signal_data(sizeof(go_msg_t) / sizeof(uint32_t));
                 DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::LAUNCH);
                 DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
                 data = tt::llrt::read_hex_vec_from_core(
-                    id_and_cores.first, phys_core, launch_addr, sizeof(launch_msg_t));
+                    id_and_cores.first, virtual_core, launch_addr, sizeof(launch_msg_t));
                 go_signal_data = tt::llrt::read_hex_vec_from_core(
-                    this->id(), phys_core, go_signal_addr, sizeof(go_msg_t));
+                    this->id(), virtual_core, go_signal_addr, sizeof(go_msg_t));
                 launch_msg_t *launch_msg = (launch_msg_t *)(&data[0]);
                 go_msg_t * go_signal = (go_msg_t *)(&go_signal_data[0]);
                 if (kernel_still_running(launch_msg, go_signal)) {
@@ -579,11 +589,11 @@ void Device::reset_cores() {
                         tt::LogMetal,
                         "While initializing device {}, ethernet dispatch core {} on Device {} detected as still running, issuing exit signal.",
                         this->id(),
-                        phys_core.str(),
+                        virtual_core.str(),
                         id_and_cores.first);
                     launch_msg->kernel_config.exit_erisc_kernel = 1;
-                    llrt::write_launch_msg_to_core(id_and_cores.first, phys_core, launch_msg, &go_msg, launch_addr, false);
-                    device_to_early_exit_cores[id_and_cores.first].insert(phys_core);
+                    llrt::write_launch_msg_to_core(id_and_cores.first, virtual_core, launch_msg, &go_msg, launch_addr, false);
+                    device_to_early_exit_cores[id_and_cores.first].insert(virtual_core);
                 }
             }
         }
@@ -647,21 +657,39 @@ void Device::initialize_and_launch_firmware() {
     const std::vector<CoreCoord> &pcie_cores = soc_d.get_pcie_cores();
     const std::vector<CoreCoord> &dram_cores = soc_d.get_dram_cores();
     const std::vector<CoreCoord> &eth_cores = soc_d.get_physical_ethernet_cores();
+    // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
+    // Get a list of unique DRAM cores.
+    std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
     TT_ASSERT(
-        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
+        pcie_cores.size() + unique_dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
+    TT_ASSERT(
+        eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
+        "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
     for (int idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
         core_info->non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
+    for (int idx = 0; idx < MAX_VIRTUAL_NON_WORKER_CORES; idx++) {
+        core_info->virtual_non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
+    }
+
     int non_worker_cores_idx = 0;
     for (const CoreCoord &core : pcie_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
     }
-    for (const CoreCoord &core : dram_cores) {
+    for (const CoreCoord &core : unique_dram_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
     }
     for (const CoreCoord &core : eth_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
+    }
+    if (hal.is_coordinate_virtualization_enabled()) {
+        // Track Virtual Non Worker Cores (In this case only Eth) separately
+        uint32_t virtual_non_worker_cores_idx = 0;
+        for (const CoreCoord &core : eth_cores) {
+            auto virtual_core = this->virtual_core_from_physical_core(core, CoreType::ETH);
+            core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
+        }
     }
 
     // Determine which noc-coords are harvested
@@ -677,6 +705,13 @@ void Device::initialize_and_launch_firmware() {
     TT_ASSERT(harvested_rows.size() <= MAX_HARVESTED_ROWS, "Detected more harvested rows than fit in mailbox.");
     for (int idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
         core_info->harvested_y[idx] = (idx < harvested_rows.size()) ? harvested_rows[idx] : CORE_COORD_INVALID;
+        // Populate harvested rows in virtual coordinate space if virtualization is supported by HW.
+        // Harvested rows in the virtual space are placed at the end of the worker grid,
+        if (hal.is_coordinate_virtualization_enabled() and idx < harvested_rows.size()) {
+            core_info->virtual_harvested_y[idx] = (hal.get_virtual_worker_start_y() + this->logical_grid_size().y + harvested_rows.size() - (idx + 1));
+        } else {
+            core_info->virtual_harvested_y[idx] = CORE_COORD_INVALID;
+        }
     }
 
     core_info->noc_size_x = soc_d.grid_size.x;
@@ -703,10 +738,10 @@ void Device::initialize_and_launch_firmware() {
     // Clear erisc sync info
     std::vector<uint32_t> zero_vec_erisc_init(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE / sizeof(uint32_t), 0);
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+        CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
-            this->id(), physical_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+            this->id(), virtual_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
     }
 
     // Load erisc app base FW to eth cores
@@ -761,16 +796,16 @@ void Device::clear_l1_state() {
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
     std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-        (eth_l1_mem::address_map::ISSUE_CQ_CB_BASE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
+        (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
         0);
 
     // Clear erisc sync info
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+        CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
             this->id(),
-            physical_core,
+            virtual_core,
             zero_vec_above_tile_header_buffer,
             eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
 
@@ -783,11 +818,11 @@ void Device::configure_kernel_variant(
     const string& path,
     const std::vector<uint32_t>& compile_args,
     CoreCoord kernel_core,
-    CoreCoord kernel_physical_core,
+    CoreCoord kernel_virtual_core,
     CoreType dispatch_core_type,
-    CoreCoord upstream_physical_core,
-    CoreCoord downstream_physical_core,
-    CoreCoord downstream_slave_physical_core,
+    CoreCoord upstream_virtual_core,
+    CoreCoord downstream_virtual_core,
+    CoreCoord downstream_slave_virtual_core,
     std::map<string, string> defines_in,
     NOC my_noc_index,
     NOC upstream_noc_index,
@@ -796,31 +831,34 @@ void Device::configure_kernel_variant(
     bool send_to_brisc,
     bool force_watcher_no_inline) {
 
-    const auto& grid_size = this->grid_size();
-
     // TODO: just pass in the programmable index
     uint32_t programmable_core_type_index = (dispatch_core_type == CoreType::WORKER) ?
         hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) :
         is_active_eth_core ? hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) :
         hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
 
+    auto my_virtual_noc_coords = this->virtual_noc0_coordinate(my_noc_index, kernel_virtual_core);
+    auto upstream_virtual_noc_coords = this->virtual_noc0_coordinate(upstream_noc_index, upstream_virtual_core);
+    auto downstream_virtual_noc_coords = this->virtual_noc0_coordinate(downstream_noc_index, downstream_virtual_core);
+    auto downstream_slave_virtual_noc_coords = this->virtual_noc0_coordinate(downstream_noc_index, downstream_slave_virtual_core);
+
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
-        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.x, kernel_physical_core.x))},
-        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.y, kernel_physical_core.y))},
+        {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
+        {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(upstream_noc_index)},
-        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.x, upstream_physical_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.y, upstream_physical_core.y))},
-        {"DOWNSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, downstream_physical_core.x))},
-        {"DOWNSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, downstream_physical_core.y))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, downstream_slave_physical_core.x))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, downstream_slave_physical_core.y))},
+        {"UPSTREAM_NOC_X", std::to_string(upstream_virtual_noc_coords.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_slave_virtual_noc_coords.x)},
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_slave_virtual_noc_coords.y)},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
-    if (llrt::OptionsG.watcher_dispatch_disabled()) {
+    if (llrt::RunTimeOptions::get_instance().watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
     if (!DPrintServerReadsDispatchCores(this)) {
@@ -878,7 +916,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     uint32_t downstream_cb_base = mux_settings.cb_start_address + mux_settings.cb_size_bytes * mux_sem[mux_index];
                     uint32_t downstream_cb_pages = mux_settings.cb_pages;
                     settings.upstream_cores.push_back(tt_cxy_pair(0, 0, 0));
-                    settings.downstream_cores.push_back(mux_settings.worker_physical_core);
+                    settings.downstream_cores.push_back(mux_settings.worker_virtual_core);
                     settings.compile_args.resize(28);
                     auto& compile_args = settings.compile_args;
                     compile_args[0]  = downstream_cb_base;
@@ -940,8 +978,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
 
                     uint32_t connections_remaining = mux_fanin;
                     for (int i = 0; (i < MAX_SWITCH_FAN_IN) && (connections_remaining); i++) {
-                        compile_args[4 + i] = packet_switch_4B_pack((uint32_t)tunneler_settings.worker_physical_core.x,
-                                                                    (uint32_t)tunneler_settings.worker_physical_core.y,
+                        compile_args[4 + i] = packet_switch_4B_pack((uint32_t)tunneler_settings.worker_virtual_core.x,
+                                                                    (uint32_t)tunneler_settings.worker_virtual_core.y,
                                                                     i + (mux_id * MAX_SWITCH_FAN_IN),
                                                                     (uint32_t)DispatchRemoteNetworkType::NOC0); // 4, 5, 6, 7: dest x info
                         compile_args[8 + i * 2] = (tunneler_settings.cb_start_address + (i + mux_id * MAX_SWITCH_FAN_IN) * tunneler_settings.cb_size_bytes) >> 4;
@@ -953,8 +991,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     connections_remaining = mux_fanin;
                     for (int i = 0; (i < MAX_SWITCH_FAN_IN) && (connections_remaining); i++) {
                         auto&[core, settings] = device_worker_variants[DispatchWorkerType::PREFETCH][i * num_muxes + mux_id];
-                        compile_args[arg_index++] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
-                                                                        (uint32_t)settings.worker_physical_core.y,
+                        compile_args[arg_index++] = packet_switch_4B_pack((uint32_t)settings.worker_virtual_core.x,
+                                                                        (uint32_t)settings.worker_virtual_core.y,
                                                                         1,
                                                                         (uint32_t)DispatchRemoteNetworkType::NOC0); // 16,17,18,19: src x info
                         connections_remaining--;
@@ -1002,8 +1040,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 compile_args[3] = tunneler_settings.cb_size_bytes >> 4; // 3: rx_queue_size_words
 
                 for (uint32_t i = 0; i < fwd_vc_count; i++) {
-                    compile_args[4 + i] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
-                                        tunneler_settings.eth_partner_physical_core.y,
+                    compile_args[4 + i] = packet_switch_4B_pack(tunneler_settings.eth_partner_virtual_core.x,
+                                        tunneler_settings.eth_partner_virtual_core.y,
                                         i,
                                         (uint32_t)DispatchRemoteNetworkType::ETH); // 4 - 13: remote_receiver fwd vcs
 
@@ -1013,8 +1051,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 if (is_tunnel_start) {
                     auto &demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][0]);
 
-                    compile_args[4 + return_vc] = packet_switch_4B_pack(demux_settings.worker_physical_core.x,
-                                        demux_settings.worker_physical_core.y,
+                    compile_args[4 + return_vc] = packet_switch_4B_pack(demux_settings.worker_virtual_core.x,
+                                        demux_settings.worker_virtual_core.y,
                                         0,//demux input,
                                         (uint32_t)DispatchRemoteNetworkType::NOC0); // 5: remote_receiver return vc
                     compile_args[14 + return_vc * 2] = demux_settings.cb_start_address >> 4; // 8: remote_receiver_queue_start_addr_words return vc
@@ -1024,8 +1062,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         uint32_t mux_output_q_id_start = mux_settings.semaphores.size();
                         uint32_t connections_remaining = mux_settings.semaphores.size();
                         for (uint32_t i = 0; i < connections_remaining; i++) {
-                            compile_args[arg_index++] = packet_switch_4B_pack(mux_settings.worker_physical_core.x,
-                                                mux_settings.worker_physical_core.y,
+                            compile_args[arg_index++] = packet_switch_4B_pack(mux_settings.worker_virtual_core.x,
+                                                mux_settings.worker_virtual_core.y,
                                                 mux_output_q_id_start + i, // mux output queue id
                                                 (uint32_t)DispatchRemoteNetworkType::NOC0); // 10: remote_sender fwd vcs
                         }
@@ -1033,8 +1071,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 } else {
                     auto &mux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX_D][0]);
                     uint32_t prefetch_d_count = device_worker_variants[DispatchWorkerType::PREFETCH_D].size();
-                    compile_args[4 + return_vc] = packet_switch_4B_pack(mux_d_settings.worker_physical_core.x,
-                                        mux_d_settings.worker_physical_core.y,
+                    compile_args[4 + return_vc] = packet_switch_4B_pack(mux_d_settings.worker_virtual_core.x,
+                                        mux_d_settings.worker_virtual_core.y,
                                         mux_d_settings.semaphores.size(),//mux_d input. This is return path from next tunnel stop towards mmio device.
                                           //mux_d iput 0 is driven by local Dispatch D
                                         (uint32_t)DispatchRemoteNetworkType::NOC0); // 5: remote_receiver return vc
@@ -1048,8 +1086,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     for (auto&[demux_d_core, demux_d_settings] : device_worker_variants[DispatchWorkerType::DEMUX_D]) {
                         uint32_t demux_d_output_q_id_start = vcs_per_demux_d;
                         for (uint32_t i = local_fanout; i < vcs_per_demux_d; i++) {
-                            compile_args[arg_index++] = packet_switch_4B_pack(demux_d_settings.worker_physical_core.x,
-                                                demux_d_settings.worker_physical_core.y,
+                            compile_args[arg_index++] = packet_switch_4B_pack(demux_d_settings.worker_virtual_core.x,
+                                                demux_d_settings.worker_virtual_core.y,
                                                 demux_d_output_q_id_start + i, // demux output queue id. 0=> demux input, 1=> demux_d output to local Prefetch D, 2=> demux_d output to tunneler (to next tunnel stop)
                                                 (uint32_t)DispatchRemoteNetworkType::NOC0); // 10: remote_sender fwd vcs
                         }
@@ -1062,8 +1100,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     compile_args[15 + i * 2] = 2; // dummy size for unused vcs.
                 }
 
-                compile_args[34 + return_vc] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
-                                    tunneler_settings.eth_partner_physical_core.y,
+                compile_args[34 + return_vc] = packet_switch_4B_pack(tunneler_settings.eth_partner_virtual_core.x,
+                                    tunneler_settings.eth_partner_virtual_core.y,
                                     tunneler_settings.vc_count * 2 - 1, // r tunneler output queue id
                                     (uint32_t)DispatchRemoteNetworkType::ETH); // 11: remote_sender return vc
 
@@ -1090,8 +1128,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
 
                     uint32_t arg_index = 4;
                     for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                        compile_args[arg_index++] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
-                                                                        (uint32_t)settings.worker_physical_core.y,
+                        compile_args[arg_index++] = packet_switch_4B_pack((uint32_t)settings.worker_virtual_core.x,
+                                                                        (uint32_t)settings.worker_virtual_core.y,
                                                                         0,
                                                                         (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
                     }
@@ -1100,8 +1138,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         compile_args[arg_index++] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
                         compile_args[arg_index++] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
                     }
-                    compile_args[16] = tunneler_settings.worker_physical_core.x; // 16: remote_rx_x
-                    compile_args[17] = tunneler_settings.worker_physical_core.y; // 17: remote_rx_y
+                    compile_args[16] = tunneler_settings.worker_virtual_core.x; // 16: remote_rx_x
+                    compile_args[17] = tunneler_settings.worker_virtual_core.y; // 17: remote_rx_y
                     compile_args[18] = tunneler_settings.vc_count * 2 - 1; // 18: remote_rx_queue_id
                     compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
                     uint32_t dest_map_array[4] = {0, 1, 2, 3};
@@ -1135,12 +1173,12 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     compile_args[2] = demux_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
                     compile_args[3] = 2; // 3: demux_fan_out
 
-                    compile_args[4] = packet_switch_4B_pack((uint32_t)demux_1_settings.worker_physical_core.x,
-                                                                    (uint32_t)demux_1_settings.worker_physical_core.y,
+                    compile_args[4] = packet_switch_4B_pack((uint32_t)demux_1_settings.worker_virtual_core.x,
+                                                                    (uint32_t)demux_1_settings.worker_virtual_core.y,
                                                                     0,
                                                                     (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
-                    compile_args[5] = packet_switch_4B_pack((uint32_t)demux_2_settings.worker_physical_core.x,
-                                                                    (uint32_t)demux_2_settings.worker_physical_core.y,
+                    compile_args[5] = packet_switch_4B_pack((uint32_t)demux_2_settings.worker_virtual_core.x,
+                                                                    (uint32_t)demux_2_settings.worker_virtual_core.y,
                                                                     0,
                                                                     (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
 
@@ -1149,8 +1187,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     compile_args[10] = demux_2_settings.cb_start_address >> 4; // 10: remote_tx_queue_start_addr_words x
                     compile_args[11] = demux_2_settings.cb_size_bytes >> 4; // 11: remote_tx_queue_size_words x
 
-                    compile_args[16] = tunneler_settings.worker_physical_core.x; // 16: remote_rx_x
-                    compile_args[17] = tunneler_settings.worker_physical_core.y; // 17: remote_rx_y
+                    compile_args[16] = tunneler_settings.worker_virtual_core.x; // 16: remote_rx_x
+                    compile_args[17] = tunneler_settings.worker_virtual_core.y; // 17: remote_rx_y
                     compile_args[18] = tunneler_settings.vc_count * 2 - 1; // 18: remote_rx_queue_id
                     compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
 
@@ -1176,16 +1214,16 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
 
                     for (int i = 0; i < demux_1_fanout; i++) {
                         auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][i]);
-                        demux_1_compile_args[4 + i] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
-                                                                        (uint32_t)settings.worker_physical_core.y,
+                        demux_1_compile_args[4 + i] = packet_switch_4B_pack((uint32_t)settings.worker_virtual_core.x,
+                                                                        (uint32_t)settings.worker_virtual_core.y,
                                                                         0,
                                                                         (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
 
                         demux_1_compile_args[8 + i * 2] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
                         demux_1_compile_args[9 + i * 2] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
                     }
-                    demux_1_compile_args[16] = demux_settings.worker_physical_core.x; // 16: remote_rx_x
-                    demux_1_compile_args[17] = demux_settings.worker_physical_core.y; // 17: remote_rx_y
+                    demux_1_compile_args[16] = demux_settings.worker_virtual_core.x; // 16: remote_rx_x
+                    demux_1_compile_args[17] = demux_settings.worker_virtual_core.y; // 17: remote_rx_y
                     demux_1_compile_args[18] = 1; // 18: remote_rx_queue_id
                     demux_1_compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
                     uint32_t dest_map_array[4] = {0, 1, 2, 3};
@@ -1218,16 +1256,16 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
 
                     for (int i = 0; i < demux_2_fanout; i++) {
                         auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][i + demux_1_fanout]);
-                        demux_2_compile_args[4 + i] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
-                                                                        (uint32_t)settings.worker_physical_core.y,
+                        demux_2_compile_args[4 + i] = packet_switch_4B_pack((uint32_t)settings.worker_virtual_core.x,
+                                                                        (uint32_t)settings.worker_virtual_core.y,
                                                                         0,
                                                                         (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
 
                         demux_2_compile_args[8 + i * 2] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
                         demux_2_compile_args[9 + i * 2] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
                     }
-                    demux_2_compile_args[16] = demux_settings.worker_physical_core.x; // 16: remote_rx_x
-                    demux_2_compile_args[17] = demux_settings.worker_physical_core.y; // 17: remote_rx_y
+                    demux_2_compile_args[16] = demux_settings.worker_virtual_core.x; // 16: remote_rx_x
+                    demux_2_compile_args[17] = demux_settings.worker_virtual_core.y; // 17: remote_rx_y
                     demux_2_compile_args[18] = 2; // 18: remote_rx_queue_id
                     demux_2_compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
                     dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
@@ -1264,12 +1302,12 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     uint32_t dispatch_idx = 0;
                     for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
                         auto prefetch_h_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH][dispatch_idx]);
-                        auto prefetch_physical_core = prefetch_h_settings.worker_physical_core;
+                        auto prefetch_virtual_core = prefetch_h_settings.worker_virtual_core;
                         auto dispatch_core_type = settings.dispatch_core_type;
                         uint32_t host_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
                         uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
                         uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-                        settings.upstream_cores.push_back(demux_settings.worker_physical_core);
+                        settings.upstream_cores.push_back(demux_settings.worker_virtual_core);
                         settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
                         settings.compile_args.resize(31);
                         auto& compile_args = settings.compile_args;
@@ -1289,7 +1327,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         compile_args[13] = 0; // unused: remote ds semaphore
                         compile_args[14] = 0; // preamble size
                         compile_args[15] = true,    // split_prefetcher
-                        compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_physical_core.x, prefetch_physical_core.y),
+                        compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_virtual_core.x, prefetch_virtual_core.y),
                         compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                         compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // XXXX should this be mux pages?
                         compile_args[19] = settings.num_compute_cores;
@@ -1319,12 +1357,12 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         for (int d = 0; d < demux_fanout; d++) {
                             auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][dispatch_idx]);
                             auto prefetch_h_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH][dispatch_idx]);
-                            auto prefetch_physical_core = prefetch_h_settings.worker_physical_core;
+                            auto prefetch_virtual_core = prefetch_h_settings.worker_virtual_core;
                             auto dispatch_core_type = settings.dispatch_core_type;
                             uint32_t host_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
                             uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
                             uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-                            settings.upstream_cores.push_back(demux_settings.worker_physical_core);
+                            settings.upstream_cores.push_back(demux_settings.worker_virtual_core);
                             settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
                             settings.compile_args.resize(31);
                             auto& compile_args = settings.compile_args;
@@ -1344,7 +1382,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                             compile_args[13] = 0; // unused: remote ds semaphore
                             compile_args[14] = 0; // preamble size
                             compile_args[15] = true,    // split_prefetcher
-                            compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_physical_core.x, prefetch_physical_core.y),
+                            compile_args[16] = tt::tt_metal::hal.noc_xy_encoding(prefetch_virtual_core.x, prefetch_virtual_core.y),
                             compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
                             compile_args[18] = mux_settings.cb_pages,
                             compile_args[19] = settings.num_compute_cores;
@@ -1387,8 +1425,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
 
                 for (auto&[core, demux_d_settings] : device_worker_variants[DispatchWorkerType::DEMUX_D]) {
                     for (int i = 0; i < vcs_per_demux_d; i++) {
-                        compile_args[4 + i + local_tunneler_vcs_connected] = packet_switch_4B_pack(demux_d_settings.worker_physical_core.x,
-                                            demux_d_settings.worker_physical_core.y,
+                        compile_args[4 + i + local_tunneler_vcs_connected] = packet_switch_4B_pack(demux_d_settings.worker_virtual_core.x,
+                                            demux_d_settings.worker_virtual_core.y,
                                             i, // input queue id of DEMUX_D
                                             (uint32_t)DispatchRemoteNetworkType::NOC0); // 4: remote_receiver_0_info
 
@@ -1399,8 +1437,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     vcs_per_demux_d = fwd_vc_count - vcs_per_demux_d;
                 }
 
-                compile_args[4 + return_vc] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
-                                    tunneler_settings.eth_partner_physical_core.y,
+                compile_args[4 + return_vc] = packet_switch_4B_pack(tunneler_settings.eth_partner_virtual_core.x,
+                                    tunneler_settings.eth_partner_virtual_core.y,
                                     return_vc, // input q id of remote ethernet tunneler
                                     (uint32_t)DispatchRemoteNetworkType::ETH); // 5: remote_receiver_1_info
 
@@ -1411,13 +1449,13 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 }
 
                 for (int i = 0; i < fwd_vc_count; i++) {
-                    compile_args[34 + i] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
-                                        tunneler_settings.eth_partner_physical_core.y,
+                    compile_args[34 + i] = packet_switch_4B_pack(tunneler_settings.eth_partner_virtual_core.x,
+                                        tunneler_settings.eth_partner_virtual_core.y,
                                         tunneler_settings.vc_count + i, // queue id of remote eth tunneler sender
                                         (uint32_t)DispatchRemoteNetworkType::ETH); // 10: remote_sender fwd vcs
                 }
-                compile_args[34 + return_vc] = packet_switch_4B_pack(mux_d_settings.worker_physical_core.x,
-                                    mux_d_settings.worker_physical_core.y,
+                compile_args[34 + return_vc] = packet_switch_4B_pack(mux_d_settings.worker_virtual_core.x,
+                                    mux_d_settings.worker_virtual_core.y,
                                     device_worker_variants[DispatchWorkerType::DISPATCH_D].size() + device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size(), // mux_d output queue id
                                     (uint32_t)DispatchRemoteNetworkType::NOC0); // 11: remote_sender return vc
                 compile_args[44] = 0x39000; // 12: test_results_addr
@@ -1425,9 +1463,9 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 compile_args[46] = 0; // 14: timeout_cycles
                 if (!is_tunnel_end && tunneler_settings.tunnel_stop > 1) {
                     auto &us_tunneler_remote_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
-                    auto mux_d_sender = us_tunneler_remote_settings.worker_physical_core;
+                    auto mux_d_sender = us_tunneler_remote_settings.worker_virtual_core;
                     compile_args[47] = (return_vc << 24) | ((us_tunneler_remote_settings.vc_count * 2 - 1) << 16) | (mux_d_sender.y << 8) | (mux_d_sender.x);
-                    log_debug(tt::LogMetal, "Tunnelr Inner Device {} will send done to {}", tunneler_settings.worker_physical_core.str(), mux_d_sender.str());
+                    log_debug(tt::LogMetal, "Tunnelr Inner Device {} will send done to {}", tunneler_settings.worker_virtual_core.str(), mux_d_sender.str());
                 }
 
                 break;
@@ -1479,8 +1517,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     // Tie DEMUX_D outputs to DEMUX_D output queues (prefetch_d and remote tunnel inputs) and set output CB parameters
                     for (int p = 0; p < num_prefetch_d_per_demux_d; p++) {
                         auto prefetch_d_setting = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][p + prefetch_d_connected]);
-                        compile_args[4 + demux_output_idx] = packet_switch_4B_pack(prefetch_d_setting.worker_physical_core.x,
-                                                            prefetch_d_setting.worker_physical_core.y,
+                        compile_args[4 + demux_output_idx] = packet_switch_4B_pack(prefetch_d_setting.worker_virtual_core.x,
+                                                            prefetch_d_setting.worker_virtual_core.y,
                                                             0, // prefetch_d input queue id
                                                             (uint32_t)DispatchRemoteNetworkType::NOC0); // 4: remote_tx_0_info
                         compile_args[8 + demux_output_cb_info_idx] = prefetch_d_setting.cb_start_address >> 4;
@@ -1493,8 +1531,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     if (!is_tunnel_end) {
                         auto &us_tunneler_remote_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
                         for (int i = 0; i < vcs_per_demux_d; i++) {
-                            compile_args[4 + demux_output_idx + i] = packet_switch_4B_pack((uint32_t)us_tunneler_remote_settings.worker_physical_core.x,
-                                                                (uint32_t)us_tunneler_remote_settings.worker_physical_core.y,
+                            compile_args[4 + demux_output_idx + i] = packet_switch_4B_pack((uint32_t)us_tunneler_remote_settings.worker_virtual_core.x,
+                                                                (uint32_t)us_tunneler_remote_settings.worker_virtual_core.y,
                                                                 remote_tunneler_vcs_connected,
                                                                 (uint32_t)DispatchRemoteNetworkType::NOC0); // 5: remote_tx_1_info
                             compile_args[8 + (demux_output_idx + i) * 2] = (us_tunneler_remote_settings.cb_start_address + remote_tunneler_vcs_connected * us_tunneler_remote_settings.cb_size_bytes) >> 4;    // 10: remote_tx_queue_start_addr_words 1
@@ -1509,8 +1547,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     //need to connect local tunneler ports to demux ports.
                     vcs_per_demux_d = compile_args[3];
                     for (int i = 0; i < vcs_per_demux_d; i++) {
-                        compile_args[16 + i] = packet_switch_4B_pack(tunneler_settings.worker_physical_core.x,
-                                                tunneler_settings.worker_physical_core.y,
+                        compile_args[16 + i] = packet_switch_4B_pack(tunneler_settings.worker_virtual_core.x,
+                                                tunneler_settings.worker_virtual_core.y,
                                                 tunneler_settings.vc_count + local_tunneler_vcs_connected++,
                                                 (uint32_t)DispatchRemoteNetworkType::NOC0); // 16: remote_rx_0_info
                     }
@@ -1573,9 +1611,9 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     auto dispatch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH_D][prefetch_d_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_d
                     auto dispatch_s_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH_S][prefetch_d_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_s
                     auto dispatch_core_type = prefetch_d_settings.dispatch_core_type;
-                    prefetch_d_settings.upstream_cores.push_back(demux_d_settings.worker_physical_core);
-                    prefetch_d_settings.downstream_cores.push_back(dispatch_d_settings.worker_physical_core);
-                    prefetch_d_settings.downstream_cores.push_back(dispatch_s_settings.worker_physical_core);
+                    prefetch_d_settings.upstream_cores.push_back(demux_d_settings.worker_virtual_core);
+                    prefetch_d_settings.downstream_cores.push_back(dispatch_d_settings.worker_virtual_core);
+                    prefetch_d_settings.downstream_cores.push_back(dispatch_s_settings.worker_virtual_core);
                     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
                     uint32_t scratch_db_base = (prefetch_d_settings.cb_start_address + prefetch_d_settings.cb_size_bytes + pcie_alignment - 1) & (~(pcie_alignment - 1));
                     uint32_t scratch_db_size = dispatch_constants::get(dispatch_core_type).scratch_db_size();
@@ -1650,9 +1688,9 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
                     uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
                     uint32_t dispatch_s_sync_sem_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
-                    dispatch_d_settings.upstream_cores.push_back(prefetch_d_settings.worker_physical_core);
-                    dispatch_d_settings.downstream_cores.push_back(mux_d_settings.worker_physical_core);
-                    dispatch_d_settings.downstream_cores.push_back(dispatch_s_settings.worker_physical_core);
+                    dispatch_d_settings.upstream_cores.push_back(prefetch_d_settings.worker_virtual_core);
+                    dispatch_d_settings.downstream_cores.push_back(mux_d_settings.worker_virtual_core);
+                    dispatch_d_settings.downstream_cores.push_back(dispatch_s_settings.worker_virtual_core);
                     dispatch_d_settings.compile_args.resize(32);
                     auto& compile_args = dispatch_d_settings.compile_args;
                     compile_args[0] = dispatch_d_settings.cb_start_address;
@@ -1699,8 +1737,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                         int dispatch_s_idx = 0;
                         auto prefetch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][dispatch_s_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_s
                         auto dispatch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH_D][dispatch_s_idx]); // 1 to 1 mapping bw dispatch_d and dispatch_s
-                        dispatch_s_settings.upstream_cores.push_back(prefetch_d_settings.worker_physical_core);
-                        dispatch_s_settings.downstream_cores.push_back(dispatch_d_settings.worker_physical_core);
+                        dispatch_s_settings.upstream_cores.push_back(prefetch_d_settings.worker_virtual_core);
+                        dispatch_s_settings.downstream_cores.push_back(dispatch_d_settings.worker_virtual_core);
                         auto dispatch_core_type = dispatch_s_settings.dispatch_core_type;
                         uint32_t dispatch_message_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
                         uint32_t dispatch_s_sync_sem_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
@@ -1744,8 +1782,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 uint32_t mux_d_input_idx = 0;
                 for (const auto& dispatch_d_settings : device_worker_variants[DispatchWorkerType::DISPATCH_D]) {
                     auto& dispatch_d_setting = std::get<1>(dispatch_d_settings);
-                    compile_args[4 + mux_d_input_idx] = packet_switch_4B_pack(dispatch_d_setting.worker_physical_core.x,
-                                                        dispatch_d_setting.worker_physical_core.y,
+                    compile_args[4 + mux_d_input_idx] = packet_switch_4B_pack(dispatch_d_setting.worker_virtual_core.x,
+                                                        dispatch_d_setting.worker_virtual_core.y,
                                                         1,
                                                         DispatchRemoteNetworkType::NOC0); // 4,5,6,7: src x info
                     mux_d_input_idx++;
@@ -1755,8 +1793,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 }
                 for (const auto& us_tunneler_remote_settings : device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE]) {
                     auto &us_tunneler_remote_setting = std::get<1>(us_tunneler_remote_settings);
-                    compile_args[4 + mux_d_input_idx] = packet_switch_4B_pack(us_tunneler_remote_setting.worker_physical_core.x,
-                                        us_tunneler_remote_setting.worker_physical_core.y,
+                    compile_args[4 + mux_d_input_idx] = packet_switch_4B_pack(us_tunneler_remote_setting.worker_virtual_core.x,
+                                        us_tunneler_remote_setting.worker_virtual_core.y,
                                         us_tunneler_remote_setting.vc_count * 2 - 1,
                                         DispatchRemoteNetworkType::NOC0); // 4,5,6,7: src x info
                     mux_d_input_idx++;
@@ -1767,8 +1805,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
 
                 compile_args[8] = (tunneler_settings.cb_start_address + ((tunneler_settings.vc_count - 1) * tunneler_settings.cb_size_bytes)) >> 4; // 8: remote_tx_queue_start_addr_words
                 compile_args[9] = tunneler_settings.cb_size_bytes >> 4; // 9: remote_tx_queue_size_words
-                compile_args[10] = tunneler_settings.worker_physical_core.x; // 10: remote_tx_x
-                compile_args[11] = tunneler_settings.worker_physical_core.y; // 11: remote_tx_y
+                compile_args[10] = tunneler_settings.worker_virtual_core.x; // 10: remote_tx_x
+                compile_args[11] = tunneler_settings.worker_virtual_core.y; // 11: remote_tx_y
                 compile_args[12] = tunneler_settings.vc_count - 1; // 12: remote_tx_queue_id
                 compile_args[13] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 13: tx_network_type
                 compile_args[14] = 0; // 14: test_results_addr (disabled)
@@ -1849,7 +1887,7 @@ void Device::setup_tunnel_for_remote_devices() {
                 settings.dispatch_core_type = dispatch_core_type;
 
                 tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(prefetch_location.chip, get_physical_core_coordinate(prefetch_location, dispatch_core_type));
+                settings.worker_virtual_core = tt_cxy_pair(prefetch_location.chip, this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type));
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
                 //prefetch needs three semaphores.
                 settings.semaphores.push_back(0);
@@ -1867,7 +1905,7 @@ void Device::setup_tunnel_for_remote_devices() {
 
             for (uint32_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(dispatch_location.chip, get_physical_core_coordinate(dispatch_location, dispatch_core_type));
+                settings.worker_virtual_core = tt_cxy_pair(dispatch_location.chip, this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type));
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
                 //dispatch needs one semaphore.
                 settings.semaphores.push_back(0);
@@ -1917,7 +1955,7 @@ void Device::setup_tunnel_for_remote_devices() {
                     //N300, T3K 1, 2 CQ case
                     settings.semaphores = std::vector<uint32_t>(num_prefetchers);
                     tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(mux_location.chip, get_physical_core_coordinate(mux_location, dispatch_core_type));
+                    settings.worker_virtual_core = tt_cxy_pair(mux_location.chip, this->virtual_core_from_logical_core(mux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
                     settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).mux_buffer_size(num_hw_cqs);
                     settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
@@ -1925,7 +1963,7 @@ void Device::setup_tunnel_for_remote_devices() {
                     tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
 
                     tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.worker_virtual_core = tt_cxy_pair(demux_location.chip, this->virtual_core_from_logical_core(demux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
                     settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                     settings.cb_size_bytes = 0x10000;
@@ -1934,7 +1972,7 @@ void Device::setup_tunnel_for_remote_devices() {
                     //TG, TGG 1, 2 CQ case
                     settings.semaphores = std::vector<uint32_t>(MAX_SWITCH_FAN_IN);
                     tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(mux_location.chip, get_physical_core_coordinate(mux_location, dispatch_core_type));
+                    settings.worker_virtual_core = tt_cxy_pair(mux_location.chip, this->virtual_core_from_logical_core(mux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
                     settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
                     settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).mux_buffer_size(1);
@@ -1942,12 +1980,12 @@ void Device::setup_tunnel_for_remote_devices() {
                     tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
                     if (num_prefetchers == 8) {
                         tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, channel, 1);
-                        settings.worker_physical_core = tt_cxy_pair(mux_location.chip, get_physical_core_coordinate(mux_location, dispatch_core_type));
+                        settings.worker_virtual_core = tt_cxy_pair(mux_location.chip, this->virtual_core_from_logical_core(mux_location, dispatch_core_type));
                         tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
                     }
 
                     tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.worker_virtual_core = tt_cxy_pair(demux_location.chip, this->virtual_core_from_logical_core(demux_location, dispatch_core_type));
                     settings.semaphores.clear();
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
                     settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
@@ -1956,14 +1994,14 @@ void Device::setup_tunnel_for_remote_devices() {
 
                     settings.semaphores = std::vector<uint32_t>(num_prefetchers / 2);
                     demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 1);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.worker_virtual_core = tt_cxy_pair(demux_location.chip, this->virtual_core_from_logical_core(demux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
                     settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                     settings.cb_size_bytes = 0x10000;
                     tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
 
                     demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 2);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.worker_virtual_core = tt_cxy_pair(demux_location.chip, this->virtual_core_from_logical_core(demux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
                     settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                     settings.cb_size_bytes = 0x10000;
@@ -1978,8 +2016,8 @@ void Device::setup_tunnel_for_remote_devices() {
             tt_cxy_pair us_location = dispatch_core_manager::instance().tunneler_core(us_device, device_id, channel, cq_id);
             tt_cxy_pair local_location = dispatch_core_manager::instance().us_tunneler_core_local(device_id, channel, cq_id);
 
-            settings.worker_physical_core = tt_cxy_pair(us_location.chip, get_physical_core_coordinate(us_location, CoreType::ETH));
-            settings.eth_partner_physical_core = tt_cxy_pair(local_location.chip, get_physical_core_coordinate(local_location, CoreType::ETH));
+            settings.worker_virtual_core = tt_cxy_pair(us_location.chip, this->virtual_core_from_logical_core(us_location, CoreType::ETH));
+            settings.eth_partner_virtual_core = tt_cxy_pair(local_location.chip, this->virtual_core_from_logical_core(local_location, CoreType::ETH));
             settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp";
             settings.cb_start_address = 0x19000;
             settings.cb_size_bytes = 0x4000;
@@ -1989,9 +2027,9 @@ void Device::setup_tunnel_for_remote_devices() {
             settings.tunnel_stop = tunnel_stop;
 
             //swap the two etnernet link pair cores for downstream chip on the link pair.
-            tt_cxy_pair temp = settings.worker_physical_core;
-            settings.worker_physical_core = settings.eth_partner_physical_core;
-            settings.eth_partner_physical_core = temp;
+            tt_cxy_pair temp = settings.worker_virtual_core;
+            settings.worker_virtual_core = settings.eth_partner_virtual_core;
+            settings.eth_partner_virtual_core = temp;
             settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp";
             tunnel_core_allocations[US_TUNNELER_LOCAL].push_back(std::make_tuple(local_location, settings));
             TT_ASSERT(us_location.chip == us_device,
@@ -2003,7 +2041,7 @@ void Device::setup_tunnel_for_remote_devices() {
             settings.dispatch_core_type = dispatch_core_type;
 
             tt_cxy_pair mux_d_location = dispatch_core_manager::instance().mux_d_core(device_id, channel, cq_id);
-            settings.worker_physical_core = tt_cxy_pair(mux_d_location.chip, get_physical_core_coordinate(mux_d_location, dispatch_core_type));
+            settings.worker_virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(mux_d_location, dispatch_core_type);
             settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_mux.cpp";
             settings.semaphores = std::vector<uint32_t>(num_hw_cqs);
             settings.consumer_semaphore_id = 0;
@@ -2015,7 +2053,7 @@ void Device::setup_tunnel_for_remote_devices() {
 
             uint32_t demux_vcs = settings.vc_count - 1;
             tt_cxy_pair demux_d_location = dispatch_core_manager::instance().demux_d_core(device_id, channel, 0);
-            settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, get_physical_core_coordinate(demux_d_location, dispatch_core_type));
+            settings.worker_virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(demux_d_location, dispatch_core_type);
             settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
             settings.producer_semaphore_id = 0;
             settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
@@ -2027,7 +2065,7 @@ void Device::setup_tunnel_for_remote_devices() {
             if (tunnel.size() > 2 && demux_vcs > 1) {
                 //TG/TGG 1-2 CQs
                 demux_d_location = dispatch_core_manager::instance().demux_d_core(device_id, channel, 1);
-                settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, get_physical_core_coordinate(demux_d_location, dispatch_core_type));
+                settings.worker_virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(demux_d_location, dispatch_core_type);
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
                 settings.producer_semaphore_id = 0;
                 settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
@@ -2045,7 +2083,7 @@ void Device::setup_tunnel_for_remote_devices() {
                 settings.producer_semaphore_id = 2;
                 settings.consumer_slave_semaphore_id = 3;
                 tt_cxy_pair prefetch_d_location = dispatch_core_manager::instance().prefetcher_d_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(prefetch_d_location.chip, get_physical_core_coordinate(prefetch_d_location, dispatch_core_type));
+                settings.worker_virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(prefetch_d_location, dispatch_core_type);
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
                 settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
                 settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_size();
@@ -2066,7 +2104,7 @@ void Device::setup_tunnel_for_remote_devices() {
                 CoreCoord compute_grid_size = this->compute_with_storage_grid_size();
                 settings.num_compute_cores = uint32_t(compute_grid_size.x * compute_grid_size.y);
                 tt_cxy_pair dispatch_d_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(dispatch_d_location.chip, get_physical_core_coordinate(dispatch_d_location, dispatch_core_type));
+                settings.worker_virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(dispatch_d_location, dispatch_core_type);
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
                 tunnel_core_allocations[DISPATCH_D].push_back(std::make_tuple(dispatch_d_location, settings));
                 settings.semaphores.clear();
@@ -2089,7 +2127,8 @@ void Device::setup_tunnel_for_remote_devices() {
                         settings.producer_semaphore_id = 0; // sync with producer (prefetcher)
                     }
                     tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
-                    settings.worker_physical_core = tt_cxy_pair(dispatch_s_location.chip, get_physical_core_coordinate(dispatch_s_location, dispatch_core_type));
+                    auto dispatch_s_virtual_coords = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(dispatch_s_location.chip, dispatch_s_location, dispatch_core_type);
+                    settings.worker_virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(dispatch_s_location, dispatch_core_type);
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp";
                     tunnel_core_allocations[DISPATCH_S].push_back(std::make_tuple(dispatch_s_location, settings));
                     settings.semaphores.clear();
@@ -2154,7 +2193,7 @@ void Device::setup_tunnel_for_remote_devices() {
             {
                 if (device_worker_variants[dwv].size()) {
                     for (auto &[core, settings] : device_worker_variants[dwv]) {
-                        log_debug(LogMetal, "Tunnel {} Stop {} is Device {}. Core {} - Physical {} will run {}.", t, tunnel_stop, tunnel_device, core.str(), settings.worker_physical_core.str(), magic_enum::enum_name((tt::tt_metal::DispatchWorkerType)dwv));
+                        log_debug(LogMetal, "Tunnel {} Stop {} is Device {}. Core {} - Physical {} will run {}.", t, tunnel_stop, tunnel_device, core.str(), settings.worker_virtual_core.str(), magic_enum::enum_name((tt::tt_metal::DispatchWorkerType)dwv));
                         for (uint32_t arg = 0; arg < settings.compile_args.size(); arg++) {
                             log_debug(LogMetal, "CompileArgs[{}] = {}", arg, settings.compile_args[arg]);
                         }
@@ -2208,8 +2247,9 @@ void Device::compile_command_queue_programs() {
             CoreType dispatch_core_type = dispatch_core_config.get_core_type();
             tt_cxy_pair prefetch_core = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
             tt_cxy_pair dispatch_core = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
-            CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_core, dispatch_core_type);
-            CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_core, dispatch_core_type);
+            CoreCoord prefetch_virtual_core = this->virtual_core_from_logical_core(prefetch_core, dispatch_core_type);
+            CoreCoord dispatch_virtual_core = this->virtual_core_from_logical_core(dispatch_core, dispatch_core_type);
+
             uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
             uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id, cq_size);
@@ -2231,14 +2271,14 @@ void Device::compile_command_queue_programs() {
 
             // dispatch_s location and flow control vars initialized as invalid. Will be set if dispatch_s is enabled for the given configuration.
             tt_cxy_pair dispatch_s_core = tt_cxy_pair(0xff, 0xff, 0xff);
-            CoreCoord dispatch_s_physical_core = {0xff, 0xff};
+            CoreCoord dispatch_s_virtual_core = {0xff, 0xff};
             uint32_t dispatch_s_buffer_base = 0xff;
             uint32_t dispatch_s_sem = 0xff; // used by dispatch_s to sync with prefetch
             uint32_t dispatch_s_sync_sem_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);; // used by dispatch_d to signal that dispatch_s can send go signal
             if (this->dispatch_s_enabled()) {
                 // Skip allocating dispatch_s for multi-CQ configurations with ethernet dispatch
                 dispatch_s_core = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
-                dispatch_s_physical_core = get_physical_core_coordinate(dispatch_s_core, dispatch_core_type);
+                dispatch_s_virtual_core = this->virtual_core_from_logical_core(dispatch_s_core, dispatch_core_type);
                 uint32_t dispatch_buffer_base = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
                 if (dispatch_core_type == CoreType::WORKER) {
                     // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
@@ -2252,9 +2292,9 @@ void Device::compile_command_queue_programs() {
             }
 
             log_debug(LogDevice, "Dispatching out of {} cores",  magic_enum::enum_name(dispatch_core_type));
-            log_debug(LogDevice, "Prefetch HD logical location: {} physical core: {}", prefetch_core.str(), prefetch_physical_core.str());
-            log_debug(LogDevice, "Dispatch HD logical location: {} physical core {}", dispatch_core.str(), dispatch_physical_core.str());
-            log_debug(LogDevice, "Dispatch S logical location: {} physical core {}", dispatch_s_core.str(), dispatch_s_physical_core.str());
+            log_debug(LogDevice, "Prefetch HD logical location: {} virtual core: {}", prefetch_core.str(), prefetch_virtual_core.str());
+            log_debug(LogDevice, "Dispatch HD logical location: {} virtual core {}", dispatch_core.str(), dispatch_virtual_core.str());
+            log_debug(LogDevice, "Dispatch S logical location: {} virtual core {}", dispatch_s_core.str(), dispatch_s_virtual_core.str());
 
             std::vector<uint32_t> prefetch_compile_args = {
                 dispatch_constants::get(dispatch_core_type).dispatch_buffer_base(),
@@ -2292,11 +2332,11 @@ void Device::compile_command_queue_programs() {
                 "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
                 prefetch_compile_args,
                 prefetch_core,
-                prefetch_physical_core,
+                prefetch_virtual_core,
                 dispatch_core_type,
                 CoreCoord{0, 0},
-                dispatch_physical_core,
-                dispatch_s_physical_core,
+                dispatch_virtual_core,
+                dispatch_s_virtual_core,
                 std::map<string, string> {},
                 my_noc_index,
                 my_noc_index,
@@ -2304,7 +2344,7 @@ void Device::compile_command_queue_programs() {
                 false,
                 false,
                 // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
-                tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
+                tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() && (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline())
             );
 
             uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
@@ -2351,11 +2391,11 @@ void Device::compile_command_queue_programs() {
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
                 dispatch_core,
-                dispatch_physical_core,
+                dispatch_virtual_core,
                 dispatch_core_type,
-                prefetch_physical_core,
+                prefetch_virtual_core,
                 CoreCoord{0, 0},
-                dispatch_s_physical_core,
+                dispatch_s_virtual_core,
                 std::map<string, string> {},
                 my_noc_index,
                 dispatch_upstream_noc_index,
@@ -2381,10 +2421,10 @@ void Device::compile_command_queue_programs() {
                     "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp",
                     dispatch_s_compile_args,
                     dispatch_s_core,
-                    dispatch_s_physical_core,
+                    dispatch_s_virtual_core,
                     dispatch_core_type,
-                    prefetch_physical_core,
-                    dispatch_physical_core,
+                    prefetch_virtual_core,
+                    dispatch_virtual_core,
                     CoreCoord{0, 0},
                     std::map<string, string> {},
                     dispatch_s_noc_index,
@@ -2448,7 +2488,7 @@ void Device::compile_command_queue_programs() {
                     prefetch_settings.kernel_file,
                     prefetch_settings.compile_args,
                     prefetch_core,
-                    prefetch_settings.worker_physical_core,
+                    prefetch_settings.worker_virtual_core,
                     prefetch_settings.dispatch_core_type,
                     prefetch_settings.upstream_cores[0],
                     prefetch_settings.downstream_cores[0],
@@ -2460,7 +2500,7 @@ void Device::compile_command_queue_programs() {
                     false,
                     false,
                     // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
-                    tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
+                    tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() && (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline())
                 );
                 cq_id = (cq_id + 1) % num_hw_cqs;
             }
@@ -2540,7 +2580,7 @@ void Device::compile_command_queue_programs() {
                     dispatch_settings.kernel_file,
                     dispatch_settings.compile_args,
                     dispatch_core,
-                    dispatch_settings.worker_physical_core,
+                    dispatch_settings.worker_virtual_core,
                     dispatch_settings.dispatch_core_type,
                     dispatch_settings.upstream_cores[0],
                     CoreCoord{0xffffffff, 0xffffffff},
@@ -2629,7 +2669,7 @@ void Device::compile_command_queue_programs() {
                 prefetch_d_settings.kernel_file,
                 prefetch_d_settings.compile_args,
                 prefetch_d_core,
-                prefetch_d_settings.worker_physical_core,
+                prefetch_d_settings.worker_virtual_core,
                 prefetch_d_settings.dispatch_core_type,
                 prefetch_d_settings.upstream_cores[0],
                 prefetch_d_settings.downstream_cores[0],
@@ -2641,7 +2681,7 @@ void Device::compile_command_queue_programs() {
                 false,
                 false,
                 // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
-                tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
+                tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() && (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline())
             );
             cq_id = (cq_id + 1) % num_hw_cqs;
         }
@@ -2657,7 +2697,7 @@ void Device::compile_command_queue_programs() {
                 dispatch_d_settings.kernel_file,
                 dispatch_d_settings.compile_args,
                 dispatch_d_core,
-                dispatch_d_settings.worker_physical_core,
+                dispatch_d_settings.worker_virtual_core,
                 dispatch_d_settings.dispatch_core_type,
                 dispatch_d_settings.upstream_cores[0],
                 dispatch_d_settings.downstream_cores[0],
@@ -2680,7 +2720,7 @@ void Device::compile_command_queue_programs() {
                     dispatch_s_settings.kernel_file,
                     dispatch_s_settings.compile_args,
                     dispatch_s_core,
-                    dispatch_s_settings.worker_physical_core,
+                    dispatch_s_settings.worker_virtual_core,
                     dispatch_s_settings.dispatch_core_type,
                     dispatch_s_settings.upstream_cores[0],
                     dispatch_s_settings.downstream_cores[0],
@@ -2876,7 +2916,7 @@ void Device::init_command_queue_host() {
 
 void Device::init_command_queue_device() {
 
-    if (llrt::OptionsG.get_skip_loading_fw()) {
+    if (llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
         detail::EnablePersistentKernelCache();
         this->compile_command_queue_programs();
         detail::DisablePersistentKernelCache();
@@ -2901,8 +2941,8 @@ void Device::init_command_queue_device() {
         for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
             launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
             go_msg_t go_msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
-            CoreCoord phys_core = this->physical_core_from_logical_core(logical_dispatch_core, core_type);
-            tt::llrt::write_launch_msg_to_core(this->id(), phys_core, &msg, &go_msg, this->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
+            CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
+            tt::llrt::write_launch_msg_to_core(this->id(), virtual_core, &msg, &go_msg, this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
         }
     }
 
@@ -2918,8 +2958,8 @@ void Device::init_command_queue_device() {
                 for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
                     launch_msg_t msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
                     go_msg_t go_msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
-                    CoreCoord phys_core = mmio_device->physical_core_from_logical_core(logical_dispatch_core, core_type);
-                    tt::llrt::write_launch_msg_to_core(mmio_device_id, phys_core, &msg, &go_msg, mmio_device->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
+                    CoreCoord virtual_core = mmio_device->virtual_core_from_logical_core(logical_dispatch_core, core_type);
+                    tt::llrt::write_launch_msg_to_core(mmio_device_id, virtual_core, &msg, &go_msg, mmio_device->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
                 }
             }
         }
@@ -2953,6 +2993,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     this->initialize_cluster();
     this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
+    this->generate_device_bank_to_noc_tables();
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal)
@@ -2989,7 +3030,7 @@ bool Device::close() {
 
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> not_done_dispatch_cores;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> cores_to_skip;
-    this->get_associated_dispatch_phys_cores(not_done_dispatch_cores, cores_to_skip);
+    this->get_associated_dispatch_virtual_cores(not_done_dispatch_cores, cores_to_skip);
 
     auto mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
     std::unordered_set<CoreCoord> wait_for_cores = not_done_dispatch_cores[mmio_device_id];
@@ -3018,12 +3059,12 @@ bool Device::close() {
 
     if (this->id_ != mmio_device_id) {
         for (auto it = not_done_dispatch_cores[mmio_device_id].begin(); it != not_done_dispatch_cores[mmio_device_id].end(); it++) {
-            const auto &phys_core = *it;
-            if(llrt::is_ethernet_core(phys_core, this->id_)) {
-                log_debug(tt::LogMetal, "Ethernet dispatch core {} on Device {} is idle. Closing Device {}", phys_core.str(), mmio_device_id, this->id());
+            const auto &virtual_core = *it;
+            if(tt::Cluster::instance().is_ethernet_core(virtual_core, this->id_)) {
+                log_debug(tt::LogMetal, "Ethernet dispatch core {} on Device {} is idle. Closing Device {}", virtual_core.str(), mmio_device_id, this->id());
             } else {
-                log_debug(tt::LogMetal, "Resetting core {} on Device {} when closing Device {}", phys_core.str(), mmio_device_id, this->id());
-                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(mmio_device_id, phys_core));
+                log_debug(tt::LogMetal, "Resetting core {} on Device {} when closing Device {}", virtual_core.str(), mmio_device_id, this->id());
+                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(mmio_device_id, virtual_core));
             }
         }
     }
@@ -3083,15 +3124,6 @@ CoreCoord Device::dram_grid_size() const {
     return tt::Cluster::instance().get_soc_desc(id_).get_dram_grid_size();
 }
 
-CoreCoord Device::physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
-}
-
-CoreCoord Device::physical_core_from_logical_core(const CoreDescriptor &logical_core) const {
-    return physical_core_from_logical_core(logical_core.coord, logical_core.type);
-}
-
 CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     if (soc_desc.physical_cores.find(physical_coord) == soc_desc.physical_cores.end())
@@ -3100,7 +3132,51 @@ CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) c
     return soc_desc.physical_cores.at(physical_coord).type;
 }
 
-CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
+CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {
+    if (tt::Cluster::instance().is_worker_core(virtual_coord, this->id_)) {
+        return CoreType::WORKER;
+    } else if (tt::Cluster::instance().is_ethernet_core(virtual_coord, this->id_)) {
+        return CoreType::ETH;
+    }
+    return this->core_type_from_physical_core(virtual_coord);
+}
+
+
+CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
+    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+        // Coordinate already in virtual space: NOC0 and NOC1 are the same
+        return coord;
+    } else {
+        const auto& grid_size = this->grid_size();
+        // Coordinate in Physical NOC0 Space. Convert to Virtual.
+        coord = this->virtual_core_from_physical_core(coord, this->core_type_from_physical_core(coord));
+        // Derive virtual coord in noc_index space.
+        CoreCoord virtual_coord = {
+            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
+            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
+        };
+        return virtual_coord;
+    }
+}
+
+CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
+     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+        // Coordinate already in virtual space: NOC0 and NOC1 are the same
+        return coord;
+    } else {
+        const auto& grid_size = this->grid_size();
+        // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
+        // the system this coordinate belongs to.
+        // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
+        CoreCoord physical_coord = {
+            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
+            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
+        };
+        return this->virtual_core_from_physical_core(physical_coord, this->core_type_from_physical_core(physical_coord));
+    }
+}
+
+CoreCoord Device::physical_worker_core_from_logical_core(const CoreCoord &logical_core) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     return soc_desc.get_physical_tensix_core_from_logical(logical_core);
 }
@@ -3108,66 +3184,64 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
 std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
     std::vector<CoreCoord> worker_cores(logical_cores.size());
     for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
-        worker_cores[idx] = worker_core_from_logical_core(logical_cores[idx]);
+        worker_cores[idx] = this->worker_core_from_logical_core(logical_cores[idx]);
 
     return worker_cores;
 }
 
-CoreCoord Device::dram_core_from_logical_core(const CoreCoord &logical_core) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return soc_desc.get_physical_dram_core_from_logical(logical_core);
+std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
+    std::vector<CoreCoord> eth_cores(logical_cores.size());
+    for (std::size_t idx = 0; idx < logical_cores.size(); idx++) {
+        eth_cores[idx] = this->ethernet_core_from_logical_core(logical_cores[idx]);
+    }
+    return eth_cores;
+}
+CoreCoord Device::virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const {
+    return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->id_, logical_coord, core_type);
 }
 
-std::vector<CoreCoord> Device::dram_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
-    std::vector<CoreCoord> dram_cores(logical_cores.size());
-    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
-        dram_cores[idx] = dram_core_from_logical_core(logical_cores[idx]);
+CoreCoord Device::virtual_core_from_physical_core(const CoreCoord &physical_coord, const CoreType& core_type) const {
+    return tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(this->id_, physical_coord, core_type);
+}
 
-    return dram_cores;
+CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
+    return this->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
 }
 
 CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord &logical_core) const {
-    return tt::Cluster::instance().ethernet_core_from_logical_core(id_, logical_core);
+    return this->virtual_core_from_logical_core(logical_core, CoreType::ETH);
 }
 
-CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord &physical_core) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
+CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const {
+    return tt::Cluster::instance().get_logical_ethernet_core_from_virtual(this->id(), ethernet_core);
 }
 
-std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
-    std::vector<CoreCoord> ethernet_cores(logical_cores.size());
-
-    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
-        ethernet_cores[idx] = ethernet_core_from_logical_core(logical_cores[idx]);
-    return ethernet_cores;
-}
-
-uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const {
-    const auto& grid_size = this->grid_size();
+uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
+    auto virtual_noc_coord = this->virtual_noc0_coordinate(noc_index, core);
     return tt::tt_metal::hal.noc_xy_encoding(
-        tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_core.x),
-        tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_core.y)
+        virtual_noc_coord.x,
+        virtual_noc_coord.y
     );
 }
 
-uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& physical_cores) const {
-    const auto& grid_size = this->grid_size();
+uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
+    auto virtual_noc_start = this->virtual_noc0_coordinate(noc_index, cores.start_coord);
+    auto virtual_noc_end = this->virtual_noc0_coordinate(noc_index, cores.end_coord);
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
         return tt::tt_metal::hal.noc_multicast_encoding(
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y)
+            virtual_noc_start.x,
+            virtual_noc_start.y,
+            virtual_noc_end.x,
+            virtual_noc_end.y
         );
     } else {
         return tt::tt_metal::hal.noc_multicast_encoding(
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y)
+            virtual_noc_end.x,
+            virtual_noc_end.y,
+            virtual_noc_start.x,
+            virtual_noc_start.y
         );
     }
 }
@@ -3558,37 +3632,49 @@ void Device::MarkAllocationsSafe() {
     tt::tt_metal::allocator::mark_allocations_safe(*this->get_initialized_allocator());
 }
 
-void Device::generate_device_headers(const std::string &path) const
+void Device::generate_device_bank_to_noc_tables()
 {
     const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
-    const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
     std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
-    std::vector<int32_t> dram_offsets_per_bank(num_dram_banks);
+    dram_bank_offset_map_.clear();
+    dram_bank_offset_map_.resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         dram_noc_coord_per_bank[bank_id] = this->dram_core_from_dram_channel(this->dram_channel_from_bank_id(bank_id));
-        dram_offsets_per_bank[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
+        dram_bank_offset_map_[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
     }
     const size_t num_l1_banks = this->num_banks(BufferType::L1);
-    const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
-    std::vector<int32_t> l1_offset_per_bank(num_l1_banks);
+    l1_bank_offset_map_.clear();
+    l1_bank_offset_map_.resize(num_l1_banks);
     for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
         l1_noc_coord_per_bank[bank_id] = this->worker_core_from_logical_core(this->logical_core_from_bank_id(bank_id));
-        l1_offset_per_bank[bank_id] = this->bank_offset(BufferType::L1, bank_id);
+        l1_bank_offset_map_[bank_id] = this->bank_offset(BufferType::L1, bank_id);
     }
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
 
-    // Generate header file in proper location
-    jit_build_genfiles_bank_to_noc_coord_descriptor (
-        path,
-        soc_d.grid_size,
-        dram_noc_coord_per_bank,
-        dram_offsets_per_bank,
-        l1_noc_coord_per_bank,
-        l1_offset_per_bank,
-        this->get_allocator_alignment()
-    );
+    dram_bank_to_noc_xy_.clear();
+    dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * dram_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
+        for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
+            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
+            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
+            dram_bank_to_noc_xy_.push_back(xy);
+        }
+    }
+
+    l1_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * l1_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
+        for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
+            auto l1_noc_coords = this->virtual_noc0_coordinate(noc, l1_noc_coord_per_bank[bank_id]);
+            uint16_t noc_x = l1_noc_coords.x;
+            uint16_t noc_y = l1_noc_coords.y;
+            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
+            l1_bank_to_noc_xy_.push_back(xy);
+        }
+    }
 }
 
 size_t Device::get_device_kernel_defines_hash() {
@@ -3675,6 +3761,60 @@ void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id)
 const std::vector<SubDeviceId> &Device::get_sub_device_ids() const {
     return this->active_sub_device_manager_->get_sub_device_ids();
 }
+
+std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment() {
+    // Top level function that users (ex: Op Writers) can use to assign Tensix Worker cores
+    // as DRAM readers or writers. Returns logical coordinates of optimally placed workers.
+    // This function queries Physical Coordinates (only exposed directly to the Device class)
+    // and passes them to logic in core_assignment.cpp to derive the most optimal core placement
+    // based on architecture specific logic and Physical Grid configuration.
+    if (not this->optimal_dram_bank_to_logical_worker_assignment_.size()) {
+        uint32_t full_grid_size_x = this->grid_size().x;
+        uint32_t full_grid_size_y = this->grid_size().y;
+
+        auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
+        uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+        // Get physical coordinates of DRAM Controller NOC end-points
+        uint32_t num_dram_banks = this->num_dram_channels();
+        std::vector<CoreCoord> dram_phy_coords;
+        for (int i = 0; i < num_dram_banks; ++i) {
+            dram_phy_coords.push_back(dram_core_from_dram_channel(i));
+        }
+        // Get all logical cores in the worker grid
+        std::vector<CoreCoord> all_worker_cores_logical;
+        for (int i = 0; i < num_cores_x; ++i) {
+            for (int j = 0; j < num_cores_y; ++j) {
+                all_worker_cores_logical.push_back(CoreCoord(i, j));
+            }
+        }
+        // Get the physical rows and cols  (y, x) in the worker grid
+        std::vector<uint32_t> worker_phy_y = std::vector<uint32_t>(num_cores_y);
+        for (int i = 0; i < num_cores_y; ++i) {
+            auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(0, i));
+            worker_phy_y.at(i) = core_phy.y;
+        }
+        std::vector<uint32_t> worker_phy_x = std::vector<uint32_t>(num_cores_x);
+        for (int i = 0; i < num_cores_x; ++i) {
+            auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
+            worker_phy_x.push_back(core_phy.x);
+        }
+        // Get optimal placement of worker cores interfacing with DRAM Controllers in physical coordinate space
+        auto physical_worker_cores = get_optimal_dram_to_physical_worker_assignment(this->arch(), dram_phy_coords, full_grid_size_x, full_grid_size_y, worker_phy_x, worker_phy_y);
+        // Convert to physical worker coordinates to logical. This gets returned to the user.
+        for (int i = 0; i < physical_worker_cores.size(); ++i) {
+            for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
+                auto core = this->physical_worker_core_from_logical_core(all_worker_cores_logical[j]);
+                if (physical_worker_cores[i] == core) {
+                    this->optimal_dram_bank_to_logical_worker_assignment_.push_back(all_worker_cores_logical[j]);
+                }
+            }
+        }
+    }
+    return this->optimal_dram_bank_to_logical_worker_assignment_;
+}
+
+
 
 size_t v1::GetNumAvailableDevices() { return tt::Cluster::instance().number_of_user_devices(); }
 

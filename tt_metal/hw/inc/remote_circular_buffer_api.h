@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "tt_metal/hw/inc/circular_buffer.h"
 #include "tt_metal/hw/inc/debug/assert.h"
 #include "utils/utils.h"
 #ifndef COMPILE_FOR_TRISC
@@ -242,11 +243,12 @@ FORCE_INLINE void align_local_cbs_to_remote_cb(
     // We assert that the offset of sender and receiver common attributes are the same
     // so we can use either interface here
     const RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_index);
-    uint32_t fifo_limit = remote_cb.fifo_limit_page_aligned >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-    uint32_t fifo_size = fifo_limit - (remote_cb.fifo_start_addr >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES);
-    uint32_t fifo_ptr = remote_cb.fifo_rd_ptr >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+    uint32_t fifo_limit = remote_cb.fifo_limit_page_aligned >> cb_addr_shift;
+    uint32_t fifo_size = fifo_limit - (remote_cb.fifo_start_addr >> cb_addr_shift);
+    uint32_t fifo_ptr = remote_cb.fifo_rd_ptr >> cb_addr_shift;
     for (uint32_t i = 0; i < num_local_cbs; i++) {
         LocalCBInterface& local_cb = get_local_cb_interface(local_cb_indices[i]);
+        ASSERT(fifo_size % local_cb.fifo_page_size == 0);
         uint32_t fifo_num_pages = fifo_size / local_cb.fifo_page_size;
         local_cb.fifo_limit = fifo_limit;
         local_cb.fifo_size = fifo_size;

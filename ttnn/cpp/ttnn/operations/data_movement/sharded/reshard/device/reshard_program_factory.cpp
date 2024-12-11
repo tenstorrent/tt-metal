@@ -341,11 +341,18 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
 
-    tt::tt_metal::KernelHandle kernel_id_0 =
-        tt::tt_metal::CreateKernel(program, kernel_name, all_cores, tt::tt_metal::ReaderDataMovementConfig({cb_index}));
+    bool interface_with_dram = (remote_core_type == CoreType::DRAM);
+    tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
+        program,
+        kernel_name,
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));
 
-    tt::tt_metal::KernelHandle kernel_id_1 =
-        tt::tt_metal::CreateKernel(program, kernel_name, all_cores, tt::tt_metal::WriterDataMovementConfig({cb_index}));
+    tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
+        program,
+        kernel_name,
+        all_cores,
+        tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
 
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(total_size, {{cb_index, data_format}})
@@ -359,7 +366,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
     auto bank_id = device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
     uint32_t bank_offset = device->bank_offset(remote_buffer_type, bank_id);
-    auto remote_core = device->physical_core_from_logical_core(remote_cores[remote_core_idx], remote_core_type);
 
     std::array<tt::tt_metal::KernelHandle, 2> kernels = {kernel_id_0, kernel_id_1};
     uint32_t local_units_left = num_units;
@@ -382,17 +388,13 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                         bank_id =
                             device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
                         bank_offset = device->bank_offset(remote_buffer_type, bank_id);
-                        remote_core =
-                            device->physical_core_from_logical_core(remote_cores[remote_core_idx], remote_core_type);
                     }
                     uint32_t units_to_transfer = std::min(remote_core_units_rem, local_units_to_transfer);
-                    auto remote_core =
-                        device->physical_core_from_logical_core(remote_cores[remote_core_idx], remote_core_type);
+                    bank_id = device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
                     kernel_args.insert(
                         kernel_args.end(),
-                        {static_cast<uint32_t>(remote_core.x),
-                         static_cast<uint32_t>(remote_core.y),
-                         (remote_units_per_shard - remote_core_units_rem) * unit_size + bank_offset,
+                        {bank_id,
+                         (remote_units_per_shard - remote_core_units_rem) * unit_size,
                          units_to_transfer * unit_size});
                     local_units_per_core -= units_to_transfer;
                     local_units_to_transfer -= units_to_transfer;
@@ -481,18 +483,17 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     std::vector<uint32_t> physical_core_coords;
     physical_core_coords.reserve(grid.x * grid.y);
     for (uint32_t i = 0; i < grid.x; i++) {
-        auto physical_input_core = device->physical_core_from_logical_core(CoreCoord(i, 0), input_core_type);
+        auto physical_input_core = device->virtual_core_from_logical_core(CoreCoord(i, 0), input_core_type);
         physical_core_coords.push_back(physical_input_core.x);
     }
     for (uint32_t i = 0; i < grid.y; i++) {
-        auto physical_input_core = device->physical_core_from_logical_core(CoreCoord(0, i), input_core_type);
+        auto physical_input_core = device->virtual_core_from_logical_core(CoreCoord(0, i), input_core_type);
         physical_core_coords.push_back(physical_input_core.y);
     }
 
     for (const auto& core : cores) {
         auto page_stride_vector = output_core_to_page_range_pair.at(core);
         uint32_t num_ranges = page_stride_vector.size();
-        std::vector<uint32_t> runtime_args = physical_core_coords;
         auto runtime_args_0 = get_runtime_args_for_given_ranges(
             physical_core_coords,
             page_stride_vector,
@@ -540,8 +541,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
 struct WidthShardedRuntimeArgs {
     uint32_t write_size;
     uint32_t read_offset;
-    uint32_t x_coord;
-    uint32_t y_coord;
+    uint32_t bank_id;
     uint32_t write_offset;
 };
 
@@ -591,14 +591,10 @@ compute_width_sharded_reshard_runtime_args(
             auto bank_id =
                 device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[current_remote_core_idx])[0];
             auto bank_offset = device->bank_offset(remote_buffer_type, bank_id);
-            const auto& remote_core =
-                device->physical_core_from_logical_core(remote_cores[current_remote_core_idx], remote_core_type);
-
             core_args.emplace_back(
                 element_size * transfer_size,
                 element_size * local_shard_offset,
-                remote_core.x,
-                remote_core.y,
+                bank_id,
                 element_size * remote_shard_offset + bank_offset);
 
             local_shard_offset += transfer_size;
@@ -640,7 +636,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
 
     const auto local_core_type = local_tensor.buffer()->core_type();
     const auto remote_core_type = remote_tensor.buffer()->core_type();
-
+    bool interface_with_dram = (remote_core_type == CoreType::DRAM);
     const auto local_cores = corerange_to_cores(
         local_shard_spec.grid, std::nullopt, local_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     const auto remote_cores = corerange_to_cores(
@@ -667,11 +663,11 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_reader.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_writer.cpp";
 
-    tt::tt_metal::KernelHandle kernel_id_0 =
-        tt::tt_metal::CreateKernel(program, kernel_name, all_cores, tt::tt_metal::ReaderDataMovementConfig({cb_index}));
+    tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
+        program, kernel_name, all_cores, tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));
 
-    tt::tt_metal::KernelHandle kernel_id_1 =
-        tt::tt_metal::CreateKernel(program, kernel_name, all_cores, tt::tt_metal::WriterDataMovementConfig({cb_index}));
+    tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
+        program, kernel_name, all_cores, tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
 
     uint32_t remote_address = remote_tensor.buffer()->address();
     auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
@@ -709,7 +705,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
             args_for_all_segments.size()};
         for (const auto& args : args_for_all_segments) {
             const std::vector<uint32_t> segment_kernel_0 = {
-                args.write_size, args.read_offset, args.x_coord, args.y_coord, args.write_offset};
+                args.write_size, args.read_offset, args.bank_id, args.write_offset};
             runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
 
             // Adjust read and write offsets to the correct stick address because we are splitting work across 2 kernels
@@ -717,7 +713,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
             const uint32_t adjusted_write_offset = args.write_offset + total_num_sticks_kernel_0 * remote_stride_bytes;
 
             const std::vector<uint32_t> segment_kernel_1 = {
-                args.write_size, adjusted_read_offset, args.x_coord, args.y_coord, adjusted_write_offset};
+                args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};
             runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
         }
         SetRuntimeArgs(program, kernel_id_0, local_cores[core_idx], runtime_args_0);

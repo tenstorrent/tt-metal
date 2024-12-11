@@ -6,12 +6,11 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
-#include <memory>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "core/xtensor_utils.hpp"
 
 TEST(TensorUtilsTest, TestFloatToFromTensorEven) {
     auto* device = &ttml::autograd::ctx().get_device();
@@ -211,4 +210,33 @@ TEST(TensorUtilsTest, TestZerosLike) {
     for (auto& val : tensor_vec) {
         EXPECT_EQ(val, 0.F);
     }
+}
+
+TEST(TensorUtilsTest, TestFloatXtensor) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<float> test_data = {30.F, 20.F, 2.F};
+
+    auto shape = ttml::core::create_shape({1, 1, 1, 3});
+
+    xt::xarray<float> xtensor =
+        ttml::core::span_to_xtensor(std::span<float>{test_data.data(), test_data.size()}, shape.logical_shape());
+    auto tensor = ttml::core::from_xtensor(xtensor, device);
+
+    auto xtensor_back = ttml::core::to_xtensor(tensor);
+
+    EXPECT_TRUE(xt::allclose(xtensor, xtensor_back));
+}
+
+TEST(TensorUtilsTest, TestUint32XTensor) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    std::vector<uint32_t> test_data = {30, 20, 2};
+
+    auto shape = ttml::core::create_shape({1, 1, 1, 3});
+    xt::xarray<uint32_t> xtensor =
+        ttml::core::span_to_xtensor(std::span<uint32_t>{test_data.data(), test_data.size()}, shape.logical_shape());
+    auto tensor = ttml::core::from_xtensor<uint32_t, DataType::UINT32>(xtensor, device);
+
+    auto xtensor_back = ttml::core::to_xtensor<uint32_t>(tensor);
+
+    EXPECT_TRUE(xt::allclose(xtensor, xtensor_back));
 }

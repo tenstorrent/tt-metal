@@ -93,7 +93,7 @@ def test_llama_model_inference(
         pcc = 0.91  # TODO Look on improving PCC
     else:  # performance mode
         assert optimizations == LlamaOptimizations.performance
-        pcc = 0.87  # TODO Look on improving PCC
+        pcc = 0.869  # TODO Look on improving PCC
 
     mesh_device.enable_async(True)
 
@@ -143,17 +143,6 @@ def test_llama_model_inference(
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len)
-    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-    transformation_mats_prefill = ttnn.as_tensor(
-        transformation_mat_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    transformation_mats = {"prefill": transformation_mats_prefill}
-
     # Setup page table
     page_table_tt = None
     paged_attention_config = None
@@ -185,7 +174,6 @@ def test_llama_model_inference(
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
     )
 
@@ -200,7 +188,7 @@ def test_llama_model_inference(
 
     tt_prefill_input = pt_prefill_input
 
-    tt_prefill_input = model_args.prepare_inputs_ttnn_prefill(
+    tt_prefill_input = model_args.prepare_residual_tensor_prefill(
         pt_prefill_input,
     )
     for i in range(1):

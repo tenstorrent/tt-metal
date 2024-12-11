@@ -18,7 +18,10 @@ namespace tt::tt_metal::distributed {
 
 using DeviceIds = std::vector<int>;
 using MeshDeviceID = size_t;
-using MeshOffset = std::pair<size_t, size_t>;
+struct MeshOffset {
+    size_t row = 0;
+    size_t col = 0;
+};
 class MeshDeviceView;
 
 struct MeshSubDeviceManagerId;
@@ -89,6 +92,9 @@ private:
         const DispatchCoreConfig& dispatch_core_config,
         const MeshDeviceConfig& config);
 
+    // This is a reference device used to query properties that are the same for all devices in the mesh.
+    Device* reference_device() const;
+
 public:
     MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice();
@@ -111,15 +117,6 @@ public:
     size_t num_cols() const;
     MeshShape shape() const;
 
-    CoreCoord compute_with_storage_grid_size() const;
-
-    CoreCoord dram_grid_size() const;
-
-    tt::ARCH arch() const;
-    void enable_async(bool enable);
-    void enable_program_cache();
-    void disable_and_clear_program_cache();
-
     void close_devices();
     std::shared_ptr<const MeshDeviceView> get_view() const;
     std::shared_ptr<MeshDeviceView> get_view();
@@ -138,10 +135,10 @@ public:
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(
         const MeshShape& submesh_shape, MeshType type = MeshType::RowMajor);
 
-    size_t num_program_cache_entries() const;
-
     MeshSubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
+    MeshSubDeviceManagerId create_sub_device_manager(
+        const std::vector<std::vector<SubDevice>>& mesh_sub_devices, DeviceAddr local_l1_size);
     void load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
     void clear_loaded_sub_device_manager();
     void remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
@@ -152,6 +149,20 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
+
+    // Device API Queries (API contract with Device class to be supported in future)
+    CoreCoord compute_with_storage_grid_size() const;
+    CoreCoord dram_grid_size() const;
+
+    tt::ARCH arch() const;
+    void enable_async(bool enable);
+    void enable_program_cache();
+    void disable_and_clear_program_cache();
+
+    size_t num_program_cache_entries() const;
+
+    int num_dram_channels() const;
+    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id = SubDeviceId{0}) const;
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
@@ -163,5 +174,45 @@ struct MeshSubDeviceManagerId {
 
     std::vector<SubDeviceManagerId> sub_device_manager_ids;
 };
+
+namespace detail {
+template <typename T>
+concept HasMethodsForArchitectureQueries = requires(T& device) {
+    { device.compute_with_storage_grid_size() } -> std::same_as<CoreCoord>;
+    { device.dram_grid_size() } -> std::same_as<CoreCoord>;
+    { device.arch() } -> std::same_as<tt::ARCH>;
+    { device.num_dram_channels() } -> std::same_as<int>;
+};
+
+template <typename T>
+concept HasMethodsForAllocator = requires(T& device) {
+    { device.get_memory_allocation_statistics(std::declval<BufferType>(), std::declval<SubDeviceId>()) } -> std::same_as<allocator::Statistics>;
+};
+
+template <typename T>
+concept HasMethodsForProgramCache = requires(T& device) {
+    { device.num_program_cache_entries() } -> std::same_as<size_t>;
+    { device.enable_program_cache() } -> std::same_as<void>;
+    { device.disable_and_clear_program_cache() } -> std::same_as<void>;
+};
+
+template <typename T>
+concept HasMethodsForAsync = requires(T& device) {
+    { device.enable_async(std::declval<bool>()) } -> std::same_as<void>;
+};
+
+template <typename T>
+concept DeviceInterfaceContract =
+    HasMethodsForArchitectureQueries<T> &&
+    HasMethodsForAllocator<T> &&
+    HasMethodsForProgramCache<T> &&
+    HasMethodsForAsync<T>;
+
+}  // namespace detail
+
+// For now static_asserts are used to ensure that the concepts are satisfied.
+// This is a temporary compile-time check to make sure that Device/MeshDevice don't deviate from the expected interface.
+static_assert(detail::DeviceInterfaceContract<Device>, "Device must satisfy the DeviceInterfaceContract concept.");
+static_assert(detail::DeviceInterfaceContract<MeshDevice>, "MeshDevice must satisfy the DeviceInterfaceContract concept.");
 
 }  // namespace tt::tt_metal::distributed
