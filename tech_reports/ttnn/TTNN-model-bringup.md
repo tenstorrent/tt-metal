@@ -84,7 +84,30 @@ The diagram below illustrates the corresponding Downsample1 module:
   - At the module-level as well as the full-model-level, there are intial oprimizations you may consider, for instance, when the module or the full model consists of cosequtive ops, idally there should be minimal changes in sharding strategy between ops. For instance, if the model starts with width-sharding op, it would be ideal to keep the same strategy for the following op as reshards can be expensive. So it is recommended to find the best sharding strategies per op. However, once you have a module implementation, you may generate the perf sheet (this will be covered on a following section of this reort) to analyze the device run-time of the full module/full model and identify where keeping the same sharding strategy could be beneficial looking at the end to end device time versus doing reshareds between ops.  
   - STAGE 2: 
   - at this stage, we need to utilize several tools available to us. We will start by the perf_sheet. You will need to build metal with perf-analyzer enabled fist. Then follow the instructions to generate the perf sheet per your module or full model.    
+  - When you build metal use:
+    ```
+    build_metal.sh -p
+    ```
+. This will enable the profiler. 
+  - Once build with the command above to enable profiler, and once you have a pytest for your TTNN module or full model, you may follow the example bellow from the ResNet model replacing the path to the test_perf_resnet.py with the path to your implementation:
  
+    ```
+    ./tt_metal/tools/profiler/profile_this.py -n resnet -c "pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"'
+    ```
+  - Once you execute such command, a .csv perf sheet will apear in your execution path. You may open the file via excel for better utilities. 
+  - You may refer to [TTNN profiler documentation](https://docs.tenstorrent.com/ttnn/latest/ttnn/profiling_ttnn_operations.html) for a more comprehensive overview of the profiler tool and the details of the generated perf sheet by it. 
+  - [Perf Report Headers](https://docs.tenstorrent.com/ttnn/latest/ttnn/profiling_ttnn_operations.html#perf-report-headers) will be particularly helpful in understanding the content of the generated perf sheet. 
+  - The first thing to check on the perf sheet would be to look at the device kernel duration reported in ns per op. By using excel tools, you can quickly identify the largest values in the column. Then see, which op they correspond too. Here are some examples: 
+  - include an image here: 
+  - Once you idenfify the op, it is recommended to check the number of cores used for the op, and the utilization which can be computed by: 
+  - add the formula for computing the per op utiliztion. 
+
+
+
+
+
+
+______________________________________________-
 In this representation, the convolution encompasses both the convolution and Batch Norm operations, as they have been folded together.
 
 Here is the code structure for the Downsample1 sub-module:
