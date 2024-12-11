@@ -215,7 +215,7 @@ def run_multi_core_matmul_1d(
     )
 
     in0 = torch.randn(in0_shape)
-    in1 = torch.randn(in1_shape) if prefetched_weights_pt is None else prefetched_weights_pt
+    in1 = torch.randn(in1_shape)
 
     in0_t = ttnn.from_torch(
         in0,
@@ -315,7 +315,12 @@ def run_multi_core_matmul_1d(
 
     tt_out = ttnn.to_torch(output_t)
 
-    pt_out = in0 @ in1
+    if global_cb is not None:
+        pt_out = in0 @ prefetched_weights_pt
+        logger.info("Using prefetched weights")
+    else:
+        pt_out = in0 @ in1
+
     if activation:
         act_fnc = torch.nn.functional.silu if activation == ttnn.UnaryOpType.SILU else torch.nn.functional.relu
         pt_out = act_fnc(pt_out)

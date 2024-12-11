@@ -23,6 +23,7 @@ Things to test:
     - Base it off of the input tensor shapes
 - Multiple layers
     - Need to change how output tensor is tested?
+- Non-square shapes
 
 
 Testing for writer side:
@@ -39,7 +40,10 @@ Testing for writer side:
 @pytest.mark.parametrize(
     "num_tensors, input_shapes, num_layers",
     [  # TODO: test different shapes etc
-        (2, [(512, 512), (512, 512)], 1),
+        (2, [(256, 512), (256, 512)], 1),
+        (2, [(1024, 256), (1024, 256)], 1),
+        (2, [(128, 128), (128, 128)], 1),
+        (2, [(256, 1024), (256, 1024)], 1),
         # (2, [(128, 128), (128, 128)], 1), # Hangs
         # (1, [(512, 512)], 2), # Hangs
     ],
@@ -47,7 +51,7 @@ Testing for writer side:
 @pytest.mark.parametrize(
     "pcc_threshold",
     [
-        1.0,
+        0.999,
     ],
 )
 def test_run_prefetcher(
@@ -96,13 +100,13 @@ def test_run_prefetcher(
     )
 
     sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
-    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 256)
+    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 1024 * (512))
 
     ##### Set up the input tensors #####
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
-    pt_tensors = [torch.ones(input_shapes[tid]) for tid in range(num_tensors) for _ in range(num_layers)]
+    pt_tensors = [torch.randn(input_shapes[tid]) for tid in range(num_tensors) for _ in range(num_layers)]
     tt_tensors = []
 
     for tid in range(num_tensors):
@@ -175,8 +179,6 @@ def test_run_prefetcher(
     matmul_sub_device = ttnn.SubDevice([receiver_core_range_set])
     prefetcher_sub_device_manager = device.create_sub_device_manager([prefetcher_sub_device, matmul_sub_device], 0)
     device.load_sub_device_manager(prefetcher_sub_device_manager)
-    device.clear_loaded_sub_device_manager()
-    device.remove_sub_device_manager(prefetcher_sub_device_manager)
 
     # Run the prefetcher
     tt_outs = ttnn.dram_prefetcher(
@@ -201,28 +203,32 @@ def test_run_prefetcher(
         all_passing = all_passing and passing
 
     # Run matmul
-    run_multi_core_matmul_1d(
-        device,
-        ttnn.bfloat16,
-        ttnn.bfloat16,
-        ttnn.MathFidelity.HiFi4,
-        False,
-        True,
-        True,
-        B=1,
-        M=32,
-        K=K,
-        N=N,
-        activation=None,
-        grid=receiver_cores_list,
-        use_arbitrary_cores=True,
-        num_iters=1,
-        max_dst_tiles=8,
-        pcc_threshold=0.98,
-        mm_chain=False,
-        use_physical_to_logical_mapping=False,
-        global_cb=global_circular_buffer,
-        prefetched_weights_pt=pt_tensors[0],
-    )
+    for i in range(num_tensors):
+        run_multi_core_matmul_1d(
+            device,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.MathFidelity.HiFi4,
+            False,
+            True,
+            True,
+            B=1,
+            M=32,
+            K=K,
+            N=N,
+            activation=None,
+            grid=receiver_cores_list,
+            use_arbitrary_cores=True,
+            num_iters=1,
+            max_dst_tiles=8,
+            pcc_threshold=0.98,
+            mm_chain=False,
+            use_physical_to_logical_mapping=False,
+            global_cb=global_circular_buffer,
+            prefetched_weights_pt=pt_tensors[0],
+        )
+
+    device.clear_loaded_sub_device_manager()
+    device.remove_sub_device_manager(prefetcher_sub_device_manager)
 
     assert all_passing
