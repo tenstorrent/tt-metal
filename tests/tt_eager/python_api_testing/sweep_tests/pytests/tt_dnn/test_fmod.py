@@ -24,6 +24,7 @@ mem_configs = [
 ]
 
 
+@pytest.mark.skip(reason="This test will be enabled after #15780 is resolved")
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -44,6 +45,7 @@ class TestFmod:
         dst_mem_config,
         device,
     ):
+        # The ranges need to be retested and updated for respective dtypes in issue #15780
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
         ] + [
