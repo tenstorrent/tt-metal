@@ -408,6 +408,7 @@ class Device {
     std::vector<int32_t> l1_bank_offset_map_;
     std::vector<uint16_t> dram_bank_to_noc_xy_;
     std::vector<uint16_t> l1_bank_to_noc_xy_;
+    uint32_t bank_to_noc_prev_build_key_ = 0;
 };
 
 }  // namespace v0

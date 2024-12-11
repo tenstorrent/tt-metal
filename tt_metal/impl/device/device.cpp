@@ -2993,7 +2993,10 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     this->initialize_cluster();
     this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
-    this->generate_device_bank_to_noc_tables();
+    if (build_key_ != bank_to_noc_prev_build_key_) {
+        this->generate_device_bank_to_noc_tables();
+        bank_to_noc_prev_build_key_ = build_key_;
+    }
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal)
