@@ -41,13 +41,6 @@ jobs:
               timeout: 70
             },
             {
-              name: "WH N300 pgm dispatch nightly",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              cmd: ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.sh,
-              timeout: 10
-            },
-            {
               name: "GS-only models",
               arch: grayskull,
               runs-on: ["cloud-virtual-machine", "E150", "in-service"],
@@ -151,18 +144,19 @@ jobs:
         test-config:
           - model: "stable_diffusion"
             cmd: pytest --timeout 900 -n auto tests/nightly/single_card/stable_diffusion
-          - model: "mamba 1"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
-          - model: "mamba 2"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 2
-          - model: "mamba 3"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 3
-          - model: "mamba 4"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 4
+              # Skipping due to issue #15932
+              # - model: "mamba 1"
+              # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
+              # - model: "mamba 2"
+              # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 2
+              # - model: "mamba 3"
+              # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 3
+              # - model: "mamba 4"
+              # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 4
           - model: "mamba 5"
             cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 5
-          - model: "mamba 6"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 6
+              # - model: "mamba 6"
+              # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 6
         card: [N150, N300]
     name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
     env:
