@@ -74,7 +74,9 @@ Tensor create_tensor_from_owned_buffer(
                 std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::TILE);
         }
     } else {
-        TT_ASSERT((output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B));
+        TT_FATAL(
+            (output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B),
+            "Unsupported output datatype");
     }
     auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(buf)}), output_shape, output_dtype, Layout::ROW_MAJOR);
     return rm_tensor.to(Layout::TILE);
