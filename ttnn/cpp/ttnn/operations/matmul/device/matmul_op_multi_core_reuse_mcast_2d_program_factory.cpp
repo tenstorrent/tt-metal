@@ -363,12 +363,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)in0_block_w,      // in0_tensor_next_inner_dim_block_stride
             (std::uint32_t)K * in0_block_h,  // in0_tensor_next_h_dim_block_stride
             // in0 block args
-            (std::uint32_t)in0_block_w,          // in0_block_w
-            (std::uint32_t)in0_block_h,          // in0_block_h
-            (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
-            (std::uint32_t) false,               // extract_shard_sub_blocks (not used for interleaved)
-            (std::uint32_t)0,                    // shard_width_in_tiles (not used for interleaved)
-            (std::uint32_t)0,                    // shard_height_in_tiles (not used for interleaved)
+            (std::uint32_t)in0_block_w,                // in0_block_w
+            (std::uint32_t)in0_block_h,                // in0_block_h
+            (std::uint32_t)in0_block_num_tiles,        // in0_block_num_tiles
+            (std::uint32_t)false,                      // extract_shard_sub_blocks (not used for interleaved)
+            (std::uint32_t)in0_shard_width_in_tiles,   // shard_width_in_tiles (not used for interleaved)
+            (std::uint32_t)in0_shard_height_in_tiles,  // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
             (std::uint32_t)out_num_blocks_x,
