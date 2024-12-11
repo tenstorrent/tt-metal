@@ -56,6 +56,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     }
 
     /* Dataforamts */
+    // tt::DataFormat reader_cb_data_format = tt::DataFormat::Bfp4_b;  // TODO: update?
     tt::DataFormat reader_cb_data_format = tt::DataFormat::Float16_b;  // TODO: update?
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.get_dtype());
     std::vector<tt::DataFormat> tensor_data_formats;
@@ -90,7 +91,9 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* read cb setup */
     uint32_t reader_cb_size = global_cb->size();
-    uint32_t reader_cb_single_tile_size = 2048;  // 16B aligned
+    uint32_t reader_cb_single_tile_size = 2048;  // bfloat16 tile size
+    // uint32_t reader_cb_single_tile_size = 1088;  // bfp8_b tile size
+    // uint32_t reader_cb_single_tile_size = 576;  // bfp4_b tile size
 
     uint32_t reader_cb_index = tt::CB::c_in0;
     CircularBufferConfig reader_cb_config =
@@ -206,7 +209,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t total_num_blocks_in_buffer = 3;  // TODO: how big should reader CB be? here it's triple buffered
     uint32_t bank_start_id = 1;               // TODO: What is this for?
     std::vector<uint32_t> bank_ids;
-    const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);
+    const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);  // TODO: fix order??
 
     // Runtime args for the reader cores
     for (uint32_t core_index = 0; core_index < reader_core_range.num_cores(); core_index++) {
@@ -215,7 +218,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
         /* reader kernel */
         // TODO: Create a proper mapping for bank_id
-        uint32_t bank_id = reader_core_range.num_cores() - core_index;
+        uint32_t bank_id = core_index;
         uint32_t vc = bank_id & 0x1;
         bank_ids.push_back(bank_id);
 
