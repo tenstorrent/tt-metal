@@ -19,6 +19,7 @@ namespace detail {
     ttnn::Tensor convert_tile_to_rm(const ttnn::Tensor& tensor, const ttnn::Shape& shape, const uint32_t tile_first_dim, const uint32_t tile_second_dim, const MemoryConfig &memory_config, const uint8_t queue_id, const PadValue &pad_value);
 }
 
+ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape);
 ttnn::Shape tiling_reshape_corrector(const ttnn::Shape& shape);
 ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shapeconst, uint32_t tile_first_dim, const uint32_t tile_second_dim);
 void Validate_transform (const ttnn::Shape& input_shape, const ttnn::Shape& output_shape);
