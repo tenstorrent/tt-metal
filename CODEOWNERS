@@ -165,7 +165,7 @@ models/perf/benchmarking_utils.py @skhorasganiTT
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
-docs/source/ttnn/dependencies/tt_lib.rst @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt
+docs/source/ttnn/ttnn/dependencies/tt_lib.rst @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt
 docs/source/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt @razorback3 @dongjin-na
 
 # misc
