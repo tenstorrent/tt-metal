@@ -630,7 +630,9 @@ set(PYBIND_SRC
 
 foreach(FILE ${TTNN_OP_SRCS})
     if(FILE MATCHES "_pybind.cpp$")
-        list(APPEND PYBIND_SRC ${FILE})
+        if(WITH_PYTHON_BINDINGS)
+            list(APPEND TTNN_SRC ${FILE})
+        endif()
     else()
         list(APPEND TTNN_SRC ${FILE})
     endif()
@@ -679,7 +681,6 @@ if(WITH_PYTHON_BINDINGS)
         APPEND
         TTNN_BASE_SRCS
         ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp
-        ${PYBIND_SRC}
         ${TT_LIB_SRCS}
     ) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindigns
 
