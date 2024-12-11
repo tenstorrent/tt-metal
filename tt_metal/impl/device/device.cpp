@@ -195,7 +195,7 @@ void Device::get_associated_dispatch_virtual_cores(
 
 void Device::initialize_cluster() {
     ZoneScoped;
-    if (llrt::OptionsG.get_clear_l1()) {
+    if (llrt::RunTimeOptions::get_instance().get_clear_l1()) {
         this->clear_l1_state();
     }
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
@@ -448,7 +448,8 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                         launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
                     }
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
-                    if (not llrt::OptionsG.get_skip_loading_fw()) {
+
+                    if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw())  {
                         llrt::test_load_write_read_risc_binary(binary_mem, this->id(), virtual_core, core_type_idx, processor_class, (riscv_id - build_idx));
                     }
                 }
@@ -479,7 +480,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
             if (is_idle_eth) {
                 tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), virtual_core));
             }
-            if (not llrt::OptionsG.get_skip_loading_fw()) {
+            if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = build_idx; eriscv_id < (build_idx + num_build_states); eriscv_id++) {
@@ -836,10 +837,10 @@ void Device::configure_kernel_variant(
         is_active_eth_core ? hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) :
         hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
 
-    auto my_virtual_noc_coords = this->virtual_noc_coordinate(my_noc_index, kernel_virtual_core);
-    auto upstream_virtual_noc_coords = this->virtual_noc_coordinate(upstream_noc_index, upstream_virtual_core);
-    auto downstream_virtual_noc_coords = this->virtual_noc_coordinate(downstream_noc_index, downstream_virtual_core);
-    auto downstream_slave_virtual_noc_coords = this->virtual_noc_coordinate(downstream_noc_index, downstream_slave_virtual_core);
+    auto my_virtual_noc_coords = this->virtual_noc0_coordinate(my_noc_index, kernel_virtual_core);
+    auto upstream_virtual_noc_coords = this->virtual_noc0_coordinate(upstream_noc_index, upstream_virtual_core);
+    auto downstream_virtual_noc_coords = this->virtual_noc0_coordinate(downstream_noc_index, downstream_virtual_core);
+    auto downstream_slave_virtual_noc_coords = this->virtual_noc0_coordinate(downstream_noc_index, downstream_slave_virtual_core);
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
@@ -857,7 +858,7 @@ void Device::configure_kernel_variant(
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
-    if (llrt::OptionsG.watcher_dispatch_disabled()) {
+    if (llrt::RunTimeOptions::get_instance().watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
     if (!DPrintServerReadsDispatchCores(this)) {
@@ -2343,7 +2344,7 @@ void Device::compile_command_queue_programs() {
                 false,
                 false,
                 // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
-                tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
+                tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() && (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline())
             );
 
             uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
@@ -2499,7 +2500,7 @@ void Device::compile_command_queue_programs() {
                     false,
                     false,
                     // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
-                    tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
+                    tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() && (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline())
                 );
                 cq_id = (cq_id + 1) % num_hw_cqs;
             }
@@ -2680,7 +2681,7 @@ void Device::compile_command_queue_programs() {
                 false,
                 false,
                 // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
-                tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
+                tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() && (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline())
             );
             cq_id = (cq_id + 1) % num_hw_cqs;
         }
@@ -2915,7 +2916,7 @@ void Device::init_command_queue_host() {
 
 void Device::init_command_queue_device() {
 
-    if (llrt::OptionsG.get_skip_loading_fw()) {
+    if (llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
         detail::EnablePersistentKernelCache();
         this->compile_command_queue_programs();
         detail::DisablePersistentKernelCache();
@@ -3141,18 +3142,37 @@ CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) con
 }
 
 
-CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
+CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     } else {
         const auto& grid_size = this->grid_size();
-        // Coordinate in Physical Space. Convert to Virtual.
-        CoreCoord phys_coord = {
+        // Coordinate in Physical NOC0 Space. Convert to Virtual.
+        coord = this->virtual_core_from_physical_core(coord, this->core_type_from_physical_core(coord));
+        // Derive virtual coord in noc_index space.
+        CoreCoord virtual_coord = {
             hal.noc_coordinate(noc_index, grid_size.x, coord.x),
             hal.noc_coordinate(noc_index, grid_size.y, coord.y)
         };
-        return this->virtual_core_from_physical_core(phys_coord, this->core_type_from_physical_core(phys_coord));
+        return virtual_coord;
+    }
+}
+
+CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
+     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+        // Coordinate already in virtual space: NOC0 and NOC1 are the same
+        return coord;
+    } else {
+        const auto& grid_size = this->grid_size();
+        // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
+        // the system this coordinate belongs to.
+        // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
+        CoreCoord physical_coord = {
+            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
+            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
+        };
+        return this->virtual_core_from_physical_core(physical_coord, this->core_type_from_physical_core(physical_coord));
     }
 }
 
@@ -3197,7 +3217,7 @@ CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord &ethernet_core
 }
 
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
-    auto virtual_noc_coord = this->virtual_noc_coordinate(noc_index, core);
+    auto virtual_noc_coord = this->virtual_noc0_coordinate(noc_index, core);
     return tt::tt_metal::hal.noc_xy_encoding(
         virtual_noc_coord.x,
         virtual_noc_coord.y
@@ -3205,8 +3225,8 @@ uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& co
 }
 
 uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
-    auto virtual_noc_start = this->virtual_noc_coordinate(noc_index, cores.start_coord);
-    auto virtual_noc_end = this->virtual_noc_coordinate(noc_index, cores.end_coord);
+    auto virtual_noc_start = this->virtual_noc0_coordinate(noc_index, cores.start_coord);
+    auto virtual_noc_end = this->virtual_noc0_coordinate(noc_index, cores.end_coord);
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
@@ -3648,7 +3668,7 @@ void Device::generate_device_bank_to_noc_tables()
     l1_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * l1_noc_coord_per_bank.size());
     for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
-            auto l1_noc_coords = this->virtual_noc_coordinate(noc, l1_noc_coord_per_bank[bank_id]);
+            auto l1_noc_coords = this->virtual_noc0_coordinate(noc, l1_noc_coord_per_bank[bank_id]);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
             uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
