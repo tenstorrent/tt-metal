@@ -37,40 +37,62 @@ Testing for writer side:
 """
 
 
-@pytest.mark.parametrize(
-    "num_tensors, input_shapes, num_layers",
-    [  # TODO: test different shapes etc
-        (2, [(256, 512), (256, 512)], 1),
-        (2, [(1024, 256), (1024, 256)], 1),
-        (2, [(128, 128), (128, 128)], 1),
-        (2, [(256, 1024), (256, 1024)], 1),
-        # (2, [(128, 128), (128, 128)], 1), # Hangs
-        # (1, [(512, 512)], 2), # Hangs
-    ],
-)
-@pytest.mark.parametrize(
-    "pcc_threshold",
-    [
-        0.999,
-    ],
-)
-def test_run_prefetcher(
-    device,
-    num_tensors,
-    input_shapes,
-    num_layers,
-    pcc_threshold,
-    use_program_cache,
-    function_level_defaults,
-):
-    logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shapes[0]}")
-    K, N = input_shapes[0]
-
-    ##### Set up the prefetcher #####
-    dram_cores = [ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)]  # DRAM banks 1 and 2
-    sender_cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4)]
-    receiver_cores_list = [(1, 0), (2, 0), (1, 4), (2, 4)]
-    receiver_cores = [
+def get_core_ranges(num_reader_cores):
+    all_dram_cores = [
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(1, 0),
+        ttnn.CoreCoord(2, 0),
+        ttnn.CoreCoord(3, 0),
+        ttnn.CoreCoord(4, 0),
+        ttnn.CoreCoord(5, 0),
+        ttnn.CoreCoord(6, 0),
+        ttnn.CoreCoord(7, 0),
+        ttnn.CoreCoord(8, 0),
+        ttnn.CoreCoord(9, 0),
+        ttnn.CoreCoord(10, 0),
+        ttnn.CoreCoord(11, 0),
+    ]
+    all_sender_cores = [
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(0, 4),
+        ttnn.CoreCoord(0, 5),
+        ttnn.CoreCoord(0, 9),
+        ttnn.CoreCoord(4, 0),
+        ttnn.CoreCoord(4, 1),
+        ttnn.CoreCoord(4, 2),
+        ttnn.CoreCoord(4, 4),
+        ttnn.CoreCoord(4, 5),
+        ttnn.CoreCoord(4, 6),
+        ttnn.CoreCoord(4, 7),
+        ttnn.CoreCoord(4, 9),
+    ]
+    all_receiver_cores_list = [
+        (1, 0),
+        (2, 0),
+        (1, 4),
+        (2, 4),
+        (1, 5),
+        (2, 5),
+        (1, 9),
+        (2, 9),
+        (5, 0),
+        (6, 0),
+        (5, 1),
+        (6, 1),
+        (5, 2),
+        (6, 2),
+        (5, 4),
+        (6, 4),
+        (5, 5),
+        (6, 5),
+        (5, 6),
+        (6, 6),
+        (5, 7),
+        (6, 7),
+        (5, 9),
+        (6, 9),
+    ]
+    all_receiver_cores = [
         ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(
@@ -87,7 +109,156 @@ def test_run_prefetcher(
                 ),
             ]
         ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 5),
+                    ttnn.CoreCoord(2, 5),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 9),
+                    ttnn.CoreCoord(2, 9),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(5, 0),
+                    ttnn.CoreCoord(6, 0),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(5, 1),
+                    ttnn.CoreCoord(6, 1),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(5, 2),
+                    ttnn.CoreCoord(6, 2),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(5, 4),
+                    ttnn.CoreCoord(6, 4),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(5, 5),
+                    ttnn.CoreCoord(6, 5),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(5, 6),
+                    ttnn.CoreCoord(6, 6),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(5, 7),
+                    ttnn.CoreCoord(6, 7),
+                ),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(5, 9),
+                    ttnn.CoreCoord(6, 9),
+                ),
+            ]
+        ),
     ]
+
+    dram_cores = all_dram_cores[:num_reader_cores]
+    sender_cores = all_sender_cores[:num_reader_cores]
+    receiver_cores_list = all_receiver_cores_list[: num_reader_cores * 2]
+    receiver_cores = all_receiver_cores[:num_reader_cores]
+
+    return dram_cores, sender_cores, receiver_cores_list, receiver_cores
+
+
+@pytest.mark.parametrize(
+    "num_tensors, input_shapes, num_layers",
+    [  # TODO: test different shapes etc
+        (2, [(256, 512), (256, 512)], 1),
+        (2, [(1024, 256), (1024, 256)], 1),
+        (2, [(128, 128), (128, 128)], 1),
+        (2, [(256, 1024), (256, 1024)], 1),
+        # (2, [(128, 128), (128, 128)], 1), # Hangs
+        # (1, [(512, 512)], 2), # Hangs
+    ],
+)
+@pytest.mark.parametrize(
+    "num_reader_cores",
+    [
+        4,
+    ],
+)
+@pytest.mark.parametrize(
+    "pcc_threshold",
+    [
+        0.999,
+    ],
+)
+def test_run_prefetcher(
+    device,
+    num_tensors,
+    input_shapes,
+    num_layers,
+    num_reader_cores,
+    pcc_threshold,
+    use_program_cache,
+    function_level_defaults,
+):
+    logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shapes[0]}")
+    K, N = input_shapes[0]
+
+    ##### Set up the prefetcher #####
+    # dram_cores = [ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)]  # DRAM banks 1 and 2
+    # sender_cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4)]
+    # receiver_cores_list = [(1, 0), (2, 0), (1, 4), (2, 4)]
+    # receiver_cores = [
+    #     ttnn.CoreRangeSet(
+    #         [
+    #             ttnn.CoreRange(
+    #                 ttnn.CoreCoord(1, 0),
+    #                 ttnn.CoreCoord(2, 0),
+    #             ),
+    #         ]
+    #     ),
+    #     ttnn.CoreRangeSet(
+    #         [
+    #             ttnn.CoreRange(
+    #                 ttnn.CoreCoord(1, 4),
+    #                 ttnn.CoreCoord(2, 4),
+    #             ),
+    #         ]
+    #     ),
+    # ]
+
+    dram_cores, sender_cores, receiver_cores_list, receiver_cores = get_core_ranges(num_reader_cores)
 
     receiver_core_range_set = ttnn.CoreRangeSet(
         [
@@ -227,6 +398,9 @@ def test_run_prefetcher(
             global_cb=global_circular_buffer,
             prefetched_weights_pt=pt_tensors[0],
         )
+
+    device.clear_loaded_sub_device_manager()
+    device.remove_sub_device_manager(prefetcher_sub_device_manager)
 
     device.clear_loaded_sub_device_manager()
     device.remove_sub_device_manager(prefetcher_sub_device_manager)
