@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "conv2d_utils.hpp"
+#include "common/assert.hpp"
 #include "common/constants.hpp"
 #include "common/logger.hpp"
 #include "impl/buffers/buffer_constants.hpp"
@@ -167,7 +168,7 @@ ParallelConfig determine_parallel_config(
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t start_divisor =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
-        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding(out_nhw_ntiles, start_divisor);
+        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(out_nhw_ntiles, start_divisor, act_block_h_ntiles);
         uint32_t start_divisor_c =
             block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
         uint32_t num_cores_c =
@@ -363,18 +364,12 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
             log_info(LogOp, "act_block_h_override is set, but ignored when Width Sharding is used");
         } else {
             uint32_t act_block_h_override_ntiles = act_block_h_override / constants::TILE_HEIGHT;
-            if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
-                act_block_h_ntiles = act_block_h_override_ntiles;
-            } else {
-                act_block_h_ntiles = find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
-                log_info(
-                    LogOp,
-                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
-                    "instead {} was selected as closest valid option!",
-                    act_block_h_override_ntiles,
-                    padded_output_height_ntiles_per_core,
-                    act_block_h_ntiles);
-            }
+            TT_FATAL(
+                padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0,
+                "padded_output_height_ntiles_per_core: {} needs to be divisible by act_block_h_override_ntiles: {}",
+                padded_output_height_ntiles_per_core,
+                act_block_h_override_ntiles);
+             act_block_h_ntiles = act_block_h_override_ntiles;
         }
     }
 
