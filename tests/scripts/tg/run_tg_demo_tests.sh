@@ -45,7 +45,22 @@ run_tg_falcon7b_tests() {
   fi
 }
 
+run_tg_demo_tests() {
+  # Run llama3 tests
+  run_tg_llama3_tests
+
+  # Run Falcon7B tests
+  run_tg_falcon7b_tests
+}
+
+fail=0
 main() {
+  # For CI pipeline - source func commands but don't execute tests if not invoked directly
+  if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    echo "Script is being sourced, not executing main function"
+    return 0
+  fi
+
   if [[ -z "$TT_METAL_HOME" ]]; then
     echo "Must provide TT_METAL_HOME in environment" 1>&2
     exit 1
@@ -60,11 +75,11 @@ main() {
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
 
-  # Run llama3 tests
-  run_tg_llama3_tests
+  run_tg_demo_tests
 
-  # Run Falcon7B tests
-  run_tg_falcon7b_tests
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
 }
 
 main "$@"

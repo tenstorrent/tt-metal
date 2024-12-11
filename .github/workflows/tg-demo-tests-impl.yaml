@@ -41,5 +41,5 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          source ${{ github.workspace }}/tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode ""
+          source ${{ github.workspace }}/tests/scripts/tg/run_tg_demo_tests.sh
           ${{ matrix.test-group.cmd }}
