@@ -100,7 +100,7 @@ void syncDeviceHost(
         return;
     }
     auto device_id = device->id();
-    if (device_id > 0) {
+    if (device_id > 4) {
         return;
     }
     ZoneScopedC(tracy::Color::Tomato3);
@@ -327,12 +327,12 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         tt_xy_pair eth_sender_core;
 
         chip_id_t device_id_receiver_curr = std::numeric_limits<chip_id_t>::max();
-        do {
+        while ((device_id_receiver != device_id_receiver_curr) and (eth_sender_core_iter != active_eth_cores.end())) {
             eth_sender_core = *eth_sender_core_iter;
             std::tie(device_id_receiver_curr, eth_receiver_core) =
                 device_sender->get_connected_ethernet_core(eth_sender_core);
             eth_sender_core_iter++;
-        } while ((device_id_receiver != device_id_receiver_curr) and (eth_sender_core_iter != active_eth_cores.end()));
+        }
 
         if (device_id_receiver != device_id_receiver_curr) {
             log_warning(
@@ -426,27 +426,51 @@ void setSyncInfo(
 void ProfilerSync(ProfilerSyncState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     if (state == ProfilerSyncState::INIT) {
         do_sync_on_close = true;
         sync_set_devices.clear();
         auto ethernet_connections = tt::Cluster::instance().get_ethernet_connections();
         std::set<chip_id_t> visited_devices = {};
+        for (int sender_device_id = 0; sender_device_id < 36; sender_device_id++) {
+            if (tt::DevicePool::instance().is_device_active(sender_device_id)) {
+                auto sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
+                auto const& active_eth_cores = sender_device->get_active_ethernet_cores(true);
+
+                chip_id_t receiver_device_id;
+                tt_xy_pair receiver_eth_core;
+                for (auto& sender_eth_core : active_eth_cores) {
+                    std::cout << "From Device: " << sender_device_id << " Core: " << sender_eth_core.x << ","
+                              << sender_eth_core.y;
+                    std::tie(receiver_device_id, receiver_eth_core) =
+                        sender_device->get_connected_ethernet_core(sender_eth_core);
+                    std::cout << "To Device: " << receiver_device_id << " Core: " << receiver_eth_core.x << ","
+                              << receiver_eth_core.y << std::endl;
+                    if (visited_devices.find(sender_device_id) == visited_devices.end() or
+                        visited_devices.find(receiver_device_id) == visited_devices.end()) {
+                        visited_devices.insert(sender_device_id);
+                        visited_devices.insert(receiver_device_id);
+                        std::pair<chip_id_t, chip_id_t> ping_pair = {sender_device_id, receiver_device_id};
+
+                        deviceDeviceTimePair.emplace(
+                            sender_device_id,
+                            (std::unordered_map<chip_id_t, std::vector<std::pair<uint64_t, uint64_t>>>){});
+                        deviceDeviceTimePair.at(sender_device_id)
+                            .emplace(receiver_device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
+                        std::cout << "ethernet_connections: " << sender_device_id << "," << receiver_device_id
+                                  << std::endl;
+                    }
+                }
+            }
+        }
+
         for (const auto& device : ethernet_connections) {
             for (const auto& connection : device.second) {
                 chip_id_t sender_device = device.first;
                 chip_id_t receiver_device = std::get<0>(connection.second);
-
-                if (visited_devices.find(sender_device) == visited_devices.end() or
-                    visited_devices.find(receiver_device) == visited_devices.end()) {
-                    visited_devices.insert(sender_device);
-                    visited_devices.insert(receiver_device);
-                    std::pair<chip_id_t, chip_id_t> ping_pair = {sender_device, receiver_device};
-
-                    deviceDeviceTimePair.emplace(
-                        sender_device, (std::unordered_map<chip_id_t, std::vector<std::pair<uint64_t, uint64_t>>>){});
-                    deviceDeviceTimePair.at(sender_device)
-                        .emplace(receiver_device, (std::vector<std::pair<uint64_t, uint64_t>>){});
-                }
             }
         }
     }
@@ -500,7 +524,7 @@ void ProfilerSync(ProfilerSyncState state) {
                         .emplace(sender.first, (std::pair<double, uint64_t>){1 / freqScale, -1 * int(shift)});
                 }
             }
-            setSyncInfo(0, (std::pair<double, uint64_t>){1.0, 0}, deviceDeviceSyncInfo);
+            setSyncInfo(4, (std::pair<double, uint64_t>){1.0, 0}, deviceDeviceSyncInfo);
         }
     }
 
@@ -573,12 +597,8 @@ void InitDeviceProfiler(Device* device) {
 void DumpDeviceProfileResults(Device* device, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    static bool device_sync_done = false;
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
-    if (device_id == 1 and !device_sync_done) {
-        device_sync_done = true;
-    }
     auto device_num_hw_cqs = device->num_hw_cqs();
     const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
     for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
@@ -596,7 +616,7 @@ void DumpDeviceProfileResults(Device* device, ProfilerDumpState state) {
             for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
                 chip_id_t sender_id = device->id();
                 chip_id_t receiver_id = connected_device.first;
-                detail::syncDeviceDevice(sender_id, receiver_id);
+                // detail::syncDeviceDevice(sender_id, receiver_id);
             }
         }
     });
