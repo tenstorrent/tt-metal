@@ -5,23 +5,7 @@
 #include <stdint.h>
 #include <cstring>
 #include "dataflow_api.h"
-#define ENABLE_DEBUG 1
 
-#if ENABLE_DEBUG
-#include "debug/dprint.h"
-
-inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << "AT PAGE " << start + page << ": ";
-        for (uint32_t j = 0; j < pagelen; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-    DPRINT << ENDL();
-}
-#endif
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
@@ -32,7 +16,6 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
 }
 
 void kernel_main() {
-    DPRINT << "Starting kernel" << ENDL();
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(1);
     uint32_t num_read_per_barrier = get_arg_val<uint32_t>(2);
@@ -41,16 +24,6 @@ void kernel_main() {
     uint32_t front_pad_c = get_arg_val<uint32_t>(5);
     uint32_t front_pad_h = get_arg_val<uint32_t>(6);
     tt_l1_ptr uint32_t* start_dim_offset = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
-
-    DPRINT << "src_addr: " << src_addr << ENDL();
-    DPRINT << "num_sticks_per_core_read: " << num_sticks_per_core_read << ENDL();
-    DPRINT << "num_read_per_barrier: " << num_read_per_barrier << ENDL();
-    DPRINT << "start_id: " << start_id << ENDL();
-    DPRINT << "front_pad_n: " << front_pad_n << ENDL();
-    DPRINT << "front_pad_c: " << front_pad_c << ENDL();
-    DPRINT << "front_pad_h: " << front_pad_h << ENDL();
-    DPRINT << "start_dim_offset: " << start_dim_offset[0] << ", " << start_dim_offset[1] << ", " << start_dim_offset[2]
-           << ", " << start_dim_offset[3] << ENDL();
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t N = get_compile_time_arg_val(1);
@@ -67,20 +40,6 @@ void kernel_main() {
     constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(12);
     constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(21);
 
-    DPRINT << "N: " << N << ENDL();
-    DPRINT << "H: " << H << ENDL();
-    DPRINT << "C: " << C << ENDL();
-    DPRINT << "stick_size_bytes: " << stick_size_bytes << ENDL();
-    DPRINT << "N_padded: " << N_padded << ENDL();
-    DPRINT << "H_padded: " << H_padded << ENDL();
-    DPRINT << "C_padded: " << C_padded << ENDL();
-    DPRINT << "stick_size_padded: " << stick_size_padded << ENDL();
-    DPRINT << "stick_size_padded_front: " << stick_size_padded_front << ENDL();
-    DPRINT << "stick_size_padded_end: " << stick_size_padded_end << ENDL();
-    DPRINT << "num_zero_pad_sticks_read: " << num_zero_pad_sticks_read << ENDL();
-    DPRINT << "last_zero_stick_size: " << last_zero_stick_size << ENDL();
-    DPRINT << "stick_size_padded_aligned: " << stick_size_padded_aligned << ENDL();
-
 #define not_pad_by_zero get_compile_time_arg_val(13) == 1
 #define front_padding get_compile_time_arg_val(9)
 #if (not_pad_by_zero)
@@ -89,12 +48,6 @@ void kernel_main() {
     constexpr uint32_t num_front_pad_sticks_read = get_compile_time_arg_val(16);
     constexpr uint32_t num_end_pad_sticks_read = get_compile_time_arg_val(17);
     constexpr uint32_t num_sticks_padded_read = get_compile_time_arg_val(18);
-
-    DPRINT << "packed_pad_value: " << packed_pad_value << ENDL();
-    DPRINT << "row_major_min_bytes: " << row_major_min_bytes << ENDL();
-    DPRINT << "num_front_pad_sticks_read: " << num_front_pad_sticks_read << ENDL();
-    DPRINT << "num_end_pad_sticks_read: " << num_end_pad_sticks_read << ENDL();
-    DPRINT << "num_sticks_padded_read: " << num_sticks_padded_read << ENDL();
 #endif
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
@@ -110,10 +63,8 @@ void kernel_main() {
 #if (stick_size_is_pow2)
     const InterleavedPow2AddrGen<src_is_dram> s = {
         .bank_base_address = src_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-    DPRINT << "log_base_2_of_page_size: " << log_base_2_of_page_size << ENDL();
 #else
     const InterleavedAddrGen<src_is_dram> s = {.bank_base_address = src_addr, .page_size = page_size};
-    DPRINT << "page_size: " << page_size << ENDL();
 #endif
 
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
@@ -130,8 +81,7 @@ void kernel_main() {
 #else
     fill_pad_cb_with_val(cb_pad, stick_size_padded, 0);
 #endif
-    DPRINT << "num_sticks_per_core_read: " << num_sticks_per_core_read << ENDL();
-    DPRINT << "num_read_per_barrier: " << num_read_per_barrier << ENDL();
+
     uint32_t i_stick = start_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {
@@ -142,30 +92,15 @@ void kernel_main() {
             bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                               (curr_n >= front_pad_n and curr_n < N);
             uint64_t read_noc_addr = get_noc_addr(i_stick, s);
-            DPRINT << ENDL() << "n,c,h and stick info: " << curr_n << " " << curr_c << " " << curr_h << " " << i_stick
-                   << ENDL();
-            if (curr_n == 2 && curr_c == 1 && curr_h == 3) {
-                DPRINT << "i_stick: " << i_stick << " and getting the problematic stick" << ENDL();
-            }
-            // #if (not_pad_by_zero)
             noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_padded);
-            // #else
-            //             noc_async_read(zeros_noc_addr, l1_write_addr, stick_size_padded);
-            // #endif
             noc_async_read_barrier();
-            DPRINT << "first time flood l1_write_addr: " << ENDL();
-            print_pages(l1_write_addr, stick_size_padded / sizeof(uint16_t), 1);
 
             if (read_stick) {
-                DPRINT << "Reading stick: " << i_stick << " from src" << ENDL();
 #if (front_padding)
                 // Read noc into cb_pad_align l1
                 noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
                 noc_async_read_barrier();
 
-                DPRINT << "second time get tensor content from noc: " << ENDL();
-                print_pages(get_read_ptr(cb_pad_align), stick_size_bytes / sizeof(uint16_t), 1);
-                // move data from cb_pad_align to l1_write_addr
                 memmove(
                     (void*)(l1_write_addr + stick_size_padded_front),
                     (void*)(get_read_ptr(cb_pad_align)),
@@ -177,8 +112,6 @@ void kernel_main() {
                 i_stick++;
             }
             noc_async_read_barrier();
-            DPRINT << "3rd time check l1 content: " << ENDL();
-            print_pages(l1_write_addr, stick_size_padded / sizeof(uint16_t), 1);
             l1_write_addr += stick_size_padded_aligned;
             curr_h++;
             if (curr_h == H_padded) {
@@ -191,7 +124,6 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
-        print_pages(get_write_ptr(cb_in0), stick_size_padded_aligned / sizeof(uint16_t), num_read_per_barrier);
         cb_push_back(cb_in0, num_read_per_barrier);
     }
 }
