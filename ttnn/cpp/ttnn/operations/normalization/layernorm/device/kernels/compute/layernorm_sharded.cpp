@@ -415,8 +415,8 @@ void MAIN {
         UNPACK((print_full_tile(cb_gamma, 0, true)));
         index_h_offset = 0;
         cb_reserve_back(cb_outgamma, num_tiles_per_block);
-        UNPACK((DPRINT << "cb_im:" << ENDL()));
-        UNPACK((print_full_tile(cb_im, 0, true)));
+        // UNPACK((DPRINT << "cb_im:" << ENDL()));
+        // UNPACK((print_full_tile(cb_im, 0, true)));
         for (uint32_t i = 0; i < block_h; i++) {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {

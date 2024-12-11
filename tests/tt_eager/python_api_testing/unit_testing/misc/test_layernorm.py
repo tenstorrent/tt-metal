@@ -34,7 +34,7 @@ def ref_rmsnorm(x, gamma, beta, eps):
 def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     epsf = 1e-2
 
-    test_dims = ((1, 1, 32, 64),)
+    test_dims = ((1, 1, 32, 32),)
     for test_shape in test_dims:
         in0 = torch.rand(test_shape) * 2 - 0.95
         # in0 = torch.full(test_shape, 10.25)
@@ -50,8 +50,10 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
             beta = torch.zeros(test_shape[3])
         if test_id % 3 == 1:
             # gamma = torch.rand(test_shape[3]) * 2 - 1
-            gamma = torch.full((test_shape[3],), 10.625)
+            # gamma = torch.full((test_shape[3],), 10.625)
+            gamma = torch.arange(start=0, end=test_shape[3] / 10, step=0.1).view((test_shape[3],))
             beta = torch.zeros(test_shape[3])
+            print("gamma: " + " ".join(f"{val.item():.4f}" for val in gamma))
         if test_id % 3 == 2:
             gamma = torch.rand(test_shape[3]) * 2 - 1
             beta = torch.rand(test_shape[3]) * 2.0 - 1.1
@@ -185,11 +187,12 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
         num_rows = tt_got_back.size(2) // 32
         num_cols = tt_got_back.size(3) // 32
 
-        for tile_row in range(num_rows):
-            for tile_col in range(num_cols):
-                print(f"Tile ({tile_row}, {tile_col}):")
-                print_tile(tt_got_back, tile_row, tile_col)
-                print_tile(ref_lnorm, tile_row, tile_col)
+        if 1 == 2:
+            for tile_row in range(num_rows):
+                for tile_col in range(num_cols):
+                    print(f"Tile ({tile_row}, {tile_col}):")
+                    print_tile(tt_got_back, tile_row, tile_col)
+                    print_tile(ref_lnorm, tile_row, tile_col)
 
         assert passing
 

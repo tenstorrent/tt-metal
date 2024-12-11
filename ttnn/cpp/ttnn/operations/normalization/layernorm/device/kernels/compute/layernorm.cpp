@@ -14,7 +14,19 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
-
+#include "debug/dprint.h"
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        // Note: TileSlice has different parameters on reader/writer kernels and these are not quite accurate. That may
+        // cause issues in terms of where data appears. But trying proper parameters caused errors in the dprint server.
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
@@ -276,6 +288,8 @@ void MAIN {
                 mul_bcast_rows_init_short();
                 cb_reserve_back(cb_outg, blk);
                 cb_wait_front(cb_gamma, wt + blk);  // we don't pop, TODO: only wait on first ht
+                UNPACK((DPRINT << "cb_gamma:" << ENDL()));
+                UNPACK((print_full_tile(cb_gamma, 0, true)));
                 cb_wait_front(cb_fusion, blk);
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, wtr, wt + wtr, wtr);  // tile *= 1/(sum(exp(x)))
