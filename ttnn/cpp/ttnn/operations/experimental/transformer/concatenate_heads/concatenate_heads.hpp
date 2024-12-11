@@ -19,8 +19,12 @@ struct ConcatenateHeadsOperation {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return operation::run(
-                   ConcatenateHeadsDeviceOperation{compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config())},
-                   {input_tensor}, {}, {optional_output_tensor}, queue_id)
+                   ConcatenateHeadsDeviceOperation{
+                       compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config())},
+                   {input_tensor},
+                   {},
+                   {optional_output_tensor},
+                   queue_id)
             .at(0);
     }
 

@@ -44,6 +44,7 @@ int main(int argc, char** argv) {
     int32_t buffer_type = 0;
     uint32_t transfer_size;
     uint32_t page_size;
+    uint32_t device_id = 0;
 
     try {
         // Input arguments parsing
@@ -72,15 +73,21 @@ int main(int argc, char** argv) {
             std::tie(skip_write, input_args) =
                 test_args::has_command_option_and_remaining_args(input_args, "--skip-write");
 
+            std::tie(device_id, input_args) =
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--device");
+
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
         }
 
-        TT_ASSERT(page_size == 0 ? transfer_size == 0 : transfer_size % page_size == 0, "Transfer size {}B should be divisible by page size {}B", transfer_size, page_size);
+        TT_ASSERT(
+            page_size == 0 ? transfer_size == 0 : transfer_size % page_size == 0,
+            "Transfer size {}B should be divisible by page size {}B",
+            transfer_size,
+            page_size);
 
         // Device setup
-        int device_id = 0;
         tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
         // Application setup
@@ -100,6 +107,8 @@ int main(int argc, char** argv) {
             page_size);
 
         log_info(LogTest, "Num tests {}", num_tests);
+        float best_write_bw = 0.0f;
+        float best_read_bw = 0.0f;
         for (uint32_t i = 0; i < num_tests; ++i) {
             // Execute application
             if (!skip_write) {
@@ -108,7 +117,9 @@ int main(int argc, char** argv) {
                 Finish(device->command_queue());
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
-                h2d_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
+                float write_bw = transfer_size / (elapsed_us * 1000.0);
+                h2d_bandwidth.push_back(write_bw);
+                best_write_bw = fmax(best_write_bw, write_bw);
                 log_info(
                     LogTest,
                     "EnqueueWriteBuffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
@@ -122,7 +133,9 @@ int main(int argc, char** argv) {
                 EnqueueReadBuffer(device->command_queue(), *buffer, result_vec, true);
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
-                d2h_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
+                float read_bw = transfer_size / (elapsed_us * 1000.0);
+                d2h_bandwidth.push_back(read_bw);
+                best_read_bw = fmax(best_read_bw, read_bw);
                 log_info(
                     LogTest,
                     "EnqueueReadBuffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",
@@ -130,6 +143,13 @@ int main(int argc, char** argv) {
                     elapsed_us / 1000.0,
                     d2h_bandwidth[i]);
             }
+        }
+
+        if (!skip_write) {
+            log_info(LogTest, "Best write: {} GB/s", best_write_bw);
+        }
+        if (!skip_read) {
+            log_info(LogTest, "Best write: {} GB/s", best_read_bw);
         }
 
         // Validation & teardown

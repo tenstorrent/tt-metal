@@ -45,6 +45,59 @@ def print_tile_corners_of_tensor(t):
                 print(f"{str_vals}")
 
 
+def run_with_trace(
+    mesh_device,
+    all_gather_topology,
+    input_tensor,
+    dim,
+    num_links,
+    cluster_axis,
+    output_mem_config,
+    n_worker=None,
+    n_buffer=None,
+    num_iter=20,
+):
+    # Compile Run
+    logger.info("Compiling model")
+    tt_out_tensor = ttnn.all_gather(
+        input_tensor,
+        dim=dim,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        num_links=num_links,
+        memory_config=output_mem_config,
+        topology=all_gather_topology,
+    )
+    for d in mesh_device.get_devices():
+        ttnn.synchronize_device(d)
+
+    # Capture trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(num_iter):
+        tt_out_tensor = ttnn.all_gather(
+            input_tensor,
+            dim=dim,
+            cluster_axis=cluster_axis,
+            mesh_device=mesh_device,
+            num_links=num_links,
+            memory_config=output_mem_config,
+            topology=all_gather_topology,
+        )
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for d in mesh_device.get_devices():
+        ttnn.synchronize_device(d)
+
+    # Run the op
+    logger.info("Starting Trace perf test...")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    for d in mesh_device.get_devices():
+        ttnn.synchronize_device(d)
+
+    return tt_out_tensor
+
+
 def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     mesh_device,
     num_devices_per_line,
@@ -63,6 +116,8 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     num_iters: int = 1,
     cluster_axis: int = 0,
     tile=(32, 32),
+    trace_mode=False,
+    debug=False,
 ):
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
@@ -120,16 +175,28 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
 
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
-    for _ in range(num_iters):
-        ttnn_tensor_out = ttnn.all_gather(
-            ttnn_tensor,
+    if trace_mode:
+        ttnn_tensor_out = run_with_trace(
+            input_tensor=ttnn_tensor,
             dim=dim,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             num_links=num_links,
-            memory_config=output_mem_config,
-            topology=ttnn.Topology.Linear,
+            output_mem_config=output_mem_config,
+            all_gather_topology=ttnn.Topology.Linear,
+            num_iter=num_iters,
         )
+    else:
+        for _ in range(num_iters):
+            ttnn_tensor_out = ttnn.all_gather(
+                ttnn_tensor,
+                dim=dim,
+                cluster_axis=cluster_axis,
+                mesh_device=mesh_device,
+                num_links=num_links,
+                memory_config=output_mem_config,
+                topology=ttnn.Topology.Linear,
+            )
 
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor_out)
     tt_output_tensor = ttnn.to_torch(
@@ -150,7 +217,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         if not eq and debug is True:
             logger.error(f"found mismatches")
             report_mismatches(tt_output_tensor, output_golden, 100)
-            print_tile_corners_of_tensor(output_tensor)
+            print_tile_corners_of_tensor(tt_output_tensor)
     else:
         eq, output = comp_pcc(tt_output_tensor, output_golden)
     if not eq:

@@ -5,7 +5,11 @@
 import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh
-from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
+from models.demos.falcon7b_common.tt.model_utils import (
+    get_falcon_default_core_grid,
+    get_weights_cached,
+    get_default_hifi2_kernel_config,
+)
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 from torch import nn
 from models.utility_functions import (
@@ -58,7 +62,13 @@ def falcon_dense_h_to_4h_matmul(
     if seq_len > 1024:
         # TODO: Review if this path is used? If not, we can delete
         assert fused_activation == None
-        return ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_mem_config, dtype=output_dtype)
+        return ttnn.matmul(
+            input_tensor_a,
+            input_tensor_b,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
+            compute_kernel_config=get_default_hifi2_kernel_config(),
+        )
 
     if is_grayskull():
         compute_kernel_config = ttnn.GrayskullComputeKernelConfig(

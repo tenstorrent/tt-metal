@@ -28,9 +28,10 @@ struct IndexedFillOperation {
         int64_t dim = 0);
 };
 
-}  // namespace indexed_fill
+}  // namespace data_movement
 }  // namespace operations
 
-constexpr auto indexed_fill = ttnn::register_operation<"ttnn::indexed_fill", ttnn::operations::data_movement::IndexedFillOperation>();
+constexpr auto indexed_fill =
+    ttnn::register_operation<"ttnn::indexed_fill", ttnn::operations::data_movement::IndexedFillOperation>();
 
 }  // namespace ttnn

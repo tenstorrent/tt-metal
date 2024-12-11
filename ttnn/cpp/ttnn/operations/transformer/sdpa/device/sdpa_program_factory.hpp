@@ -11,11 +11,11 @@
 namespace ttnn::operations::transformer::detail {
 
 operation::ProgramWithCallbacks sdpa_multi_core(
-    const Tensor &input_tensor_q,
-    const Tensor &input_tensor_k,
-    const Tensor &input_tensor_v,
-    const Tensor &output_tensor,
-    const std::optional<const Tensor> attn_mask,
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const Tensor& input_tensor_v,
+    const Tensor& output_tensor,
+    const std::optional<const Tensor>& attn_mask,
     std::optional<float> scale,
     bool is_causal,
     std::size_t q_chunk_size,

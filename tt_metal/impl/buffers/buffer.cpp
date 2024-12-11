@@ -4,25 +4,29 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 
+#include "tt_metal/buffer.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/types.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
-#include <string>
 #include <utility>
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "third_party/umd/device/tt_soc_descriptor.h"
+#include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
 #include "tt_stl/reflection.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+
+std::atomic<size_t> Buffer::next_unique_id = 0;
 
 std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
     tt::stl::reflection::operator<<(os, spec);
@@ -56,9 +60,6 @@ void validate_buffer_size_and_page_size(
         "should be divisible by buffer size",
         page_size,
         size);
-    TT_FATAL(
-        page_size % sizeof(uint32_t) == 0,
-        "Page size {} must be divisible by sizeof(uint32_t) because buffers hold uint32_t values", page_size);
 
     if (is_sharded(buffer_layout)) {
         TT_FATAL(
@@ -249,6 +250,7 @@ Buffer::Buffer(
     if (size != 0) {
         validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     }
+    unique_id_ = next_unique_id.fetch_add(1);
 }
 
 std::shared_ptr<Buffer> Buffer::create(
@@ -423,33 +425,27 @@ CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
     return allocator::logical_core_from_bank_id(*this->allocator_, bank_id);
 }
 
-CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
-    switch (this->buffer_type_) {
-        case BufferType::DRAM:
-        case BufferType::TRACE: {
-            auto dram_channel = this->dram_channel_from_bank_id(bank_id);
-            return this->device_->dram_core_from_dram_channel(dram_channel);
-        }
-        case BufferType::L1:  // fallthrough
-        case BufferType::L1_SMALL: {
-            auto logical_core = this->logical_core_from_bank_id(bank_id);
-            return this->device_->worker_core_from_logical_core(logical_core);
-        }
-        case BufferType::SYSTEM_MEMORY: {
-            TT_THROW("Host buffer is located in system memory! Cannot retrieve NoC coordinates for it");
-        } break;
-        default: TT_THROW("Unsupported buffer type!");
-    }
-}
-
-CoreCoord Buffer::noc_coordinates() const { return this->noc_coordinates(0); }
-
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     uint32_t num_banks = allocator::num_banks(*this->allocator_, this->buffer_type_);
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     int pages_offset_within_bank = (int)page_index / num_banks;
     auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
+}
+
+DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index) const {
+    uint32_t num_banks = allocator::num_banks(*this->allocator_, this->buffer_type_);
+    TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
+    uint32_t offset;
+    if (is_sharded(this->buffer_layout())) {
+        auto shard_spec = this->shard_spec();
+        uint32_t pages_offset_within_bank = page_index % shard_spec.size();
+        offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+    } else {
+        uint32_t pages_offset_within_bank = page_index / num_banks;
+        offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+    }
+    return this->address() + offset;
 }
 
 uint32_t Buffer::alignment() const {
@@ -461,6 +457,11 @@ DeviceAddr Buffer::aligned_page_size() const {
 }
 DeviceAddr Buffer::aligned_size() const {
     return this->num_dev_pages() * this->aligned_page_size();
+}
+
+DeviceAddr Buffer::aligned_size_per_bank() const {
+    uint32_t num_banks = is_sharded(this->buffer_layout_) ? this->num_cores().value() : this->device_->num_banks(this->buffer_type());
+    return tt::tt_metal::detail::SizeBytesPerBank(this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
@@ -517,15 +518,45 @@ DeviceAddr ShardSpecBuffer::size() const {
     return shape_in_pages_[0] * shape_in_pages_[1];
 }
 
+v1::BufferHandle v1::CreateBuffer(InterleavedBufferConfig config) { return v1::BufferHandle{v0::CreateBuffer(config)}; }
+
+void v1::DeallocateBuffer(const BufferHandle& buffer) { v0::DeallocateBuffer(*buffer); }
+
+std::size_t v1::GetId(const BufferHandle& buffer) { return buffer->unique_id(); }
+
+void v1::WriteToBuffer(const BufferHandle& buffer, stl::Span<const std::byte> host_buffer) {
+    detail::WriteToBuffer(*buffer, stl::Span<const uint8_t>{reinterpret_cast<const std::uint8_t *>(host_buffer.data()), host_buffer.size()});
+}
+
+void v1::ReadFromBuffer(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, bool shard_order) {
+    detail::ReadFromBuffer(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), shard_order);
+}
+
+void v1::ReadFromShard(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, std::uint32_t core_id) {
+    detail::ReadShard(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), core_id);
+}
+
 }  // namespace tt_metal
 }  // namespace tt
 
 namespace tt::stl::json {
 tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann::json &json_object) const {
+    const auto& shard_mode = from_json<tt_metal::ShardMode>(json_object.at("mode"));
+    const auto& physical_shard_shape = from_json<std::optional<std::array<uint32_t, 2>>>(json_object.at("physical_shard_shape"));
+    if (physical_shard_shape.has_value()) {
+        TT_FATAL(shard_mode == ShardMode::LOGICAL, "Physical shard shape can only be provided in logical sharding mode!");
+        return tt_metal::ShardSpec{
+            from_json<CoreRangeSet>(json_object.at("grid")),
+            from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
+            physical_shard_shape.value(),
+            from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
+            from_json<bool>(json_object.at("halo"))};
+    }
     return tt_metal::ShardSpec{
         from_json<CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
-        from_json<bool>(json_object.at("halo"))};
+        from_json<bool>(json_object.at("halo")),
+        shard_mode};
 }
 }

@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <memory>
 #include <random>
 
-#include "core/device.hpp"
+#include "core/indestructible.hpp"
+#include "core/mesh_device.hpp"
 #include "graph.hpp"
 
 namespace ttml::autograd {
@@ -39,7 +41,14 @@ public:
 
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
-    tt::tt_metal::Device& get_device();
+    ttnn::distributed::MeshDevice& get_device();
+
+    void set_mesh_shape(tt::tt_metal::distributed::MeshShape shape);
+    [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
+
+    void open_device();
+
+    void close_device();
 
 private:
     AutoContext();
@@ -49,8 +58,10 @@ private:
     GradMode m_grads_mode = GradMode::ENABLED;
 
     Graph m_graph;
+    tt::tt_metal::distributed::MeshShape m_mesh_shape = {1, 1};
+    std::unique_ptr<core::MeshDevice> m_device;
 
-    core::Device device{0};
+    friend class core::Indestructible<AutoContext>;
 };
 
 inline auto& ctx() {

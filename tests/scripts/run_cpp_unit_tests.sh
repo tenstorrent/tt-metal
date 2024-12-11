@@ -9,22 +9,29 @@ fi
 
 kernel_path="/tmp/kernels"
 mkdir -p $kernel_path
-TT_METAL_KERNEL_PATH=$kernel_path ./build/test/tt_metal/test_kernel_path_env_var
+TT_METAL_KERNEL_PATH=$kernel_path ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
 rm -rf $kernel_path
 
+./build/test/tt_metal/unit_tests_api
+./build/test/tt_metal/unit_tests_debug_tools
+./build/test/tt_metal/unit_tests_device
+./build/test/tt_metal/unit_tests_dispatch
+./build/test/tt_metal/unit_tests_eth
+./build/test/tt_metal/unit_tests_llk
+./build/test/tt_metal/unit_tests_stl
+./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=MeshDeviceSuite.*
+
 if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
-    ./build/test/tt_metal/unit_tests
-    env python tests/scripts/run_tt_metal.py --dispatch-mode slow
-    env python tests/scripts/run_tt_eager.py --dispatch-mode slow
+    env python3 tests/scripts/run_tt_metal.py --dispatch-mode slow
+    env python3 tests/scripts/run_tt_eager.py --dispatch-mode slow
 else
-    ./build/test/tt_metal/unit_tests_fast_dispatch
-    TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
+    TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*
     # Enable this on BH after #14613
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
-        TT_METAL_GTEST_ETH_DISPATCH=1 ./build/test/tt_metal/unit_tests_fast_dispatch
+        TT_METAL_GTEST_ETH_DISPATCH=1 ./build/test/tt_metal/unit_tests_dispatch
     fi
-    env python tests/scripts/run_tt_eager.py --dispatch-mode fast
-    env python tests/scripts/run_tt_metal.py --dispatch-mode fast
+    env python3 tests/scripts/run_tt_eager.py --dispatch-mode fast
+    env python3 tests/scripts/run_tt_metal.py --dispatch-mode fast
 fi
 
 # Tool tests use C++ unit tests so include them here.

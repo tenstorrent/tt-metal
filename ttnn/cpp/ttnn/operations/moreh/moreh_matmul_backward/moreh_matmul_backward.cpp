@@ -19,8 +19,7 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
         other.get_legacy_shape().rank() != 4) {
         return false;
     }
-    return is_scalar(output_grad) && is_1d_tensor(input) &&
-           is_1d_tensor(other) && is_same_shape(input, other);
+    return is_scalar(output_grad) && is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
 std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
@@ -91,8 +90,12 @@ OptionalTensors MorehMatmulBackward::create_async_optional_output_tensors(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     return {
-        are_required_outputs.at(0) ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, other})) : std::nullopt,
-        are_required_outputs.at(1) ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, other})) : std::nullopt};
+        are_required_outputs.at(0)
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, other}))
+            : std::nullopt,
+        are_required_outputs.at(1)
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, other}))
+            : std::nullopt};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_matmul_backward

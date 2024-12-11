@@ -8,6 +8,8 @@
 #include "tt_metal/common/work_split.hpp"
 #include "untilize_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 namespace untilize_helpers {
@@ -38,7 +40,7 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
         if (this->output_mem_config.is_sharded()) {
             TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout, "Error");
         }
-        if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1, "Error");
         }
         TT_FATAL(this->use_multicore == true, "Error");
@@ -85,8 +87,8 @@ std::vector<Tensor> Untilize::create_output_tensors(
             uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
             auto num_cores =
                 untilize_helpers::get_num_cores(input_tensor.device()->compute_with_storage_grid_size(), nblocks);
-            auto shard_grid =
-                tt::tt_metal::num_cores_to_corerangeset(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
+            auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(
+                num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
             uint32_t fused_height = input_tensor.volume() / input_tensor.get_legacy_shape()[-1];
             std::array<uint32_t, 2> shard_shape = {fused_height / num_cores, input_tensor.get_legacy_shape()[-1]};
             ShardSpec shard_spec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
@@ -110,9 +112,11 @@ operation::ProgramWithCallbacks Untilize::create_program(
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     if (this->use_multicore) {
-        return detail::untilize_multi_core(input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+        return detail::untilize_multi_core(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     } else {
-        return detail::untilize_single_core(input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+        return detail::untilize_single_core(
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
 }
 

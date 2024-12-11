@@ -7,6 +7,7 @@ import json
 import re
 import inspect
 import pytest
+import subprocess
 
 import pandas as pd
 
@@ -22,6 +23,30 @@ from tt_metal.tools.profiler.common import (
 from models.utility_functions import skip_for_grayskull
 
 PROG_EXMP_DIR = "programming_examples/profiler"
+
+
+def get_device_data(setupStr=""):
+    postProcessRun = os.system(
+        f"cd {PROFILER_SCRIPTS_ROOT} && " f"./process_device_log.py {setupStr} --no-artifacts --no-print-stats"
+    )
+
+    assert postProcessRun == 0, f"Log process script crashed with exit code {postProcessRun}"
+
+    devicesData = {}
+    with open(f"{PROFILER_ARTIFACTS_DIR}/output/device/device_analysis_data.json", "r") as devicesDataJson:
+        devicesData = json.load(devicesDataJson)
+
+    return devicesData
+
+
+def run_gtest_profiler_test(testbin, testname):
+    clear_profiler_runtime_artifacts()
+    output = subprocess.check_output(
+        f"cd {TT_METAL_HOME} && {testbin} --gtest_filter={testname}", stderr=subprocess.STDOUT, shell=True
+    ).decode("UTF-8")
+    print(output)
+    if "SKIPPED" not in output:
+        get_device_data()
 
 
 def run_device_profiler_test(testName=None, setup=False, slowDispatch=False):
@@ -41,17 +66,7 @@ def run_device_profiler_test(testName=None, setup=False, slowDispatch=False):
     if setup:
         setupStr = f"-s {name}"
 
-    postProcessRun = os.system(
-        f"cd {PROFILER_SCRIPTS_ROOT} && " f"./process_device_log.py {setupStr} --no-artifacts --no-print-stats"
-    )
-
-    assert postProcessRun == 0, f"Log process script crashed with exit code {postProcessRun}"
-
-    devicesData = {}
-    with open(f"{PROFILER_ARTIFACTS_DIR}/output/device/device_analysis_data.json", "r") as devicesDataJson:
-        devicesData = json.load(devicesDataJson)
-
-    return devicesData
+    return get_device_data(setupStr)
 
 
 def get_function_name():
@@ -230,3 +245,59 @@ def test_profiler_host_device_sync():
 
         assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency too large on device {device}"
         assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency too small on device {device}"
+
+    os.environ["TT_METAL_PROFILER_SYNC"] = "0"
+
+
+def test_timestamped_events():
+    OP_COUNT = 2
+    RISC_COUNT = 5
+    ZONE_COUNT = 100
+    ERISC_COUNTS = [0, 1, 5]
+    TENSIX_COUNTS = [72, 64, 56]
+
+    COMBO_COUNTS = []
+    for T in TENSIX_COUNTS:
+        for E in ERISC_COUNTS:
+            COMBO_COUNTS.append((T, E))
+
+    REF_COUNT_DICT = {
+        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
+        "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in COMBO_COUNTS],
+    }
+    REF_ERISC_COUNT = {
+        "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in ERISC_COUNTS],
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
+
+    devicesData = run_device_profiler_test(setup=True)
+
+    if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
+        eventCount = len(
+            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["erisc_events"]
+        )
+        assert eventCount in REF_ERISC_COUNT[ENV_VAR_ARCH_NAME], "Wrong erisc event count"
+
+    if ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys():
+        eventCount = len(
+            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["all_events"]
+        )
+        assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
+
+
+def test_sub_device_profiler():
+    run_gtest_profiler_test(
+        "./build/test/tt_metal/unit_tests_dispatch", "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms"
+    )
+    os.environ["TT_METAL_PROFILER_SYNC"] = "1"
+    run_gtest_profiler_test(
+        "./build/test/tt_metal/unit_tests_dispatch",
+        "CommandQueueSingleCardFixture.TensixActiveEthTestSubDeviceBasicEthPrograms",
+    )
+    os.environ["TT_METAL_PROFILER_SYNC"] = "0"
+    run_gtest_profiler_test(
+        "./build/test/tt_metal/unit_tests_dispatch_trace",
+        "CommandQueueSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
+    )

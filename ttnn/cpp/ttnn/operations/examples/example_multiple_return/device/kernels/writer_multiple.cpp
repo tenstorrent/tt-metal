@@ -6,8 +6,8 @@
 #include "dprint.h"
 
 void kernel_main() {
-    uint32_t dst_addr1  = get_arg_val<uint32_t>(0);
-    uint32_t dst_addr2  = get_arg_val<uint32_t>(1);
+    uint32_t dst_addr1 = get_arg_val<uint32_t>(0);
+    uint32_t dst_addr2 = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
     uint32_t start_id = get_arg_val<uint32_t>(3);
 
@@ -21,19 +21,13 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id_out);
 
     const InterleavedAddrGenFast<dst_is_dram1> s1 = {
-        .bank_base_address = dst_addr1,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = dst_addr1, .page_size = tile_bytes, .data_format = data_format};
 
     const InterleavedAddrGenFast<dst_is_dram2> s2 = {
-        .bank_base_address = dst_addr2,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = dst_addr2, .page_size = tile_bytes, .data_format = data_format};
 
     uint32_t end_id = start_id + num_tiles;
-    for (uint32_t i = start_id; i < end_id; ++ i) {
+    for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(cb_id_out, onetile);
 
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);

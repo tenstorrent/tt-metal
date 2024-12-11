@@ -360,7 +360,7 @@ def softshrink_bw(x, y):
 
 
 def unary_div_bw(x, y):
-    ttnn.div_bw(x, y, 3.0, round_mode="None")
+    ttnn.div_bw(x, y, 3.0, round_mode=None)
 
 
 all_binary_ops = [
@@ -2502,7 +2502,7 @@ def subalpha_bw(x, y, z):
 
 
 def div_bw(x, y, z):
-    ttnn.div_bw(x, y, z, round_mode="None")
+    ttnn.div_bw(x, y, z, round_mode=None)
 
 
 def add_bw(x, y, z):

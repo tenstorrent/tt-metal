@@ -67,8 +67,8 @@ MorehDotOperation::tensor_return_value_t MorehDotOperation::create_output_tensor
     const auto& input_tensor = tensor_args.input_a;
     return create_device_tensor(
         output_shape,
-        input_tensor.tensor_attributes->dtype,
-        input_tensor.tensor_attributes->layout,
+        input_tensor.dtype(),
+        input_tensor.layout(),
         input_tensor.device(),
         operation_attributes.memory_config);
 }
@@ -84,8 +84,7 @@ std::tuple<MorehDotOperation::operation_attributes_t, MorehDotOperation::tensor_
         operation_attributes_t{
             dtype.value_or(input_a.dtype()),
             memory_config.value_or(input_a.memory_config()),
-            init_device_compute_kernel_config(
-                input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            init_device_compute_kernel_config(input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         tensor_args_t{input_a, input_b, output}};
 }
 

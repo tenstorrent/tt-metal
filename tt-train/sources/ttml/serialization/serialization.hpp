@@ -4,11 +4,11 @@
 
 #pragma once
 
+#include <core/ttnn_all_includes.hpp>
 #include <string_view>
 
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
-#include "core/ttnn_fwd.hpp"
 
 namespace ttml::optimizers {
 class OptimizerBase;

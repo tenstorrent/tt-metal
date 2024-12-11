@@ -45,7 +45,7 @@ void kernel_main() {
                 l1_write_addr_in0 = get_write_ptr(cb_id_in0);
             }
             noc_async_read_tile(read_tile_id, input_addrg, l1_write_addr_in0);
-            l1_write_addr_in0 += input_tile_bytes; // correctness error
+            l1_write_addr_in0 += input_tile_bytes;  // correctness error
             read_tile_id += inner_tile_size;
             input_granularity_index++;
             if (input_granularity_index == input_granularity) {

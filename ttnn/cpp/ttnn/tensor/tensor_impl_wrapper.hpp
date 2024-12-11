@@ -10,25 +10,25 @@ namespace tt::tt_metal::tensor_impl {
 
 // Utility to convert runtime DataType to compile-time constant and dispatch the function call
 template <typename Func, typename... Args>
-auto dispatch(DataType dtype, Func &&func, Args &&...args) {
+auto dispatch(DataType dtype, Func&& func, Args&&... args) {
     switch (dtype) {
-        case DataType::BFLOAT16: return func.template operator()<bfloat16>(static_cast<Args &&>(args)...);
-        case DataType::FLOAT32: return func.template operator()<float>(static_cast<Args &&>(args)...);
-        case DataType::INT32: return func.template operator()<int32_t>(static_cast<Args &&>(args)...);
-        case DataType::UINT32: return func.template operator()<uint32_t>(static_cast<Args &&>(args)...);
-        case DataType::UINT16: return func.template operator()<uint16_t>(static_cast<Args &&>(args)...);
-        case DataType::UINT8: return func.template operator()<uint8_t>(static_cast<Args &&>(args)...);
-        case DataType::BFLOAT8_B: return func.template operator()<bfloat8_b>(static_cast<Args &&>(args)...);
-        case DataType::BFLOAT4_B: return func.template operator()<bfloat4_b>(static_cast<Args &&>(args)...);
+        case DataType::BFLOAT16: return func.template operator()<bfloat16>(static_cast<Args&&>(args)...);
+        case DataType::FLOAT32: return func.template operator()<float>(static_cast<Args&&>(args)...);
+        case DataType::INT32: return func.template operator()<int32_t>(static_cast<Args&&>(args)...);
+        case DataType::UINT32: return func.template operator()<uint32_t>(static_cast<Args&&>(args)...);
+        case DataType::UINT16: return func.template operator()<uint16_t>(static_cast<Args&&>(args)...);
+        case DataType::UINT8: return func.template operator()<uint8_t>(static_cast<Args&&>(args)...);
+        case DataType::BFLOAT8_B: return func.template operator()<bfloat8_b>(static_cast<Args&&>(args)...);
+        case DataType::BFLOAT4_B: return func.template operator()<bfloat4_b>(static_cast<Args&&>(args)...);
         default: TT_THROW("Unsupported data type");
     }
 }
 
-#define AS_LAMBDA(func) []<typename T>(auto &&...args) { return func<T>(std::forward<decltype(args)>(args)...); }
+#define AS_LAMBDA(func) []<typename T>(auto&&... args) { return func<T>(std::forward<decltype(args)>(args)...); }
 
 #define WRAP_FUNCTION(func)                                                                                         \
     template <typename... Args>                                                                                     \
-    auto func##_wrapper(Args &&...args) {                                                                           \
+    auto func##_wrapper(Args&&... args) {                                                                           \
         return dispatch(                                                                                            \
             std::get<0>(std::forward_as_tuple(args...)).get_dtype(), AS_LAMBDA(func), std::forward<Args>(args)...); \
     }

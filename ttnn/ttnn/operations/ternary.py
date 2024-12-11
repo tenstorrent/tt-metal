@@ -37,7 +37,10 @@ ttnn.attach_golden_function(ttnn.addcdiv, golden_function=_golden_function_addcd
 def _golden_function_lerp(input_tensor_a, input_tensor_b, input_tensor_c, *args, **kwargs):
     import torch
 
-    return torch.lerp(input_tensor_a, input_tensor_b, input_tensor_c)
+    if torch.is_tensor(input_tensor_c):
+        input_tensor_c = input_tensor_c.to(input_tensor_a.dtype)
+
+    return torch.lerp(input_tensor_a, input_tensor_b.to(input_tensor_a.dtype), input_tensor_c)
 
 
 ttnn.attach_golden_function(ttnn.lerp, golden_function=_golden_function_lerp)

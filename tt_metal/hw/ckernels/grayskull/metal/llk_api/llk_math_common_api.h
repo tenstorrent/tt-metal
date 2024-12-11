@@ -19,7 +19,8 @@
  * LLK MATH COMMON
  *************************************************************************/
 template <bool untilize_en = false, bool skip_inputs = false>
-inline void llk_math_hw_configure_disaggregated(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) { /*Unused for GS*/ }
+inline void llk_math_hw_configure_disaggregated(
+    const std::uint32_t srca_operand, const std::uint32_t srcb_operand) { /*Unused for GS*/ }
 
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");
@@ -38,7 +39,7 @@ inline void llk_math_pack_sync_init() {
 }
 
 template <bool mail2math = true, bool mail2pack = true>
-inline void llk_math_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t *p_tile) {
+inline void llk_math_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t* p_tile) {
     _llk_math_get_tile_<mail2math, mail2pack>(tile_index, p_tile);
 }
 
@@ -47,11 +48,11 @@ inline void llk_math_release_tile(std::uint32_t operand) {
     _llk_math_release_tile_<mail2math, mail2pack>();
 }
 
-inline void llk_math_debug_dump(std::uint8_t *data, std::uint32_t byte_size) { _llk_math_debug_dump_(data, byte_size); }
+inline void llk_math_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _llk_math_debug_dump_(data, byte_size); }
 
 inline void llk_math_debug_dump_seek(std::uint8_t offset) { _llk_math_debug_dump_seek_(offset); }
 
-//The following functions are only needed for WHB0, they call empty functions for GS
+// The following functions are only needed for WHB0, they call empty functions for GS
 template <bool to_from_int8 = false /*not used*/, bool is_fp32_dest_acc_en = false /*not used*/>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     _llk_math_reconfig_data_format_srca_();

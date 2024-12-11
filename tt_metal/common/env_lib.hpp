@@ -15,10 +15,11 @@ template <class T>
 constexpr std::false_type false_type_t{};
 
 template <typename T>
-T parse_env(const char *env_name, const T &default_value) {
+T parse_env(const char* env_name, const T& default_value) {
     char* env_value = std::getenv(env_name);
-    if (env_value == nullptr)
+    if (env_value == nullptr) {
         return default_value;
+    }
 
     if constexpr (std::is_same_v<T, bool>) {
         return static_cast<bool>(std::stoi(env_value, 0, 0));
@@ -36,7 +37,7 @@ T parse_env(const char *env_name, const T &default_value) {
 }
 
 template <typename T>
-T parse_trigger(const char *env_name, const T &default_value) {
+T parse_trigger(const char* env_name, const T& default_value) {
     T retval = parse_env<T>(env_name, default_value);
     unsetenv(env_name);
     return retval;
@@ -45,8 +46,8 @@ T parse_trigger(const char *env_name, const T &default_value) {
 }  // namespace tt
 
 // Explicit specializations
-template bool tt::parse_env<bool>(const char *, const bool &);
-template std::string tt::parse_env<std::string>(const char *, const std::string &);
-template int tt::parse_env<int>(const char *, const int &);
-template uint32_t tt::parse_env<uint32_t>(const char *, const uint32_t &);
-template uint64_t tt::parse_env<uint64_t>(const char *, const uint64_t &);
+template bool tt::parse_env<bool>(const char*, const bool&);
+template std::string tt::parse_env<std::string>(const char*, const std::string&);
+template int tt::parse_env<int>(const char*, const int&);
+template uint32_t tt::parse_env<uint32_t>(const char*, const uint32_t&);
+template uint64_t tt::parse_env<uint64_t>(const char*, const uint64_t&);

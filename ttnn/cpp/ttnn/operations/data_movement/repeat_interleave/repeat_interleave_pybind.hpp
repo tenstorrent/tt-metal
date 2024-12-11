@@ -11,14 +11,12 @@
 
 #include "repeat_interleave.hpp"
 
-
-
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_repeat_interleave(py::module& module) {
     auto doc =
-    R"doc(
+        R"doc(
         Repeats elements of a :attr:`tensor` in the given :attr:`dim`.
 
         Args:
@@ -58,5 +56,4 @@ void bind_repeat_interleave(py::module& module) {
             py::arg("memory_config") = std::nullopt});
 }
 
-
-} // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::detail

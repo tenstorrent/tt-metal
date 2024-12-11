@@ -11,7 +11,7 @@ show_help() {
     echo
     echo "Options:"
     echo "  -d, --debug        Enable debug mode to show real-time output."
-    echo "  -t, --target       Specify the target configuration (t3000 or n300). Default is n300."
+    echo "  -t, --target       Specify the target configuration (t3000 or n300 or tg). Default is n300."
     echo "  -h, --help         Display this help message."
     echo
     echo "Example:"
@@ -42,8 +42,8 @@ while [ $# -gt 0 ]; do
             shift 2
 
             # Validate the target value
-            if [ "$TARGET" != "t3000" ] && [ "$TARGET" != "n300" ]; then
-                echo "Error: Invalid target configuration: $TARGET. Must be either 't3000' or 'n300'."
+            if [ "$TARGET" != "t3000" ] && [ "$TARGET" != "tg" ] && [ "$TARGET" != "n300" ]; then
+                echo "Error: Invalid target configuration: $TARGET. Must be 't3000' or 'n300' or 'tg'."
                 exit 1
             fi
             ;;
@@ -83,10 +83,12 @@ from tabulate import tabulate
 
 try:
     # Generate the report and convert it to a DataFrame
-    average_df = perf_report('$csv_path')
+    average_df, utilization = perf_report('$csv_path')
     # Print the DataFrame in a pretty table format
     print('Min - Avg - Max by Common Runs:')
     print(tabulate(average_df, headers='keys', tablefmt='pretty'))
+    print('Device Utilization:')
+    print(tabulate(utilization, headers='keys', tablefmt='pretty'))
 except Exception as e:
     print(f'Error in performance report generation: {e}', file=sys.stderr)
     sys.exit(1)

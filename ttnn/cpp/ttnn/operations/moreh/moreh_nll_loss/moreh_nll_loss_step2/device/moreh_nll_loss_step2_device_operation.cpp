@@ -4,6 +4,8 @@
 
 #include "moreh_nll_loss_step2_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_nll_loss_step2 {
 
 MorehNllLossStep2DeviceOperation::program_factory_t MorehNllLossStep2DeviceOperation::select_program_factory(
@@ -129,7 +131,7 @@ std::tuple<MorehNllLossStep2DeviceOperation::operation_attributes_t, MorehNllLos
 MorehNllLossStep2DeviceOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& target_tensor,
-    const std::string reduction,
+    const std::string& reduction,
     const std::optional<Tensor>& weight_tensor,
     const std::optional<Tensor>& divisor_tensor,
     const std::optional<Tensor>& output_tensor,

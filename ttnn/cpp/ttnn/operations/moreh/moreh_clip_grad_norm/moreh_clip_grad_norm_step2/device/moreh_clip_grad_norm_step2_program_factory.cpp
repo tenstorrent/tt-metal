@@ -68,13 +68,13 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
         single_core,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},        // input(==tmp_pow_sum)
-            {tt::CB::c_in1, in1_t},        // decimal
-            {tt::CB::c_out0, out0_t},      // output(==total_norm)
-            {tt::CB::c_intermed0, im0_t},  // Sum[tmp_pow_sum](==x)
-            {tt::CB::c_intermed1, im1_t},  // x^p
-            {tt::CB::c_intermed2, im2_t},  // log(x)
-            {tt::CB::c_intermed3, im3_t},  // exp(log(x) * decimal)
+            {tt::CBIndex::c_0, in0_t},    // input(==tmp_pow_sum)
+            {tt::CBIndex::c_1, in1_t},    // decimal
+            {tt::CBIndex::c_16, out0_t},  // output(==total_norm)
+            {tt::CBIndex::c_24, im0_t},   // Sum[tmp_pow_sum](==x)
+            {tt::CBIndex::c_25, im1_t},   // x^p
+            {tt::CBIndex::c_26, im2_t},   // log(x)
+            {tt::CBIndex::c_27, im3_t},   // exp(log(x) * decimal)
         });
 
     ////////////////////////////////////////////////////////////////////////////

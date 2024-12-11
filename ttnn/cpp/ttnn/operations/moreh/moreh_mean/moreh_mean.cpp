@@ -10,7 +10,7 @@
 namespace ttnn::operations::moreh::moreh_mean {
 Tensor MorehMean::invoke(
     const Tensor& input,
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
     const bool keepdim,
     const std::optional<uint32_t>& divisor,
     const std::optional<Tensor>& output,

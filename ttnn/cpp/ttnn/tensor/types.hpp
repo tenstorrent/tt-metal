@@ -18,6 +18,7 @@
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "tt_metal/tt_stl/span.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 
@@ -41,6 +42,25 @@ enum class DataType {
     INVALID = 8,
 };
 
+template <typename T>
+consteval inline DataType convert_to_data_type() {
+    if constexpr (std::is_same_v<T, uint8_t>) {
+        return DataType::UINT8;
+    } else if constexpr (std::is_same_v<T, uint16_t>) {
+        return DataType::UINT16;
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+        return DataType::INT32;
+    } else if constexpr (std::is_same_v<T, uint32_t>) {
+        return DataType::UINT32;
+    } else if constexpr (std::is_same_v<T, float>) {
+        return DataType::FLOAT32;
+    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
+        return DataType::BFLOAT16;
+    } else {
+        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType!");
+    }
+}
+
 inline bool is_floating_point(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT16:
@@ -58,31 +78,6 @@ enum class StorageType {
     MULTI_DEVICE,       // on-device storage for multi-device context
     MULTI_DEVICE_HOST,  // host storage for multi-device context
 };
-
-struct AllGatherTensor {};
-bool operator==(const AllGatherTensor &, const AllGatherTensor &);
-struct ReplicateTensor {
-    int replication_factor = 1;
-    ReplicateTensor() = default;
-    ReplicateTensor(int replication_factor) : replication_factor(replication_factor) {}
-};
-bool operator==(const ReplicateTensor &, const ReplicateTensor &);
-struct ShardTensor {
-    int shard_dimension;
-    ShardTensor(int shard_dimension) : shard_dimension(shard_dimension) {}
-};
-bool operator==(const ShardTensor &lhs, const ShardTensor &rhs);
-
-using ShardMesh = std::pair<std::uint16_t, std::uint16_t>;  // (y,x)
-struct ShardTensor2D {
-    ShardMesh shard_mesh;  // logic 2D grid that defines the mapping of shards to devices
-    ShardTensor2D(ShardMesh mesh) : shard_mesh(std::move(mesh)) {}
-};
-bool operator==(const ShardTensor2D &lhs, const ShardTensor2D &rhs);
-
-// DistributedTensorConfig is a variant of different ways in which a tensor can be distributed across devices.
-using DistributedTensorConfig = std::variant<ReplicateTensor, ShardTensor, ShardTensor2D, AllGatherTensor>;
-DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<std::string, std::string> &metadata);
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 
@@ -464,10 +459,10 @@ struct Shape {
     explicit Shape(const std::initializer_list<uint32_t> shape, const std::initializer_list<uint32_t> shape_with_tile_padding) :
         value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
 
-    explicit Shape(tt::stl::Span<const uint32_t> shape, const Padding &padding) :
+    explicit Shape(tt::stl::Span<const uint32_t> shape, const tt::tt_metal::Padding &padding) :
         value{tt::tt_metal::LegacyShape{shape, padding}} {}
 
-    explicit Shape(const Shape &shape, const Padding &padding) :
+    explicit Shape(const Shape &shape, const tt::tt_metal::Padding &padding) :
         value{tt::tt_metal::LegacyShape{shape.value, padding}} {}
 
     Shape(const SimpleShape& shape): value{shape.view()} {}
@@ -731,6 +726,7 @@ struct MultiDeviceStorage {
 
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
+    std::vector<DeviceBuffer> get_buffers() const;
 
     inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const ttnn::Shape shape) {
         std::scoped_lock lock(buffer_mtx, shape_mtx);

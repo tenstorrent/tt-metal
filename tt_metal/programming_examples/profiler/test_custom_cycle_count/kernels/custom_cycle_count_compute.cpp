@@ -18,18 +18,16 @@
  * More info on tt-metal issue #515
  *
  * https://github.com/tenstorrent/tt-metal/issues/515#issuecomment-1548434301
-*/
+ */
 
 namespace NAMESPACE {
-    void MAIN {
-        for (int i = 0; i < LOOP_COUNT; i ++)
-        {
-//Max unroll size
+void MAIN {
+    for (int i = 0; i < LOOP_COUNT; i++) {
+// Max unroll size
 #pragma GCC unroll 65534
-            for (int j = 0 ; j < LOOP_SIZE; j++)
-            {
-                asm("nop");
-            }
+        for (int j = 0; j < LOOP_SIZE; j++) {
+            asm("nop");
         }
     }
-} // NAMESPACE
+}
+}  // namespace NAMESPACE

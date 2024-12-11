@@ -23,7 +23,7 @@ uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_si
 // Set the largest number of cores less than the number of tiles
 // Returns the number of cores as well as the number of tiles per core
 std::tuple<uint32_t, uint32_t> get_max_cores_divisible_by_tiles_per_core_tiles(
-    const uint32_t &num_tiles, const uint32_t &num_cores_max, bool request_even = false);
+    const uint32_t& num_tiles, const uint32_t& num_cores_max, bool request_even = false);
 
 // Finds the maximum divisor (excluding 5 or 7) of val starting at start_max_div and below
 int find_max_divisor(uint32_t val, uint32_t start_max_div);
@@ -40,6 +40,11 @@ CoreRangeSet num_cores_to_corerangeset(
 CoreRangeSet num_cores_to_corerangeset(
     const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise = false);
 
+CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
+    const CoreCoord start_core,
+    const uint32_t target_num_cores,
+    const CoreRangeSet& sub_core_grids,
+    const bool row_wise = false);
 // This function takes in the core grid size, as well as the number of units of work to divide between the cores
 // This function returns the number of cores, the CoreRangeSet of all cores, and then the CoreRangeSet that does
 // the greater amount of work, and the CoreRangeSet that does less work if work cannot be evenly divided

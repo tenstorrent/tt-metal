@@ -10,7 +10,7 @@
 #include "noc_nonblocking_api.h"
 
 inline void RISC_POST_STATUS(uint32_t status) {
-    volatile uint32_t *ptr = (volatile uint32_t *)(NOC_CFG(ROUTER_CFG_2));
+    volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
     ptr[0] = status;
 }
 
@@ -39,24 +39,23 @@ struct erisc_info_t {
     volatile uint32_t unused_arg0;
     volatile uint32_t unused_arg1;
     volatile uint32_t unused_arg2;
-    volatile eth_channel_sync_t channels[eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS]; // user_buffer_bytes_sent
+    volatile eth_channel_sync_t
+        channels[eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS];  // user_buffer_bytes_sent
 };
 
-erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
-routing_info_t *routing_info = (routing_info_t *)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
+erisc_info_t* erisc_info = (erisc_info_t*)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+routing_info_t* routing_info = (routing_info_t*)(eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE);
 
 // Context Switch Config
-tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
+tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
 
 extern uint32_t __erisc_jump_table;
-volatile uint32_t *RtosTable =
-    (volatile uint32_t *)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
+volatile uint32_t* RtosTable =
+    (volatile uint32_t*)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
 
 namespace internal_ {
 
-FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
-    return eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0;
-}
+FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) { return eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0; }
 
 FORCE_INLINE
 void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
@@ -106,8 +105,7 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
     //  flush both nocs because ethernet kernels could be using different nocs to try to atomically increment semaphore
     //  in dispatch core
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
-        while (!noc_cmd_buf_ready(n, NCRISC_AT_CMD_BUF))
-            ;
+        while (!noc_cmd_buf_ready(n, NCRISC_AT_CMD_BUF));
     }
     DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
     noc_fast_atomic_increment(

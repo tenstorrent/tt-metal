@@ -23,7 +23,8 @@ struct ExecuteRMSNormPreAllGather {
 
 }  // namespace operations::normalization
 
-constexpr auto rms_norm_pre_all_gather =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::rms_norm_pre_all_gather", ttnn::operations::normalization::ExecuteRMSNormPreAllGather>();
+constexpr auto rms_norm_pre_all_gather = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::rms_norm_pre_all_gather",
+    ttnn::operations::normalization::ExecuteRMSNormPreAllGather>();
 
 }  // namespace ttnn

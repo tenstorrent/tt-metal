@@ -33,7 +33,8 @@ void bind_all_reduce(pybind11::module& module, const ccl_operation_t& operation,
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_workers,
                const std::optional<size_t> num_buffers_per_channel) -> ttnn::Tensor {
-                return self(input_tensor, math_op, num_links, memory_config, topology, num_workers, num_buffers_per_channel);
+                return self(
+                    input_tensor, math_op, num_links, memory_config, topology, num_workers, num_buffers_per_channel);
             },
             py::arg("input_tensor"),
             py::arg("math_op"),
@@ -47,9 +48,7 @@ void bind_all_reduce(pybind11::module& module, const ccl_operation_t& operation,
 
 }  // namespace detail
 
-
 void py_bind_all_reduce(pybind11::module& module) {
-
     detail::bind_all_reduce(
         module,
         ttnn::experimental::all_reduce,

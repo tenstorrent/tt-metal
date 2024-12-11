@@ -86,26 +86,15 @@ SECTIONS
   __kernel_init_local_l1_base = .;
 #endif
 
+#if defined(TYPE_FIRMWARE)
   PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
+#endif
   .data DATA_START : ALIGN(4)
   {
      . = .; /* Force section emission.  */
      __ldm_data_start = .;
      *(.rodata .rodata.* .gnu.linkonce.r.*)
      *(.rodata1)
-
-    PROVIDE_HIDDEN (__preinit_array_start = .);
-    KEEP (*(.preinit_array))
-    PROVIDE_HIDDEN (__preinit_array_end = .);
-    PROVIDE_HIDDEN (__init_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*)))
-    KEEP (*(.init_array))
-    PROVIDE_HIDDEN (__init_array_end = .);
-
-    PROVIDE_HIDDEN (__fini_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
-    KEEP (*(.fini_array))
-    PROVIDE_HIDDEN (__fini_array_end = .);
 
     *(.dynamic)
     *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
@@ -126,6 +115,16 @@ SECTIONS
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
     ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
+  } > REGION_DATA :data
+  .init_array.fini_array :
+  {
+    /* We don't support global static constructors or destructors. make sure there aren't any.  */
+    KEEP (*(.preinit_array))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*)))
+    KEEP (*(.init_array))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
+    KEEP (*(.fini_array))
+    ASSERT(SIZEOF(.init_array.fini_array) == 0, ".{preinit,init,fini}_array sections have contents");
   } > REGION_DATA :data
   .bss : ALIGN(4)
   {

@@ -31,7 +31,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
         all_cores,
         tt::tt_metal::datatype_to_dataformat_converter(dtype),
         {
-            {tt::CB::c_out0, 1},
+            {tt::CBIndex::c_16, 1},
         });
 
     // Create write kernel
@@ -58,12 +58,13 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t num_tiles_per_core;
-        if (core_group_1.contains(core))
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        else if (core_group_2.contains(core))
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
-        else
+        } else {
             TT_FATAL(false, "Core not in specified core ranges");
+        }
         std::vector<uint32_t> writer_args = {
             output.buffer()->address(),
             tile_offset,

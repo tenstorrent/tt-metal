@@ -17,6 +17,10 @@ run_perf_models_other() {
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/test_perf_yolo.py -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
@@ -33,8 +37,14 @@ run_perf_models_other() {
 
     env pytest -n auto models/demos/convnet_mnist/tests -m $test_marker
 
+    env pytest -n auto models/demos/bert_tiny/tests/test_performance.py -m $test_marker
+
+    env pytest -n auto models/demos/mnist/tests -m $test_marker
+
+    env pytest -n auto models/demos/squeezebert/tests/test_performance.py -m $test_marker
+
     ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
+    env python3 models/perf/merge_perf_results.py
 }
 
 run_perf_models_llm_javelin() {
@@ -48,26 +58,13 @@ run_perf_models_llm_javelin() {
     env pytest -n auto models/demos/falcon7b_common/tests -m $test_marker
     env pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
 
-    # Llama3.1-8B
-    llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-    # Llama3.2-1B
-    llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
-    # Llama3.2-3B
-    llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-    # Llama3.2-11B  (#Skip: Weights too big for single-chip ci VM)
-    llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
-
-    # Run all Llama3 tests for 8B, 1B, and 3B weights
-    for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
-        LLAMA_DIR=$llama_dir pytest -n auto models/demos/llama3/tests/test_llama_perf.py -m $test_marker
-        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
-    done
+    env QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/tests -m $test_marker
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
         env pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker
     fi
     ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
+    env python3 models/perf/merge_perf_results.py
 }
 
 run_perf_models_cnn_javelin() {
@@ -76,23 +73,29 @@ run_perf_models_cnn_javelin() {
 
     # Run tests
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests/test_unet_perf.py -m $test_marker
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=480
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=480
 
     ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
+    env python3 models/perf/merge_perf_results.py
 }
 
 run_device_perf_models() {
     set -eo pipefail
     local test_marker=$1
 
-    env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
+    env pytest models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=600
 
     env pytest models/demos/distilbert/tests -m $test_marker
 
     env pytest models/demos/vgg/tests/ -m $test_marker
 
     env pytest models/demos/convnet_mnist/tests/ -m $test_marker
+
+    env pytest models/demos/bert_tiny/tests/ -m $test_marker
+
+    env pytest models/demos/mnist/tests -m $test_marker
+
+    env pytest models/demos/squeezebert/tests -m $test_marker
 
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
@@ -118,10 +121,14 @@ run_device_perf_models() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/metal_BERT_large_11/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b_common/tests -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/ -m $test_marker
     fi
 
     ## Merge all the generated reports
-    env python models/perf/merge_device_perf_results.py
+    env python3 models/perf/merge_device_perf_results.py
 }
 
 run_device_perf_ops() {

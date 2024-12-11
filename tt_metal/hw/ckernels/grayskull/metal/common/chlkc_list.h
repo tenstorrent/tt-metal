@@ -11,7 +11,6 @@
 
 using namespace ckernel;
 
-
 #ifdef UCK_CHLKC_MATH
 #include "chlkc_unpack_data_format.h"
 #include "chlkc_math_fidelity.h"
@@ -36,7 +35,6 @@ using namespace ckernel;
 #endif
 
 uint run_kernel() {
-
 #ifdef UCK_CHLKC_MATH
     zeroacc();
     chlkc_math::math_main();
@@ -51,6 +49,5 @@ uint run_kernel() {
     chlkc_unpack::unpack_main();
 #endif
 
-return 0;
-
+    return 0;
 }

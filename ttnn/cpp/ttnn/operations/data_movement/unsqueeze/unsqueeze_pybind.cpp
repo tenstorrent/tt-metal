@@ -22,20 +22,14 @@ void bind_unsqueeze(pybind11::module& module, const data_movement_operation_t& o
         operation,
         doc,
         ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int dim
-             ) -> ttnn::Tensor {
+            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const int dim) -> ttnn::Tensor {
                 return self(input_tensor, dim);
             },
             py::arg("input_tensor"),
-            py::arg("dim")
-            }
-        );
+            py::arg("dim")});
 }
 
 }  // namespace detail
-
 
 void py_bind_unsqueeze(pybind11::module& module) {
     detail::bind_unsqueeze(

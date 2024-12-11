@@ -12,15 +12,15 @@ namespace ttnn::operations::moreh::moreh_nll_loss {
 
 struct MorehNllLoss {
     static Tensor invoke(
-        const Tensor &input_tensor,
-        const Tensor &target_tensor,
-        const std::string reduction,
-        const std::optional<Tensor> &weight_tensor,
-        const std::optional<Tensor> &divisor_tensor,
-        const std::optional<Tensor> &output_tensor,
+        const Tensor& input_tensor,
+        const Tensor& target_tensor,
+        const std::string& reduction,
+        const std::optional<Tensor>& weight_tensor,
+        const std::optional<Tensor>& divisor_tensor,
+        const std::optional<Tensor>& output_tensor,
         const int32_t ignore_index,
-        const std::optional<MemoryConfig> &memory_config,
-        const std::optional<DeviceComputeKernelConfig> &compute_kernel_config);
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss

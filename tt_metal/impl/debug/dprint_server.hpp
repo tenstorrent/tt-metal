@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
-* Implements host-side debug print server interface.
-*/
+ * Implements host-side debug print server interface.
+ */
 
 #pragma once
 
@@ -12,7 +12,7 @@ namespace tt {
 
 namespace tt_metal {
 inline namespace v0 {
-    class Device;
+class Device;
 }  // namespace v0
 }  // namespace tt_metal
 
@@ -94,4 +94,4 @@ void DPrintServerClearSignals();
 */
 bool DPrintServerReadsDispatchCores(tt::tt_metal::Device* device);
 
-} // namespace tt
+}  // namespace tt

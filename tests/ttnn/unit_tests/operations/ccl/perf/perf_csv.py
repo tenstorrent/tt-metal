@@ -6,6 +6,7 @@ import pandas as pd
 import os
 import re
 import time
+import shutil
 
 
 def perf_report(file_path):
@@ -168,6 +169,8 @@ def perf_report(file_path):
                 link_bw = input_tensor_volume / longest_erisc_fw_time
         return round(op_bw, 2), round(link_bw, 2)
 
+    utilization_data = []
+
     for i, (group, group_df) in enumerate(grouped, start=1):
         group_df = group_df.iloc[2 * group_df["n_chips"].iloc[0] :]
 
@@ -177,10 +180,12 @@ def perf_report(file_path):
         group_df.rename(columns={"INPUT_0_LAYOUT": "Layout", "INPUT_0_DATATYPE": "Data Type"}, inplace=True)
 
         group_df["Input Shape"] = group_df.apply(
-            lambda row: f"[{row['INPUT_0_W']}, {row['INPUT_0_Z']}, {row['INPUT_0_Y']}, {row['INPUT_0_X']}]", axis=1
+            lambda row: f"[{int(row['INPUT_0_W'])}, {int(row['INPUT_0_Z'])}, {int(row['INPUT_0_Y'])}, {int(row['INPUT_0_X'])}]",
+            axis=1,
         )
         group_df["Output Shape"] = group_df.apply(
-            lambda row: f"[{row['OUTPUT_0_W']}, {row['OUTPUT_0_Z']}, {row['OUTPUT_0_Y']}, {row['OUTPUT_0_X']}]", axis=1
+            lambda row: f"[{int(row['OUTPUT_0_W'])}, {int(row['OUTPUT_0_Z'])}, {int(row['OUTPUT_0_Y'])}, {int(row['OUTPUT_0_X'])}]",
+            axis=1,
         )
         group_df["Cycles Count"] = group_df["DEVICE FW END CYCLE"] - group_df["DEVICE FW START CYCLE"]
         group_df[["Op BW [GB/s]", "Link BW [GB/s]"]] = group_df.apply(calculate_bandwidth, axis=1, result_type="expand")
@@ -211,8 +216,36 @@ def perf_report(file_path):
 
             group_data[column] = f"{min_val} - {avg_val} - {max_val}"
 
+        link_bw_str = group_data["Link BW [GB/s]"]
+        link_bw_values = [float(x.strip()) for x in link_bw_str.split(" - ")]
+
+        link_bw_min, link_bw_avg, link_bw_max = link_bw_values
+
+        link_bw = 12.5 if group_df["topology"].iloc[0] == "Linear" else 25.0  # GB/s
+        num_links = int(group_df["num_links"].iloc[0]) if "num_links" in group_df else 0
+
+        theoretical_peak = num_links * link_bw
+        min_utilization = round((link_bw_min / theoretical_peak) * 100, 2)
+        avg_utilization = round((link_bw_avg / theoretical_peak) * 100, 2)
+        max_utilization = round((link_bw_max / theoretical_peak) * 100, 2)
+
+        utilization_summary = {
+            "Input Shape": group_df["Input Shape"].iloc[0],
+            "OP CODE": group_df["OP CODE"].iloc[0],
+            "dim": group_df["dim"].iloc[0] if "dim" in group_df else "",
+            "num_links": group_df["num_links"].iloc[0] if "num_links" in group_df else "",
+            "output_mem_config": group_df["output_mem_config"].iloc[0] if "output_mem_config" in group_df else "",
+            "topology": group_df["topology"].iloc[0],
+            "Layout": group_df["Layout"].iloc[0] if "Layout" in group_df else "",
+            "Data Type": group_df["Data Type"].iloc[0] if "Data Type" in group_df else "",
+            "Link BW [GB/s]": f"{group_df['Link BW [GB/s]'].min()} - {group_df['Link BW [GB/s]'].mean():.2f} - {group_df['Link BW [GB/s]'].max()}",
+            "Theoretical Peak [GB/s]": f"{theoretical_peak}",
+            "Utilization [%]": f"{min_utilization} - {avg_utilization} - {max_utilization}",
+        }
+        utilization_data.append(utilization_summary)
         averages_data.append(group_data)
 
+    utilization_df = pd.DataFrame(utilization_data)
     averages_df = pd.DataFrame(averages_data)
     op_code = averages_df.iloc[0]["OP CODE"]
 
@@ -223,11 +256,18 @@ def perf_report(file_path):
         ccl_perf_file_path = f"CCL_reduce_scatter_Perf_{today}.csv"
     else:
         ccl_perf_file_path = f"CCL_Perf_{today}.csv"
+    utilization_file_path = file_path.replace(".csv", f"_utilization_{i}.csv")
 
-    os.rename(file_path, ccl_perf_file_path)
+    shutil.copy(file_path, ccl_perf_file_path)
+
+    logs_dir = "generated/profiler/.logs"
+    os.makedirs(logs_dir, exist_ok=True)
+    shutil.copy(ccl_perf_file_path, logs_dir)
 
     averages_df.to_csv(ccl_perf_file_path, index=False)
+    utilization_df.to_csv(utilization_file_path, index=False)
 
     print(f"CCL Perf report CSV saved to: {ccl_perf_file_path}")
+    print(f"CCL Perf Utilization report CSV saved to: {utilization_file_path}")
 
-    return averages_df
+    return averages_df, utilization_df

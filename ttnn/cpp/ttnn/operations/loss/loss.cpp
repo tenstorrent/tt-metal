@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <utility>
 #include <vector>
 
 #include "loss.hpp"
@@ -16,10 +17,10 @@ namespace operations::loss {
 
 namespace loss_utils {
 
-using ttnn::operations::unary::UnaryWithParam;
-using ttnn::operations::unary::UnaryOpType;
-using ttnn::operations::loss::LossReductionMode;
 using ttnn::operations::loss::LossFunction;
+using ttnn::operations::loss::LossReductionMode;
+using ttnn::operations::unary::UnaryOpType;
+using ttnn::operations::unary::UnaryWithParam;
 
 Tensor loss_function(
     uint8_t queue_id,
@@ -30,19 +31,15 @@ Tensor loss_function(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     std::vector<UnaryWithParam> fused_ops;
-    switch(loss_kind) {
-        case LossFunction::MAE:
-            fused_ops.push_back(UnaryWithParam{UnaryOpType::ABS});
-            break;
-        case LossFunction::MSE:
-            fused_ops.push_back(UnaryWithParam{UnaryOpType::SQUARE});
-            break;
-        default:
-            TT_THROW("unsupported loss function {}. Please change.", loss_kind);
+    switch (loss_kind) {
+        case LossFunction::MAE: fused_ops.push_back(UnaryWithParam{UnaryOpType::ABS}); break;
+        case LossFunction::MSE: fused_ops.push_back(UnaryWithParam{UnaryOpType::SQUARE}); break;
+        default: TT_THROW("unsupported loss function {}. Please change.", loss_kind);
     }
-    Tensor result = ttnn::subtract(queue_id, ref, prediction, std::nullopt, memory_config, optional_output_tensor, fused_ops);
+    Tensor result =
+        ttnn::subtract(queue_id, ref, prediction, std::nullopt, memory_config, optional_output_tensor, fused_ops);
 
-    switch(reduce_mode) {
+    switch (reduce_mode) {
         case LossReductionMode::SUM:
             return ttnn::sum(result, std::nullopt, true, memory_config.value_or(ref.memory_config()));
         case LossReductionMode::MEAN:
@@ -56,28 +53,28 @@ Tensor loss_function(
     return result;
 }
 
-} // loss_utils
+}  // namespace loss_utils
 
-Tensor MseLossOperation::invoke (
+Tensor MseLossOperation::invoke(
     uint8_t queue_id,
     const Tensor& ref,
     const Tensor& prediction,
     const LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-
-    return loss_utils::loss_function(queue_id, ref, prediction, LossFunction::MSE, mode, memory_config, optional_output_tensor);
+    return loss_utils::loss_function(
+        queue_id, ref, prediction, LossFunction::MSE, mode, memory_config, std::move(optional_output_tensor));
 }
 
-Tensor MaeLossOperation::invoke (
+Tensor MaeLossOperation::invoke(
     uint8_t queue_id,
     const Tensor& ref,
     const Tensor& prediction,
     const LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-
-    return loss_utils::loss_function(queue_id, ref, prediction, LossFunction::MAE, mode, memory_config, optional_output_tensor);
+    return loss_utils::loss_function(
+        queue_id, ref, prediction, LossFunction::MAE, mode, memory_config, std::move(optional_output_tensor));
 }
 
 }  // namespace operations::loss

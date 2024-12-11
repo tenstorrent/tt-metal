@@ -53,7 +53,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
-    constexpr CB cb_fill_value_id = CB::c_intermed0;
+    constexpr CBIndex cb_fill_value_id = CBIndex::c_24;
 
     CircularBufferConfig cb_value_config = CircularBufferConfig(single_tile_size, {{cb_fill_value_id, data_format}})
                                                .set_page_size(cb_fill_value_id, single_tile_size);
@@ -67,7 +67,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         default: break;
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) cb_fill_value_id};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id};
 
     auto writer_id = CreateKernel(
         program,

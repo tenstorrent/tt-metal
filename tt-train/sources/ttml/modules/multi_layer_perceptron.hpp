@@ -13,9 +13,9 @@
 namespace ttml::modules {
 
 struct MultiLayerPerceptronParameters {
-    uint32_t m_input_features{};
-    std::vector<uint32_t> m_hidden_features;
-    uint32_t m_output_features{};
+    uint32_t input_features{};
+    std::vector<uint32_t> hidden_features;
+    uint32_t output_features{};
 };
 
 class MultiLayerPerceptron : public autograd::ModuleBase {

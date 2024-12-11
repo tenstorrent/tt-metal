@@ -1,4 +1,5 @@
 set(COMMON_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_assignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal_soc_descriptor.cpp
@@ -25,7 +26,6 @@ target_link_libraries(
 target_include_directories(
     common
     PUBLIC
-        ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
 )

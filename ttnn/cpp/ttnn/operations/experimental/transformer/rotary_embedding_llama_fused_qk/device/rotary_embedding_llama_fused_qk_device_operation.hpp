@@ -19,12 +19,12 @@ struct RotaryEmbeddingLlamaFusedQK {
     const MemoryConfig k_output_mem_config;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
 
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
 }  // namespace tt_metal

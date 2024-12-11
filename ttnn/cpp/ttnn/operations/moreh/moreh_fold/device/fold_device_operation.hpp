@@ -60,11 +60,11 @@ struct MorehFoldOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
         const std::optional<Tensor>& output,
-        const std::vector<uint32_t> output_size,
-        const std::vector<uint32_t> kernel_size,
-        const std::vector<uint32_t> dilation,
-        const std::vector<uint32_t> padding,
-        const std::vector<uint32_t> stride,
+        const std::vector<uint32_t>& output_size,
+        const std::vector<uint32_t>& kernel_size,
+        const std::vector<uint32_t>& dilation,
+        const std::vector<uint32_t>& padding,
+        const std::vector<uint32_t>& stride,
         const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_fold

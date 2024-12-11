@@ -78,6 +78,7 @@ RUN apt-get -y update \
     && apt-get install -y --no-install-recommends \
     libc++-17-dev \
     libc++abi-17-dev \
+    clang-tidy-17 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /usr/app

@@ -46,14 +46,32 @@ void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to reduce must be tilized");
     if (this->dim == ReduceOpDim::H) {
         if (input_tensor.memory_config().is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Illegal input memory config {} for sharded reduction along H!", input_tensor.memory_config().memory_layout);
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+                "Illegal input memory config {} for sharded reduction along H!",
+                input_tensor.memory_config().memory_layout);
         } else {
-            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Illegal input memory config {} for reduction along H!", input_tensor.memory_config().memory_layout);
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+                "Illegal input memory config {} for reduction along H!",
+                input_tensor.memory_config().memory_layout);
         }
-        TT_FATAL(input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout, "Illegal input memory config {} and output memory config {} for reduction along H!", input_tensor.memory_config().memory_layout, this->output_mem_config.memory_layout);
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout,
+            "Illegal input memory config {} and output memory config {} for reduction along H!",
+            input_tensor.memory_config().memory_layout,
+            this->output_mem_config.memory_layout);
     } else {
-        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Illegal input memory config {} for reduction along {}!", input_tensor.memory_config().memory_layout, this->dim);
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Illegal output memory config {} for reduction along {}!", this->output_mem_config.memory_layout, this->dim);
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            "Illegal input memory config {} for reduction along {}!",
+            input_tensor.memory_config().memory_layout,
+            this->dim);
+        TT_FATAL(
+            this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+            "Illegal output memory config {} for reduction along {}!",
+            this->output_mem_config.memory_layout,
+            this->dim);
     }
 }
 
@@ -84,12 +102,18 @@ std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Ten
 
     auto output_mem_config = this->output_mem_config;
     if (output_mem_config.is_sharded()) {
-        auto shard_spec = input_tensor.shard_spec().value(); // TODO: This will segfault if input is not sharded...
+        auto shard_spec = input_tensor.shard_spec().value();  // TODO: This will segfault if input is not sharded...
         shard_spec.shape[0] = output_padded_shape.volume() / output_padded_shape[-1];
         output_mem_config.shard_spec = shard_spec;
     }
 
-    return {ttnn::TensorSpec(output_shape, TensorLayout::fromLegacyPaddedShape(this->output_dtype, PageConfig(Layout::TILE), output_mem_config, ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
+    return {ttnn::TensorSpec(
+        output_shape,
+        TensorLayout::fromLegacyPaddedShape(
+            this->output_dtype,
+            PageConfig(Layout::TILE),
+            output_mem_config,
+            ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
 }
 
 operation::ProgramWithCallbacks Reduce::create_program(
@@ -167,8 +191,12 @@ Tensor reduce(
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
-    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
-        ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
+    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
+        input_tensor.device()->arch(),
+        std::nullopt,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true));
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     if (is_multicore_hw) {
@@ -187,11 +215,15 @@ Tensor reduce(
                 } else {
                     device = input_tensor.device();
                 }
-                auto input_tensor_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+                auto input_tensor_pad_shape =
+                    ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
+                        input_tensor.get_legacy_shape());
                 auto formatted_input_tensor = input_tensor;
-                if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-                    formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-                        input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
+                if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
+                        input_tensor, input_tensor_pad_shape)) {
+                    formatted_input_tensor =
+                        ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
+                            input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
                 }
                 const Tensor output_tensor = operation::run_without_autoformat(
                                                  Reduce{

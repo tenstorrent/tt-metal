@@ -8,7 +8,7 @@ inputs:
   docker_os_arch:
     description: 'Docker image architecture'
     required: false
-    default: ubuntu-20.04-amd64
+    default: tt-metalium/ubuntu-20.04-amd64
   docker_username:
     description: docker login username
     required: true
@@ -86,8 +86,12 @@ runs:
           ${{ inputs.device }}
           -w ${{ github.workspace }}
         run: |
-          if [ ${{ inputs.install_wheel }} ]; then
+          set -eu
+
+          install_wheel=${{ inputs.install_wheel }}
+          if [ "${install_wheel,,}" == "true" ]; then
             WHEEL_FILENAME=$(ls -1 *.whl)
-            pip3 install $WHEEL_FILENAME
+            pip3 install "$WHEEL_FILENAME"
           fi
+
           ${{ inputs.run_args }}

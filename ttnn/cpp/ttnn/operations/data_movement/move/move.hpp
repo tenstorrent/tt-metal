@@ -16,10 +16,8 @@ struct MoveOperation {
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-
     static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+        const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 }  // namespace operations::data_movement

@@ -13,17 +13,23 @@ namespace ckernel {
  */
 template <bool to_from_int8 = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
-    UNPACK(( llk_unpack_reconfig_data_format<to_from_int8, DST_ACCUM_MODE>(srca_new_operand, srcb_new_operand) ));
-    MATH(( llk_math_reconfig_data_format<to_from_int8, DST_ACCUM_MODE>(srca_new_operand, srcb_new_operand) ));
+    UNPACK((llk_unpack_reconfig_data_format<to_from_int8, DST_ACCUM_MODE>(srca_new_operand, srcb_new_operand)));
+    MATH((llk_math_reconfig_data_format<to_from_int8, DST_ACCUM_MODE>(srca_new_operand, srcb_new_operand)));
 }
 
 /**
  * Helper function to reconfigure srca/srcb data formats, only if they differ from existing formats.
-*/
+ */
 template <bool to_from_int8 = false>
-ALWI void reconfig_data_format(const uint32_t srca_old_operand, const uint32_t srca_new_operand, const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
-    UNPACK(( llk_unpack_reconfig_data_format<to_from_int8, DST_ACCUM_MODE>(srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand) ));
-    MATH(( llk_math_reconfig_data_format<to_from_int8, DST_ACCUM_MODE>(srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand) ));
+ALWI void reconfig_data_format(
+    const uint32_t srca_old_operand,
+    const uint32_t srca_new_operand,
+    const uint32_t srcb_old_operand,
+    const uint32_t srcb_new_operand) {
+    UNPACK((llk_unpack_reconfig_data_format<to_from_int8, DST_ACCUM_MODE>(
+        srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand)));
+    MATH((llk_math_reconfig_data_format<to_from_int8, DST_ACCUM_MODE>(
+        srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand)));
 }
 
 /**
@@ -31,8 +37,8 @@ ALWI void reconfig_data_format(const uint32_t srca_old_operand, const uint32_t s
  */
 template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
-    UNPACK(( llk_unpack_reconfig_data_format_srca<to_from_int8, DST_ACCUM_MODE>(srca_new_operand) ));
-    MATH(( llk_math_reconfig_data_format_srca<to_from_int8, DST_ACCUM_MODE>(srca_new_operand) ));
+    UNPACK((llk_unpack_reconfig_data_format_srca<to_from_int8, DST_ACCUM_MODE>(srca_new_operand)));
+    MATH((llk_math_reconfig_data_format_srca<to_from_int8, DST_ACCUM_MODE>(srca_new_operand)));
 }
 
 /**
@@ -40,8 +46,8 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
  */
 template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
-    UNPACK(( llk_unpack_reconfig_data_format_srca<to_from_int8, DST_ACCUM_MODE>(srca_old_operand, srca_new_operand) ));
-    MATH(( llk_math_reconfig_data_format_srca<to_from_int8, DST_ACCUM_MODE>(srca_old_operand, srca_new_operand) ));
+    UNPACK((llk_unpack_reconfig_data_format_srca<to_from_int8, DST_ACCUM_MODE>(srca_old_operand, srca_new_operand)));
+    MATH((llk_math_reconfig_data_format_srca<to_from_int8, DST_ACCUM_MODE>(srca_old_operand, srca_new_operand)));
 }
 
 /**
@@ -49,8 +55,8 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
  */
 template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
-    UNPACK(( llk_unpack_reconfig_data_format_srcb<to_from_int8, DST_ACCUM_MODE>(srcb_new_operand) ));
-    MATH(( llk_math_reconfig_data_format_srcb<to_from_int8, DST_ACCUM_MODE>(srcb_new_operand) ));
+    UNPACK((llk_unpack_reconfig_data_format_srcb<to_from_int8, DST_ACCUM_MODE>(srcb_new_operand)));
+    MATH((llk_math_reconfig_data_format_srcb<to_from_int8, DST_ACCUM_MODE>(srcb_new_operand)));
 }
 
 /**
@@ -58,8 +64,8 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
  */
 template <bool to_from_int8 = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
-    UNPACK(( llk_unpack_reconfig_data_format_srcb<to_from_int8, DST_ACCUM_MODE>(srcb_old_operand, srcb_new_operand) ));
-    MATH(( llk_math_reconfig_data_format_srcb<to_from_int8, DST_ACCUM_MODE>(srcb_old_operand, srcb_new_operand) ));
+    UNPACK((llk_unpack_reconfig_data_format_srcb<to_from_int8, DST_ACCUM_MODE>(srcb_old_operand, srcb_new_operand)));
+    MATH((llk_math_reconfig_data_format_srcb<to_from_int8, DST_ACCUM_MODE>(srcb_old_operand, srcb_new_operand)));
 }
 
-}
+}  // namespace ckernel

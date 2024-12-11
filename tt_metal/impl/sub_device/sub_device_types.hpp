@@ -33,18 +33,12 @@ struct SubDeviceId {
         return *this;
     }
 
-    bool operator==(const SubDeviceId &other) const {
-        return id == other.id;
-    }
+    bool operator==(const SubDeviceId& other) const { return id == other.id; }
 
-    bool operator!=(const SubDeviceId &other) const {
-        return id != other.id;
-    }
+    bool operator!=(const SubDeviceId& other) const { return id != other.id; }
 
     static constexpr auto attribute_names = std::forward_as_tuple("id");
-    constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->id);
-    }
+    constexpr auto attribute_values() const { return std::forward_as_tuple(this->id); }
 };
 
 struct SubDeviceManagerId {
@@ -69,34 +63,27 @@ struct SubDeviceManagerId {
         return *this;
     }
 
-    bool operator==(const SubDeviceManagerId &other) const {
-        return id == other.id;
-    }
+    bool operator==(const SubDeviceManagerId& other) const { return id == other.id; }
 
-    bool operator!=(const SubDeviceManagerId &other) const {
-        return id != other.id;
-    }
+    bool operator!=(const SubDeviceManagerId& other) const { return id != other.id; }
 
     static constexpr auto attribute_names = std::forward_as_tuple("id");
-    constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->id);
-    }
+    constexpr auto attribute_values() const { return std::forward_as_tuple(this->id); }
 };
 
 }  // namespace tt::tt_metal
 
-
 namespace std {
 template <>
 struct hash<tt::tt_metal::SubDeviceId> {
-    std::size_t operator()(tt::tt_metal::SubDeviceId const &o) const {
+    std::size_t operator()(tt::tt_metal::SubDeviceId const& o) const {
         return std::hash<decltype(tt::tt_metal::SubDeviceId::id)>{}(o.to_index());
     }
 };
 
 template <>
 struct hash<tt::tt_metal::SubDeviceManagerId> {
-    std::size_t operator()(tt::tt_metal::SubDeviceManagerId const &o) const {
+    std::size_t operator()(tt::tt_metal::SubDeviceManagerId const& o) const {
         return std::hash<decltype(tt::tt_metal::SubDeviceManagerId::id)>{}(o.to_index());
     }
 };

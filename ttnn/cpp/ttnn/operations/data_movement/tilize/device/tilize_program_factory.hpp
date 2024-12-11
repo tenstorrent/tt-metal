@@ -8,8 +8,7 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& output);
-operation::ProgramWithCallbacks tilize_multi_core(const Tensor& a, Tensor& output);
-
+tt::tt_metal::operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& output);
+tt::tt_metal::operation::ProgramWithCallbacks tilize_multi_core(const Tensor& a, Tensor& output);
 
 }  // namespace ttnn::operations::data_movement::detail

@@ -15,6 +15,7 @@
 #include "ttnn/operation.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::transformer::detail {
 
@@ -24,7 +25,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,
     const Tensor& output_tensor,
-    const std::optional<const Tensor> attn_mask,
+    const std::optional<const Tensor>& attn_mask,
     std::optional<float> scale,
     bool is_causal,
     std::size_t q_chunk_size,
@@ -40,25 +41,28 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     const auto q_shape = input_tensor_q.get_legacy_shape();
     const auto k_shape = input_tensor_k.get_legacy_shape();
-    const uint32_t B = q_shape[0], NQH = q_shape[1], S = q_shape[2], DH = q_shape[3];
+    const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
+    const uint32_t Sk = k_shape[2];
     const uint32_t NKH = k_shape[1];
-    const uint32_t St = S / TILE_HEIGHT;
+    const uint32_t Sqt = Sq / TILE_HEIGHT;
+    const uint32_t Skt = Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
-    const uint32_t q_num_chunks = S / q_chunk_size;
-    const uint32_t k_num_chunks = S / k_chunk_size;
+    const uint32_t q_num_chunks = Sq / q_chunk_size;
+    const uint32_t k_num_chunks = Sk / k_chunk_size;
     const bool use_provided_mask = attn_mask.has_value();
-
 
     // log_debug all of the above
     tt::log_debug("B: {}", B);
     tt::log_debug("NQH: {}", NQH);
 
-    tt::log_debug("S: {}", S);
+    tt::log_debug("Sq: {}", Sq);
+    tt::log_debug("Sk: {}", Sk);
     tt::log_debug("DH: {}", DH);
-    tt::log_debug("St: {}", St);
+    tt::log_debug("Sqt: {}", Sqt);
+    tt::log_debug("Skt: {}", Skt);
     tt::log_debug("DHt: {}", DHt);
     tt::log_debug("Sq_chunk_t: {}", Sq_chunk_t);
     tt::log_debug("Sk_chunk_t: {}", Sk_chunk_t);
@@ -84,12 +88,16 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
-    bool exp_approx_mode = program_config.has_value() ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true) : true;
+    bool exp_approx_mode =
+        program_config.has_value()
+            ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
+            : true;
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
 
-    TT_FATAL(num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
+    TT_FATAL(
+        num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
 
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
@@ -215,7 +223,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         B,
         NQH,
         NKH,
-        St,
+        Sqt,
+        Skt,
         DHt,
         Sq_chunk_t,
         q_num_chunks,
@@ -230,7 +239,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         B,
         NQH,
         NKH,
-        St,
+        Sqt,
         DHt,
         Sq_chunk_t,
         q_num_chunks,
@@ -247,7 +256,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         B,
         NQH,
         NKH,
-        St,
+        Skt,
         DHt,
         Sq_chunk_t,
         q_num_chunks,
@@ -280,7 +289,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    uint32_t balanced_q_parallel = (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
+    uint32_t balanced_q_parallel =
+        (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
@@ -320,7 +330,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                  : tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b; // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
+                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
 
     uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
@@ -342,77 +353,77 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     log_debug("statistics_data_format: {}", stats_df);
 
     // Q input
-    auto c_in0_config =
-        CircularBufferConfig(q_tiles * q_tile_size, {{tt::CB::c_in0, q_df}}).set_page_size(tt::CB::c_in0, q_tile_size);
+    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
+                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
 
     auto cb_in0_id = CreateCircularBuffer(program, core_grid, c_in0_config);
     // K input
-    auto c_in1_config =
-        CircularBufferConfig(k_tiles * k_tile_size, {{tt::CB::c_in1, k_df}}).set_page_size(tt::CB::c_in1, k_tile_size);
+    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
+                            .set_page_size(tt::CBIndex::c_1, k_tile_size);
     auto cb_in1_id = CreateCircularBuffer(program, core_grid, c_in1_config);
     // V input
-    auto c_in2_config =
-        CircularBufferConfig(v_tiles * v_tile_size, {{tt::CB::c_in2, v_df}}).set_page_size(tt::CB::c_in2, v_tile_size);
+    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
+                            .set_page_size(tt::CBIndex::c_2, v_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, core_grid, c_in2_config);
 
     // attn_mask input
-    auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                            .set_page_size(tt::CB::c_in3, mask_tile_size);
+    auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CBIndex::c_3, mask_df}})
+                            .set_page_size(tt::CBIndex::c_3, mask_tile_size);
     auto cb_in3_id = CreateCircularBuffer(program, core_grid, c_in3_config);
 
     // scale input
-    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CB::c_in4, scalar_df}})
-                            .set_page_size(tt::CB::c_in4, scalar_tile_size);
+    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
+                            .set_page_size(tt::CBIndex::c_4, scalar_tile_size);
     auto cb_in4_id = CreateCircularBuffer(program, core_grid, c_in4_config);
 
     // identity scale input
-    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CB::c_in5, scalar_df}})
-                            .set_page_size(tt::CB::c_in5, scalar_tile_size);
+    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
+                            .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
     auto cb_in5_id = CreateCircularBuffer(program, core_grid, c_in5_config);
 
     // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CB::c_intermed0, im_df}})
-                                  .set_page_size(tt::CB::c_intermed0, im_tile_size);
+    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
+                                  .set_page_size(tt::CBIndex::c_24, im_tile_size);
     auto cb_intermed0_id = CreateCircularBuffer(program, core_grid, c_intermed0_config);
 
     // cb_out_im
-    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CB::c_intermed1, im_df}})
-                                  .set_page_size(tt::CB::c_intermed1, im_tile_size);
+    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
+                                  .set_page_size(tt::CBIndex::c_25, im_tile_size);
     auto cb_intermed1_id = CreateCircularBuffer(program, core_grid, c_intermed1_config);
 
     // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CB::c_intermed2, im_df}})
-                                  .set_page_size(tt::CB::c_intermed2, im_tile_size);
+    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
+                                  .set_page_size(tt::CBIndex::c_26, im_tile_size);
     auto cb_intermed2_id = CreateCircularBuffer(program, core_grid, c_intermed2_config);
 
     // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed3, stats_df}})
-                                  .set_page_size(tt::CB::c_intermed3, stats_tile_size);
+    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_27, stats_tile_size);
     auto cb_intermed3_id = CreateCircularBuffer(program, core_grid, c_intermed3_config);
 
     // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed4, stats_df}})
-                                  .set_page_size(tt::CB::c_intermed4, stats_tile_size);
+    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_28, stats_tile_size);
     auto cb_intermed4_id = CreateCircularBuffer(program, core_grid, c_intermed4_config);
 
     // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed5, stats_df}})
-                                  .set_page_size(tt::CB::c_intermed5, stats_tile_size);
+    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_29, stats_tile_size);
     auto cb_intermed5_id = CreateCircularBuffer(program, core_grid, c_intermed5_config);
 
     // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed6, stats_df}})
-                                  .set_page_size(tt::CB::c_intermed6, stats_tile_size);
+    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_30, stats_tile_size);
     auto cb_intermed6_id = CreateCircularBuffer(program, core_grid, c_intermed6_config);
 
     // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed7, stats_df}})
-                                  .set_page_size(tt::CB::c_intermed7, stats_tile_size);
+    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
+                                  .set_page_size(tt::CBIndex::c_31, stats_tile_size);
     auto cb_intermed7_id = CreateCircularBuffer(program, core_grid, c_intermed7_config);
 
     // Output
-    auto c_out0_config =
-        CircularBufferConfig(out0_t * out_tile_size, {{tt::CB::c_out0, out_df}}).set_page_size(tt::CB::c_out0, out_tile_size);
+    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
+                             .set_page_size(tt::CBIndex::c_16, out_tile_size);
 
     auto cb_out0_id = CreateCircularBuffer(program, core_grid, c_out0_config);
 

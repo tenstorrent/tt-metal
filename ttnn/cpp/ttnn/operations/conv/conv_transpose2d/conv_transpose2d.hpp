@@ -4,7 +4,7 @@
 
 #pragma once
 #include <cstdint>
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 
 namespace ttnn {
 
@@ -14,6 +14,7 @@ namespace conv_transpose2d {
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
+
 struct ConvTranpose2dOperation{
     static Result invoke(
         uint8_t queue_id,
@@ -32,7 +33,9 @@ struct ConvTranpose2dOperation{
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const conv2d::Conv2dConfig> conv_config_ = std::nullopt);
+        const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
     static Result invoke(
         uint8_t queue_id,
@@ -51,7 +54,9 @@ struct ConvTranpose2dOperation{
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const conv2d::Conv2dConfig> conv_config_ = std::nullopt);
+        const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace conv_transpose2d

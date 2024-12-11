@@ -10,18 +10,26 @@
 
 #pragma once
 
-#include "core_config.h"
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 
 // TODO: move these to processor specific files
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+
+// Several firmware/kernel files depend on this file for dev_mem_map.h and/or noc_parameters.h inclusion
+// We don't want to pollute host code with those
+// Including them here within the guard to make FW/KERNEL happy
+// The right thing to do, would be "include what you use" in the other header files
+#include "core_config.h"
+#include "noc/noc_parameters.h"
+#include "dev_mem_map.h"
+
 #if defined(COMPILE_FOR_ERISC)
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 #elif defined(COMPILE_FOR_IDLE_ERISC)
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_IERISC_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_IERISC_MAILBOX_BASE)->x))
 #else
-#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
 #endif
 #endif
 
@@ -63,8 +71,8 @@ enum dispatch_core_processor_classes {
 };
 
 enum dispatch_core_processor_masks {
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0     = 1 << DISPATCH_CLASS_TENSIX_DM0,
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1     = 1 << DISPATCH_CLASS_TENSIX_DM1,
+    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 = 1 << DISPATCH_CLASS_TENSIX_DM0,
+    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 = 1 << DISPATCH_CLASS_TENSIX_DM1,
     DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE = 1 << DISPATCH_CLASS_TENSIX_COMPUTE,
 
     DISPATCH_CLASS_MASK_ETH_DM0 = 1 << DISPATCH_CLASS_ETH_DM0,
@@ -89,33 +97,39 @@ struct rta_offset_t {
     volatile uint16_t crta_offset;
 };
 
+// Maximums across all archs
+constexpr auto NUM_PROGRAMMABLE_CORE_TYPES = 3u;
+constexpr auto NUM_PROCESSORS_PER_CORE_TYPE = 5u;
+
 struct kernel_config_msg_t {
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     // Ring buffer of kernel configuration data
-    volatile uint32_t kernel_config_base[static_cast<int>(ProgrammableCoreType::COUNT)];
-    volatile uint16_t sem_offset[static_cast<int>(ProgrammableCoreType::COUNT)];
-    volatile uint16_t cb_offset;
+    volatile uint32_t kernel_config_base[NUM_PROGRAMMABLE_CORE_TYPES];
+    volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
+    volatile uint16_t local_cb_offset;
+    volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
-    volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
+    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
 
     volatile uint16_t host_assigned_id;
 
-    volatile uint8_t mode;                   // dispatch mode host/dev
+    volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
-    volatile uint8_t max_cb_index;
+    volatile uint8_t max_local_cb_end_index;
+    volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t enables;
-    volatile uint8_t pad2[12];
+    volatile uint8_t pad2[9];
 } __attribute__((packed));
 
 struct go_msg_t {
     volatile uint8_t dispatch_message_offset;
     volatile uint8_t master_x;
     volatile uint8_t master_y;
-    volatile uint8_t signal; // INIT, GO, DONE, RESET_RD_PTR
+    volatile uint8_t signal;  // INIT, GO, DONE, RESET_RD_PTR
 } __attribute__((packed));
 
 struct launch_msg_t {  // must be cacheline aligned
@@ -162,14 +176,15 @@ struct debug_insert_delays_msg_t {
 
 enum debug_sanitize_noc_return_code_enum {
     // 0 and 1 are a common stray values to write, so don't use those
-    DebugSanitizeNocOK                    = 2,
-    DebugSanitizeNocAddrUnderflow         = 3,
-    DebugSanitizeNocAddrOverflow          = 4,
-    DebugSanitizeNocAddrZeroLength        = 5,
-    DebugSanitizeNocTargetInvalidXY       = 6,
-    DebugSanitizeNocMulticastNonWorker    = 7,
+    DebugSanitizeNocOK = 2,
+    DebugSanitizeNocAddrUnderflow = 3,
+    DebugSanitizeNocAddrOverflow = 4,
+    DebugSanitizeNocAddrZeroLength = 5,
+    DebugSanitizeNocTargetInvalidXY = 6,
+    DebugSanitizeNocMulticastNonWorker = 7,
     DebugSanitizeNocMulticastInvalidRange = 8,
-    DebugSanitizeNocAlignment             = 9,
+    DebugSanitizeNocAlignment = 9,
+    DebugSanitizeNocMixedVirtualandPhysical = 10,
 };
 
 struct debug_assert_msg_t {
@@ -244,16 +259,15 @@ struct watcher_msg_t {
 
 struct dprint_buf_msg_t {
     DebugPrintMemLayout data[DPRINT_BUFFERS_COUNT];
-    uint32_t pad; // to 1024 bytes
+    uint32_t pad;  // to 1024 bytes
 };
-
 
 // NOC aligment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there (same as above for dprint)
-#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 #ifdef ARCH_BLACKHOLE
 static constexpr uint32_t PROFILER_RISC_COUNT = 1;
 #else
@@ -270,13 +284,28 @@ struct profiler_msg_t {
     uint32_t buffer[PROFILER_RISC_COUNT][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
 };
 
+enum class AddressableCoreType : uint8_t {
+    TENSIX = 0,
+    ETH = 1,
+    PCIE = 2,
+    DRAM = 3,
+    HARVESTED = 4,
+    UNKNOWN = 5,
+    COUNT = 6,
+};
+
 struct addressable_core_t {
     volatile uint8_t x, y;
     volatile AddressableCoreType type;
 };
 
 // TODO: This can move into the hal eventually, currently sized for WH.
-constexpr static std::uint32_t MAX_NON_WORKER_CORES = 36 + 1 + 16;
+// This is the number of Ethernet cores on WH (Ethernet cores can be queried through Virtual Coordinates).
+// All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
+constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 18;
+// This is the total number of Non Worker Cores on WH (first term is Ethernet, second term is PCIe and last term is
+// DRAM).
+constexpr static std::uint32_t MAX_NON_WORKER_CORES = MAX_VIRTUAL_NON_WORKER_CORES + 1 + 16;
 constexpr static std::uint32_t MAX_HARVESTED_ROWS = 2;
 constexpr static std::uint8_t CORE_COORD_INVALID = 0xFF;
 struct core_info_msg_t {
@@ -285,12 +314,13 @@ struct core_info_msg_t {
     volatile uint64_t noc_dram_addr_base;
     volatile uint64_t noc_dram_addr_end;
     addressable_core_t non_worker_cores[MAX_NON_WORKER_CORES];
+    addressable_core_t virtual_non_worker_cores[MAX_VIRTUAL_NON_WORKER_CORES];
     volatile uint8_t harvested_y[MAX_HARVESTED_ROWS];
+    volatile uint8_t virtual_harvested_y[MAX_HARVESTED_ROWS];
     volatile uint8_t noc_size_x;
     volatile uint8_t noc_size_y;
-    volatile uint8_t pad[29];
+    volatile uint8_t pad[27];
 };
-
 
 constexpr uint32_t launch_msg_buffer_num_entries = 4;
 struct mailboxes_t {

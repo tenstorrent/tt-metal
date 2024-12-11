@@ -3,15 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "types.hpp"
+
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/types.hpp"
 //==================================================
 //                  BUFFER HANDLING
 //==================================================
 
-namespace tt::tt_metal{
+namespace tt::tt_metal {
 namespace v1 {
-
 
 /**
  * @brief Allocates an interleaved DRAM or L1 buffer on the device.
@@ -19,22 +19,22 @@ namespace v1 {
  * @param config Configuration for the buffer.
  * @return Buffer handle to the allocated buffer.
  */
-Buffer CreateBuffer(const InterleavedBufferConfig &config);
-
-/**
- * @brief Allocates a buffer on the device.
- *
- * @param buffer The buffer to allocate.
- * @param bottom_up If true, allocates buffer from the bottom up.
- */
-void AllocateBuffer(Buffer buffer, bool bottom_up);
+BufferHandle CreateBuffer(InterleavedBufferConfig config);
 
 /**
  * @brief Deallocates a buffer from the device.
  *
  * @param buffer The buffer to deallocate.
  */
-void DeallocateBuffer(Buffer buffer);
+void DeallocateBuffer(const BufferHandle& buffer);
+
+/**
+ * @brief Retrieves the ID of the specified buffer.
+ *
+ * @param buffer The buffer to get the ID from.
+ * @return The unique ID of the buffer.
+ */
+std::size_t GetId(const BufferHandle& buffer);
 
 /**
  * @brief Copies data from a host buffer into the specified device buffer.
@@ -42,7 +42,7 @@ void DeallocateBuffer(Buffer buffer);
  * @param buffer Buffer to write data into.
  * @param host_buffer Host buffer containing data to copy.
  */
-void WriteToBuffer(Buffer buffer, const std::vector<uint32_t> &host_buffer);
+void WriteToBuffer(const BufferHandle& buffer, stl::Span<const std::byte> host_buffer);
 
 /**
  * @brief Copies data from a device buffer into a host buffer.
@@ -51,7 +51,7 @@ void WriteToBuffer(Buffer buffer, const std::vector<uint32_t> &host_buffer);
  * @param host_buffer Host buffer to copy data into.
  * @param shard_order If true, reads data in shard order.
  */
-void ReadFromBuffer(Buffer buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
+void ReadFromBuffer(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, bool shard_order = false);
 
 /**
  * @brief Copies data from a specific shard of a device buffer into a host buffer.
@@ -60,8 +60,7 @@ void ReadFromBuffer(Buffer buffer, std::vector<uint32_t> &host_buffer, bool shar
  * @param host_buffer Host buffer to copy data into.
  * @param core_id ID of the core shard to read.
  */
-void ReadFromShard(Buffer buffer, std::vector<uint32_t> &host_buffer, const uint32_t &core_id);
+void ReadFromShard(const BufferHandle& buffer, stl::Span<std::byte> host_buffer, std::uint32_t core_id);
 
-
-} // namespace v1
-} // namespace tt::tt_metal
+}  // namespace v1
+}  // namespace tt::tt_metal

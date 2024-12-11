@@ -46,23 +46,18 @@ inline void moreh_linear_backward_validate(
     const std::optional<const Tensor>& bias_grad) {
     if (input_grad.has_value()) {
         const auto& input_grad_tensor = input_grad.value();
-        TT_FATAL(
-            is_same_shape(input, input_grad_tensor), "both tensors should be the same shape");
+        TT_FATAL(is_same_shape(input, input_grad_tensor), "both tensors should be the same shape");
     }
 
     if (weight_grad.has_value()) {
         const auto& weight_grad_tensor = weight_grad.value();
-        TT_FATAL(
-            is_same_shape(weight, weight_grad_tensor),
-            "both tensors should be the same shape");
+        TT_FATAL(is_same_shape(weight, weight_grad_tensor), "both tensors should be the same shape");
     }
 
     if (bias_grad.has_value()) {
         const auto& bias_grad_tensor = bias_grad.value();
         TT_FATAL(
-            is_scalar(bias_grad_tensor) ||
-                is_1d_tensor(bias_grad_tensor),
-            "bias_grad tensor should be 1d or scalar");
+            is_scalar(bias_grad_tensor) || is_1d_tensor(bias_grad_tensor), "bias_grad tensor should be 1d or scalar");
     }
 }
 
@@ -200,9 +195,15 @@ OptionalTensors MorehLinearBackward::create_async_optional_output_tensors(
     const std::optional<ttnn::MemoryConfig>& bias_grad_memory_config,
     const DeviceComputeKernelConfig compute_kernel_config) {
     return {
-        are_required_outputs.at(0) ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight})) : std::nullopt,
-        are_required_outputs.at(1) ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight})) : std::nullopt,
-        are_required_outputs.at(2) ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight})) : std::nullopt};
+        are_required_outputs.at(0)
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight}))
+            : std::nullopt,
+        are_required_outputs.at(1)
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight}))
+            : std::nullopt,
+        are_required_outputs.at(2)
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight}))
+            : std::nullopt};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_linear_backward

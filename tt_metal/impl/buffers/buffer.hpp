@@ -21,8 +21,8 @@
 #include "common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
-#include "third_party/umd/device/xy_pair.h"
+#include "umd/device/tt_soc_descriptor.h"
+#include "umd/device/types/xy_pair.h"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "third_party/json/json.hpp"
@@ -49,12 +49,27 @@ struct ShardSpec {
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
     bool halo = false;
 
+    // In ShardMode::PHYSICAL, physical_shard_shape will always be std::nullopt
+    ShardMode mode = ShardMode::PHYSICAL;
+    std::optional<std::array<uint32_t, 2>> physical_shard_shape = std::nullopt;
+
     ShardSpec(
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
         const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
+        const bool &halo_ = false,
+        const ShardMode &shard_mode_ = ShardMode::PHYSICAL) :
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(shard_mode_), physical_shard_shape(std::nullopt) {
+    }
+
+    ShardSpec(
+        const CoreRangeSet &core_sets_,
+        const std::array<uint32_t, 2> &shard_shape_,
+        const std::array<uint32_t, 2> &physical_shard_shape_,
+        const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
         const bool &halo_ = false) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_) {
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(ShardMode::LOGICAL), physical_shard_shape(physical_shard_shape_) {
+        TT_FATAL(physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1], "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!", physical_shard_shape_[0], physical_shard_shape_[1], shard_shape_[0], shard_shape_[1]);
     }
 
     const uint32_t num_cores() const { return this->grid.num_cores(); }
@@ -63,9 +78,9 @@ struct ShardSpec {
     bool operator==(const ShardSpec& other) const;
     bool operator!=(const ShardSpec& other) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo");
+    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo", "mode", "physical_shard_shape");
     constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo);
+        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo, this->mode, this->physical_shard_shape);
     }
 };
 
@@ -206,16 +221,13 @@ class Buffer final {
 
     CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
-    CoreCoord noc_coordinates(uint32_t bank_id) const;
-
-    // returns NoC coordinates of first bank buffer is in
-    CoreCoord noc_coordinates() const;
-
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
+    DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const;
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;
+    DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
@@ -231,6 +243,8 @@ class Buffer final {
 
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
     std::optional<SubDeviceManagerId> sub_device_manager_id() const { return sub_device_manager_id_; }
+
+    size_t unique_id() const { return unique_id_; }
 
     Buffer(
         Device *device,
@@ -284,6 +298,8 @@ class Buffer final {
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::weak_ptr<Buffer> weak_self;
+    size_t unique_id_ = 0;
+    static std::atomic<size_t> next_unique_id;
 };
 
 }  // namespace v0

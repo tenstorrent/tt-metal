@@ -10,8 +10,8 @@
 #include "noc/noc_parameters.h"
 
 /*
-* This file contains addresses that are visible to both host and device compiled code.
-*/
+ * This file contains addresses that are visible to both host and device compiled code.
+ */
 
 // TODO: move this to the memory manager, make configurable through the API
 constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = MEM_MAP_END;

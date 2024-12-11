@@ -9,7 +9,6 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "softmax.hpp"
 
-
 namespace ttnn::operations::normalization::detail {
 
 namespace py = pybind11;
@@ -17,8 +16,7 @@ namespace py = pybind11;
 void bind_normalization_softmax_program_config_operation(py::module& module) {
     py::class_<SoftmaxProgramConfig>(module, "SoftmaxProgramConfig").def(py::init<>());
 
-    py::class_<SoftmaxDefaultProgramConfig>(module, "SoftmaxDefaultProgramConfig")
-        .def(py::init<>());
+    py::class_<SoftmaxDefaultProgramConfig>(module, "SoftmaxDefaultProgramConfig").def(py::init<>());
 
     py::class_<SoftmaxShardedMultiCoreProgramConfig>(module, "SoftmaxShardedMultiCoreProgramConfig")
         .def(
@@ -27,13 +25,11 @@ void bind_normalization_softmax_program_config_operation(py::module& module) {
             py::arg("compute_with_storage_grid_size"),
             py::arg("subblock_w").noconvert(),
             py::arg("block_h").noconvert(),
-            py::arg("block_w").noconvert()
-        )
+            py::arg("block_w").noconvert())
         .def_readwrite("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w);
 }
 
 void bind_normalization_softmax_operation(py::module& module) {
-
     auto doc =
         R"doc(softmax(input_tensor: ttnn.Tensor, dim: int, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
 
@@ -62,24 +58,23 @@ void bind_normalization_softmax_operation(py::module& module) {
         ttnn::softmax,
         doc,
         ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const int8_t dim,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-                const bool numeric_stable) {
-                    return self(input_tensor, dim, memory_config, compute_kernel_config, numeric_stable);
-                },
-                py::arg("input_tensor").noconvert(),
-                py::arg("dim") = -1,
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("compute_kernel_config").noconvert() = std::nullopt,
-                py::arg("numeric_stable").noconvert() = false});
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const int8_t dim,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
+               const bool numeric_stable) {
+                return self(input_tensor, dim, memory_config, compute_kernel_config, numeric_stable);
+            },
+            py::arg("input_tensor").noconvert(),
+            py::arg("dim") = -1,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("numeric_stable").noconvert() = false});
 }
 
 void bind_normalization_scale_mask_softmax_operation(py::module& module) {
-
     auto doc =
         R"doc(scale_mask_softmax(input_tensor: ttnn.Tensor, scale: Optional[float] = None, mask: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, is_causal_mask: Optional[bool] = False, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
 
@@ -106,28 +101,28 @@ void bind_normalization_scale_mask_softmax_operation(py::module& module) {
         ttnn::scale_mask_softmax,
         doc,
         ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const std::optional<float> scale,
-                const std::optional<const Tensor> mask,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const bool is_causal_mask,
-                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-                const bool numeric_stable) {
-                    return self(input_tensor, scale, mask, memory_config, is_causal_mask, compute_kernel_config, numeric_stable);
-                },
-                py::arg("input_tensor").noconvert(),
-                py::arg("scale").noconvert() = std::nullopt,
-                py::arg("mask").noconvert() = std::nullopt,
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("is_causal_mask") = false,
-                py::arg("compute_kernel_config") = std::nullopt,
-                py::arg("numeric_stable") = false});
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<float> scale,
+               const std::optional<const Tensor>& mask,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const bool is_causal_mask,
+               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
+               const bool numeric_stable) {
+                return self(
+                    input_tensor, scale, mask, memory_config, is_causal_mask, compute_kernel_config, numeric_stable);
+            },
+            py::arg("input_tensor").noconvert(),
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("mask").noconvert() = std::nullopt,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("is_causal_mask") = false,
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("numeric_stable") = false});
 }
 
 void bind_normalization_softmax_in_place_operation(py::module& module) {
-
     auto doc =
         R"doc(softmax_in_place(input_tensor: ttnn.Tensor, program_config: Optional[SoftmaxProgramConfig], compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
 
@@ -151,22 +146,21 @@ void bind_normalization_softmax_in_place_operation(py::module& module) {
         ttnn::softmax_in_place,
         doc,
         ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const SoftmaxProgramConfig& program_config,
-                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-                const bool numeric_stable) {
-                    return self(input_tensor, program_config, compute_kernel_config, numeric_stable);
-                },
-                py::arg("input_tensor").noconvert(),
-                py::kw_only(),
-                py::arg("program_config") = SoftmaxDefaultProgramConfig{},
-                py::arg("compute_kernel_config") = std::nullopt,
-                py::arg("numeric_stable") = false});
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const SoftmaxProgramConfig& program_config,
+               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
+               const bool numeric_stable) {
+                return self(input_tensor, program_config, compute_kernel_config, numeric_stable);
+            },
+            py::arg("input_tensor").noconvert(),
+            py::kw_only(),
+            py::arg("program_config") = SoftmaxDefaultProgramConfig{},
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("numeric_stable") = false});
 }
 
 void bind_normalization_scale_mask_softmax_in_place_operation(py::module& module) {
-
     auto doc =
         R"doc(softmax_in_place(input_tensor: ttnn.Tensor, scale: Optional[float] = None, mask: Optional[ttnn.Tensor] = None, program_config: Optional[SoftmaxProgramConfig], compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
 
@@ -190,28 +184,28 @@ void bind_normalization_scale_mask_softmax_in_place_operation(py::module& module
         ttnn::scale_mask_softmax_in_place,
         doc,
         ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const std::optional<float> scale,
-                const std::optional<const Tensor> mask,
-                const SoftmaxProgramConfig& program_config,
-                const bool is_causal_mask,
-                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-                const bool numeric_stable) {
-                    return self(input_tensor, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
-                },
-                py::arg("input_tensor").noconvert(),
-                py::arg("scale").noconvert() = std::nullopt,
-                py::arg("mask").noconvert() = std::nullopt,
-                py::kw_only(),
-                py::arg("program_config") = SoftmaxDefaultProgramConfig{},
-                py::arg("is_causal_mask") = false,
-                py::arg("compute_kernel_config") = std::nullopt,
-                py::arg("numeric_stable") = false});
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<float> scale,
+               const std::optional<const Tensor>& mask,
+               const SoftmaxProgramConfig& program_config,
+               const bool is_causal_mask,
+               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
+               const bool numeric_stable) {
+                return self(
+                    input_tensor, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
+            },
+            py::arg("input_tensor").noconvert(),
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("mask").noconvert() = std::nullopt,
+            py::kw_only(),
+            py::arg("program_config") = SoftmaxDefaultProgramConfig{},
+            py::arg("is_causal_mask") = false,
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("numeric_stable") = false});
 }
 
 void bind_normalization_scale_causal_mask_hw_dims_softmax_in_place_operation(py::module& module) {
-
     auto doc =
         R"doc(scale_causal_mask_hw_dims_softmax_in_place(input_tensor: ttnn.Tensor, scale: Optional[float] = None, mask: Optional[ttnn.Tensor] = None, program_config: Optional[SoftmaxProgramConfig], compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
 
@@ -235,22 +229,22 @@ void bind_normalization_scale_causal_mask_hw_dims_softmax_in_place_operation(py:
         ttnn::scale_causal_mask_hw_dims_softmax_in_place,
         doc,
         ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const std::optional<float> scale,
-                const std::optional<const Tensor> mask,
-                const SoftmaxProgramConfig& program_config,
-                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-                const bool numeric_stable) {
-                    return self(input_tensor, scale, mask, program_config, compute_kernel_config, numeric_stable);
-                },
-                py::arg("input_tensor").noconvert(),
-                py::arg("scale").noconvert() = std::nullopt,
-                py::arg("mask").noconvert() = std::nullopt,
-                py::kw_only(),
-                py::arg("program_config") = SoftmaxDefaultProgramConfig{},
-                py::arg("compute_kernel_config") = std::nullopt,
-                py::arg("numeric_stable") = false});
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<float> scale,
+               const std::optional<const Tensor>& mask,
+               const SoftmaxProgramConfig& program_config,
+               const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
+               const bool numeric_stable) {
+                return self(input_tensor, scale, mask, program_config, compute_kernel_config, numeric_stable);
+            },
+            py::arg("input_tensor").noconvert(),
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("mask").noconvert() = std::nullopt,
+            py::kw_only(),
+            py::arg("program_config") = SoftmaxDefaultProgramConfig{},
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("numeric_stable") = false});
 }
 
 void bind_normalization_softmax(py::module& module) {

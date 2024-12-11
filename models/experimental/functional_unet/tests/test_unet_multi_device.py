@@ -21,8 +21,8 @@ from models.experimental.functional_unet.tests.common import (
 )
 
 
-@pytest.mark.parametrize("batch", [2])
-@pytest.mark.parametrize("groups", [1])
+@pytest.mark.parametrize("batch", [1])
+@pytest.mark.parametrize("groups", [2])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, reset_seeds):
     if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):
@@ -32,7 +32,7 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(mesh_device, batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
@@ -42,7 +42,7 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     logger.info(f"Using {num_devices} devices for this test")
 
     torch_input, ttnn_input = create_unet_input_tensors(
-        mesh_device, num_devices * batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
+        num_devices * batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(

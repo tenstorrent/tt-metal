@@ -48,8 +48,7 @@ void validate_tensors(
     validate_input_with_dim(input, operation_attributes.dim);
 
     if (output.has_value()) {
-        validate_output_with_keepdim(
-            input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
+        validate_output_with_keepdim(input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
     }
 }
 
@@ -102,8 +101,9 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)
         for (int i = 0; i < input_rank; ++i) {
             bool is_reduced_dim = (i == operation_attributes.dim);
-            if (is_reduced_dim && !is_tile_dim)
+            if (is_reduced_dim && !is_tile_dim) {
                 continue;
+            }
 
             shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input_shape.value[i]));
             pad_dimensions.push_back(

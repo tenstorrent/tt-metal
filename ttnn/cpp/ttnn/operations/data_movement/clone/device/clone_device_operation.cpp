@@ -8,8 +8,9 @@ namespace ttnn::operations::data_movement::clone {
 void CloneOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    if (operation_attributes.dtype != input.get_dtype())
+    if (operation_attributes.dtype != input.get_dtype()) {
         TT_FATAL(input.get_layout() == Layout::TILE, "Clone: data type conversion is only supported with tile layout");
+    }
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Clone: input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Clone: input must be allocated in buffer on device");
     TT_FATAL(

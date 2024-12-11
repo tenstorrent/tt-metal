@@ -24,7 +24,7 @@ void bind_experimental_plusone_operation(py::module& module) {
                 return torch.add(input_tensor, 1)
 
             Args:
-                * :attr:`input_tensor`: Input Tensor for plusone. 
+                * :attr:`input_tensor`: Input Tensor for plusone.
 
         )doc";
 
@@ -34,12 +34,8 @@ void bind_experimental_plusone_operation(py::module& module) {
         ttnn::plus_one,
         doc,
         ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor
-                ) {
-                    return self(input_tensor);
-                },
-                py::arg("input_tensor").noconvert()});
+            [](const OperationType& self, const ttnn::Tensor& input_tensor) { return self(input_tensor); },
+            py::arg("input_tensor").noconvert()});
 }
 
 }  // namespace ttnn::operations::experimental::plusone::detail

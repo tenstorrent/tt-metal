@@ -27,7 +27,7 @@ jobs:
     environment: dev
     runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "pipeline-perf"]
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/ensure-active-weka-mount
       - name: Set up dynamic env vars for build
         run: |

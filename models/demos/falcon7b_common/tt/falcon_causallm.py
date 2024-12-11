@@ -9,7 +9,11 @@ import ttnn
 from ttnn import ReplicateTensorToMesh
 from models.demos.falcon7b_common.tt.falcon_lm_head import falcon_lm_head_matmul_2d
 from models.demos.falcon7b_common.tt.falcon_model import TtFalconModelShared
-from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
+from models.demos.falcon7b_common.tt.model_utils import (
+    get_falcon_default_core_grid,
+    get_weights_cached,
+    get_default_hifi2_kernel_config,
+)
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 from models.utility_functions import (
     is_grayskull,
@@ -27,7 +31,13 @@ def falcon_lm_head_matmul(
     seq_len = input_tensor_a.shape.with_tile_padding()[2]
     if seq_len > 512:
         # TODO: Review if this path is used? If not, we can delete
-        return ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_mem_config, dtype=output_dtype)
+        return ttnn.matmul(
+            input_tensor_a,
+            input_tensor_b,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
+            compute_kernel_config=get_default_hifi2_kernel_config(),
+        )
 
     if is_grayskull():
         compute_kernel_config = ttnn.GrayskullComputeKernelConfig(

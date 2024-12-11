@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #pragma once
 
 #include <functional>
@@ -18,10 +17,10 @@
 #include <sstream>
 #include "common/metal_soc_descriptor.h"
 
-
 #include "tt_metal/common/base.hpp"
 
-inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevice target_device, std::string output_dir = "") {
+inline std::string get_soc_description_file(
+    const tt::ARCH& arch, tt::TargetDevice target_device, std::string output_dir = "") {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     std::string tt_metal_home;
     if (getenv("TT_METAL_HOME")) {
@@ -32,17 +31,20 @@ inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevi
     if (tt_metal_home.back() != '/') {
         tt_metal_home += "/";
     }
-    if (target_device == tt::TargetDevice::Simulator){
+    if (target_device == tt::TargetDevice::Simulator) {
         switch (arch) {
             case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported");
             case tt::ARCH::GRAYSKULL: throw std::runtime_error("GRAYSKULL arch not supported");
             case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_versim.yaml";
-            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/soc_descriptors/blackhole_simulation_1x2_arch.yaml";
+            case tt::ARCH::BLACKHOLE:
+                return tt_metal_home + "tt_metal/soc_descriptors/blackhole_simulation_1x2_arch.yaml";
             default: throw std::runtime_error("Unsupported device arch");
         };
     } else {
         switch (arch) {
-            case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported"); // will be overwritten in tt_global_state constructor
+            case tt::ARCH::Invalid:
+                throw std::runtime_error(
+                    "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/soc_descriptors/grayskull_120_arch.yaml";
             case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml";
             case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/soc_descriptors/blackhole_140_arch.yaml";
@@ -58,7 +60,7 @@ template <class T>
 constexpr std::false_type always_false{};
 
 template <class T>
-T parse(std::string const &s) {
+T parse(std::string const& s) {
     if constexpr (std::is_same_v<T, std::uint32_t>) {
         return std::stoul(s, 0, 0);
     } else if constexpr (std::is_same_v<T, int>) {
@@ -74,7 +76,7 @@ T parse(std::string const &s) {
     }
 }
 
-inline std::string strip(std::string const &s) {
+inline std::string strip(std::string const& s) {
     std::string whitespace = " \t\n";
     std::size_t start = s.find_first_not_of(whitespace);
     std::size_t end = s.find_last_not_of(whitespace);
@@ -83,9 +85,9 @@ inline std::string strip(std::string const &s) {
 }
 
 inline std::string get_command_option(
-    const std::vector<std::string> &test_args,
-    const std::string &option,
-    const std::optional<std::string> &default_value = std::nullopt) {
+    const std::vector<std::string>& test_args,
+    const std::string& option,
+    const std::optional<std::string>& default_value = std::nullopt) {
     std::vector<std::string>::const_iterator option_pointer =
         std::find(std::begin(test_args), std::end(test_args), option);
     if (option_pointer != std::end(test_args) and option_pointer++ != std::end(test_args)) {
@@ -98,9 +100,9 @@ inline std::string get_command_option(
 }
 
 inline std::uint32_t get_command_option_uint32(
-    const std::vector<std::string> &test_args,
-    const std::string &option,
-    const std::optional<std::uint32_t> &default_value = std::nullopt) {
+    const std::vector<std::string>& test_args,
+    const std::string& option,
+    const std::optional<std::uint32_t>& default_value = std::nullopt) {
     std::string param;
     if (default_value.has_value()) {
         param = get_command_option(test_args, option, std::to_string(default_value.value()));
@@ -111,9 +113,9 @@ inline std::uint32_t get_command_option_uint32(
 }
 
 inline std::int32_t get_command_option_int32(
-    const std::vector<std::string> &test_args,
-    const std::string &option,
-    const std::optional<std::uint32_t> &default_value = std::nullopt) {
+    const std::vector<std::string>& test_args,
+    const std::string& option,
+    const std::optional<std::uint32_t>& default_value = std::nullopt) {
     std::string param;
     if (default_value.has_value()) {
         param = get_command_option(test_args, option, std::to_string(default_value.value()));
@@ -124,9 +126,9 @@ inline std::int32_t get_command_option_int32(
 }
 
 inline double get_command_option_double(
-    const std::vector<std::string> &test_args,
-    const std::string &option,
-    const std::optional<double> &default_value = std::nullopt) {
+    const std::vector<std::string>& test_args,
+    const std::string& option,
+    const std::optional<double>& default_value = std::nullopt) {
     std::string param;
     if (default_value.has_value()) {
         param = get_command_option(test_args, option, std::to_string(default_value.value()));
@@ -136,16 +138,16 @@ inline double get_command_option_double(
     return std::stod(param, 0);
 }
 
-inline bool has_command_option(const std::vector<std::string> &test_args, const std::string &option) {
+inline bool has_command_option(const std::vector<std::string>& test_args, const std::string& option) {
     std::vector<std::string>::const_iterator option_pointer =
         std::find(std::begin(test_args), std::end(test_args), option);
     return option_pointer != std::end(test_args);
 }
 
 inline std::tuple<std::string, std::vector<std::string>> get_command_option_and_remaining_args(
-    const std::vector<std::string> &test_args,
-    const std::string &option,
-    const std::optional<std::string> &default_value = std::nullopt) {
+    const std::vector<std::string>& test_args,
+    const std::string& option,
+    const std::optional<std::string>& default_value = std::nullopt) {
     std::vector<std::string> remaining_args = test_args;
     std::vector<std::string>::const_iterator option_pointer =
         std::find(std::begin(remaining_args), std::end(remaining_args), option);
@@ -160,10 +162,10 @@ inline std::tuple<std::string, std::vector<std::string>> get_command_option_and_
     return {default_value.value(), remaining_args};
 }
 
-inline  std::tuple<std::uint32_t, std::vector<std::string>> get_command_option_uint32_and_remaining_args(
-    const std::vector<std::string> &test_args,
-    const std::string &option,
-    const std::optional<std::uint32_t> &default_value = std::nullopt) {
+inline std::tuple<std::uint32_t, std::vector<std::string>> get_command_option_uint32_and_remaining_args(
+    const std::vector<std::string>& test_args,
+    const std::string& option,
+    const std::optional<std::uint32_t>& default_value = std::nullopt) {
     std::vector<std::string> remaining_args = test_args;
     std::string param;
     if (default_value.has_value()) {
@@ -175,10 +177,10 @@ inline  std::tuple<std::uint32_t, std::vector<std::string>> get_command_option_u
     return {std::stoul(param, 0, 0), remaining_args};
 }
 
-inline  std::tuple<std::uint64_t, std::vector<std::string>> get_command_option_uint64_and_remaining_args(
-    const std::vector<std::string> &test_args,
-    const std::string &option,
-    const std::optional<std::uint64_t> &default_value = std::nullopt) {
+inline std::tuple<std::uint64_t, std::vector<std::string>> get_command_option_uint64_and_remaining_args(
+    const std::vector<std::string>& test_args,
+    const std::string& option,
+    const std::optional<std::uint64_t>& default_value = std::nullopt) {
     std::vector<std::string> remaining_args = test_args;
     std::string param;
     if (default_value.has_value()) {
@@ -192,9 +194,9 @@ inline  std::tuple<std::uint64_t, std::vector<std::string>> get_command_option_u
 }
 
 inline std::tuple<std::int32_t, std::vector<std::string>> get_command_option_int32_and_remaining_args(
-    const std::vector<std::string> &test_args,
-    const std::string &option,
-    const std::optional<std::int32_t> &default_value = std::nullopt) {
+    const std::vector<std::string>& test_args,
+    const std::string& option,
+    const std::optional<std::int32_t>& default_value = std::nullopt) {
     std::vector<std::string> remaining_args = test_args;
     std::string param;
     if (default_value.has_value()) {
@@ -207,7 +209,9 @@ inline std::tuple<std::int32_t, std::vector<std::string>> get_command_option_int
 }
 
 inline std::tuple<double, std::vector<std::string>> get_command_option_double_and_remaining_args(
-    const std::vector<std::string> &test_args, const std::string &option, const std::optional<double> &default_value = std::nullopt) {
+    const std::vector<std::string>& test_args,
+    const std::string& option,
+    const std::optional<double>& default_value = std::nullopt) {
     std::vector<std::string> remaining_args = test_args;
     std::string param;
     if (default_value.has_value()) {
@@ -220,7 +224,7 @@ inline std::tuple<double, std::vector<std::string>> get_command_option_double_an
 }
 
 inline std::tuple<bool, std::vector<std::string>> has_command_option_and_remaining_args(
-    const std::vector<std::string> &test_args, const std::string &option) {
+    const std::vector<std::string>& test_args, const std::string& option) {
     std::vector<std::string> remaining_args = test_args;
     std::vector<std::string>::const_iterator option_pointer =
         std::find(std::begin(remaining_args), std::end(remaining_args), option);
@@ -233,7 +237,7 @@ inline std::tuple<bool, std::vector<std::string>> has_command_option_and_remaini
 
 template <class T>
 inline void split_string_into_vector(
-    std::vector<T> &output_vector, const std::string input_command, const char *delimiter) {
+    std::vector<T>& output_vector, const std::string input_command, const char* delimiter) {
     std::string input_command_modified = input_command;
     if (!input_command_modified.empty()) {
         size_t current_pos = input_command_modified.find(delimiter);
@@ -250,9 +254,9 @@ inline void split_string_into_vector(
 
 template <class T>
 T get(
-    const std::vector<std::string> &test_args,
-    const std::string &option,
-    const std::optional<T> &default_value = std::nullopt) {
+    const std::vector<std::string>& test_args,
+    const std::string& option,
+    const std::optional<T>& default_value = std::nullopt) {
     std::string param;
     if (default_value.has_value()) {
         if constexpr (std::is_same_v<T, std::string>) {
@@ -267,7 +271,7 @@ T get(
     return test_args::parse<T>(param);
 }
 
-inline void validate_remaining_args(const std::vector<std::string> &remaining_args) {
+inline void validate_remaining_args(const std::vector<std::string>& remaining_args) {
     if (remaining_args.size() == 1) {
         // Only executable is left, so all good
         return;

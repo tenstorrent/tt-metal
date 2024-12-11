@@ -56,20 +56,28 @@ void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
     m_grad = ttnn::add(m_grad, grad);
 }
 
-void Tensor::backward() {
+void Tensor::backward(bool retain_graph) {
     if (!m_node_id.has_value()) {
         return;
     }
     std::vector<size_t> sorted_nodes;
     std::unordered_set<std::size_t> visited_nodes;
-    const auto& graph = m_node_id->get_graph();
+    auto& graph = m_node_id->get_graph();
     topological_sort(m_node_id->get_id(), graph.get_edges(), visited_nodes, sorted_nodes);
 
-    const auto& graph_nodes = graph.get_graph_nodes();
+    auto& graph_nodes = graph.get_graph_nodes();
     std::ranges::reverse(sorted_nodes);
     try_init_grad(/* init_ones */ true);
     for (const auto& node_id : sorted_nodes) {
         graph_nodes[node_id].grad_function();
+        if (!retain_graph) {
+            graph_nodes[node_id].grad_function = [] {
+                throw std::runtime_error(
+                    "[Tensor::backward] This backward function should not be called! Memory from the node is released! "
+                    "Please consider tweaking the retain_graph parameter if you need to call backward twice on the "
+                    "same graph nodes.");
+            };
+        }
     }
 }
 

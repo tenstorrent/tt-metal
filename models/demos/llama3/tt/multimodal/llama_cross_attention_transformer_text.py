@@ -2,20 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
 import ttnn
 import torch
-import torch.nn as nn
+from tqdm import tqdm
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
-from models.demos.llama3.tt.llama_model import LMHead
 from models.demos.llama3.tt.distributed_norm import DistributedNorm
 from models.common.rmsnorm import RMSNorm
 import ttnn
-from typing import Optional
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
+
+from models.utility_functions import (
+    nearest_32,
+)
 
 
 def _get_full_row_masked_out_mask(
@@ -42,6 +44,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         weight_cache_path,
         dtype,
         configuration,
+        use_paged_kv_cache=False,
     ):
         super().__init__()
         self.vocab_size = configuration.vocab_size
@@ -117,12 +120,31 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         self.num_frozen_embeddings = self.tok_embeddings.num_embeddings
         self._thresh = self.num_frozen_embeddings - 1
 
+        self.rope_setup = TtLlamaRotarySetup(
+            mesh_device,
+            configuration.max_batch_size,
+            configuration.head_dim,
+            configuration.max_seq_len,
+            configuration.rope_theta,
+            configuration.use_scaled_rope,
+        )
+        self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
+
         # transformer blocks
         self.layers = []
         self.cross_attention_layers = []
-        for i in range(configuration.n_layers):
+        for i in tqdm(range(configuration.n_layers), desc="Loading text transformer layers"):
             layer_id = i
-            block = TtTransformerBlock(configuration, mesh_device, dtype, state_dict, layer_id, weight_cache_path)
+            block = TtTransformerBlock(
+                configuration,
+                mesh_device,
+                dtype,
+                state_dict,
+                layer_id,
+                weight_cache_path,
+                transformation_mats=self.trans_mats_dict,
+                use_paged_kv_cache=use_paged_kv_cache,
+            )
             self.layers.append(block)
             if layer_id in self.fusion_schedule:
                 xa_layer_id = self.fusion_schedule.index(layer_id)
@@ -215,8 +237,30 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             full_text_row_masked_out_mask,
         )
 
-    def setup_cache(self, max_batch_size, dtype):
+    def setup_cache(self, max_batch_size):
         self.cache_is_setup = True
+
+        # Prepare xattn_caches
+        chunk_length = nearest_32(self.configuration.vision_chunk_ntok)
+        vision_seq_len = self.configuration.vision_max_num_chunks * chunk_length
+        xattn_cache = [
+            [
+                ttnn.from_torch(
+                    torch.zeros(
+                        max_batch_size, self.configuration.n_kv_heads, vision_seq_len, self.configuration.head_dim
+                    ),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+                )
+                for _ in range(2)
+            ]
+            for l in range(len(self.cross_attention_layers))
+        ]
+
+        return xattn_cache
 
     def forward(
         self,
@@ -226,13 +270,14 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         full_text_row_masked_out_mask_11SD: ttnn.Tensor,
         xattn_caches,
         current_pos,
-        rot_mat=None,
-        transformation_mats=None,
+        rot_mats=None,
         user_id=0,
         mode="decode",
         page_table=None,
-        # get_last_token=-1,
+        kv_cache=None,
         text_only_inference=False,
+        vision_tokens=None,
+        get_last_token=-1,
     ):
         for idx, (
             layer,
@@ -247,20 +292,26 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                     full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
                     full_text_row_masked_out_mask_11SD=full_text_row_masked_out_mask_11SD,
                     mode=mode,
+                    user_id=user_id,
+                    vision_tokens=vision_tokens,
                 )
             h = layer(
                 h,
                 current_pos,
-                rot_mat=rot_mat,
-                transformation_mats=transformation_mats,
+                rot_mats=rot_mats,
                 user_id=user_id,
                 mode=mode,
+                page_table=page_table,
+                kv_cache=kv_cache,
             )
 
+        if get_last_token != -1:
+            h = ttnn.slice(h, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, h.shape[-1]))
         h = self.norm(h, mode=mode)
 
-        if mode == "decode":  # h is expected to be interleaved for the lm head
-            h = ttnn.sharded_to_interleaved(h)
+        # TODO: Switch to using dram-sharded LM head and remove this
+        # Note: workaround for sharded_to_interleaved memory corruption (#15113)
+        h = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
 
         seq_len = h.shape[2]
         MAX_MM_SEQ_LEN = 1024
@@ -286,5 +337,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             outputs.append(output)
 
         output = ttnn.concat(outputs, dim=-1)
+        output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         return output

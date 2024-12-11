@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -15,7 +16,7 @@
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
 
-#include "tt_metal/hw/inc/circular_buffer.h"
+#include "tt_metal/hw/inc/circular_buffer_constants.h"
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -23,124 +24,72 @@ inline namespace v0 {
 using CBHandle = uintptr_t;
 
 class CircularBufferConfig {
-   public:
+public:
     // Static circular buffer spec
-    CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat> &data_format_spec) :
-        total_size_(total_size), globally_allocated_address_(std::nullopt), dynamic_cb_(false) {
-        this->set_config(data_format_spec);
-    }
+    CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec);
+
+    // User is expected to use the builder here.
+    CircularBufferConfig(uint32_t total_size);
 
     // Dynamic circular buffer spec
     CircularBufferConfig(
-        uint32_t total_size, const std::map<uint8_t, tt::DataFormat> &data_format_spec, const Buffer &buffer) :
-        total_size_(total_size),
-        dynamic_cb_(true),
-        max_size_(buffer.size()) {
-        if (not buffer.is_l1()) {
-            TT_THROW("Only L1 buffers can have an associated circular buffer!");
-        }
-        if (total_size > buffer.size()) {
-            TT_THROW(
-                "Requested {} B but dynamic circular buffer cannot be larger than allocated L1 buffer of {} B",
-                total_size,
-                buffer.size());
-        }
-        this->set_globally_allocated_address(buffer);
-        this->set_config(data_format_spec);
-    }
+        uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec, const Buffer& buffer);
 
-    CircularBufferConfig set_page_size(uint8_t buffer_index, uint32_t page_size) {
-        if (buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
-            TT_THROW(
-                "Buffer index ({}) exceeds max number of circular buffers per core ({})",
-                buffer_index,
-                NUM_CIRCULAR_BUFFERS);
-        }
-        if (this->buffer_indices_.find(buffer_index) == this->buffer_indices_.end()) {
-            TT_THROW(
-                "Illegal circular buffer index {}. Page size can only be specified for buffer indices configured "
-                "during config creation",
-                buffer_index);
-        }
-        if (this->total_size_ % page_size != 0) {
-            TT_THROW(
-                "Total circular buffer size {} B must be divisible by page size {} B",
-                this->total_size_,
-                page_size);
-        }
-        if (page_size % sizeof(uint32_t) != 0) {
-            TT_THROW("Page size must be divisible by sizeof(uint32_t) because buffers holds uint32_t values");
-        }
+    CircularBufferConfig& set_page_size(uint8_t buffer_index, uint32_t page_size);
 
-        this->page_sizes_[buffer_index] = page_size;
-        return *this;
-    }
+    CircularBufferConfig& set_total_size(uint32_t total_size);
 
-    CircularBufferConfig set_total_size(uint32_t total_size) {
-        if (dynamic_cb_ and total_size > this->max_size_.value()) {
-            TT_THROW(
-                "Cannot grow circular buffer to {} B. This is larger than associated dynamically allocated L1 buffer "
-                "of {} B",
-                total_size,
-                this->max_size_.value());
-        }
-        if (total_size == 0) {
-            TT_THROW("Total size for circular buffer must be non-zero!");
-        }
-        this->total_size_ = total_size;
-        return *this;
-    }
+    CircularBufferConfig& set_globally_allocated_address(const Buffer& buffer);
 
-    CircularBufferConfig set_globally_allocated_address(const Buffer &buffer) {
-        if (not buffer.is_l1()) {
-            TT_THROW("Only L1 buffers can have an associated circular buffer!");
-        }
-        this->globally_allocated_address_ = buffer.address();
-        this->dynamic_cb_ = true;
-        this->max_size_ = buffer.size();
-        this->shadow_global_buffer = &buffer;
-        return *this;
-    }
+    CircularBufferConfig& set_globally_allocated_address_and_total_size(const Buffer& buffer, uint32_t total_size);
 
-    CircularBufferConfig set_tile_dims(uint8_t buffer_index, const Tile& tile) {
-        this->tiles_[buffer_index] = tile;
-        return *this;
-    }
+    CircularBufferConfig& set_tile_dims(uint8_t buffer_index, const Tile& tile);
 
-    const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> &tiles() const {
-        return this->tiles_;
-    }
+    const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles() const;
 
-    uint32_t total_size() const { return this->total_size_; }
+    uint32_t total_size() const;
 
-    std::optional<uint32_t> globally_allocated_address() const { return this->globally_allocated_address_; }
+    std::optional<uint32_t> globally_allocated_address() const;
 
-    const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> &data_formats() const {
-        return this->data_formats_;
-    }
+    const std::unordered_set<uint8_t>& buffer_indices() const;
+    const std::unordered_set<uint8_t>& local_buffer_indices() const;
+    const std::unordered_set<uint8_t>& remote_buffer_indices() const;
 
-    const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> &page_sizes() const { return this->page_sizes_; }
-    const Buffer* shadow_global_buffer;
-   private:
-    void set_config(const std::map<uint8_t, tt::DataFormat> &data_format_spec) {
-        if (data_format_spec.size() > NUM_CIRCULAR_BUFFERS) {
-            TT_THROW(
-                "Only {} circular buffer slots are available but data formats are specified for {} indices",
-                NUM_CIRCULAR_BUFFERS,
-                data_format_spec.size());
-        }
+    const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats() const;
 
-        for (const auto &[buffer_index, data_format] : data_format_spec) {
-            if (buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
-                TT_THROW(
-                    "Buffer index ({}) exceeds max number of circular buffers per core ({})",
-                    buffer_index,
-                    NUM_CIRCULAR_BUFFERS);
-            }
-            this->data_formats_[buffer_index] = data_format;
-            this->buffer_indices_.insert(buffer_index);
-        }
-    }
+    const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes() const;
+
+    const Buffer* shadow_global_buffer{nullptr};
+
+    class Builder {
+    public:
+        static Builder LocalBuilder(CircularBufferConfig& parent, uint8_t buffer_index);
+        static Builder RemoteBuilder(CircularBufferConfig& parent, uint8_t buffer_index);
+
+        const Builder& set_data_format(tt::DataFormat data_format) const;
+
+        const Builder& set_total_size(uint32_t total_size) const;
+
+        const Builder& set_page_size(uint32_t page_size) const;
+
+        const Builder& set_tile_dims(const Tile& tile) const;
+
+    private:
+        Builder(CircularBufferConfig& parent, uint8_t buffer_index);
+
+        CircularBufferConfig& parent_;
+        uint8_t buffer_index_;
+    };
+
+    Builder index(uint8_t buffer_index);
+    Builder remote_index(uint8_t buffer_index);
+
+    friend bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
+    friend bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
+
+private:
+    void set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec);
+    void validate_total_size(uint32_t total_size);
 
     uint32_t total_size_ = 0;
     std::optional<uint32_t> globally_allocated_address_ = std::nullopt;
@@ -148,10 +97,18 @@ class CircularBufferConfig {
     std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> page_sizes_;
     std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> tiles_;
     std::unordered_set<uint8_t> buffer_indices_;
+    std::unordered_set<uint8_t> local_buffer_indices_;
+    std::unordered_set<uint8_t> remote_buffer_indices_;
     bool dynamic_cb_ = false;
     // `max_size_` is used to ensure that total size does not grow beyond associated buffer size
-    std::optional<uint32_t> max_size_ = std::nullopt;
+    // `buffer_size_` is tracked to enforce the old size assertions.
+    // Will be removed once tests are updated to respect the correct `max_size_` constraint
+    uint32_t max_size_ = 0;
+    uint32_t buffer_size_ = 0;
 };
+
+bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
+bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
 
 }  // namespace v0
 }  // namespace tt::tt_metal

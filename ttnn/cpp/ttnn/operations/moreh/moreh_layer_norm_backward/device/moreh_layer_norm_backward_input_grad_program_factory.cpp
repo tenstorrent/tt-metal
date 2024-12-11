@@ -134,23 +134,23 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},                            // output_grad(==dy)
-            {tt::CB::c_in1, in1_t},                            // input(==x)
-            {tt::CB::c_in2, in2_t},                            // mean
-            {tt::CB::c_in3, in3_t},                            // rstd
-            {tt::CB::c_in4, in4_t},                            // scaler
-            {tt::CB::c_in5, in5_t},                            // n_recip_n
-            {tt::CB::c_in6, in6_t},                            // gamma
-            {tt::CB::c_in7, in7_t},                            // mask_h_w
-            {tt::CB::c_out0, out0_t},                          // input_grad(==dx)
-            {tt::CB::c_intermed0, im0_t, intermed_cb_format},  // copy output_grad(==dy or dy * gamma)
-            {tt::CB::c_intermed1, im1_t, intermed_cb_format},  // output(==y)
-            {tt::CB::c_intermed2, im2_t, intermed_cb_format},  // Sum[dy]
-            {tt::CB::c_intermed3, im3_t, intermed_cb_format},  // Sum[y * dy]
-            {tt::CB::c_intermed4, im4_t, intermed_cb_format},  // rstd / n
-            {tt::CB::c_intermed5, im5_t, intermed_cb_format},
-            {tt::CB::c_intermed6, im6_t, intermed_cb_format},
-            {tt::CB::c_intermed7, im7_t, intermed_cb_format},
+            {tt::CBIndex::c_0, in0_t},                       // output_grad(==dy)
+            {tt::CBIndex::c_1, in1_t},                       // input(==x)
+            {tt::CBIndex::c_2, in2_t},                       // mean
+            {tt::CBIndex::c_3, in3_t},                       // rstd
+            {tt::CBIndex::c_4, in4_t},                       // scaler
+            {tt::CBIndex::c_5, in5_t},                       // n_recip_n
+            {tt::CBIndex::c_6, in6_t},                       // gamma
+            {tt::CBIndex::c_7, in7_t},                       // mask_h_w
+            {tt::CBIndex::c_16, out0_t},                     // input_grad(==dx)
+            {tt::CBIndex::c_24, im0_t, intermed_cb_format},  // copy output_grad(==dy or dy * gamma)
+            {tt::CBIndex::c_25, im1_t, intermed_cb_format},  // output(==y)
+            {tt::CBIndex::c_26, im2_t, intermed_cb_format},  // Sum[dy]
+            {tt::CBIndex::c_27, im3_t, intermed_cb_format},  // Sum[y * dy]
+            {tt::CBIndex::c_28, im4_t, intermed_cb_format},  // rstd / n
+            {tt::CBIndex::c_29, im5_t, intermed_cb_format},
+            {tt::CBIndex::c_30, im6_t, intermed_cb_format},
+            {tt::CBIndex::c_31, im7_t, intermed_cb_format},
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -166,8 +166,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         static_cast<uint32_t>(do_mask_h),
         static_cast<uint32_t>(do_mask_w)};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(input_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
@@ -191,10 +190,9 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "writer_moreh_layer_norm_backward_input_grad.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernels_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,

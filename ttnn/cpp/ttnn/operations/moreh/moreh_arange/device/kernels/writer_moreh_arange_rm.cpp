@@ -16,7 +16,7 @@ void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(4);
     uint32_t element_size = get_arg_val<uint32_t>(5);
 
-    constexpr uint32_t cb_out = tt::CB::c_out0;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     uint32_t num_bytes_per_tile = TILE_WIDTH * element_size;
@@ -40,7 +40,7 @@ void kernel_main() {
         uint32_t w_addr = get_write_ptr(cb_out);
 
 #ifdef OUTPUT_DTYPE_BFLOAT16
-        auto ptr = reinterpret_cast<uint16_t *>(w_addr);
+        auto ptr = reinterpret_cast<uint16_t*>(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
@@ -50,7 +50,7 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
-        auto ptr = reinterpret_cast<uint32_t *>(w_addr);
+        auto ptr = reinterpret_cast<uint32_t*>(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
@@ -60,7 +60,7 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
-        auto ptr = reinterpret_cast<uint32_t *>(w_addr);
+        auto ptr = reinterpret_cast<uint32_t*>(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;

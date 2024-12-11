@@ -12,6 +12,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_pcc,
     compare_equal,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import is_grayskull, skip_for_grayskull
 
 
@@ -268,7 +269,7 @@ def test_binary_subalpha_ttnn(input_shapes, alpha, device):
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -297,7 +298,7 @@ def test_binary_div_ttnn(accurate_mode, round_mode, input_shapes, device):
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -336,7 +337,7 @@ def test_binary_div_ttnn_opt(accurate_mode, round_mode, input_shapes, device):
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -361,7 +362,7 @@ def test_binary_div_scalar_ttnn(accurate_mode, round_mode, input_shapes, value, 
 
 
 @pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -486,6 +487,40 @@ def test_binary_remainder_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        [[1, 1, 3, 3], [1, 1, 3, 3]],
+    ],
+)
+@skip_for_grayskull("Unsupported for Grayskull")
+def test_shape_remainder(device, shapes):
+    torch.manual_seed(0)
+    high = 10
+    low = -10
+
+    torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.bfloat16) * (high - low) + low
+
+    high = 9
+    low = -9
+    torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.bfloat16) * (high - low) + low
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
 
 
 @pytest.mark.parametrize(
@@ -951,11 +986,110 @@ def test_binary_gcd_ttnn(input_shapes, device):
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_lcm_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
-    in_data2, input_tensor2 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
+    torch.manual_seed(213919)
+    in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
+    in_data2 = torch.randint(-80, 180, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.lcm)
     golden_tensor = golden_function(in_data1, in_data2)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 2, 32, 64, 64])),
+        (torch.Size([1, 3, 7, 29, 127])),
+        (torch.Size([1, 3, 2, 32])),
+        (torch.Size([1, 6, 49, 97])),
+        (torch.Size([1, 7, 320])),
+        (torch.Size([1, 49, 321])),
+        (torch.Size([4, 32])),
+        (torch.Size([49, 321])),
+    ),
+)
+def test_binary_prelu_ttnn(input_shapes, device):
+    in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16) * 200 - 100
+    channels = input_shapes[1]
+    in_data2 = torch.rand((channels,), dtype=torch.bfloat16) * 200 - 100
+
+    input_tensor1 = ttnn.from_torch(in_data1, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.prelu(input_tensor1, input_tensor2)
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.prelu)
+    golden_tensor = golden_function(in_data1, in_data2)
+
+    assert_with_pcc(golden_tensor, output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 2, 32, 64, 64])),
+        (torch.Size([1, 3, 7, 29, 127])),
+        (torch.Size([1, 3, 2, 32])),
+        (torch.Size([1, 6, 49, 97])),
+        (torch.Size([1, 7, 320])),
+        (torch.Size([1, 49, 321])),
+        (torch.Size([4, 32])),
+        (torch.Size([49, 321])),
+    ),
+)
+@pytest.mark.parametrize(
+    "scalar",
+    {-0.25, -2.7, 0.45, 6.4},
+)
+@skip_for_grayskull()
+def test_binary_prelu_scalar_ttnn(input_shapes, scalar, device):
+    in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16) * 200 - 100
+    input_tensor1 = ttnn.from_torch(in_data1, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.prelu(input_tensor1, scalar)
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.prelu)
+    golden_tensor = golden_function(in_data1, scalar)
+
+    assert_with_pcc(golden_tensor, output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 2, 32, 64, 64])),
+        (torch.Size([1, 3, 7, 29, 127])),
+        (torch.Size([1, 3, 2, 32])),
+        (torch.Size([1, 6, 49, 97])),
+        (torch.Size([1, 7, 320])),
+        (torch.Size([1, 49, 321])),
+        (torch.Size([4, 32])),
+        (torch.Size([49, 321])),
+    ),
+)
+@pytest.mark.parametrize(
+    "weight",
+    [
+        [-0.25],
+        [-2.7],
+        [0.45],
+        [6.4],
+        [2],
+        [-1],
+    ],
+)
+@skip_for_grayskull()
+def test_binary_prelu_1D_weight(input_shapes, weight, device):
+    in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16) * 200 - 100
+    input_tensor1 = ttnn.from_torch(in_data1, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.prelu(input_tensor1, weight)
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.prelu)
+    golden_tensor = golden_function(in_data1, weight)
+
+    assert_with_pcc(golden_tensor, output_tensor, 0.999)

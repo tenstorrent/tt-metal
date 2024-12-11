@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -14,9 +13,15 @@ namespace py = pybind11;
 namespace ttnn {
 namespace profiler {
 namespace detail {
-void ProfilerModule(py::module &m_profiler) {
-    m_profiler.def("start_tracy_zone",&tt::tt_metal::op_profiler::start_tracy_zone,
-            py::arg("source"), py::arg("functName"),py::arg("lineNum"), py::arg("color") = 0, R"doc(
+void ProfilerModule(py::module& m_profiler) {
+    m_profiler.def(
+        "start_tracy_zone",
+        &tt::tt_metal::op_profiler::start_tracy_zone,
+        py::arg("source"),
+        py::arg("functName"),
+        py::arg("lineNum"),
+        py::arg("color") = 0,
+        R"doc(
         Stop profiling op with tracy.
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                                    | Data type             | Valid range | Required |
@@ -28,7 +33,12 @@ void ProfilerModule(py::module &m_profiler) {
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_profiler.def("stop_tracy_zone",&tt::tt_metal::op_profiler::stop_tracy_zone, py::arg("name") = "", py::arg("color") = 0, R"doc(
+    m_profiler.def(
+        "stop_tracy_zone",
+        &tt::tt_metal::op_profiler::stop_tracy_zone,
+        py::arg("name") = "",
+        py::arg("color") = 0,
+        R"doc(
         Stop profiling op with tracy.
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                                    | Data type             | Valid range | Required |
@@ -63,8 +73,6 @@ void ProfilerModule(py::module &m_profiler) {
 
 }  // namespace detail
 
-void py_module(py::module& module) {
-   detail::ProfilerModule(module);
-}
+void py_module(py::module& module) { detail::ProfilerModule(module); }
 }  // namespace profiler
 }  // namespace ttnn
