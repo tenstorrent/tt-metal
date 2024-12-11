@@ -1063,13 +1063,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
-    if (not_pad_by_zero) {
-        uint32_t src1_cb_index = tt::CBIndex::c_1;
-        tt::tt_metal::CircularBufferConfig cb_src1_config =
-            tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src1_cb_index, cb_data_format}})
-                .set_page_size(src1_cb_index, align(stick_size_padded_aligned, hal.get_alignment(HalMemType::L1)));
-        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
-    }
+
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, stick_size_padded_aligned);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+
     if (stick_size_padded_front != 0) {
         uint32_t src2_cb_index = tt::CBIndex::c_2;
         tt::tt_metal::CircularBufferConfig cb_src2_config =
