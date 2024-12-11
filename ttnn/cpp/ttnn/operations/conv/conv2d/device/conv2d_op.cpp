@@ -76,7 +76,6 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
 ) {
     tt::tt_metal::Device* device = a.device();
     auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
-    tt::log_info(tt::LogOp, "Allocation Stats before Op: {}", stats);
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
         [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height, stats]
@@ -267,11 +266,25 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         use_non_tile_height);
 
     if(std::getenv("TT_DISABLE_CONV_L1_CHECK")==nullptr) {
+        tt::log_info(tt::LogOp, "Allocation Stats before Op: {}", this->pre_op_l1_allocation_size_bytes);
         program_with_cbs.program.set_pre_exec_callback([this, arch, input_dtype, weights_dtype, output_dtype, weights_shape, has_bias, device](const Program& program) {
             const uint32_t post_op_l1_stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
             auto actual_cb_size = program.get_max_cb_memory_usage(device);
 
-            auto [calc_output_size, calc_CB_size] = this->estimate_L1_usage(arch, input_dtype, weights_dtype, output_dtype, weights_shape, has_bias);
+            auto [calc_output_size, calc_CB_size] = estimate_L1_usage(
+                    arch, this->memory_config.memory_layout,
+                    input_dtype, weights_dtype, output_dtype,
+                    sliding_window_config, compute_kernel_config,
+                    block_config, parallelization_config,
+                    input_tensor_shape, weights_shape,
+                    output_channels, groups,
+                    Conv2dConfig{
+                        .enable_act_double_buffer=enable_act_double_buffer,
+                        .enable_weights_double_buffer=enable_weights_double_buffer,
+                        .enable_split_reader=enable_split_reader,
+                        .enable_subblock_padding=enable_subblock_padding
+                    },
+                    has_bias, use_non_tile_height);
             if(calc_CB_size > 0) {
                 if(calc_CB_size != actual_cb_size) {
                     tt::log_error("Calculated CB size {} does not match with the actual CB size {}",calc_CB_size,actual_cb_size);
@@ -286,285 +299,6 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         });
     }
     return program_with_cbs;
-}
-
-std::pair<uint32_t,uint32_t> OptimizedConvNew::estimate_L1_usage(tt::ARCH arch, const DataType input_dtype, const DataType weights_dtype, const DataType output_dtype, const tt::tt_metal::LegacyShape weights_shape, bool enable_bias) const {
-
-    auto output_shape = sliding_window_config.get_output_shape();
-    uint32_t batch_size = output_shape[0];
-    uint32_t conv_output_h = output_shape[1];
-    uint32_t conv_output_w = output_shape[2];
-
-    auto filter_hw = sliding_window_config.window_hw;
-    uint32_t input_channels = this->input_tensor_shape[3];
-    bool is_depthwise_conv = this->groups == input_channels && groups == output_channels;
-
-    uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_dtype));
-    uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
-    uint32_t bias_tile_size = 0;
-    if(enable_bias) {
-        bias_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
-    }
-    uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(output_dtype));
-
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(arch, compute_kernel_config);
-
-    uint32_t act_block_w_ntiles = this->block_config.act_block_w_ntiles;
-    uint32_t act_block_h_ntiles = this->block_config.act_block_h_ntiles;
-    uint32_t act_block_num_tiles = this->block_config.act_block_h_ntiles * act_block_w_ntiles;
-
-
-    uint32_t weight_matrix_height = weights_shape[2];
-    uint32_t weight_matrix_width = weights_shape[3];
-    uint32_t weight_matrix_height_ntiles = weight_matrix_height / TILE_HEIGHT;
-    uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
-
-    uint32_t per_core_out_matrix_width_ntiles = tt::div_up(this->parallelization_config.per_core_out_matrix_width, TILE_WIDTH);
-    uint32_t per_core_out_matrix_height_ntiles = tt::div_up(this->parallelization_config.per_core_out_matrix_height, TILE_HEIGHT);
-
-    uint32_t num_blocks_act_h_per_core =
-        (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
-    uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
-
-    if(this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED)
-    {
-
-        uint32_t conv_output_c_per_core = per_core_out_matrix_width_ntiles * TILE_WIDTH;
-
-        uint32_t output_size_per_core_in_bytes = per_core_out_matrix_width_ntiles * per_core_out_matrix_height_ntiles * tt::tile_size(datatype_to_dataformat_converter(this->dtype));
-
-        uint32_t act_block_num_bytes = act_block_num_tiles * input_tile_size;
-        uint32_t tilized_act_block_num_bytes = act_block_num_tiles * output_tile_size;
-
-
-        uint32_t weight_block_w_ntiles = per_core_out_matrix_width_ntiles;
-        uint32_t weight_block_num_tiles = weight_block_w_ntiles * act_block_w_ntiles; //act_block_w_ntiles == weight_block_h_ntiles
-        uint32_t weight_block_num_bytes = weight_block_num_tiles * weights_tile_size;
-
-        uint32_t bias_block_num_bytes = per_core_out_matrix_width_ntiles * bias_tile_size;
-
-        uint32_t out_block_num_tiles = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles;
-
-        uint32_t num_blocks_act_w = weight_matrix_height_ntiles / act_block_w_ntiles;
-
-        packer_l1_acc = packer_l1_acc && ((has_bias && num_blocks_act_w > 1) || (num_blocks_act_w > 2));
-
-        auto interm_dtype =
-            packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_dtype;
-
-        uint32_t partial_tile_size = tt::tile_size(datatype_to_dataformat_converter(interm_dtype));
-
-        uint32_t partials_block_num_bytes = out_block_num_tiles * partial_tile_size;
-
-
-        //CB 0
-        uint32_t cb0_size = tilized_act_block_num_bytes; tt::log_debug(tt::LogOp, "CB0 Size: {}", cb0_size);
-
-        //CB 1
-        uint32_t cb1_size = weight_block_num_bytes; tt::log_debug(tt::LogOp, "CB1 Size: {}", cb1_size);
-
-        //CB 2
-        uint32_t cb2_size = bias_block_num_bytes; tt::log_debug(tt::LogOp, "CB2 Size: {}", cb2_size);
-
-        //CB 5
-        uint32_t cb5_size = 64; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
-
-        //CB 6
-        uint32_t cb6_size = act_block_num_bytes; tt::log_debug(tt::LogOp, "CB6 Size: {}", cb6_size);
-
-        //CB 24
-        uint32_t cb24_size = partials_block_num_bytes;
-        if(interm_dtype == output_dtype) {
-            cb24_size = 0;
-        } else {
-            tt::log_debug(tt::LogOp, "CB24 Size: {}", cb24_size);
-        }
-        //CB 25
-        uint32_t cb25_size = tilized_act_block_num_bytes; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
-
-        uint32_t total_CB_size = cb0_size + cb1_size + cb2_size + cb5_size + cb6_size + cb24_size + cb25_size;
-
-        tt::log_debug(tt::LogOp, "Total CB Size: {}", total_CB_size);
-
-        return {output_size_per_core_in_bytes, total_CB_size};
-    } else if (this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        uint32_t output_size = 0;
-        if(this->use_non_tile_height){
-            uint32_t total_height = conv_output_h * conv_output_w * batch_size;
-            output_size = total_height / this->parallelization_config.num_cores_nhw * this->output_channels;
-        } else {
-            output_size = per_core_out_matrix_height_ntiles *
-                          per_core_out_matrix_width_ntiles *
-                          output_tile_size;
-        }
-
-        uint32_t bias_block_num_bytes = per_core_out_matrix_width_ntiles * bias_tile_size;
-
-        uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-
-        TT_FATAL(conv_act_c_blocks == 1, "Error: conv_act_c_blocks should be 1 for height sharding");
-        uint32_t weight_block_w_ntiles = per_core_out_matrix_width_ntiles;
-        uint32_t weight_block_h_ntiles = is_depthwise_conv ? act_block_h_ntiles : act_block_w_ntiles;
-
-
-        uint32_t act_block_cb_ntiles =  act_block_h_ntiles * act_block_w_ntiles;
-
-        uint32_t act_block_cb_size = act_block_cb_ntiles * input_tile_size;
-        uint32_t tilzed_act_cb_size = act_block_cb_ntiles * output_tile_size;
-
-        uint32_t output_block_ntiles = out_block_h_ntiles_padded * per_core_out_matrix_width_ntiles;
-
-        uint32_t num_blocks_act_w = weight_matrix_height_ntiles / act_block_w_ntiles;
-        uint32_t num_blocks_act_h = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
-        uint32_t in0_num_blocks_w =
-            num_blocks_act_w * conv_act_c_blocks;  // Fold outer c_block loop together with weight_block_num_tiles = 9
-
-        packer_l1_acc = packer_l1_acc && ((has_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
-
-        auto interm_dtype =
-            packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_dtype;
-
-        uint32_t partial_tile_size = tt::tile_size(datatype_to_dataformat_converter(interm_dtype));
-
-        uint32_t act_block_split_last_ntiles = 0;
-        uint32_t act_block_split_ntiles = act_block_cb_ntiles ;
-        if(this->enable_split_reader) {
-            uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles / block_config.out_subblock_h_ntiles;
-            uint32_t act_block_split_last_ntiles = act_block_cb_ntiles / 2;
-            uint32_t act_block_split_ntiles = act_block_cb_ntiles - act_block_split_last_ntiles;
-        }
-
-        if(this->enable_act_double_buffer) {
-            act_block_split_last_ntiles *= 2;
-            act_block_split_ntiles *= 2;
-        }
-        //CB 0
-        uint32_t cb0_size = act_block_split_ntiles * input_tile_size; tt::log_debug(tt::LogOp, "CB0 Size: {}", cb0_size);
-
-        //CB 1
-        uint32_t cb1_size =  weight_block_h_ntiles * weight_block_w_ntiles * weights_tile_size;
-        if(num_blocks_act_h > 1) {
-            cb1_size *= filter_hw.first;
-        }
-        if(this->enable_weights_double_buffer) {
-            cb1_size *= 2;
-        }
-        tt::log_debug(tt::LogOp, "CB1 Size: {}", cb1_size);
-
-
-        //CB 2
-        uint32_t cb2_size = bias_block_num_bytes; tt::log_debug(tt::LogOp, "CB2 Size: {}", cb2_size);
-
-        uint32_t cb5_size = 64; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
-
-        uint32_t cb7_size = 0;
-
-        cb7_size = act_block_split_last_ntiles * input_tile_size; tt::log_debug(tt::LogOp, "CB7 Size: {}", cb7_size);
-
-        //CB 24
-        uint32_t cb24_size = output_block_ntiles * partial_tile_size;
-        if(this->untilize_out==false && interm_dtype == output_dtype) {
-            cb24_size = 0;
-        }
-        if(is_depthwise_conv) {
-            cb24_size = output_tile_size;
-        }
-        if(cb24_size == 0) {
-            tt::log_debug(tt::LogOp, "CB24 Size: {}", cb24_size);
-        }
-        //CB 25
-        uint32_t cb25_size = tilzed_act_cb_size; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
-
-
-        uint32_t cb26_size = 0;
-        //CB26
-        if(this->untilize_out) {
-            cb26_size = weight_block_w_ntiles * output_tile_size; tt::log_debug(tt::LogOp, "CB26 Size: {}", cb26_size);
-        }
-
-        uint32_t cb27_size = 0;
-        if(is_depthwise_conv) {
-            cb27_size = output_tile_size;
-        }
-
-        return {output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb7_size + cb24_size + cb25_size + cb26_size + cb27_size};
-    } else if(this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        uint32_t output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
-
-        uint32_t bias_block_num_bytes = per_core_out_matrix_width_ntiles * bias_tile_size;
-
-        uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-
-        uint32_t weight_block_w_ntiles = per_core_out_matrix_width_ntiles;
-        uint32_t weight_block_h_ntiles = act_block_w_ntiles;
-
-
-        uint32_t tilized_act_block_cb_size =  act_block_h_ntiles * act_block_w_ntiles * output_tile_size ;
-        uint32_t row_major_act_cb_size =  act_block_h_ntiles * act_block_w_ntiles * input_tile_size ;
-
-        uint32_t output_block_ntiles = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles;
-
-        uint32_t num_blocks_act_w = weight_matrix_height_ntiles / act_block_w_ntiles;
-        uint32_t num_blocks_act_h = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
-        uint32_t in0_num_blocks_w =
-            num_blocks_act_w * conv_act_c_blocks;  // Fold outer c_block loop together with weight_block_num_tiles = 9
-
-        packer_l1_acc = packer_l1_acc && ((has_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
-
-        auto interm_dtype =
-            packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_dtype;
-
-        uint32_t partial_tile_size = tt::tile_size(datatype_to_dataformat_converter(interm_dtype));
-
-
-
-
-        //CB 0
-        uint32_t cb0_size = tilized_act_block_cb_size;
-        if(this->enable_act_double_buffer) {
-            cb0_size *= 2;
-        }
-        tt::log_debug(tt::LogOp, "CB0 Size: {}", cb0_size);
-
-        //CB 1
-        uint32_t cb1_size = weight_block_h_ntiles * weight_block_w_ntiles * weights_tile_size;
-        if(this->enable_weights_double_buffer) {cb1_size *= 2;}
-
-        tt::log_debug(tt::LogOp, "CB1 Size: {}", cb1_size);
-
-
-        //CB 2
-        uint32_t cb2_size = bias_block_num_bytes; tt::log_debug(tt::LogOp, "CB2 Size: {}", cb2_size);
-
-        //CB 5
-        uint32_t cb5_size = 64; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
-
-        //CB 6
-        uint32_t cb6_size = row_major_act_cb_size; tt::log_debug(tt::LogOp, "CB6 Size: {}", cb6_size);
-
-        //CB 24
-        uint32_t cb24_size = output_block_ntiles * partial_tile_size;
-        if(this->untilize_out==false && interm_dtype == output_dtype) {
-            cb24_size = 0;
-        } else {
-            tt::log_debug(tt::LogOp, "CB24 Size: {}", cb24_size);
-        }
-
-        //CB 25
-        uint32_t cb25_size = tilized_act_block_cb_size; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
-
-
-        uint32_t cb26_size = 0;
-        //CB26
-        if(this->untilize_out) {
-            cb26_size = weight_block_w_ntiles * output_tile_size; tt::log_debug(tt::LogOp, "CB26 Size: {}", cb26_size);
-        }
-
-        return{ output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb6_size + cb24_size + cb25_size + cb26_size};
-    }
-    return {0, 0};
-
 }
 
 operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {
