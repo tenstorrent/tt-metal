@@ -28,21 +28,13 @@ random.seed(0)
 
 parameters = {
     "nightly": {
-        "input_shape": [[197], [19]],
-        "input_a_dtype": [ttnn.float32],
+        "input_shape": [[1, 23, 40]],
+        "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     },
 }
-
-
-def mesh_device_fixture():
-    device = ttnn.open_device(device_id=0)
-    assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
-    yield (device, "Wormhole_B0")
-    ttnn.close_device(device)
-    del device
 
 
 # Invalidate vector is called during the generation phase where each vector will be passed in.
@@ -73,7 +65,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.floor)
+    golden_function = ttnn.get_golden_function(ttnn.logical_not)
     torch_output_tensor = golden_function(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
@@ -85,9 +77,8 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.floor(input_tensor_a, memory_config=output_memory_config)
-    # ToDo: Update it once the tensor layout support with rank < 2 is supported in mid of Jan
-    output_tensor = ttnn.to_torch(result, torch_rank=len(input_shape))
+    result = ttnn.logical_not(input_tensor_a, memory_config=output_memory_config)
+    output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

@@ -92,6 +92,7 @@ on:
           - eltwise.unary.log_sigmoid.log_sigmoid
           - eltwise.unary.logical_not.logical_not_
           - eltwise.unary.logical_not.logical_not
+          - eltwise.unary.logical_not.logical_not_forge
           - eltwise.unary.logical_not.logical_not_output
           - eltwise.unary.logical_not.logical_not_pytorch2
           - eltwise.unary.neg.neg_pytorch2
