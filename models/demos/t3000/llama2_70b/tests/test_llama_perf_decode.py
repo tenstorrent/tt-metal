@@ -129,7 +129,7 @@ def run_test_LlamaModel_end_to_end(
 
     ##### Prepare Inputs #####
     prev_pos = total_len - 1
-    tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs(tokens, prev_pos)
+    tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(tokens, prev_pos)
 
     ##### Compile Model #####
     logger.info("Compiling model")
@@ -320,7 +320,9 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
 
         ##### Prepare Inputs #####
         prev_pos = total_len - 1
-        tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs(tokens, prev_pos, mode="decode")
+        tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(
+            tokens, prev_pos, mode="decode"
+        )
 
         ##### Compile Model #####
         logger.info("Compiling model")
