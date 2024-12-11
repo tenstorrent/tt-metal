@@ -24,7 +24,8 @@ struct MatmulTest {
     ExpectedResult expected_result;
 };
 
-TEST(GPT2STest, Matmul) {
+// Matmul tests are based on GPT2-S model with batch size 64
+TEST(GPT2SBatch64Test, Matmul) {
     std::vector<MatmulTest> tests = {
         {{{64, 12, 64, 1024}, {64, 12, 1024, 64}, false, false}, ExpectedResult::OK},
         {{{64, 12, 1024, 64}, {64, 12, 1024, 64}, false, true}, ExpectedResult::OK},
