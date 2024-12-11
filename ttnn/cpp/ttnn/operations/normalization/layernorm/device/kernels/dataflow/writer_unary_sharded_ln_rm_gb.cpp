@@ -7,7 +7,20 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "debug/dprint.h"
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        // Note: TileSlice has different parameters on reader/writer kernels and these are not quite accurate. That may
+        // cause issues in terms of where data appears. But trying proper parameters caused errors in the dprint server.
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
@@ -72,6 +85,8 @@ void kernel_main() {
             noc_async_read(
                 gamma_noc_addr, l1_write_addr_gamma + mask_read_tile_offset_bytes, mask_read_tile_face_bytes);
             l1_write_addr_gamma += gamma_tile_bytes;
+            // DPRINT << "cb_gamma writer:" << ENDL();
+            // DPRINT_DATA1(( print_full_tile(cb_gamma, 0, true) ));
         }
         noc_async_read_barrier();
         cb_push_back(cb_gamma, block_w);
