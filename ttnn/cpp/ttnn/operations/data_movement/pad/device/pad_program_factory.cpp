@@ -1029,6 +1029,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     auto stick_size_padded = W_padded * a.element_size();
     auto stick_size_padded_front = front_pad[-1] * a.element_size();
     auto stick_size_padded_end = stick_size_padded - stick_size - stick_size_padded_front;
+    uint32_t stick_size_padded_aligned = align(stick_size_padded, hal.get_alignment(HalMemType::L1));
     uint32_t row_major_min_bytes = 16;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -1050,24 +1051,31 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
          num_sticks_padded_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
 
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     auto num_sticks = num_sticks_padded_per_core_group_1 > num_sticks_padded_per_core_group_2
                           ? num_sticks_padded_per_core_group_1
                           : num_sticks_padded_per_core_group_2;
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_sticks * stick_size_padded, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, stick_size_padded);
+        tt::tt_metal::CircularBufferConfig(num_sticks * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, stick_size_padded_aligned);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
-    if (not_pad_by_zero) {
-        uint32_t src1_cb_index = 1;
-        tt::tt_metal::CircularBufferConfig cb_src1_config =
-            tt::tt_metal::CircularBufferConfig(row_major_min_bytes, {{src1_cb_index, cb_data_format}})
-                .set_page_size(src1_cb_index, row_major_min_bytes);
-        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, stick_size_padded_aligned);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+
+    if (stick_size_padded_front != 0) {
+        uint32_t src2_cb_index = tt::CBIndex::c_2;
+        tt::tt_metal::CircularBufferConfig cb_src2_config =
+            tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src2_cb_index, cb_data_format}})
+                .set_page_size(src2_cb_index, stick_size_padded_aligned);
+        auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
     }
 
     Buffer* src0_buffer = a.buffer();
@@ -1104,13 +1112,15 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         (std::uint32_t)(stick_size_padded_end / row_major_min_bytes),
         (std::uint32_t)(stick_size_padded / row_major_min_bytes),
         (std::uint32_t)src_stick_size_is_power_of_two,
-        (std::uint32_t)src_stick_size_is_power_of_two ? src_log2_stick_size : stick_size};
+        (std::uint32_t)src_stick_size_is_power_of_two ? src_log2_stick_size : stick_size,
+        (std::uint32_t)stick_size_padded_aligned};
     std::vector<uint32_t> writer_ct_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)dst_is_dram,
         (std::uint32_t)stick_size_padded,
         (std::uint32_t)dst_stick_size_is_power_of_two,
-        (std::uint32_t)dst_stick_size_is_power_of_two ? dst_log2_stick_size : stick_size_padded};
+        (std::uint32_t)dst_stick_size_is_power_of_two ? dst_log2_stick_size : stick_size_padded,
+        (std::uint32_t)stick_size_padded_aligned};
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
