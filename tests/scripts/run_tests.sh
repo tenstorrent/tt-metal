@@ -261,6 +261,7 @@ frequent_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
     ./tests/scripts/tg/run_tg_frequent_tests.sh
 }
@@ -270,8 +271,9 @@ demos_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
-    ./tests/scripts/tg/run_tg_demo_tests.sh
+    ./tests/scripts/tg/run_tg_demo_tests.sh --model "$model"
 }
 
 # Run tg model perf tests
@@ -360,11 +362,11 @@ run_pipeline_tests() {
     elif [[ $pipeline_type == "unit_tg_device" ]]; then
         unit_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == "frequent_tg_device" ]]; then
-        frequent_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        frequent_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == "demos_tg_device" ]]; then
-        demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == *"model_perf_tg_device" ]]; then
-        model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == "ccl_perf_tg_device" ]]; then
         ./tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t tg
         ./tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t tg

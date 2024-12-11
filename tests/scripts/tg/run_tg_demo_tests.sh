@@ -7,16 +7,16 @@ run_tg_llama3_tests() {
 
   echo "LOG_METAL: Running run_tg_llama3_tests"
 
-  # Llama3.1-70B
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
-  # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   # Llama3.2-1B
   llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
   # Llama3.2-3B
   llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.1-8B
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   # Llama3.2-11B
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  # Llama3.1-70B
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
@@ -46,11 +46,17 @@ run_tg_falcon7b_tests() {
 }
 
 run_tg_demo_tests() {
-  # Run llama3 tests
-  run_tg_llama3_tests
 
-  # Run Falcon7B tests
-  run_tg_falcon7b_tests
+  if [[ "$1" == "llama3" ]]; then
+    run_tg_llama3_tests
+
+  elif [[ "$1" == "falcon7b" ]]; then
+    run_tg_falcon7b_tests
+  else
+    echo "LOG_METAL: Unknown model type: $1"
+    return 1
+  fi
+
 }
 
 fail=0
@@ -71,11 +77,26 @@ main() {
     exit 1
   fi
 
+  # Parse the arguments
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --model)
+        model=$2
+        shift
+        ;;
+      *)
+        echo "Unknown option: $1"
+        exit 1
+        ;;
+    esac
+    shift
+  done
+
   # Run all tests
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
 
-  run_tg_demo_tests
+  run_tg_demo_tests "$model"
 
   if [[ $fail -ne 0 ]]; then
     exit 1

@@ -9,9 +9,10 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "TG Llama3 demo tests", arch: wormhole_b0, cmd: run_tg_llama3_tests, timeout: 90, owner_id: U03PUAKE719}, # Miguel Tairum
-          { name: "TG Falcon7b demo tests", arch: wormhole_b0, cmd: run_tg_falcon7b_tests, timeout: 30, owner_id: U05RWH3QUPM}, #Salar Hosseini
+          { name: "TG Llama3 demo tests",arch: wormhole_b0, model: 'llama3', timeout: 90, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "TG Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 30, owner_id: U05RWH3QUPM}, #Salar Hosseini
         ]
+    args: '--tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode ""'
     name: ${{ matrix.test-group.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
@@ -41,5 +42,5 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          source ${{ github.workspace }}/tests/scripts/tg/run_tg_demo_tests.sh
-          ${{ matrix.test-group.cmd }}
+          source ${{ github.workspace }}/tests/scripts/run_tests.sh
+          ${{ args }} --model ${{ matrix.test-group.model }}
