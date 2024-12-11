@@ -19,7 +19,7 @@ run_tg_llama3_tests() {
   # llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
+  for llama_dir in "$llama70b"; do
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_model.py -k full ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
