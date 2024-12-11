@@ -93,121 +93,30 @@ void memory::process_spans(
 // Used for kernels (not firmware)
 // Spans get packed for kernels so they can be loaded in one NOC transaction
 // A symbol at the end of the text segment allows the FW to find the data segment to copy into place
-void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_start) {
-    std::printf("text_start=%lx data_start=%lx\n", long(text_start), long(data_start));
-    uint64_t text_end, data_end;
-    if (text_start > data_start) {
-        text_end = std::numeric_limits<uint64_t>::max();
-        data_end = text_start;
-    } else {
-        text_end = data_start;
-        data_end = std::numeric_limits<uint64_t>::max();
-    }
-
-    TT_ASSERT(this->link_spans_.size() != 0);
-
-    std::vector<word_t> new_data;
-    new_data.resize(this->data_.size());
-    struct span new_span;
-    size_t new_len = 0;
-
-    bool first_text = true;
-    size_t offset = 0;
-    // Copy text spans.  May start after data span (ncrisc)
-    // TODO: Ideally would be just 1, sometimes init doesn't merge w/ text and we get 2
-    // TODO: (and init is just a jump to text and should be removed)
-    for (const auto& span : this->link_spans_) {
-        if (span.addr >= text_start && span.addr < text_end) {
-            if (first_text) {
-                new_span.addr = span.addr;
-                first_text = false;
-            } else if (span.addr > new_span.addr + new_len * sizeof(uint32_t)) {
-                uint64_t delta = span.addr - (new_span.addr + new_len * sizeof(uint32_t));
-                delta /= sizeof(uint32_t);
-                // Pad the prior span
-                new_data.resize(new_data.size() + delta);
-                new_len += delta;
-            }
-            std::printf(
-                "Copying text[%d]@%lu (%lx,%lu)\n",
-                int(&span - &link_spans_[0]),
-                long(offset),
-                long(span.addr),
-                long(span.len));
-            memcpy(&new_data[new_len], &this->data_[offset], span.len * sizeof(uint32_t));
-            new_len += span.len;
-        }
-
-        offset += span.len;
-    }
-    TT_ASSERT(!first_text);
-
-    // Copy data spans.  Should be just 1.  May start before text span (ncrisc)
-    offset = 0;
-    for (const auto& span : this->link_spans_) {
-        if (span.addr >= data_start && span.addr < data_end) {
-            std::printf(
-                "Copying data[%d]@%lu (%lx,%lu)\n",
-                int(&span - &link_spans_[0]),
-                long(offset),
-                long(span.addr),
-                long(span.len));
-            memcpy(&new_data[new_len], &this->data_[offset], span.len * sizeof(uint32_t));
-            new_len += span.len;
-        }
-        offset += span.len;
-    }
-
-    new_span.len = new_len;
-
+void memory::pack_data_into_text(std::uint64_t, std::uint64_t) {
     TT_ASSERT(this->link_spans_.size() != 0);
     TT_ASSERT(link_spans_.size() <= 2);
-    std::printf("text_addr=%lx\n", long(text_addr_));
 
     std::vector<word_t> new_data2;
 
-    bool text_is_second =
-        // link_spans_.size() == 2 && link_spans_[1].addr >= text_start && link_spans_[1].addr < text_end;
-        link_spans_.size() == 2 && link_spans_[1].addr == text_addr_;
+    bool text_is_second = link_spans_.size() == 2 && link_spans_[1].addr == text_addr_;
     auto const& text = link_spans_[text_is_second];
-    TT_ASSERT(text.addr >= text_start && text.addr < text_end && text.addr == text_addr_);
 
     span new_span2 = text;
 
-    offset = text_is_second ? link_spans_[0].len : 0;
-    std::printf(
-        "Copying new text[%d]@%lu (%lx,%lu)\n", int(text_is_second), long(offset), long(text.addr), long(text.len));
+    uint32_t offset = text_is_second ? link_spans_[0].len : 0;
     new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + text.len);
 
     if (link_spans_.size() == 2) {
         offset = text_is_second ? 0 : text.len;
         auto const& data = link_spans_[!text_is_second];
-        TT_ASSERT(data.addr >= data_start && data.addr < data_end);
-        std::printf(
-            "Copying new data[%d]@%lu (%lx,%lu)\n",
-            int(!text_is_second),
-            long(offset),
-            long(data.addr),
-            long(data.len));
         new_span2.len += data.len;
         new_data2.insert(new_data2.end(), &data_[offset], &data_[offset] + data.len);
-    }
-    std::printf(
-        "new_span=(%lx,%lu), new_span2=(%lx,%lu), new_data.size=%lu, new_data2.size=%lu\n",
-        (long)new_span.addr,
-        (long)new_span.len,
-        (long)new_span2.addr,
-        (long)new_span2.len,
-        (long)new_data.size(),
-        (long)new_data2.size());
-    if (false && !(new_span == new_span2 && new_data == new_data2)) {
-        std::abort();
     }
 
     this->link_spans_.resize(1);
     this->link_spans_[0] = new_span2;
     this->data_ = new_data2;
-    //    this->text_addr_ = new_span.addr;
 }
 
 }  // namespace ll_api

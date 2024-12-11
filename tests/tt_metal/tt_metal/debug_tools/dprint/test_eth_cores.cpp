@@ -66,20 +66,6 @@ static void RunTest(DPrintFixture* fixture, Device* device, bool active) {
         );
         fixture->RunProgram(device, program);
 
-        {
-            std::printf("gold='%s'\n", golden_output.c_str());
-            std::printf("output='");
-            FILE* f = fopen(DPrintFixture::dprint_file_name.c_str(), "r");
-            for (;;) {
-                int c = std::fgetc(f);
-                if (c == EOF) {
-                    break;
-                }
-                std::fputc(c, f);
-            }
-            fclose(f);
-            std::printf("'\n");
-        }
         // Check the print log against golden output.
         EXPECT_TRUE(
             FilesMatchesString(
