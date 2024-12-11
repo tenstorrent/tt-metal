@@ -384,9 +384,14 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     if (this_is_view) {
         return PerformView(tensor,shape, tile_first_dim, tile_second_dim);
     }
+    TensorSpec out_spec(
+        shape,
+        TensorLayout(tensor.dtype(), PageConfig(tensor.layout(), tensor.tensor_spec().tile()), tensor.memory_config()));
     if (shape.volume() != tensor.get_logical_volume()) {
         //This is completely incorrect but it is due to issue 15137 or issue 15558
-        bool tile_tensor_view_reshape_possible = layout == ttnn::Layout::TILE && tensor_shape[-1] == shape[-1];
+        auto padded_shape = out_spec.padded_shape();
+        bool tile_tensor_view_reshape_possible =
+            (layout == ttnn::Layout::TILE && padded_shape.rank() >= 2 && tensor.padded_shape()[-1] == padded_shape[-1]);
 
         if (tile_tensor_view_reshape_possible) {
             // This case has been allowed in the past though it means introducing padding values to the data
