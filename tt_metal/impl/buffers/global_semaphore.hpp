@@ -9,6 +9,7 @@
 
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_metal {
@@ -21,10 +22,18 @@ class Device;
 class GlobalSemaphore {
 public:
     GlobalSemaphore(
-        Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device,
+        const CoreRangeSet& cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     GlobalSemaphore(
-        Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device,
+        CoreRangeSet&& cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     GlobalSemaphore(const GlobalSemaphore&) = default;
     GlobalSemaphore& operator=(const GlobalSemaphore&) = default;
@@ -33,22 +42,30 @@ public:
     GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = default;
 
     static std::shared_ptr<GlobalSemaphore> create(
-        Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device,
+        const CoreRangeSet& cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     static std::shared_ptr<GlobalSemaphore> create(
-        Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        Device* device,
+        CoreRangeSet&& cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     Device* device() const;
 
     DeviceAddr address() const;
 
-    void reset_semaphore_value();
+    void reset_semaphore_value(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "initial_value");
     const auto attribute_values() const { return std::make_tuple(this->cores_, this->initial_value_); }
 
 private:
-    void setup_buffer(BufferType buffer_type);
+    void setup_buffer(BufferType buffer_type, tt::stl::Span<const SubDeviceId> sub_device_ids);
 
     // GlobalSemaphore is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
