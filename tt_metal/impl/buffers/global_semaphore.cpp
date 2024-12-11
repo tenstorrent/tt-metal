@@ -24,9 +24,10 @@ GlobalSemaphore::GlobalSemaphore(
     const CoreRangeSet& cores,
     uint32_t initial_value,
     BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) :
-    device_(device), cores_(cores), initial_value_(initial_value) {
-    this->setup_buffer(buffer_type, sub_device_ids);
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    Private) :
+    device_(device), cores_(cores) {
+    this->setup_buffer(initial_value, buffer_type, sub_device_ids);
 }
 
 GlobalSemaphore::GlobalSemaphore(
@@ -34,12 +35,14 @@ GlobalSemaphore::GlobalSemaphore(
     CoreRangeSet&& cores,
     uint32_t initial_value,
     BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) :
-    device_(device), cores_(std::move(cores)), initial_value_(initial_value) {
-    this->setup_buffer(buffer_type, sub_device_ids);
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    Private) :
+    device_(device), cores_(std::move(cores)) {
+    this->setup_buffer(initial_value, buffer_type, sub_device_ids);
 }
 
-void GlobalSemaphore::setup_buffer(BufferType buffer_type, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void GlobalSemaphore::setup_buffer(
+    uint32_t initial_value, BufferType buffer_type, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global semaphore can only be created for L1 buffer types");
@@ -58,8 +61,7 @@ void GlobalSemaphore::setup_buffer(BufferType buffer_type, tt::stl::Span<const S
         shard_parameters,
         std::nullopt);
 
-    this->host_buffer_ = std::vector<uint32_t>(num_cores, this->initial_value_);
-    this->reset_semaphore_value(sub_device_ids);
+    this->reset_semaphore_value(initial_value, sub_device_ids);
 }
 
 std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
@@ -68,7 +70,7 @@ std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
     uint32_t initial_value,
     BufferType buffer_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return std::make_shared<GlobalSemaphore>(device, cores, initial_value, buffer_type, sub_device_ids);
+    return std::make_shared<GlobalSemaphore>(device, cores, initial_value, buffer_type, sub_device_ids, Private());
 }
 std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
     Device* device,
@@ -76,23 +78,31 @@ std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
     uint32_t initial_value,
     BufferType buffer_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return std::make_shared<GlobalSemaphore>(device, std::move(cores), initial_value, buffer_type, sub_device_ids);
+    return std::make_shared<GlobalSemaphore>(
+        device, std::move(cores), initial_value, buffer_type, sub_device_ids, Private());
 }
 
 Device* GlobalSemaphore::device() const { return device_; }
 
 DeviceAddr GlobalSemaphore::address() const { return buffer_->address(); }
 
-void GlobalSemaphore::reset_semaphore_value(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     // Write the initial value to the semaphore to the device
     // Only block for the slow dispatch case
-    if (this->device_->using_slow_dispatch()) {
-        detail::WriteToBuffer(*this->buffer_, this->host_buffer_);
-        tt::Cluster::instance().l1_barrier(this->device_->id());
-    } else {
-        EnqueueWriteBuffer(
-            this->device_->command_queue(), this->buffer_, this->host_buffer_.data(), false, sub_device_ids);
-    }
+    auto* device = this->device_;
+    device->push_work([device,
+                       reset_value,
+                       sub_device_ids = std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end()),
+                       num_cores = this->cores_.num_cores(),
+                       buffer = this->buffer_] {
+        std::vector<uint32_t> host_buffer(num_cores, reset_value);
+        if (device->using_slow_dispatch()) {
+            detail::WriteToBuffer(*buffer, host_buffer);
+            tt::Cluster::instance().l1_barrier(device->id());
+        } else {
+            EnqueueWriteBuffer(device->command_queue(), buffer, host_buffer, false, sub_device_ids);
+        }
+    });
 }
 
 }  // namespace tt::tt_metal
