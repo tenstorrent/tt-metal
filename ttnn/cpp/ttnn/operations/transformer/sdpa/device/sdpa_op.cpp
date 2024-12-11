@@ -259,4 +259,19 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
         this->program_config);
 }
 
+operation::Hash ScaledDotProductAttention::compute_program_hash(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    bool is_chunked_prefill = this->chunk_start_idx.has_value();
+    return operation::hash_operation<ScaledDotProductAttention>(
+        this->scale,
+        this->output_mem_config,
+        this->program_config,
+        this->is_causal,
+        is_chunked_prefill,
+        this->compute_kernel_config,
+        input_tensors,
+        optional_input_tensors);
+}
+
 }  // namespace ttnn::operations::transformer

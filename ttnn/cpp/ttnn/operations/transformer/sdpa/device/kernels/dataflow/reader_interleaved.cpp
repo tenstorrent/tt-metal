@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -58,7 +57,7 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chunk_start_t = get_arg_val<uint32_t>(argidx++);
+    const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(argidx++);
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -126,7 +125,6 @@ void kernel_main() {
         const uint32_t mask_batch_offset = nb * Sqt * Skt;
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                // DPRINT << "q_iter: " << q_iter << ENDL();
                 uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
                 uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
@@ -163,8 +161,9 @@ void kernel_main() {
 
                 cb_push_back(cb_q_in, q_chunk_tiles);
 
-                // DPRINT << "q_chunk: " << q_chunk << "\n";
-
+                if constexpr (is_chunked) {
+                    q_chunk = chunked_q_chunk_offset + q_chunk;
+                }
                 uint32_t q_low_idx =
                     q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                 uint32_t q_high_idx;
@@ -173,14 +172,6 @@ void kernel_main() {
                 } else {
                     q_high_idx = Skt;
                 }
-                if constexpr (is_chunked) {
-                    // Add the chunk offset to the low and high indices
-                    q_low_idx = chunk_start_t + q_low_idx;
-                    q_high_idx = chunk_start_t + q_high_idx;
-                }
-
-                // DPRINT << "q_low_idx: " << q_low_idx << ENDL();
-                // DPRINT << "q_high_idx: " << q_high_idx << ENDL();
 
                 const uint32_t kv_head = nq / q_heads_per_kv;
                 const uint32_t kv_head_offset = kv_head * Skt * DHt;
@@ -190,7 +181,6 @@ void kernel_main() {
                     const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                     const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
                     const uint32_t k_start_tile_id = kv_batch_offset + kv_head_offset + k_chunk * Sk_chunk_t * DHt;
-                    // DPRINT << "READER: k_chunk: " << k_chunk << ENDL();
 
                     if constexpr (is_chunked) {
                         // Use page table to read K chunk
@@ -240,7 +230,6 @@ void kernel_main() {
                         cb_push_back(cb_k_in, k_chunk_tiles);
                     }
 
-                    // DPRINT << "READER: done with k_chunk: " << k_chunk << ENDL();
                     if constexpr (use_provided_mask) {
                         // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
                         // Q-range = [q_low, q_high)
@@ -314,11 +303,8 @@ void kernel_main() {
                         noc_async_read_barrier();
                         cb_push_back(cb_v_in, k_chunk_tiles);
                     }
-
-                    // DPRINT << "READER: done with v_chunk: " << k_chunk << ENDL();
                 }
             }
         }
     }
-    // DPRINT << "READER: done" << ENDL();
 }

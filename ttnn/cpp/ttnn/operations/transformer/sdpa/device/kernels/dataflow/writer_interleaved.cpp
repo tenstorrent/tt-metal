@@ -50,7 +50,6 @@ void fill_diagonal_tile(uint32_t cb_id, uint32_t tile_id, uint32_t partial_val) 
 
     fill_tile<tile_bytes>(cb_id, tile_id, 0);
 
-    // DPRINT << "Fill partial tile" << ENDL();
     const uint16_t datum_val = partial_val >> 16;
     volatile tt_l1_ptr uint16_t* uint16_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
@@ -215,12 +214,6 @@ void kernel_main() {
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                     uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
 
-                    // if constexpr (is_chunked) {
-                    //     q_low_idx = chunk_start_t + q_low_idx;
-                    //     q_high_idx = chunk_start_t + q_high_idx;
-                    //     q_chunk = chunk_start_t_in_q_chunks + q_chunk;
-                    // }
-
                     for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                         const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                         const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
@@ -233,7 +226,6 @@ void kernel_main() {
                         if (!(q_low_idx >= k_high_idx)) {
                             generate_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, q_chunk, k_chunk);
                         }
-                        // DPRINT << "WRITER: done with k_chunk: " << k_chunk << ENDL();
                     }
                 }
 

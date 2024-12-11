@@ -80,8 +80,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     tt::log_debug("k_num_chunks: {}", k_num_chunks);
     tt::log_debug("NKH: {}", NKH);
 
-    uint32_t chunk_start_t = 0;
-    uint32_t chunk_start_t_in_q_chunks = 0;
+    // In chunked prefill mode, the offset of Q in terms of Q chunks
+    uint32_t chunked_q_chunk_offset = 0;
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
     uint32_t max_blocks_per_seq = 0;
@@ -90,8 +90,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
 
     if (is_chunked) {
-        chunk_start_t = chunk_start_idx.value() / TILE_HEIGHT;  // Q offset in tiles
-        chunk_start_t_in_q_chunks = chunk_start_idx.value() / q_chunk_size;
+        chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
         const auto& page_table_tensor = page_table.value();
         block_size = k_shape[2];  // K's sequence dimension represents block size
         block_size_t = block_size / TILE_HEIGHT;
@@ -107,15 +106,14 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             "page table page size in bytes must be a multiple of 32 due to address alignment");
     }
     // Log page table info
-    tt::log_info("is_chunked: {}", is_chunked);
+    tt::log_debug("is_chunked: {}", is_chunked);
     if (is_chunked) {
-        tt::log_info("chunk_start_t: {}", chunk_start_t);
-        tt::log_info("block_size: {}", block_size);
-        tt::log_info("block_size_t: {}", block_size_t);
-        tt::log_info("max_blocks_per_seq: {}", max_blocks_per_seq);
-        tt::log_info("page_table_stick_size: {}", page_table_stick_size);
-        tt::log_info("page_table_is_dram: {}", page_table_is_dram);
-        tt::log_info("page_table_df: {}", page_table_df);
+        tt::log_debug("block_size: {}", block_size);
+        tt::log_debug("block_size_t: {}", block_size_t);
+        tt::log_debug("max_blocks_per_seq: {}", max_blocks_per_seq);
+        tt::log_debug("page_table_stick_size: {}", page_table_stick_size);
+        tt::log_debug("page_table_is_dram: {}", page_table_is_dram);
+        tt::log_debug("page_table_df: {}", page_table_df);
     }
 
     Program program = CreateProgram();
@@ -538,7 +536,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunk_start_t});
+             chunked_q_chunk_offset});
         SetRuntimeArgs(
             program,
             writer_kernels_id,
@@ -551,7 +549,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunk_start_t_in_q_chunks});
+             chunked_q_chunk_offset});
         SetRuntimeArgs(
             program,
             compute_kernels_id,
@@ -563,7 +561,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunk_start_t});
+             chunked_q_chunk_offset});
     }
 
     auto override_runtime_arguments_callback =
@@ -604,13 +602,10 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             uint32_t out_addr = out0_buffer->address();
 
             uint32_t page_table_addr = 0;
-            uint32_t chunk_start_t = 0;
-            uint32_t chunk_start_t_in_q_chunks = 0;
+            uint32_t chunked_q_chunk_offset = 0;
             if (is_chunked) {
                 page_table_addr = optional_input_tensors.at(1).value().buffer()->address();
-                chunk_start_t = static_cast<const ScaledDotProductAttention*>(operation)->chunk_start_idx.value() /
-                                TILE_HEIGHT;  // Q offset in tiles
-                chunk_start_t_in_q_chunks =
+                chunked_q_chunk_offset =
                     static_cast<const ScaledDotProductAttention*>(operation)->chunk_start_idx.value() / q_chunk_size;
             }
 
@@ -654,12 +649,12 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                 reader_args[2] = v_addr;
                 reader_args[3] = mask_addr;
                 reader_args[4] = page_table_addr;
-                reader_args[12] = chunk_start_t;
+                reader_args[12] = chunked_q_chunk_offset;
 
                 writer_args[0] = out_addr;
-                writer_args[8] = chunk_start_t;
+                writer_args[8] = chunked_q_chunk_offset;
 
-                compute_args[7] = chunk_start_t;
+                compute_args[7] = chunked_q_chunk_offset;
             }
         };
 

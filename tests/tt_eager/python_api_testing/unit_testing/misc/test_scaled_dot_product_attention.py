@@ -73,7 +73,7 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q, tt_K, tt_V, is_causal=True, program_config=program_config, compute_kernel_config=compute_kernel_config
     )
-    tt_back = tt_back.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_back = ttnn.to_torch(tt_back)
 
     K_repeated = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
     V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
@@ -238,7 +238,7 @@ def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dt
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
-    tt_back = tt_back.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_back = ttnn.to_torch(tt_back)
 
     if nkv > 1 and nkv != nh:
         assert nh % nkv == 0
@@ -305,19 +305,13 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
 # @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
-# @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
-# @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
-@pytest.mark.parametrize("q_chunk_size", [64, 128])
-@pytest.mark.parametrize("k_chunk_size", [64, 128])
+@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
 @pytest.mark.parametrize("prefill_chunk_size", [1024, 2048])
 @pytest.mark.parametrize("page_block_size", [64, 128])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
-    (
-        [1, 1, 1, 16 * 1024, 32],  # Llama2-70B
-        # [1, 16, 1, 2048, 64],  # Falcon-40B
-        # [1, 71, 1, 2048, 64],  # Falcon-7B
-    ),
+    ([1, 8, 1, 16 * 1024, 128],),  # Llama2-70B
 )
 def test_sdpa_chunked(
     device,
@@ -332,8 +326,8 @@ def test_sdpa_chunked(
     page_block_size,
     q_dtype,
     k_dtype,
+    use_program_cache,
     use_high_precision_compute=False,
-    use_program_cache=False,
 ):
     for _ in range(2):
         run_test_chunked_sdpa(
@@ -352,6 +346,11 @@ def test_sdpa_chunked(
             use_high_precision_compute,
         )
 
+    # Print number of program cache entries
+    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
+        device.num_program_cache_entries()
+    )
+
 
 def run_test_chunked_sdpa(
     device,
@@ -369,7 +368,7 @@ def run_test_chunked_sdpa(
     use_high_precision_compute,
 ):
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(1, 1),
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -438,23 +437,12 @@ def run_test_chunked_sdpa(
         return paged_cache_back
 
     # Check that we can convert from normal to paged to normal
-    assert torch.allclose(unpage_cache(page_cache(K)), K)
-    assert torch.allclose(unpage_cache(page_cache(V)), V)
+    assert torch.allclose(unpage_cache(page_cache(K)), K), "K is not equal to unpage_cache(page_cache(K))"
+    assert torch.allclose(unpage_cache(page_cache(V)), V), "V is not equal to unpage_cache(page_cache(V))"
 
     tt_paged_K = ttnn.Tensor(page_cache(K), k_dtype).to(ttnn.TILE_LAYOUT).to(device)
     tt_paged_V = ttnn.Tensor(page_cache(V), k_dtype).to(ttnn.TILE_LAYOUT).to(device)
     page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
-
-    # tt_K = ttnn.Tensor(K, k_dtype).to(ttnn.TILE_LAYOUT).to(device)
-    # tt_V = ttnn.Tensor(V, k_dtype).to(ttnn.TILE_LAYOUT).to(device)
-
-    # # TODO: Chunk Q
-    # tt_Q = ttnn.Tensor(Q, q_dtype).to(ttnn.TILE_LAYOUT).to(device)
-
-    # tt_back = ttnn.transformer.scaled_dot_product_attention(
-    #     tt_Q, tt_K, tt_V, is_causal=True, program_config=program_config, compute_kernel_config=compute_kernel_config
-    # )
-    # tt_back = tt_back.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     for chunk_idx in range(num_prefill_chunks):
         # Chunk Q
@@ -472,13 +460,7 @@ def run_test_chunked_sdpa(
             compute_kernel_config=compute_kernel_config,
         )
         tt_back = tt_back.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-
-        # tt_chunk = tt_back[:, :, chunk_idx * prefill_chunk_size : (chunk_idx + 1) * prefill_chunk_size]
         gt_chunk = gt[:, :, chunk_idx * prefill_chunk_size : (chunk_idx + 1) * prefill_chunk_size]
-        out_pass, out_pcc = comp_pcc(gt_chunk, tt_back, 0.994)
+        out_pass, out_pcc = comp_pcc(gt_chunk, tt_back, 0.998)
         logger.debug(f"python vs pytorch: {out_pcc}")
         assert out_pass
-
-    # out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
-    # logger.debug(f"python vs pytorch: {out_pcc}")
-    # assert out_pass
