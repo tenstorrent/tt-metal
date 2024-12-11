@@ -41,9 +41,13 @@ DeviceAddr get_global_semaphore_address(const std::shared_ptr<GlobalSemaphore>& 
 }
 
 void reset_global_semaphore_value(
-    const std::shared_ptr<GlobalSemaphore>& global_semaphore, const std::vector<SubDeviceId>& sub_device_ids) {
+    const std::shared_ptr<GlobalSemaphore>& global_semaphore,
+    uint32_t reset_value,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto* device = global_semaphore->device();
-    device->push_work([global_semaphore, sub_device_ids] { global_semaphore->reset_semaphore_value(sub_device_ids); });
+    device->push_work([global_semaphore, reset_value, sub_device_ids] {
+        global_semaphore->reset_semaphore_value(reset_value, sub_device_ids);
+    });
 }
 
 MultiDeviceGlobalSemaphore create_global_semaphore(
@@ -82,9 +86,11 @@ std::vector<DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSema
 }
 
 void reset_global_semaphore_value(
-    const MultiDeviceGlobalSemaphore& global_semaphore, const std::vector<SubDeviceId>& sub_device_ids) {
+    const MultiDeviceGlobalSemaphore& global_semaphore,
+    uint32_t reset_value,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     for (const auto& global_semaphore : global_semaphore.global_semaphores) {
-        reset_global_semaphore_value(global_semaphore, sub_device_ids);
+        reset_global_semaphore_value(global_semaphore, reset_value, sub_device_ids);
     }
 }
 

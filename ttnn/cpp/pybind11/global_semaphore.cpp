@@ -57,15 +57,20 @@ void py_module(py::module& module) {
 
     module.def(
         "reset_global_semaphore_value",
-        py::overload_cast<const std::shared_ptr<GlobalSemaphore>&, const std::vector<SubDeviceId>&>(
-            &reset_global_semaphore_value),
+        [](const std::shared_ptr<GlobalSemaphore>& global_semaphore,
+           uint32_t reset_value,
+           const std::vector<SubDeviceId>& sub_device_ids) {
+            ttnn::global_semaphore::reset_global_semaphore_value(global_semaphore, reset_value, sub_device_ids);
+        },
         py::arg("global_semaphore"),
+        py::arg("reset_value"),
         py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
         R"doc(
             Reset the value of the global semaphore.
 
             Args:
                 global_semaphore (GlobalSemaphore): The global semaphore object.
+                reset_value (int): The value to reset the global semaphore to.
                 sub_device_ids (List[ttnn.SubDeviceIds]): Sub-device IDs to wait on before writing the global semaphore value to device.
                 Defaults to waiting on all sub-devices.
             )doc");
@@ -111,15 +116,20 @@ void py_module(py::module& module) {
 
     module.def(
         "reset_global_semaphore_value",
-        py::overload_cast<const MultiDeviceGlobalSemaphore&, const std::vector<SubDeviceId>&>(
-            &reset_global_semaphore_value),
+        [](const MultiDeviceGlobalSemaphore& global_semaphore,
+           uint32_t reset_value,
+           const std::vector<SubDeviceId>& sub_device_ids) {
+            ttnn::global_semaphore::reset_global_semaphore_value(global_semaphore, reset_value, sub_device_ids);
+        },
         py::arg("global_semaphore"),
+        py::arg("reset_value"),
         py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
         R"doc(
             Reset the value of the global semaphore.
 
             Args:
                 global_semaphore (GlobalSemaphore): The global semaphore object.
+                reset_value (int): The value to reset the global semaphore to.
                 sub_device_ids (List[ttnn.SubDeviceIds]): Sub-device IDs to wait on before writing the global semaphore value to device.
             )doc");
 }
