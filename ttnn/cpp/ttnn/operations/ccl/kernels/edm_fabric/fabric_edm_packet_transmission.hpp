@@ -181,14 +181,14 @@ tt::fabric::SendStatus forward_payload_to_downstream_edm(
     tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface
     ) {
     DPRINT << "Fwding pkt to downstream\n";
-    // SHOULD BE ABLE TO ASSERT ON THIS SINCE WE CHECK FOR THIS IN THE CALLER
-    // TODO: PERF
+    // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
     bool safe_to_send = downstream_edm_interface.consumer_has_space();
     if (!safe_to_send) {
         return tt::fabric::SendStatus::NOT_SENT;
     }
 
-    // print_pkt_header(packet_header);
+    // This is a good place to print the packet header for debug if you are trying to inspect packets
+    // because it is before we start manipulating the header for forwarding
     update_packet_header_for_next_hop(packet_header);
 
     downstream_edm_interface.send_payload_blocking_from_address(
@@ -198,9 +198,6 @@ tt::fabric::SendStatus forward_payload_to_downstream_edm(
     return tt::fabric::SendStatus::SENT_PAYLOAD_AND_SYNC;
 }
 
-void execute_chip_multicast_to_local_chip(volatile tt::fabric::PacketHeader *const packet_start) {
-    ASSERT(false);
-}
 
 bool packet_must_be_consumed_locally(volatile tt::fabric::PacketHeader const& packet_header) {
     switch (packet_header.chip_send_type) {

@@ -13,8 +13,8 @@
 #include "eth_l1_address_map.h"
 
 namespace ttnn {
-namespace ccl{
-namespace all_gather_detail{
+namespace ccl {
+namespace all_gather_detail {
 
 AllGatherV2 create_all_gather_struct(
     const Tensor& input_tensor,
@@ -23,18 +23,22 @@ AllGatherV2 create_all_gather_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<Device*>& devices,
     const ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore_handles
-) {
+    const std::vector<GlobalSemaphore>& semaphore_handles,
+    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) {
     uint32_t num_devices = devices.size();
 
     std::optional<Device*> forward_device = std::nullopt;
     std::optional<Device*> backward_device = std::nullopt;
     const GlobalSemaphore* semaphore_handle = nullptr;
-    uint32_t device_index = 0; // Initialize device index
+    bool persistent_fabric = fabric_handle.has_value();
+    uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == input_tensor.device()) {
             device_index = i;
-            semaphore_handle = &semaphore_handles.at(i);  // Get raw pointer
+            if (!persistent_fabric) {
+                semaphore_handle = &semaphore_handles.at(i);  // Get raw pointer
+            }
             if (i != 0) {
                 backward_device = devices.at(i - 1);
             }
@@ -45,12 +49,22 @@ AllGatherV2 create_all_gather_struct(
     }
 
     return ttnn::AllGatherV2{
-        forward_device, backward_device, dim, num_links, num_devices, device_index, memory_config.value_or(input_tensor.memory_config()), topology, *semaphore_handle};
+        forward_device,
+        backward_device,
+        dim,
+        num_links,
+        num_devices,
+        device_index,
+        memory_config.value_or(input_tensor.memory_config()),
+        topology,
+        semaphore_handle == nullptr ? std::optional<GlobalSemaphore>{std::nullopt} : *semaphore_handle,
+        sub_device_id_map,
+        fabric_handle};
 }
-} // namespace all_gather_v2_detail
-} // namespace ccl
+}  // namespace all_gather_detail
+}  // namespace ccl
 
-void AllGatherV2::validate(const std::vector<Tensor> &input_tensors) const {
+void AllGatherV2::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].get_layout();
@@ -62,15 +76,19 @@ void AllGatherV2::validate(const std::vector<Tensor> &input_tensors) const {
     // Buffer sizes also need to take this aligned page size into consideration
     // TODO: Validate ring
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr , "Operands to all_gather need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
-    TT_FATAL(this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y, "Worker cores used by links are parallelizaed over rows");
+    TT_FATAL(
+        this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
+        "Worker cores used by links are parallelizaed over rows");
 
-    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-        "Unsupported memory layout {}.", input_tensor.memory_config().memory_layout);
+    TT_FATAL(
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        "Unsupported memory layout {}.",
+        input_tensor.memory_config().memory_layout);
 
     // Sharding Config checks
     bool input_sharded = input_tensor.is_sharded();
@@ -79,47 +97,53 @@ void AllGatherV2::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<ttnn::SimpleShape> AllGatherV2::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto shape = input_tensors[0].get_padded_shape(); // TODO: Replace with get_logical_shape()
+std::vector<ttnn::SimpleShape> AllGatherV2::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    auto shape = input_tensors[0].get_padded_shape();  // TODO: Replace with get_logical_shape()
     shape[this->dim] *= this->ring_size;
     return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
 }
 
-std::vector<Tensor> AllGatherV2::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+std::vector<Tensor> AllGatherV2::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto output_tensors = std::vector<Tensor>();
     output_tensors.reserve(1);
     auto tile = input_tensor.get_tensor_spec().tile();
-    if(this->output_mem_config.is_sharded()) {
+    if (this->output_mem_config.is_sharded()) {
         output_tensors.push_back(create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
             input_tensor.get_dtype(),
             input_tensor.get_layout(),
             input_tensor.device(),
             this->output_mem_config,
-            tile
-            ));
+            tile));
     } else {
-        output_tensors = operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, tile);
+        output_tensors = operation::generic_create_output_tensors(
+            *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, tile);
     }
     log_debug(tt::LogOp, "DEBUG: output_tensors[0] address: {}", output_tensors.at(0).buffer()->address());
     return output_tensors;
 }
 
-operation::ProgramWithCallbacks AllGatherV2::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks AllGatherV2::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
-    return all_gather_multi_core_with_workers_new(input_tensors[0], this->forward_device, this->backward_device, output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->topology, this->semaphore_handle);
-}
-
-const operation::Hash AllGatherV2::compute_program_hash(
-    const std::vector<Tensor> &input_tensors) const {
-    return operation::hash_operation<AllGatherV2>(
+    return all_gather_multi_core_with_workers_new(
+        input_tensors[0],
+        this->forward_device,
+        this->backward_device,
+        output_tensors[0],
         this->dim,
         this->num_links,
         this->ring_size,
         this->ring_index,
-        this->output_mem_config,
-        this->topology);
+        this->topology,
+        this->semaphore_handle,
+        this->fabric_handle);
+}
+
+const operation::Hash AllGatherV2::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+    return operation::hash_operation<AllGatherV2>(
+        this->dim, this->num_links, this->ring_size, this->ring_index, this->output_mem_config, this->topology);
 }
 
 namespace operations {
@@ -132,17 +156,19 @@ Tensor all_gather_v2(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const ttnn::ccl::Topology topology) {
-
+    const ttnn::ccl::Topology topology,
+    std::unordered_map<chip_id_t, SubDeviceId> sub_device_id_map,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle) {
     tt::log_info(tt::LogOp, "DEBUG: all_gather is called");
 
-    TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
+    TT_FATAL(
+        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_gather op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
 
-    if (num_devices == 2){
+    if (num_devices == 2) {
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
@@ -155,36 +181,59 @@ Tensor all_gather_v2(
     //         program = tt::tt_metal::Program{}; // Initialize each Program
     //         return &program;
     //     });
-    tt::log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
+    tt::log_debug(
+        tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     tt::log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     // create this semaphore for all cores since we don't know which core will be used for teardown draining
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
+    bool persistent_fabric_mode = fabric_handle.has_value();
     std::vector<GlobalSemaphore> semaphore_handles;
-    for (const auto& device : devices) {
-        auto handle = GlobalSemaphore::create(device, core_grid, 0);
-        tt::log_info(tt::LogOp, "Created semaphore handle at address {} for device {}",
-            handle->address(), device->id());
-        semaphore_handles.push_back(std::move(*handle));
+    if (!persistent_fabric_mode) {
+        for (const auto& device : devices) {
+            auto handle = GlobalSemaphore::create(device, core_grid, 0);
+            tt::log_info(
+                tt::LogOp, "Created semaphore handle at address {} for device {}", handle->address(), device->id());
+            semaphore_handles.push_back(std::move(*handle));
+        }
+
+        // HACK: assert every handle address is the same
+        TT_FATAL(
+            std::all_of(
+                semaphore_handles.begin(),
+                semaphore_handles.end(),
+                [&](const auto& handle) { return handle.address() == semaphore_handles.front().address(); }),
+            "[Hack] All semaphore handles should have the same address");
     }
 
-    // HACK: assert every handle address is the same
-    TT_FATAL(std::all_of(semaphore_handles.begin(), semaphore_handles.end(), [&](const auto& handle) {
-        return handle.address() == semaphore_handles.front().address();
-    }), "[Hack] All semaphore handles should have the same address");
-
     operation::launch_op(
-        [dim, num_links, num_devices, memory_config, devices, ccl_topology, semaphore_handles](
+        [dim,
+         num_links,
+         num_devices,
+         memory_config,
+         devices,
+         ccl_topology,
+         semaphore_handles,
+         sub_device_id_map,
+         fabric_handle](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                ttnn::ccl::all_gather_detail::create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices, ccl_topology, semaphore_handles),
+                ttnn::ccl::all_gather_detail::create_all_gather_struct(
+                    input_tensor,
+                    dim,
+                    num_links,
+                    memory_config,
+                    devices,
+                    ccl_topology,
+                    semaphore_handles,
+                    sub_device_id_map,
+                    fabric_handle),
                 {input_tensor});
         },
         {input_tensor},
@@ -202,11 +251,12 @@ Tensor all_gather_v2(
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const ttnn::ccl::Topology topology) {
-
     TT_FATAL(false, "not implemented");
     tt::log_info(tt::LogOp, "DEBUG: all_gather with cluster_axis is called");
 
-    TT_FATAL(topology == ttnn::ccl::Topology::Linear, "This all_gather API with cluster_axis is currently supported only for the Linear topology");
+    TT_FATAL(
+        topology == ttnn::ccl::Topology::Linear,
+        "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
 
@@ -226,20 +276,18 @@ Tensor all_gather_v2(
     // Make programs vector persist by moving it to heap or making it static
     static auto programs = std::vector<Program>(devices.size());
     auto program_ptrs = std::vector<Program*>(devices.size());
-    std::transform(programs.begin(), programs.end(), program_ptrs.begin(),
-        [](auto& program) {
-            program = tt::tt_metal::Program{}; // Initialize each Program
-            return &program;
-        });
+    std::transform(programs.begin(), programs.end(), program_ptrs.begin(), [](auto& program) {
+        program = tt::tt_metal::Program{};  // Initialize each Program
+        return &program;
+    });
     TT_FATAL(num_links == 1, "all_gather op is only supported for num_links == 1, but has {}", num_links);
     tt::log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     auto line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, program_ptrs, num_links);
     tt::log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-
-
     // operation::launch_op(
-    //     [dim, num_links, memory_config, mesh_view, cluster_axis, num_devices, topology, devices, program_ptrs, line_fabric](
+    //     [dim, num_links, memory_config, mesh_view, cluster_axis, num_devices, topology, devices, program_ptrs,
+    //     line_fabric](
     //         const std::vector<Tensor>& input_tensors,
     //         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     //         const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -261,17 +309,15 @@ Tensor all_gather_v2(
     //         };
 
     //         return operation::run(
-    //             ttnn::ccl::all_gather_detail::create_all_gather_struct(input_device_tensor, dim, num_links, memory_config, devices, topology, semaphore_handle),
-    //             {input_device_tensor});
+    //             ttnn::ccl::all_gather_detail::create_all_gather_struct(input_device_tensor, dim, num_links,
+    //             memory_config, devices, topology, semaphore_handle), {input_device_tensor});
     //     },
     //     {input_tensor},
     //     output_tensors);
     return output_tensors.at(0);
-
 }
 
-
-} // namespace ccl
-} // namespace operations
+}  // namespace ccl
+}  // namespace operations
 
 }  // namespace ttnn

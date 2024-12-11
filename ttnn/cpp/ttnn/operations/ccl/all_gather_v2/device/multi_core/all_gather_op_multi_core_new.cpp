@@ -62,7 +62,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore semaphore_handle) {
+    std::optional<GlobalSemaphore> semaphore_handle,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> &fabric_handle) {
+    bool persistent_fabric_mode = fabric_handle.has_value();
     tt::tt_metal::Program program{};
 
     // Sleep for ring_index * 5 seconds to stagger startup
@@ -73,13 +75,15 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     bool is_last_chip = ring_index == ring_size - 1;
     log_info(tt::LogOp, "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}", input_tensor.device()->id(), is_first_chip, is_last_chip);
 
-    auto local_device_fabric_interface = ccl::EdmLineFabricOpInterface (
-        device,
-        forward_device,
-        backward_device,
-        &program,
-        false,
-        num_links);
+    if (!persistent_fabric_mode) {
+        fabric_handle = ccl::EdmLineFabricOpInterface (
+            device,
+            forward_device,
+            backward_device,
+            &program,
+            false,
+            num_links);
+    }
 
     LineTopology line_topology(ring_size, ring_index);
 
@@ -211,11 +215,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
             line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD) ?
             std::nullopt :
-            std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_device_fabric_interface.uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
+            std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(fabric_handle->uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> backward_fabric_connection =
             line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD) ?
             std::nullopt :
-            std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(local_device_fabric_interface.uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
+            std::optional<ttnn::ccl::SenderWorkerAdapterSpec>(fabric_handle->uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         log_info(tt::LogOp, "DEBUG: line_index: {}, line_size: {}, forward_fabric_connection: {}", line_topology.line_index(), line_topology.line_size(), forward_fabric_connection.has_value());
         log_info(tt::LogOp, "DEBUG: line_index: {}, line_size: {}, backward_fabric_connection: {}", line_topology.line_index(), line_topology.line_size(), backward_fabric_connection.has_value());
@@ -252,26 +256,28 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
             mcast_dest_args
         ));
         // 2, mcast the semaphore to all dest for teardown
-        writer_cmd_stream.push_back(
-        ttnn::ccl::cmd::uops::fabric_multicast_semaphore_inc(
-            semaphore_handle,
-            ttnn::ccl::cmd::CclCommandAtomicInc{1},
-            drain_sync_core.x,
-            drain_sync_core.y,
-            mcast_dest_args
-        ));
-        if (link == 0) {
+        bool generate_teardown_commands = !persistent_fabric_mode && link == 0;
+        if (generate_teardown_commands) {
+            TT_FATAL(semaphore_handle.has_value(), "Internal error during all-=gather fatcory. Global semaphore for fabric teardown not properly initialized for non-persistent fabric mode");
+            writer_cmd_stream.push_back(
+            ttnn::ccl::cmd::uops::fabric_multicast_semaphore_inc(
+                semaphore_handle.value(),
+                ttnn::ccl::cmd::CclCommandAtomicInc{1},
+                drain_sync_core.x,
+                drain_sync_core.y,
+                mcast_dest_args
+            ));
             // 3, wait for n_chip*num_links number of semaphore at teardown semaphore address for first chip, and n_chip*num_links+1 for other chips
             writer_cmd_stream.push_back(
             ttnn::ccl::cmd::uops::local_semaphore_wait(
-                semaphore_handle,
+                semaphore_handle.value(),
                 is_first_chip ? ring_size * num_links : ring_size * num_links + 1
             ));
             // 4, send semaphore unicast to forward device except for the last chip
             if (!is_last_chip) {
                 writer_cmd_stream.push_back(
                 ttnn::ccl::cmd::uops::fabric_unicast_semaphore_inc(
-                    semaphore_handle,
+                    semaphore_handle.value(),
                     ttnn::ccl::cmd::CclCommandAtomicInc{1},
                     drain_sync_core.x,
                     drain_sync_core.y,
@@ -279,7 +285,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
                 ));
             }
             // 5, increment the termination semaphore for local device for local teardown only for the drain sync core
-            auto termination_infos = local_device_fabric_interface.generate_local_chip_fabric_termination_infos(device);
+            auto termination_infos = fabric_handle->generate_local_chip_fabric_termination_infos(device);
             for (auto& info : termination_infos) {
                 if (info.distance != 0) {
                     continue;
@@ -295,7 +301,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
             // 6. (drain sync core) reset semaphore to 0
             writer_cmd_stream.push_back(
             ttnn::ccl::cmd::uops::local_core_semaphore_set(
-                semaphore_handle,
+                semaphore_handle.value(),
                 0
             ));
         }
@@ -316,7 +322,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
         );
     }
 
-    local_device_fabric_interface.build_kernels();
+    if (!persistent_fabric_mode) {
+        fabric_handle->build_kernels();
+    }
 
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id,

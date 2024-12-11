@@ -6,7 +6,6 @@
 #include <iterator>
 
 #include "hostdevcommon/kernel_structs.h"
-#include "reflection.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -17,12 +16,10 @@
 #include "tt_metal/host_api.hpp"
 
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_metal/tt_stl/overloaded.hpp"
 
 #include <optional>
 #include <variant>
-#include <type_traits>
 
 namespace ttnn {
 namespace ccl {
@@ -355,15 +352,7 @@ size_t generate_ccl_wait_value_command_args(
     args_out.push_back(hdr.to_uint32());
     log_trace(tt::LogOp, "Emitting header only for for wait_value field. header.code={}, .inline_val0={}, .inline_val1={}",
         static_cast<int>(hdr.code), hdr.inline_value0, hdr.inline_value1);
-    // args_out.resize(args_out.size() + ttnn::ccl::cmd::CclCommandArg<arg_code>::size_in_words());
-    // auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<arg_code>::size_in_words();
-    // log_trace(tt::LogOp, "Emitting {} args for target_value field", num_words_for_args);
-    // static_assert(ttnn::ccl::cmd::CclCommandArg<arg_code>::size_in_words() == 1);
 
-    // ttnn::ccl::cmd::CclCommandArg<arg_code>::pack_to(
-    //     &args_out[args_out.size() - num_words_for_args],
-    //     wait_value_args.target_value
-    // );
     return 1;
 }
 
@@ -393,10 +382,8 @@ static size_t generate_ccl_atomic_inc_command_args(
     hdr.inline_value0 = static_cast<uint8_t>(true);
     hdr.inline_value1 = atomic_inc_args.value;
     TT_FATAL(atomic_inc_args.value < std::numeric_limits<uint8_t>::max(), "Atomic increment value is too large: {}", atomic_inc_args.value);
-    args_out.push_back(hdr.to_uint32());//static_cast<uint32_t>(arg_code));
+    args_out.push_back(hdr.to_uint32());
 
-    // args_out.resize(args_out.size() + ttnn::ccl::cmd::CclCommandArg<arg_code>::size_in_words());
-    // auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<arg_code>::size_in_words();
     log_trace(tt::LogOp, "Emitting header only for for atomic_inc field. header.code={}, .inline_val0={}, .inline_val1={}",
         static_cast<int>(hdr.code), hdr.inline_value0, hdr.inline_value1);
 
@@ -474,8 +461,6 @@ static size_t generate_ccl_address_info_command_args(
 
             auto const& semaphore_id = std::get<ttnn::ccl::cmd::CclCommandAddrSemaphoreId>(current_addr_type_args.second);
             header.inline_value2 = semaphore_id.semaphore_id;
-            // args_out.push_back(semaphore_id.semaphore_id);
-            // header.inline_value1 = semaphore_id.semaphore_id;
         } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrCircularBufferId>(current_addr_type_args.second)) {
             log_trace(tt::LogOp, "Emitting {} args for circular_buffer_id field at index {}", 1, header_index);
             header.inline_value0 = src_dest_type;
@@ -528,7 +513,7 @@ size_t generate_ccl_core_descriptor_info_command_args(
     if (requires_update_to_args) {
         const size_t header_index = args_out.size();
         log_trace(tt::LogOp, "Emitting {} args for core_descriptor field at index {}", 1, header_index);
-        args_out.push_back(0);//static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_ADDRESS_INFO));
+        args_out.push_back(0);
         ttnn::ccl::cmd::CclCommandArgHeader hdr;
         hdr.code = ttnn::ccl::cmd::CclCommandArgCode::SET_CORE_DESCRIPTOR_INFO;
         hdr.inline_value0 = static_cast<uint8_t>(current_core_descriptor.first);
@@ -621,7 +606,6 @@ void generate_ccl_command_stream_to_kernel_args(std::vector<ttnn::ccl::cmd::CclH
                 break;
 
             case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
-            // case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM:
                 TT_THROW("CCL command STREAM_EDM_TO_TENSOR is not useable, supported, or intended to be supported in CCL v2. This command is deprecated.");
                 break;
                 TT_THROW("CCL command STREAM_TENSOR_TO_EDM is not useable, supported, or intended to be supported in CCL v2. This command is deprecated.");
@@ -793,15 +777,6 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
     return sender_worker_reader_kernel;
 }
 
-void generate_rt_args_from_low_level_host_ccl_commands(std::vector<ttnn::ccl::cmd::CclCommandArgs> const& commands, std::vector<uint32_t>& rt_args_out) {
-    // for (auto const& command : commands) {
-
-}
-
-// ostream& operator<<(ostream& os, const ttnn::ccl::v2::TensorSlice& s) {
-//     os << "TensorSlice"
-// }
-
 static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence const& commands, size_t tab_level = 0) {
     using namespace ttnn::ccl;
     using namespace ttnn::ccl::cmd;
@@ -956,7 +931,6 @@ void generate_multi_input_command_stream_kernel_rt_args(
         log_command_stream(ccl_command_stream1.value(), 1);
     }
 
-    // TT_FATAL(tensors.size() > 0 && tensors.size() <= 2, "Size mismatch between tensors and cb_ids");
     std::vector<const std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>*> command_streams = {
         &ccl_command_stream0};
     if (ccl_command_stream1.has_value()) {

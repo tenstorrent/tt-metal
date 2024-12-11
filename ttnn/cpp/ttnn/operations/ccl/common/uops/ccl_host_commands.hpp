@@ -4,12 +4,9 @@
 
 #pragma once
 
-#include "buffers/semaphore.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
-
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+
 
 namespace ttnn::ccl::cmd {
 
@@ -41,7 +38,7 @@ using CclHostLowLevelCommandSequence = std::vector<CclHostLowLevelWorkerCommand>
 
 namespace uops {
 
-using semaphore_id_t = std::variant<uint32_t, GlobalSemaphore>;
+using semaphore_id_t = std::variant<uint32_t, tt::tt_metal::GlobalSemaphore>;
 
 [[nodiscard]] CclHostLowLevelWorkerCommand read_tensor_slice_to_cb_for_eventual_fabric_write(ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);
 [[nodiscard]] CclHostLowLevelWorkerCommand read_tensor_slice_to_cb(ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);
@@ -59,27 +56,23 @@ using semaphore_id_t = std::variant<uint32_t, GlobalSemaphore>;
     size_t bank_address,
     size_t value);
 [[nodiscard]] CclHostLowLevelWorkerCommand fabric_multicast_semaphore_inc(
-    // CclCommandAddrSemaphoreId const& semaphore_dest_args,
     semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     size_t dest_noc0_x,
     size_t dest_noc0_y,
     MulticastCommandDestArgs const& multicast_args);
 [[nodiscard]] CclHostLowLevelWorkerCommand fabric_unicast_semaphore_inc(
-    // CclCommandAddrSemaphoreId const& semaphore_dest_args,
     semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     size_t dest_noc0_x,
     size_t dest_noc0_y,
     UnicastCommandDestArgs const& unicast_args);
 [[nodiscard]] CclHostLowLevelWorkerCommand fabric_unicast_semaphore_inc_mcast(
-    // CclCommandAddrSemaphoreId const& semaphore_dest_args,
     semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     CclCommandCoreDescriptorTypeMcast const& dest_mcast_spec,
     UnicastCommandDestArgs const& unicast_args);
 [[nodiscard]] CclHostLowLevelWorkerCommand local_chip_semaphore_inc_mcast(
-    // CclCommandAddrSemaphoreId const& semaphore_dest_args,
     semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     CclCommandCoreDescriptorTypeMcast const& dest_mcast_spec);

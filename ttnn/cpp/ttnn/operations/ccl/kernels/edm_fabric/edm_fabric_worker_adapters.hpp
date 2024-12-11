@@ -6,9 +6,8 @@
 
 #include "dataflow_api.h"
 
-#include "tt_metal/hw/inc/ethernet/dataflow_api.h"
+#include "tt_metal/hw/inc/ethernet/tunneling.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header_validate.hpp"
 #include "debug/assert.h"
 #include "debug/dprint.h"
 
@@ -17,13 +16,6 @@
 
 namespace tt::fabric {
 
-void nop(){
-    // Debug loop to let time pass
-    volatile uint32_t i = 0;
-    for (i = 0; i < 1000000; i++) {
-        asm volatile("" : "+r"(i) : : "memory");
-    }
-}
 
 struct WorkerToFabricEdmSender{
 
@@ -31,9 +23,6 @@ struct WorkerToFabricEdmSender{
     static constexpr uint32_t close_connection_value = 0;
 
     WorkerToFabricEdmSender () : worker_sem_addr(nullptr) {}
-    // WorkerToFabricEdmSender (WorkerToFabricEdmSender&&) = default;
-    // WorkerToFabricEdmSender (const WorkerToFabricEdmSender&) = default;
-    // WorkerToFabricEdmSender& operator=(const WorkerToFabricEdmSender&) = default;
 
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSender build_from_args(std::size_t &arg_idx) {
@@ -48,7 +37,6 @@ struct WorkerToFabricEdmSender{
         auto const edm_buffer_index_addr = get_arg_val<uint32_t>(arg_idx++);
         auto writer_send_sem_addr = reinterpret_cast<volatile uint32_t* const >(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
         auto const worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
-        // DPRINT << "w->E Conn. y|x " << (uint32_t)((edm_worker_xy.y << 16) | edm_worker_xy.x) << "\n";
         ASSERT(
             (my_core_type == ProgrammableCoreType::TENSIX && worker_buffer_index_semaphore_addr < 1499136) ||
             (my_core_type == ProgrammableCoreType::ACTIVE_ETH && worker_buffer_index_semaphore_addr < 262144));
@@ -142,20 +130,7 @@ struct WorkerToFabricEdmSender{
         send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
 
-    // Layout
-    // |-----------------------|
-    // | EDM Handshake         | 16B
-    // |-----------------------|
-    // | EDM Ack Channel Sync  | 16B
-    // |-----------------------|          -
-    // | Connection Semaphore  | 16B        |
-    // |-----------------------|            |
-    // | Buffer Index          | 16B         >- Per Sender Channel (On EDM)
-    // |-----------------------|            |
-    // | Worker Connection Info| 16B        |worker
-    // |-----------------------|          -/
-    // |-----------------------|
-    //
+
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
     FORCE_INLINE void open() {
@@ -175,10 +150,6 @@ struct WorkerToFabricEdmSender{
         noc_async_read_barrier();
         ASSERT(*this->buffer_index_ptr < 20);
         DPRINT << "Connecting to EDM fabric @ " << (uint64_t)edm_connection_handshake_noc_addr << "\n";
-        // DPRINT << "\t&sem_addr: " << (uint32_t)&(this->worker_sem_addr) << "\n";
-        // DPRINT << "remote buffer index @: " << (uint64_t)remote_buffer_index_addr << "\n";
-        // DPRINT << "Buffer index: " << (uint32_t)*this->buffer_index_ptr << "\n";
-        // DPRINT << "edm_buffer_base_addr: " << (uint64_t)edm_buffer_base_addr << "\n";
     }
 
     FORCE_INLINE void close() {
@@ -217,31 +188,12 @@ struct WorkerToFabricEdmSender{
 
         ASSERT(size_bytes <= this->buffer_size_bytes);
 
-        /*{ // For debug purposes only. Useful to permanently backup the packet somewhere we can inspect with ttx-status
-            uint32_t dram_noc_x = my_y[0] == 1 ? 0 : 0;
-            uint32_t dram_noc_y = my_y[0] == 1 ? 0 : 5;
-            // noc_inline_dw_write(get_noc_addr(dram_noc_x, dram_noc_y, storage_offset), 0x0F);
-            // noc_async_writes_flushed();
-            // noc_inline_dw_write(get_noc_addr(dram_noc_x, dram_noc_y, storage_offset  + 4), 0);
-            // auto pkthdr_size_words = sizeof(tt::fabric::PacketHeader) >> 2;
-            // for (size_t i = 0; i < pkthdr_size_words; i++) {
-            //     reinterpret_cast<volatile uint32_t*>(source_address)[pkthdr_size_words - i] =
-            //     reinterpret_cast<volatile uint32_t*>(source_address)[pkthdr_size_words - 1 - i];
-            // }
-            // reinterpret_cast<volatile uint32_t*>(source_address)[0] = 0xc0ffee;
-            // DPRINT << "NEXT STORAGE OFF: " << (uint32_t)storage_offset << "\n";
-            noc_async_write(source_address, get_noc_addr(dram_noc_x, dram_noc_y, storage_offset), size_bytes);
-            storage_offset += size_bytes;
-            storage_offset += 64;
-            storage_offset = storage_offset & (~0x1F);
-        }*/
         DPRINT << "SND PKT TO @ " << (uint64_t)buffer_address << "\n";
         DPRINT << "\t1st 8B: " << (uint64_t)*reinterpret_cast<volatile uint64_t*>(source_address) << "\n";
         ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader *>(reinterpret_cast<volatile tt::fabric::PacketHeader*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         auto const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_semaphore_addr);
         DPRINT << "\tSEMINC TO @ " << (uint64_t)noc_sem_addr << "\n";
-        // DPRINT << "\tbuff_idx: " << (uint32_t)*this->buffer_index_ptr << "\n";
         noc_semaphore_inc(noc_sem_addr, 1);
 
         *this->buffer_index_ptr = (*this->buffer_index_ptr == this->last_buffer_index) ? 0 : *this->buffer_index_ptr + 1;

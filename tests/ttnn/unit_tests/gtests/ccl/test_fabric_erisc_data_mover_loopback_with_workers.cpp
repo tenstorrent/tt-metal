@@ -5,17 +5,12 @@
 
 #include "common/logger.hpp"
 #include "sub_device/sub_device_types.hpp"
-// #include "tt_backend_api_types.hpp"
 #include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
@@ -32,26 +27,19 @@
 
 #include "umd/device/types/arch.h"
 #include "umd/device/types/cluster_descriptor_types.h"
-// #include "umd/device/tt_arch_types.h"
-
 #include "gtest/gtest.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <limits>
-#include <random>
 #include <unordered_set>
 
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-enum TwoInputReaderKernelWriteMode {
-    LOCAL_WRITEBACK,
-    FABRIC_UNICAST,
-    FABRIC_MULTICAST
-};
+enum TwoInputReaderKernelWriteMode { LOCAL_WRITEBACK, FABRIC_UNICAST, FABRIC_MULTICAST };
 
 static constexpr size_t TEST_WORKERS_SUBDEVICE_INDEX = 0;
 static constexpr size_t TEST_EDM_FABRIC_SUBDEVICE_INDEX = 1;
@@ -105,9 +93,9 @@ struct BankedConfig {
     size_t num_pages;
     size_t size_bytes;
     size_t page_size_bytes;
-    BufferType input_buffer_type;   // = BufferType::L1;
-    BufferType output_buffer_type;  // = BufferType::L1;
-    tt::DataFormat l1_data_format;  // = tt::DataFormat::Float16_b;
+    BufferType input_buffer_type;
+    BufferType output_buffer_type;
+    tt::DataFormat l1_data_format;
 };
 
 struct KernelXY {
@@ -120,27 +108,19 @@ struct KernelXY {
 enum Correctness { Correct, Incorrect };
 
 struct EthLinkBuilder {
-    ttnn::ccl::FabricEriscDatamoverBuilder sender_edm_builder;    // chip_0_edm_builder,
-    ttnn::ccl::FabricEriscDatamoverBuilder receiver_edm_builder;  // chip_0_edm_builder,
+    ttnn::ccl::FabricEriscDatamoverBuilder sender_edm_builder;
+    ttnn::ccl::FabricEriscDatamoverBuilder receiver_edm_builder;
     tt_xy_pair sender_core;
     tt_xy_pair receiver_core;
-    // size_t downstream_edm_buffer_index_semaphore_id;
 };
 
 template <typename CONTAINER_T>
-Correctness run_output_check(
-    CONTAINER_T const& inputs,
-    CONTAINER_T output_buffer) {
+Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffer) {
     constexpr bool debug_mode = true;
 
     log_info(tt::LogTest, "Checking outputs");
-    // if (inputs.size() != output_buffer.size()) {
-    //     log_error(tt::LogTest, "Output size mismatch: expected {} got {}", inputs.size(), output_buffer.size());
-    //     return Correctness::Incorrect;
-    // }
-    bool pass = true;//std::ranges::equal(inputs, output_buffer);
+    bool pass = true;
 
-    // if (not pass) {
     std::size_t num_printed_mismatches = 0;
     for (size_t i = 0; i < inputs.size() && num_printed_mismatches < 64; i++) {
         if (output_buffer[i] != inputs[i]) {
@@ -159,7 +139,6 @@ Correctness run_output_check(
     }
 
     log_info(tt::LogTest, "Output check: {}", pass ? "PASS" : "FAIL");
-    // }
     return pass ? Correctness::Correct : Correctness::Incorrect;
 };
 
@@ -186,7 +165,7 @@ static SubdeviceInfo create_subdevices(std::vector<Device*> const& devices) {
 Correctness run_output_check(
     std::vector<uint32_t> const& all_zeros,
     std::vector<uint32_t> const& inputs,
-    std::shared_ptr<Buffer> output_buffer) {
+    std::shared_ptr<Buffer>& output_buffer) {
     constexpr bool debug_mode = true;
     std::vector<uint32_t> readback_data_vec(all_zeros.size(), 0);  // init to 0 data for easier debug
 
@@ -395,7 +374,6 @@ bool RunLoopbackTest(
     std::optional<SubdeviceInfo>& subdevice_managers,
     bool enable_persistent_fabric) {
     auto& sender_program = programs.at(0);
-    // auto& receiver_program = programs.at(1);
     std::size_t page_plus_header_size = page_size + sizeof(tt::fabric::PacketHeader);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
@@ -434,15 +412,6 @@ bool RunLoopbackTest(
     ////////////////////////////////////////////////////////////////////////////
 
     static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
-    // const chip_id_t local_chip_id = 0;
-    // const chip_id_t remote_chip_id = 1;
-    // auto const& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
-    // auto chip_0_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
-    //     sender_device, sender_program, eth_sender_core, local_chip_id, remote_chip_id, edm_config);
-    // auto chip_1_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
-    //     receiver_device, receiver_program, eth_receiver_core, remote_chip_id, local_chip_id, edm_config);
-    // // Create the loopback connection on the second device
-    // chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
 
     auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
     ////////////////////////////////////////////////////////////////////////////
@@ -474,7 +443,7 @@ bool RunLoopbackTest(
         sender_device,
         worker_core,
         chip0_worker_fabric_connection,
-        unicast_send{2}, // 2 hops because we are looping back to ourselves
+        unicast_send{2},  // 2 hops because we are looping back to ourselves
         edm_buffer_size,
         page_plus_header_size,
         num_pages_total,
@@ -487,16 +456,6 @@ bool RunLoopbackTest(
         dest_is_dram,
         worker_buffer_index_semaphore_id,
         edm_termination_infos);
-
-    ////////////////////////////////////////////////////////////////////////////
-    // Build EDMs
-    ////////////////////////////////////////////////////////////////////////////
-    // auto local_edm_kernel =
-    //     ttnn::ccl::generate_edm_kernel(sender_program, sender_device, chip_0_edm_builder, eth_sender_core,
-    //     NOC::NOC_0);
-
-    // auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
-    //     receiver_program, receiver_device, chip_1_edm_builder, eth_receiver_core, NOC::NOC_0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -535,11 +494,10 @@ void generate_multi_input_test_worker_reader_kernel(
     DataMovementConfig const& datamovement_kernel_config,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& chip0_worker_forward_fabric_connection,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& chip0_worker_backward_fabric_connection,
-    std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const&
-        optional_teardown_sequence,  // std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> const&
-                                     // edm_termination_infos,
+    std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& optional_teardown_sequence,
     ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
-    bool fabric_enabled = std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args) || std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args);
+    bool fabric_enabled = std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args) ||
+                          std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args);
     using namespace ttnn::ccl::cmd::uops;
     using namespace ttnn::ccl::cmd;
     log_trace(
@@ -547,18 +505,16 @@ void generate_multi_input_test_worker_reader_kernel(
         "Generating multi input test worker reader kernel for command type: {}",
         static_cast<uint32_t>(command_type));
 
-    TT_FATAL(command_type == ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB || command_type == ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR, "Unsupported tensor IO command type");
+    TT_FATAL(
+        command_type == ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB ||
+            command_type == ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR,
+        "Unsupported tensor IO command type");
 
     TT_ASSERT(tensors.size() > 0 && tensors.size() <= 2);
     TT_ASSERT(cb_indices.size() == tensors.size());
 
     auto sender_worker_reader_kernel = ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
-        program,
-        cb_indices,
-        tensors,
-        worker_core_range,
-        datamovement_kernel_config
-    );
+        program, cb_indices, tensors, worker_core_range, datamovement_kernel_config);
 
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> ccl_command_stream0;
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> ccl_command_stream1;
@@ -567,8 +523,10 @@ void generate_multi_input_test_worker_reader_kernel(
     if (command_type == ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB) {
         log_trace(tt::LogTest, "Adding local noc read");
         if (fabric_enabled) {
-            ccl_command_stream0.push_back(read_tensor_slice_to_cb_for_eventual_fabric_write(in0_command_tensor_slice, cb_indices.at(0)));
-            ccl_command_stream1.push_back(read_tensor_slice_to_cb_for_eventual_fabric_write(in1_command_tensor_slice, cb_indices.at(1)));
+            ccl_command_stream0.push_back(
+                read_tensor_slice_to_cb_for_eventual_fabric_write(in0_command_tensor_slice, cb_indices.at(0)));
+            ccl_command_stream1.push_back(
+                read_tensor_slice_to_cb_for_eventual_fabric_write(in1_command_tensor_slice, cb_indices.at(1)));
         } else {
             ccl_command_stream0.push_back(read_tensor_slice_to_cb(in0_command_tensor_slice, cb_indices.at(0)));
             ccl_command_stream1.push_back(read_tensor_slice_to_cb(in1_command_tensor_slice, cb_indices.at(1)));
@@ -580,17 +538,33 @@ void generate_multi_input_test_worker_reader_kernel(
             ccl_command_stream1.push_back(local_write_cb_to_tensor_slice(in1_command_tensor_slice, cb_indices.at(1)));
         } else {
             if (std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args)) {
-                log_trace(tt::LogTest, "Adding fabric unicast write command. Distance: {}. Forward: {}", std::get<UnicastCommandDestArgs>(dest_args).distance_in_hops, std::get<UnicastCommandDestArgs>(dest_args).is_forward_direction);
+                log_trace(
+                    tt::LogTest,
+                    "Adding fabric unicast write command. Distance: {}. Forward: {}",
+                    std::get<UnicastCommandDestArgs>(dest_args).distance_in_hops,
+                    std::get<UnicastCommandDestArgs>(dest_args).is_forward_direction);
                 ccl_command_stream0.push_back(fabric_write_cb_to_tensor_slice(
-                    in0_command_tensor_slice, cb_indices.at(0), UnicastCommandDestArgs{std::get<UnicastCommandDestArgs>(dest_args)}));
+                    in0_command_tensor_slice,
+                    cb_indices.at(0),
+                    UnicastCommandDestArgs{std::get<UnicastCommandDestArgs>(dest_args)}));
                 ccl_command_stream1.push_back(fabric_write_cb_to_tensor_slice(
-                    in1_command_tensor_slice, cb_indices.at(1), UnicastCommandDestArgs{std::get<UnicastCommandDestArgs>(dest_args)}));
+                    in1_command_tensor_slice,
+                    cb_indices.at(1),
+                    UnicastCommandDestArgs{std::get<UnicastCommandDestArgs>(dest_args)}));
             } else if (std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args)) {
-                log_trace(tt::LogTest, "Adding fabric multicast write command. Forward: {}. Backward: {}", std::get<MulticastCommandDestArgs>(dest_args).num_targets_forward_direction, std::get<MulticastCommandDestArgs>(dest_args).num_targets_backward_direction);
+                log_trace(
+                    tt::LogTest,
+                    "Adding fabric multicast write command. Forward: {}. Backward: {}",
+                    std::get<MulticastCommandDestArgs>(dest_args).num_targets_forward_direction,
+                    std::get<MulticastCommandDestArgs>(dest_args).num_targets_backward_direction);
                 ccl_command_stream0.push_back(fabric_write_cb_to_tensor_slice(
-                    in0_command_tensor_slice, cb_indices.at(0), MulticastCommandDestArgs{std::get<MulticastCommandDestArgs>(dest_args)}));
+                    in0_command_tensor_slice,
+                    cb_indices.at(0),
+                    MulticastCommandDestArgs{std::get<MulticastCommandDestArgs>(dest_args)}));
                 ccl_command_stream1.push_back(fabric_write_cb_to_tensor_slice(
-                    in1_command_tensor_slice, cb_indices.at(1), MulticastCommandDestArgs{std::get<MulticastCommandDestArgs>(dest_args)}));
+                    in1_command_tensor_slice,
+                    cb_indices.at(1),
+                    MulticastCommandDestArgs{std::get<MulticastCommandDestArgs>(dest_args)}));
             } else {
                 log_trace(tt::LogTest, "WTF? Should have been caught earlier");
                 TT_FATAL(true, "Unsupported dest args type");
@@ -614,39 +588,21 @@ void generate_multi_input_test_worker_reader_kernel(
         tensors,
         {page_size, page_size},
         device,
-        num_pages_per_edm_buffer, // TODO: get from fabric
+        num_pages_per_edm_buffer,  // TODO: get from fabric
         worker_core_range,
         ccl_command_stream0,
         ccl_command_stream1,
         chip0_worker_forward_fabric_connection,
-        chip0_worker_backward_fabric_connection
-    );
-
-    // ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_rt_args(
-    //     program,
-    //     sender_worker_reader_kernel,
-    //     cb_indices,
-    //     tensors,
-    //     device,
-    //     page_size,
-    //     worker_core_range,
-    //     num_pages_per_edm_buffer,
-    //     {{in0_command_tensor_slice}, {in1_command_tensor_slice}},
-    //     command_type, // TODAY REQURED TO BE SAME - FUTURE - wrapped with above
-    //     chip0_worker_forward_fabric_connection,
-    //     chip0_worker_backward_fabric_connection,
-    //     edm_termination_infos,
-    //     {dest_args, dest_args}
-    // );
+        chip0_worker_backward_fabric_connection);
 }
 
 void generate_multi_input_test_worker_kernels_for_local_tensor_write(
     Program& program,
     Device* device,
-    Tensor &input_tensor0,
-    Tensor &input_tensor1,
-    Tensor &output_tensor0,
-    Tensor &output_tensor1,
+    Tensor& input_tensor0,
+    Tensor& input_tensor1,
+    Tensor& output_tensor0,
+    Tensor& output_tensor1,
     size_t first_cb_index,
     size_t second_cb_index,
     CoreCoord const& worker_core,
@@ -656,12 +612,10 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
     ttnn::ccl::v2::TensorSlice const& in1_tensor_slice,
     ttnn::ccl::v2::TensorSlice const& out0_tensor_slice,
     ttnn::ccl::v2::TensorSlice const& out1_tensor_slice,
-    std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& optional_teardown_sequence, //std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> const& edm_termination_infos,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> & chip0_worker_forward_fabric_connection,
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> & chip0_worker_backward_fabric_connection,
-    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args
-    ) {
-
+    std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& optional_teardown_sequence,
+    std::optional<ttnn::ccl::SenderWorkerAdapterSpec>& chip0_worker_forward_fabric_connection,
+    std::optional<ttnn::ccl::SenderWorkerAdapterSpec>& chip0_worker_backward_fabric_connection,
+    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
     // Just want a dummy DF
     tt::DataFormat df = (page_plus_header_size - PACKET_HEADER_SIZE_BYTES) == 1024   ? tt::DataFormat::Bfp8
                         : (page_plus_header_size - PACKET_HEADER_SIZE_BYTES) == 2048 ? tt::DataFormat::Float16
@@ -675,7 +629,8 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
     }
     {
         tt_metal::CircularBufferConfig cb_src1_config =
-            tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_plus_header_size, {{second_cb_index, df}})
+            tt_metal::CircularBufferConfig(
+                2 * num_pages_per_edm_buffer * page_plus_header_size, {{second_cb_index, df}})
                 .set_page_size(second_cb_index, page_plus_header_size);
         CBHandle cb1 = CreateCircularBuffer(program, worker_core, cb_src1_config);
     }
@@ -711,7 +666,7 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
         tt_metal::WriterDataMovementConfig{},
         chip0_worker_forward_fabric_connection,
         chip0_worker_backward_fabric_connection,
-        optional_teardown_sequence, //edm_termination_infos,
+        optional_teardown_sequence,
         dest_args);
 }
 
@@ -744,29 +699,35 @@ bool RunLocalTestWithMultiInputReaders(
     for (size_t i = 0; i < devices.size(); i++) {
         log_info(tt::LogTest, "Device[{}] ID: {}", i, devices.at(i)->id());
     }
-    // auto programs = std::vector<Program>(devices.size()); // test debugger will catch throw
     auto program_ptrs = std::vector<Program*>();
     program_ptrs.reserve(devices.size());
-    std::ranges::transform(programs, std::back_inserter(program_ptrs), [](auto& p){return &p;});
+    std::ranges::transform(programs, std::back_inserter(program_ptrs), [](auto& p) { return &p; });
 
-    // std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
     size_t output_tensor_dest_device_index = 0;
     if (fabric_enabled) {
         if (std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args)) {
-            log_info(tt::LogTest, "Unicast command dest args. Distance in hops: {}", std::get<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args).distance_in_hops);
-            output_tensor_dest_device_index = std::get<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args).distance_in_hops;
+            log_info(
+                tt::LogTest,
+                "Unicast command dest args. Distance in hops: {}",
+                std::get<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args).distance_in_hops);
+            output_tensor_dest_device_index =
+                std::get<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args).distance_in_hops;
             TT_ASSERT(output_tensor_dest_device_index != 0, "Output tensor destination device index must be non-zero");
             TT_ASSERT(test_mode == TwoInputReaderKernelWriteMode::FABRIC_UNICAST);
         } else if (std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args)) {
-            log_info(tt::LogTest, "Multicast command dest args. Number of targets forward direction: {}", std::get<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args).num_targets_forward_direction);
-            output_tensor_dest_device_index = std::get<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args).num_targets_forward_direction;
+            log_info(
+                tt::LogTest,
+                "Multicast command dest args. Number of targets forward direction: {}",
+                std::get<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args).num_targets_forward_direction);
+            output_tensor_dest_device_index =
+                std::get<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args).num_targets_forward_direction;
             TT_ASSERT(output_tensor_dest_device_index != 0, "Output tensor destination device index must be non-zero");
             TT_ASSERT(test_mode == TwoInputReaderKernelWriteMode::FABRIC_MULTICAST);
         }
-        // line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, program_ptrs, 1);
     } else {
         log_info(tt::LogTest, "No fabric enabled");
-        TT_ASSERT(std::holds_alternative<ttnn::ccl::cmd::DestTypeArgsNull>(dest_args), "Local command dest args expected");
+        TT_ASSERT(
+            std::holds_alternative<ttnn::ccl::cmd::DestTypeArgsNull>(dest_args), "Local command dest args expected");
     }
 
     std::size_t page_plus_header_size = page_size + sizeof(tt::fabric::PacketHeader);
@@ -786,8 +747,16 @@ bool RunLocalTestWithMultiInputReaders(
 
     log_info(tt::LogTest, "input_tensor0_device->address(): {}", input_tensor0_device.buffer()->address());
     log_info(tt::LogTest, "input_tensor1_device->address(): {}", input_tensor1_device.buffer()->address());
-    log_info(tt::LogTest, "output_tensor0_device->address(): {} on device {}", output_tensor0_device.buffer()->address(), output_tensor_dest_device->id());
-    log_info(tt::LogTest, "output_tensor1_device->address(): {} on device {}", output_tensor1_device.buffer()->address(), output_tensor_dest_device->id());
+    log_info(
+        tt::LogTest,
+        "output_tensor0_device->address(): {} on device {}",
+        output_tensor0_device.buffer()->address(),
+        output_tensor_dest_device->id());
+    log_info(
+        tt::LogTest,
+        "output_tensor1_device->address(): {} on device {}",
+        output_tensor1_device.buffer()->address(),
+        output_tensor_dest_device->id());
 
     ////////////////////////////////////////////////////////////////////////////
     // Build Workers
@@ -796,9 +765,9 @@ bool RunLocalTestWithMultiInputReaders(
 
     const size_t num_pages_per_edm_buffer = 2;
 
-    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> chip0_worker_forward_fabric_connection = fabric_enabled ?
-        line_fabric->uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD) :
-        std::optional<ttnn::ccl::SenderWorkerAdapterSpec>{std::nullopt};
+    std::optional<ttnn::ccl::SenderWorkerAdapterSpec> chip0_worker_forward_fabric_connection =
+        fabric_enabled ? line_fabric->uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD)
+                       : std::optional<ttnn::ccl::SenderWorkerAdapterSpec>{std::nullopt};
 
     // always at start of line for now
     std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> edm_termination_infos =
@@ -806,7 +775,6 @@ bool RunLocalTestWithMultiInputReaders(
             ? std::optional<std::vector<ttnn::ccl::edm_termination_info_t>>{std::nullopt}
             : line_fabric->generate_ordered_termination_info_farthest_to_nearest();
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> chip0_worker_backward_fabric_connection = std::nullopt;
-
 
     std::optional<ttnn::ccl::SyncModeSpec> sync_details;
     std::optional<CoreCoord> teardown_worker_core;
@@ -849,7 +817,7 @@ bool RunLocalTestWithMultiInputReaders(
         in1_tensor_slice,
         out0_tensor_slice,
         out1_tensor_slice,
-        teardown_command_stream,//std:::nullopt,//edm_termination_infos,
+        teardown_command_stream,
         chip0_worker_forward_fabric_connection,
         chip0_worker_backward_fabric_connection,
         dest_args);
@@ -901,8 +869,10 @@ bool RunLocalTestWithMultiInputReaders(
         auto out0_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(output0_cpu);
         auto out1_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(output1_cpu);
 
-        bool input0_copyback_check_passed = run_output_check(in0_tensor_data, in0_tensor_copyback) == Correctness::Correct;
-        bool input1_copyback_check_passed = run_output_check(in1_tensor_data, in1_tensor_copyback) == Correctness::Correct;
+        bool input0_copyback_check_passed =
+            run_output_check(in0_tensor_data, in0_tensor_copyback) == Correctness::Correct;
+        bool input1_copyback_check_passed =
+            run_output_check(in1_tensor_data, in1_tensor_copyback) == Correctness::Correct;
         TT_FATAL(input0_copyback_check_passed, "Input 0 copyback check failed");
         TT_FATAL(input1_copyback_check_passed, "Input 1 copyback check failed");
 
@@ -919,18 +889,8 @@ bool RunLocalTestWithMultiInputReaders(
         } else {
             log_error(tt::LogTest, "Output check failed for output 1");
         }
-
-        // for (size_t c = 0; c < extra_output0_tensors.size(); c++) {
-        //     auto extra_out0_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(extra_output0_tensors.at(c));
-        //     pass &= run_output_check(in0_tensor_data, extra_out0_tensor_data) == Correctness::Correct;
-        // }
-        // for (size_t c = 0; c < extra_output1_tensors.size(); c++) {
-        //     auto extra_out1_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(extra_output1_tensors.at(c));
-        //     pass &= run_output_check(in1_tensor_data, extra_out1_tensor_data) == Correctness::Correct;
-        // }
     }
 
-    // Tensor(const Storage storage, const ttnn::Shape shape, DataType::UINT32, Layout layout, const std::optional<Tile>& tile = std::nullopt)
     return pass;
 }
 
@@ -1700,7 +1660,8 @@ ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(ttnn::Shape const& shape) {
     logical_shape[-2] /= tt::constants::TILE_HEIGHT;
     logical_shape[-1] /= tt::constants::TILE_WIDTH;
     EXPECT_TRUE(logical_shape.size() == 4);
-    ttnn::ccl::Shape4D<uint32_t> shape_in_tiles = {logical_shape[0], logical_shape[1], logical_shape[2], logical_shape[3]};
+    ttnn::ccl::Shape4D<uint32_t> shape_in_tiles = {
+        logical_shape[0], logical_shape[1], logical_shape[2], logical_shape[3]};
     return shape_in_tiles;
 }
 
@@ -1711,18 +1672,21 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
     MemoryConfig const& in1_memory_config,
     MemoryConfig const& out0_memory_config,
     MemoryConfig const& out1_memory_config,
-    TwoInputReaderKernelWriteMode test_writeback_mode
-) {
+    TwoInputReaderKernelWriteMode test_writeback_mode) {
     auto logical_shape = tensor_shape.logical_shape();
     auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 = ttnn::numpy::arange<uint32_t>(0, num_elems, 1).reshape(tensor_shape).to(layout);
-    Tensor input_tensor1 = ttnn::numpy::arange<uint32_t>(num_elems, 2* num_elems, 1).reshape(tensor_shape).to(layout);
+    Tensor input_tensor1 = ttnn::numpy::arange<uint32_t>(num_elems, 2 * num_elems, 1).reshape(tensor_shape).to(layout);
     Tensor output_tensor0 = ttnn::numpy::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
     Tensor output_tensor1 = ttnn::numpy::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
-    input_tensor0.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
-    input_tensor1.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
-    output_tensor0.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
-    output_tensor1.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
+    input_tensor0.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
+    input_tensor1.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
+    output_tensor0.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
+    output_tensor1.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -1732,15 +1696,12 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
     ttnn::ccl::Shape4D<uint32_t> worker_slice_shape = tensor_shape_in_pages;
     ttnn::ccl::Shape4D<uint32_t> worker_slice_offset = {0, 0, 0, 0};
 
-    ttnn::ccl::v2::TensorSlice tensor_slice{
-        // using ords_t = Shape4D<uint32_t>;
-        tensor_shape_in_pages,
-        tensor_slice_shape_in_pages,
-        tensor_slice_offset,
-        worker_slice_shape,
-        worker_slice_offset
-    };
-
+    ttnn::ccl::v2::TensorSlice tensor_slice{// using ords_t = Shape4D<uint32_t>;
+                                            tensor_shape_in_pages,
+                                            tensor_slice_shape_in_pages,
+                                            tensor_slice_offset,
+                                            worker_slice_shape,
+                                            worker_slice_offset};
 
     auto const in0_tensor_slice = tensor_slice;
     auto const in1_tensor_slice = tensor_slice;
@@ -1779,8 +1740,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_SinglePageTile)
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
-        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK
-    );
+        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
 
@@ -1792,8 +1752,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0) {
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
-        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK
-    );
+        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
 
@@ -1808,9 +1767,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
             {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3]},
             ShardOrientation::ROW_MAJOR,
             false,
-            ShardMode::LOGICAL
-            )
-    );
+            ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -1818,8 +1775,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         mem_config,
         mem_config,
         mem_config,
-        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK
-    );
+        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded1) {
@@ -1833,9 +1789,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
             {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3]},
             ShardOrientation::ROW_MAJOR,
             false,
-            ShardMode::LOGICAL
-            )
-    );
+            ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -1843,8 +1797,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         mem_config,
         mem_config,
         mem_config,
-        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK
-    );
+        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded2) {
@@ -1858,9 +1811,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
             {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3] / 4},
             ShardOrientation::ROW_MAJOR,
             false,
-            ShardMode::LOGICAL
-            )
-    );
+            ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -1868,8 +1819,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         mem_config,
         mem_config,
         mem_config,
-        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK
-    );
+        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded3) {
@@ -1885,9 +1835,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
             {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3] / (ncores_x * ncores_y)},
             ShardOrientation::ROW_MAJOR,
             false,
-            ShardMode::LOGICAL
-            )
-    );
+            ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -1895,8 +1843,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         mem_config,
         mem_config,
         mem_config,
-        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK
-    );
+        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded4) {
@@ -1912,9 +1859,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
             {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3] / (ncores_x * ncores_y)},
             ShardOrientation::ROW_MAJOR,
             false,
-            ShardMode::LOGICAL
-            )
-    );
+            ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -1922,8 +1867,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         mem_config,
         mem_config,
         mem_config,
-        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK
-    );
+        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
 
@@ -1939,9 +1883,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
             {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3]},
             ShardOrientation::ROW_MAJOR,
             false,
-            ShardMode::LOGICAL
-            )
-    );
+            ShardMode::LOGICAL));
     auto output_mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
@@ -1950,9 +1892,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
             {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3] / 4},
             ShardOrientation::ROW_MAJOR,
             false,
-            ShardMode::LOGICAL
-            )
-    );
+            ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -1960,8 +1900,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         input_mem_config,
         output_mem_config,
         output_mem_config,
-        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK
-    );
+        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
 
@@ -1977,24 +1916,24 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
         ShardSpec(
-            CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{in_shard_grid_x - 1, in_shard_grid_y - 1}}}},
-            {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3] / (in_shard_grid_x * in_shard_grid_y)},
+            CoreRangeSet{
+                std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{in_shard_grid_x - 1, in_shard_grid_y - 1}}}},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2],
+             logical_shape[3] / (in_shard_grid_x * in_shard_grid_y)},
             ShardOrientation::ROW_MAJOR,
             false,
-            ShardMode::LOGICAL
-            )
-    );
+            ShardMode::LOGICAL));
     auto mem_config1 = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
         ShardSpec(
-            CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{out_shard_grid_x - 1, out_shard_grid_y - 1}}}},
-            {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3] / (out_shard_grid_x * out_shard_grid_y)},
+            CoreRangeSet{
+                std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{out_shard_grid_x - 1, out_shard_grid_y - 1}}}},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2],
+             logical_shape[3] / (out_shard_grid_x * out_shard_grid_y)},
             ShardOrientation::ROW_MAJOR,
             false,
-            ShardMode::LOGICAL
-            )
-    );
+            ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -2002,17 +1941,14 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         mem_config1,
         mem_config1,
         mem_config0,
-        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK
-    );
+        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
-
-
 
 // Copying even slightly large tensors exposes issues in underlying tensor code
 // that isn't under test here
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
-    ttnn::Shape tensor_shape = {1, 1, 256, 256}; // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 256, 256};  // 16384 crashes... TBD
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -2020,8 +1956,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
-        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK
-    );
+        TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK);
     ASSERT_TRUE(pass);
 }
 
@@ -2037,7 +1972,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
 // ////////////////////////////////////////////////////////////////////
 
 TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SinglePageTile_OneHop) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32}; // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     auto logical_shape = tensor_shape.logical_shape();
@@ -2049,14 +1984,18 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 
     auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 = ttnn::numpy::arange<uint32_t>(0, num_elems, 1).reshape(tensor_shape).to(layout);
-    Tensor input_tensor1 = ttnn::numpy::arange<uint32_t>(num_elems, 2* num_elems, 1).reshape(tensor_shape).to(layout);
+    Tensor input_tensor1 = ttnn::numpy::arange<uint32_t>(num_elems, 2 * num_elems, 1).reshape(tensor_shape).to(layout);
     Tensor output_tensor0 = ttnn::numpy::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
     Tensor output_tensor1 = ttnn::numpy::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
 
-    input_tensor0.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
-    input_tensor1.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
-    output_tensor0.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
-    output_tensor1.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
+    input_tensor0.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
+    input_tensor1.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
+    output_tensor0.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
+    output_tensor1.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -2066,14 +2005,12 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
     ttnn::ccl::Shape4D<uint32_t> worker_slice_shape = tensor_shape_in_pages;
     ttnn::ccl::Shape4D<uint32_t> worker_slice_offset = {0, 0, 0, 0};
 
-    ttnn::ccl::v2::TensorSlice tensor_slice{
-        // using ords_t = Shape4D<uint32_t>;
-        tensor_shape_in_pages,
-        tensor_slice_shape_in_pages,
-        tensor_slice_offset,
-        worker_slice_shape,
-        worker_slice_offset
-    };
+    ttnn::ccl::v2::TensorSlice tensor_slice{// using ords_t = Shape4D<uint32_t>;
+                                            tensor_shape_in_pages,
+                                            tensor_slice_shape_in_pages,
+                                            tensor_slice_offset,
+                                            worker_slice_shape,
+                                            worker_slice_offset};
 
     auto const in0_tensor_slice = tensor_slice;
     auto const in1_tensor_slice = tensor_slice;
@@ -2193,13 +2130,17 @@ void RunFabricMcastFullTensorPropagateTest(
 
     auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 = ttnn::numpy::arange<uint32_t>(0, num_elems, 1).reshape(tensor_shape).to(layout);
-    Tensor input_tensor1 = ttnn::numpy::arange<uint32_t>(num_elems, 2* num_elems, 1).reshape(tensor_shape).to(layout);
+    Tensor input_tensor1 = ttnn::numpy::arange<uint32_t>(num_elems, 2 * num_elems, 1).reshape(tensor_shape).to(layout);
     Tensor output_tensor0 = ttnn::numpy::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
     Tensor output_tensor1 = ttnn::numpy::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
-    input_tensor0.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
-    input_tensor1.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
-    output_tensor0.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
-    output_tensor1.set_tensor_spec(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
+    input_tensor0.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
+    input_tensor1.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
+    output_tensor0.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
+    output_tensor1.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
     ASSERT_EQ(input_tensor0.get_logical_shape(), tensor_shape.logical_shape());
     ASSERT_EQ(input_tensor1.get_logical_shape(), tensor_shape.logical_shape());
     ASSERT_EQ(output_tensor0.get_logical_shape(), tensor_shape.logical_shape());
@@ -2213,22 +2154,19 @@ void RunFabricMcastFullTensorPropagateTest(
     ttnn::ccl::Shape4D<uint32_t> worker_slice_shape = tensor_shape_in_pages;
     ttnn::ccl::Shape4D<uint32_t> worker_slice_offset = {0, 0, 0, 0};
 
-    ttnn::ccl::v2::TensorSlice tensor_slice{
-        // using ords_t = Shape4D<uint32_t>;
-        tensor_shape_in_pages,
-        tensor_slice_shape_in_pages,
-        tensor_slice_offset,
-        worker_slice_shape,
-        worker_slice_offset
-    };
+    ttnn::ccl::v2::TensorSlice tensor_slice{// using ords_t = Shape4D<uint32_t>;
+                                            tensor_shape_in_pages,
+                                            tensor_slice_shape_in_pages,
+                                            tensor_slice_offset,
+                                            worker_slice_shape,
+                                            worker_slice_offset};
 
     auto const in0_tensor_slice = tensor_slice;
     auto const in1_tensor_slice = tensor_slice;
     auto const out0_tensor_slice = tensor_slice;
     auto const out1_tensor_slice = tensor_slice;
 
-    ttnn::ccl::cmd::CclCommandDestArgs dest_args =
-        ttnn::ccl::cmd::MulticastCommandDestArgs{distance_dest_device, 0};
+    ttnn::ccl::cmd::CclCommandDestArgs dest_args = ttnn::ccl::cmd::MulticastCommandDestArgs{distance_dest_device, 0};
     auto pass = TestMultiInputReaderKernel(
         num_devices,
         input_tensor0,
@@ -2254,38 +2192,38 @@ void RunFabricMcastFullTensorPropagateTest(
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_SingleHop) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32}; // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32}; // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32}; // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 128}; // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 128};  // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop) {
-    ttnn::Shape tensor_shape = {1, 1, 128, 32}; // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 128, 32};  // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop) {
-    ttnn::Shape tensor_shape = {1, 1, 64, 64}; // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 64, 64};  // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
@@ -2358,13 +2296,12 @@ bool RunPipelinedWorkersTest(
     auto layout,
 
     std::vector<std::vector<size_t>> worker_chunk_read_order,
-    std::vector<MemoryConfig> mem_configs)
-{
+    std::vector<MemoryConfig> mem_configs) {
     auto logical_shape = tensor_shape.logical_shape();
     auto const cb_index = tt::CB::c_in0;
 
     auto programs = std::vector<Program>(1);
-    Program &program = programs[0];
+    Program& program = programs[0];
 
     T3000TestDevice test_fixture;
     Device* device = test_fixture.devices_.at(0);
@@ -2375,7 +2312,6 @@ bool RunPipelinedWorkersTest(
     // knows it's safe to read that slice.
     // HOWEVER. the reader will be programmed to read the chunks in a different order than they were written, this way
     // we can identify synchronization related bugs (e.g. if sender semaphore increments before writes flush)
-
 
     ///// PROMOTE EVERYTHING ABOVE HERE TO ARGUMENTS TO THIS CODE WHICH WILL EVENTUALLY BECOME A FUNCTION
     TT_FATAL(num_workers_per_stage.size() == num_stages, "Must have a read order for each stage");
@@ -2395,7 +2331,8 @@ bool RunPipelinedWorkersTest(
     std::vector<TensorSpec> tensor_specs;
     tensor_specs.reserve(num_stages + 1);
     for (size_t i = 0; i < num_stages + 1; ++i) {
-        tensor_specs.push_back(TensorSpec(logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), mem_configs[i])));
+        tensor_specs.push_back(TensorSpec(
+            logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), mem_configs[i])));
     }
 
     // Allocate the tensors - pull to function
@@ -2424,19 +2361,20 @@ bool RunPipelinedWorkersTest(
 
     std::vector<CoreRangeSet> pipeline_stage_worker_cores = {};
     for (size_t i = 0; i < num_stages; ++i) {
-        pipeline_stage_worker_cores.push_back(CoreRangeSet(CoreRange(CoreCoord(0,i), CoreCoord(num_workers_per_stage[i] - 1,i))));
+        pipeline_stage_worker_cores.push_back(
+            CoreRangeSet(CoreRange(CoreCoord(0, i), CoreCoord(num_workers_per_stage[i] - 1, i))));
     }
     CoreRangeSet all_workers_cores = CoreRangeSet();
     for (size_t i = 0; i < num_stages; ++i) {
     }
-
 
     // Create circular buffers
     for (size_t stage = 0; stage < num_stages; stage++) {
         const size_t cb_packet_size_in_pages = 4;
         const size_t num_packets_per_cb = 4;
         tt_metal::CircularBufferConfig cb_config =
-            tt_metal::CircularBufferConfig(cb_packet_size_in_pages * num_packets_per_cb * page_size_bytes, {{cb_index, data_format}})
+            tt_metal::CircularBufferConfig(
+                cb_packet_size_in_pages * num_packets_per_cb * page_size_bytes, {{cb_index, data_format}})
                 .set_page_size(cb_index, page_size_bytes);
         CBHandle sender_workers_cb = CreateCircularBuffer(program, pipeline_stage_worker_cores[stage], cb_config);
     }
@@ -2462,8 +2400,7 @@ bool RunPipelinedWorkersTest(
             {&device_tensors[stage]},
             pipeline_stage_worker_cores[stage],
             tt_metal::ReaderDataMovementConfig{},
-            num_command_streams
-        );
+            num_command_streams);
         reader_kernels.push_back(reader_kernel);
         auto writer_kernel = ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
             program,
@@ -2471,8 +2408,7 @@ bool RunPipelinedWorkersTest(
             {&device_tensors[stage + 1]},
             pipeline_stage_worker_cores[stage],
             tt_metal::WriterDataMovementConfig{},
-            num_command_streams
-        );
+            num_command_streams);
         writer_kernels.push_back(writer_kernel);
     }
 
@@ -2480,18 +2416,31 @@ bool RunPipelinedWorkersTest(
     std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> tensor_slices;
     tensor_slices.reserve(num_stages + 1);
     for (size_t t = 0; t < num_tensors; t++) {
-        tensor_slices.push_back(ttnn::ccl::cmd::builder::generate_tensor_slices(slices_per_stage, device_tensors[t], split_dim ));
+        tensor_slices.push_back(
+            ttnn::ccl::cmd::builder::generate_tensor_slices(slices_per_stage, device_tensors[t], split_dim));
     }
     std::vector<std::vector<std::vector<ttnn::ccl::v2::TensorSlice>>> per_stage_worker_reader_tensor_slices;
     std::vector<std::vector<std::vector<ttnn::ccl::v2::TensorSlice>>> per_stage_worker_writer_tensor_slices;
     per_stage_worker_reader_tensor_slices.reserve(num_tensors);
     per_stage_worker_writer_tensor_slices.reserve(num_tensors);
     for (size_t stage = 0; stage < num_stages; stage++) {
-        per_stage_worker_reader_tensor_slices.push_back(ttnn::ccl::cmd::builder::split_tensor_slices_across_workers_page_aligned(num_workers_per_stage[stage], tensor_slices[stage]));
+        per_stage_worker_reader_tensor_slices.push_back(
+            ttnn::ccl::cmd::builder::split_tensor_slices_across_workers_page_aligned(
+                num_workers_per_stage[stage], tensor_slices[stage]));
         // We could compute this once and reuse it but I am generating it twice so I can have size mismatches
-        per_stage_worker_writer_tensor_slices.push_back(ttnn::ccl::cmd::builder::split_tensor_slices_across_workers_page_aligned(num_workers_per_stage[stage], tensor_slices[stage + 1]));
-        TT_FATAL(per_stage_worker_reader_tensor_slices.back().size() == num_workers_per_stage[stage], "Mismatch in tensor slices. Got {} but expected {}", per_stage_worker_reader_tensor_slices.back().size(), num_workers_per_stage[stage]);
-        TT_FATAL(per_stage_worker_writer_tensor_slices.back().size() == num_workers_per_stage[stage], "Mismatch in tensor slices. Got {} but expected {}", per_stage_worker_writer_tensor_slices.back().size(), num_workers_per_stage[stage]);
+        per_stage_worker_writer_tensor_slices.push_back(
+            ttnn::ccl::cmd::builder::split_tensor_slices_across_workers_page_aligned(
+                num_workers_per_stage[stage], tensor_slices[stage + 1]));
+        TT_FATAL(
+            per_stage_worker_reader_tensor_slices.back().size() == num_workers_per_stage[stage],
+            "Mismatch in tensor slices. Got {} but expected {}",
+            per_stage_worker_reader_tensor_slices.back().size(),
+            num_workers_per_stage[stage]);
+        TT_FATAL(
+            per_stage_worker_writer_tensor_slices.back().size() == num_workers_per_stage[stage],
+            "Mismatch in tensor slices. Got {} but expected {}",
+            per_stage_worker_writer_tensor_slices.back().size(),
+            num_workers_per_stage[stage]);
     }
 
     // Build the command stream for each stage/worker
@@ -2516,34 +2465,50 @@ bool RunPipelinedWorkersTest(
 
         const auto worker_cores = corerange_to_cores(pipeline_stage_worker_cores[stage]);
         TT_FATAL(worker_cores.size() == num_workers_per_stage[stage], "Mismatch in worker cores");
-        std::optional<std::vector<CoreCoord>> next_worker_cores = !last_stage ? corerange_to_cores(pipeline_stage_worker_cores[stage + 1]) : std::optional<std::vector<CoreCoord>>(std::nullopt);
+        std::optional<std::vector<CoreCoord>> next_worker_cores =
+            !last_stage ? corerange_to_cores(pipeline_stage_worker_cores[stage + 1])
+                        : std::optional<std::vector<CoreCoord>>(std::nullopt);
 
         // auto &reader_cmd_stream = per_stage_worker_reader_command_streams.back();
         // auto &writer_cmd_stream = per_stage_worker_writer_command_streams.back();
-        TT_FATAL(per_stage_worker_reader_tensor_slices[stage].size() == num_workers_per_stage[stage], "Mismatch in tensor slices");
-        TT_FATAL(per_stage_worker_writer_tensor_slices[stage].size() == num_workers_per_stage[stage], "Mismatch in tensor slices");
+        TT_FATAL(
+            per_stage_worker_reader_tensor_slices[stage].size() == num_workers_per_stage[stage],
+            "Mismatch in tensor slices");
+        TT_FATAL(
+            per_stage_worker_writer_tensor_slices[stage].size() == num_workers_per_stage[stage],
+            "Mismatch in tensor slices");
         for (size_t worker = 0; worker < num_workers_per_stage[stage]; worker++) {
             std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> reader_cmd_stream;
             std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> writer_cmd_stream;
-            TT_FATAL(per_stage_worker_reader_tensor_slices[stage][worker].size() == slices_per_stage, "Mismatch in tensor slices");
-            TT_FATAL(per_stage_worker_writer_tensor_slices[stage][worker].size() == slices_per_stage, "Mismatch in tensor slices");
+            TT_FATAL(
+                per_stage_worker_reader_tensor_slices[stage][worker].size() == slices_per_stage,
+                "Mismatch in tensor slices");
+            TT_FATAL(
+                per_stage_worker_writer_tensor_slices[stage][worker].size() == slices_per_stage,
+                "Mismatch in tensor slices");
             for (size_t slice_logical = 0; slice_logical < slices_per_stage; slice_logical++) {
                 const auto slice_actual = worker_chunk_read_order[stage][slice_logical];
                 // reader
                 if (!first_stage) {
-                    reader_cmd_stream.push_back(
-                        ttnn::ccl::cmd::uops::local_semaphore_wait(input_tensor_semaphores[stage][slice_actual], num_workers_per_stage[stage - 1]));
+                    reader_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_semaphore_wait(
+                        input_tensor_semaphores[stage][slice_actual], num_workers_per_stage[stage - 1]));
                 }
-                reader_cmd_stream.push_back(
-                    ttnn::ccl::cmd::uops::read_tensor_slice_to_cb(per_stage_worker_reader_tensor_slices[stage][worker][slice_actual], cb_index));
+                reader_cmd_stream.push_back(ttnn::ccl::cmd::uops::read_tensor_slice_to_cb(
+                    per_stage_worker_reader_tensor_slices[stage][worker][slice_actual], cb_index));
                 log_info(tt::LogTest, "Worker {} reading/writing slice {}", worker, slice_actual);
 
                 // writer
-                writer_cmd_stream.push_back(
-                    ttnn::ccl::cmd::uops::local_write_cb_to_tensor_slice(per_stage_worker_writer_tensor_slices[stage][worker][slice_actual], cb_index));
+                writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_write_cb_to_tensor_slice(
+                    per_stage_worker_writer_tensor_slices[stage][worker][slice_actual], cb_index));
                 if (not last_stage) {
                     for (auto next_worker_xy : next_worker_cores.value()) {
-                        log_info(tt::LogTest, "Stage {} Worker {} noc seminc to core (logical) x={},y={}", stage,worker, next_worker_xy.x, next_worker_xy.y);
+                        log_info(
+                            tt::LogTest,
+                            "Stage {} Worker {} noc seminc to core (logical) x={},y={}",
+                            stage,
+                            worker,
+                            next_worker_xy.x,
+                            next_worker_xy.y);
                         writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_chip_noc_semaphore_inc(
                             device->worker_core_from_logical_core(next_worker_xy).x,
                             device->worker_core_from_logical_core(next_worker_xy).y,
@@ -2558,31 +2523,28 @@ bool RunPipelinedWorkersTest(
                 {&device_tensors[stage]},
                 {page_size_bytes},
                 device,
-                cb_packet_size_in_pages, // TODO: get from fabric
+                cb_packet_size_in_pages,  // TODO: get from fabric
                 {worker_cores.at(worker)},
                 reader_cmd_stream,
                 std::nullopt,
                 std::nullopt,
-                std::nullopt
-            );
+                std::nullopt);
             ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
                 program,
                 writer_kernels[stage],
                 {&device_tensors[stage + 1]},
                 {page_size_bytes},
                 device,
-                cb_packet_size_in_pages, // TODO: get from fabric
+                cb_packet_size_in_pages,  // TODO: get from fabric
                 {worker_cores.at(worker)},
                 writer_cmd_stream,
                 std::nullopt,
                 std::nullopt,
-                std::nullopt
-            );
+                std::nullopt);
         }
     }
 
     run_programs(programs, {device});
-
 
     bool pass = true;
     constexpr bool enable_check = true;
@@ -2619,7 +2581,6 @@ bool RunPipelinedWorkersTest(
     return pass;
 }
 
-
 TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly0) {
     ttnn::Shape tensor_shape = {1, 1, 64, 16384};
     auto logical_shape = tensor_shape.logical_shape();
@@ -2641,13 +2602,12 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
         {2, 0, 3, 1},  // read in non-sequential order
         {1, 2, 3, 0}   // read in non-sequential order
     };
-    std::vector<MemoryConfig> mem_configs {
+    std::vector<MemoryConfig> mem_configs{
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
-        MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)
-    };
+        MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)};
 
     auto pass = RunPipelinedWorkersTest(
 
@@ -2690,13 +2650,12 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
         {2, 0, 3, 1},  // read in non-sequential order
         {1, 2, 3, 0}   // read in non-sequential order
     };
-    std::vector<MemoryConfig> mem_configs {
+    std::vector<MemoryConfig> mem_configs{
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
-        MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)
-    };
+        MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)};
 
     auto pass = RunPipelinedWorkersTest(
 
@@ -2735,17 +2694,16 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
 
     std::vector<std::vector<size_t>> worker_chunk_read_order = {
         {0, 1},  // first input
-        {1,0},  // read in reverse order
+        {1, 0},  // read in reverse order
         {1, 0},  // read in non-sequential order
-        {0,1}   // read in non-sequential order
+        {0, 1}   // read in non-sequential order
     };
-    std::vector<MemoryConfig> mem_configs {
+    std::vector<MemoryConfig> mem_configs{
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
-        MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)
-    };
+        MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)};
 
     auto pass = RunPipelinedWorkersTest(
 
@@ -2769,33 +2727,24 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
 }
 
 // Hits issues with input tensor copy-back
-TEST(WorkerCclCommandProcessingKernels, DISABLED_ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly_SmallSweep) {
-
+TEST(
+    WorkerCclCommandProcessingKernels,
+    DISABLED_ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly_SmallSweep) {
     std::vector<ttnn::Shape> tensor_shapes = {
-        {1, 1, 64, 8192},
-        {1, 4, 64, 768},
-        {4, 1, 64, 768},
-        {4, 4, 64, 768},
-        {1, 1, 64, 768},
-        {5, 3, 64, 768}
-    };
+        {1, 1, 64, 8192}, {1, 4, 64, 768}, {4, 1, 64, 768}, {4, 4, 64, 768}, {1, 1, 64, 768}, {5, 3, 64, 768}};
 
     const size_t split_dim = 3;
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
     constexpr size_t num_stages = 4;
-    const std::vector<size_t> slices_per_stage_sweep = {2,3,4};
+    const std::vector<size_t> slices_per_stage_sweep = {2, 3, 4};
     const size_t cb_packet_size_in_pages = 4;
     const size_t num_packets_per_cb = 4;
     auto layout = Layout::TILE;
     const tt::DataFormat data_format = tt::DataFormat::RawUInt32;
     const size_t page_size_bytes = tile_size(DataFormat::RawUInt32);
     std::vector<std::vector<size_t>> num_workers_per_stage_sweep = {
-        {1, 1, 1, 1},
-        {2, 2, 2, 2},
-        {3, 3, 3, 3},
-        {4, 4, 4, 4}
-    };
+        {1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}, {4, 4, 4, 4}};
 
     std::vector<std::vector<std::vector<size_t>>> worker_chunk_read_order = {
         {{}},
@@ -2806,26 +2755,24 @@ TEST(WorkerCclCommandProcessingKernels, DISABLED_ChainOfCommandProcessorsWithVar
             {0},
         },
         {
-            {0,1},
-            {1,0},
-            {1,0},
-            {0,1},
+            {0, 1},
+            {1, 0},
+            {1, 0},
+            {0, 1},
         },
         {
-            {2,0,1},
-            {1,0,2},
-            {0,1,2},
-            {2,1,0},
+            {2, 0, 1},
+            {1, 0, 2},
+            {0, 1, 2},
+            {2, 1, 0},
         },
         {
             {0, 1, 2, 3},  // first input
             {3, 2, 1, 0},  // read in reverse order
             {2, 0, 3, 1},  // read in non-sequential order
             {1, 2, 3, 0}   // read in non-sequential order
-        }
-    };
-    std::vector<std::vector<MemoryConfig>> mem_configs_sweep =
-    {
+        }};
+    std::vector<std::vector<MemoryConfig>> mem_configs_sweep = {
         {
             MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
             MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
@@ -2833,56 +2780,57 @@ TEST(WorkerCclCommandProcessingKernels, DISABLED_ChainOfCommandProcessorsWithVar
             MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
             MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         },
-        {
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1)
-        },
-        {
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)
-        },
-        {
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
-            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)
-        },
+        {MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1)},
+        {MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)},
+        {MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1),
+         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)},
     };
 
-    for (auto &tensor_shape : tensor_shapes) {
-    for (auto &num_workers_per_stage : num_workers_per_stage_sweep) {
-    for (size_t slices_per_stage : slices_per_stage_sweep) {
-    for (auto &mem_configs : mem_configs_sweep) {
-        log_info(tt::LogTest, "tensor shape {} and workers stage {} slices_per_stage {}", tensor_shape, num_workers_per_stage, slices_per_stage);
-                auto pass = RunPipelinedWorkersTest(
+    for (auto& tensor_shape : tensor_shapes) {
+        for (auto& num_workers_per_stage : num_workers_per_stage_sweep) {
+            for (size_t slices_per_stage : slices_per_stage_sweep) {
+                for (auto& mem_configs : mem_configs_sweep) {
+                    log_info(
+                        tt::LogTest,
+                        "tensor shape {} and workers stage {} slices_per_stage {}",
+                        tensor_shape,
+                        num_workers_per_stage,
+                        slices_per_stage);
+                    auto pass = RunPipelinedWorkersTest(
 
-                    tensor_shape,
-                    split_dim,
+                        tensor_shape,
+                        split_dim,
 
-                    // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
-                    num_stages,
-                    num_workers_per_stage,
-                    slices_per_stage,
-                    data_format,
-                    page_size_bytes,
-                    cb_packet_size_in_pages,
-                    num_packets_per_cb,
-                    layout,
+                        // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be
+                        // configurable)
+                        num_stages,
+                        num_workers_per_stage,
+                        slices_per_stage,
+                        data_format,
+                        page_size_bytes,
+                        cb_packet_size_in_pages,
+                        num_packets_per_cb,
+                        layout,
 
-                    worker_chunk_read_order[slices_per_stage],
-                    mem_configs);
+                        worker_chunk_read_order[slices_per_stage],
+                        mem_configs);
 
-                ASSERT_TRUE(pass);
+                    ASSERT_TRUE(pass);
+                }
             }
         }
-    }}
+    }
 }
 
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
@@ -2969,20 +2917,17 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 }
 
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather_v2/device/all_gather_op.hpp"
-TEST(CclAsyncOp, AllGatherSmall_PersistentFabric) {
-    // JUST MAKE SURE IT DOESN'T HANG - CORRECTNESS CHECKS ARE DONE IN PYTEST
-    // HERE WE JUST CHECK THE BASIC PLUMBING IS DONE
+void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, ttnn::Shape const& input_shape) {
     log_info(tt::LogTest, "entering test");
-    const size_t dim = 3;
-    const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
     // DEVICES setuip
     T3000TestDevice test_fixture;
-    std::vector<Device*> devices = {test_fixture.devices_.at(0), test_fixture.devices_.at(1)};
-    // test_fixture.devices_.at(2),
-    // test_fixture.devices_.at(3)};
+    std::vector<Device*> devices = {
+        test_fixture.devices_.at(0),
+        test_fixture.devices_.at(1),
+        test_fixture.devices_.at(2),
+        test_fixture.devices_.at(3)};
     const size_t num_devices = devices.size();
-    const ttnn::Shape input_shape = ttnn::Shape{1, 1, 32, 128};
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     auto const logical_shape = input_shape.logical_shape();
     const auto num_elems = logical_shape.volume();
@@ -3004,40 +2949,65 @@ TEST(CclAsyncOp, AllGatherSmall_PersistentFabric) {
     const Tensor input_mesh_tensor = ttnn::distributed::api::aggregate_as_tensor(device_input_tensors);
 
     // FABRIC setup
-    // const bool enable_persistent_fabric = true;
+    const bool enable_persistent_fabric = true;
 
-    // std::vector<Program> dummy_worker_programs;
-    // std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
-    // std::optional<std::vector<Program>> fabric_programs;
-    // std::vector<Program*> fabric_program_ptrs;
-    // std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
-    // setup_test_with_persistent_fabric(
-    //     devices,
-    //     dummy_worker_programs,
-    //     subdevice_managers,
-    //     fabric_programs,
-    //     fabric_program_ptrs,
-    //     fabric_handle,
-    //     enable_persistent_fabric);
+    std::vector<Program> dummy_worker_programs;
+    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
+    std::optional<std::vector<Program>> fabric_programs;
+    std::vector<Program*> fabric_program_ptrs;
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
+    setup_test_with_persistent_fabric(
+        devices,
+        dummy_worker_programs,
+        subdevice_managers,
+        fabric_programs,
+        fabric_program_ptrs,
+        fabric_handle,
+        enable_persistent_fabric,
+        num_links);
     log_info(tt::LogTest, "Lauching op");
 
     auto output_tensor = ttnn::operations::ccl::all_gather_v2(
-        input_mesh_tensor, dim, num_links, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, 0, 0, ttnn::ccl::Topology::Linear);
+        input_mesh_tensor,
+        dim,
+        num_links,
+        operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        0,
+        0,
+        ttnn::ccl::Topology::Linear,
+        subdevice_managers->worker_subdevice_id,
+        fabric_handle);
 
     // wait for op completion
-    // log_info(tt::LogTest, "Waiting for Op finish");
-    // std::ranges::for_each(devices, [&](Device* d) {
-    //     tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
-    // });
-    // log_info(tt::LogTest, "Main op done");
+    log_info(tt::LogTest, "Waiting for Op finish");
+    std::ranges::for_each(devices, [&](Device* d) {
+        tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
+    });
+    log_info(tt::LogTest, "Main op done");
 
-    // log_info(tt::LogTest, "Fabric teardown");
-    // persistent_fabric_teardown_sequence(
-    //     devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+    log_info(tt::LogTest, "Fabric teardown");
+    persistent_fabric_teardown_sequence(
+        devices,
+        subdevice_managers,
+        fabric_handle.value(),
+        tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);  // tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {
         tt_metal::Synchronize(d, ttnn::DefaultQueueId);
     }
     log_info(tt::LogTest, "Finished");
+}
+
+TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {
+    run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape{1, 1, 32, 128});
+}
+TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_8192) {
+    run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape{1, 1, 32, 8192});
+}
+TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_128) {
+    run_all_gather_with_persistent_fabric(3, 2, ttnn::Shape{1, 1, 32, 128});
+}
+TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_8192) {
+    run_all_gather_with_persistent_fabric(3, 2, ttnn::Shape{1, 1, 32, 8192});
 }

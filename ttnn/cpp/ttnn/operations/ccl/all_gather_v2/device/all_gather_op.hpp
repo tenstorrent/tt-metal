@@ -35,7 +35,9 @@ struct AllGatherV2 {
     const uint32_t ring_index;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
-    const GlobalSemaphore semaphore_handle;
+    std::optional<GlobalSemaphore> semaphore_handle;
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle;
+    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map;
 
     AllGatherV2(
         std::optional<Device*> forward_device,
@@ -46,7 +48,9 @@ struct AllGatherV2 {
         uint32_t ring_index,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        GlobalSemaphore semaphore_handle) :
+        std::optional<GlobalSemaphore> semaphore_handle,
+        std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+        std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) :
         forward_device(forward_device),
         backward_device(backward_device),
         dim(dim),
@@ -55,7 +59,9 @@ struct AllGatherV2 {
         ring_index(ring_index),
         output_mem_config(output_mem_config),
         topology(topology),
-        semaphore_handle(semaphore_handle) {}
+        semaphore_handle(semaphore_handle),
+        fabric_handle(fabric_handle),
+        sub_device_id_map(sub_device_id_map) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -88,7 +94,9 @@ AllGatherV2 create_all_gather_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<Device*>& devices,
     const ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore_handles
+    const std::vector<GlobalSemaphore>& semaphore_handles,
+    std::unordered_map<chip_id_t, SubDeviceId> &sub_device_id_map,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> &fabric_handle
 );
 } // namespace all_gather_detail
 } // namespace ccl
@@ -104,7 +112,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore semaphore_handle);
+    std::optional<GlobalSemaphore> semaphore_handle,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> &fabric_handle
+    );
 
 
 
@@ -118,7 +128,9 @@ Tensor all_gather_v2(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
     const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    std::unordered_map<chip_id_t, SubDeviceId> sub_device_id_map = {},                 // TODO make reference
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
 
 Tensor all_gather_v2(
     const Tensor& input_tensor,
