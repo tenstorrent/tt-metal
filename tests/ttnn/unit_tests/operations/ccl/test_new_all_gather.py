@@ -197,13 +197,18 @@ def run_all_gather_impl(
         # (2, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
         # (2, 1, [1, 1, 640, 8192], 2, ttnn.TILE_LAYOUT),
         # (2, 1, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 64, 256], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),  # https://github.com/tenstorrent/tt-metal/issues/9686
         # # (8, 1, [1, 8, 256, 32], 1, ttnn.TILE_LAYOUT),
         # (2, 2, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
         # (2, 2, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
+        # (2, 2, [1, 1, 64, 64], 3, ttnn.TILE_LAYOUT),
         # (2, 2, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
         # (2, 2, [1, 1, 640, 8192], 2, ttnn.TILE_LAYOUT),
         # (2, 2, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
+        (8, 2, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT)
         # # (4, 3, [1, 1, 32, 16384 * 4], 3, ttnn.TILE_LAYOUT),  # failed: device not connected
         # (8, 4, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
         # (8, 3, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),

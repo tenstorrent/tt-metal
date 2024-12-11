@@ -632,5 +632,47 @@ private:
 };
 
 
+class GenericWrappedTensorSlicerV2 {
+public:
+    GenericWrappedTensorSlicerV2(
+        const Tensor& input_tensor,
+        int slice_dim,
+        uint32_t partition_index,
+        uint32_t partition_size,
+        uint32_t total_num_workers);
+
+    ttnn::ccl::v2::TensorSlice get_worker_slice_v2(std::size_t global_worker_index);
+
+    // method to compute offsets in a wrapped layout
+    std::vector<Shape4D<uint32_t>> compute_worker_slice_offsets(std::vector<Shape4D<uint32_t>> const& worker_slice_shapes);
+
+    // method to create worker slice shapes in a tile layout
+    std::vector<Shape4D<uint32_t>> create_worker_slice_shapes_for_tile_layout(
+        Shape4D<uint32_t> const& tensor_slice_shape_in_tiles,
+        uint32_t num_workers);
+
+private:
+    void initialize(
+        const Tensor& input_tensor,
+        int slice_dim,
+        uint32_t partition_index,
+        uint32_t partition_size,
+        uint32_t total_num_workers);
+
+    Shape4D<uint32_t> calculate_tensor_slice_shape(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_size);
+    Shape4D<uint32_t> calculate_tensor_slice_offset(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_index);
+
+    // Class member variables
+    Shape4D<uint32_t> tensor_shape;
+    Shape4D<uint32_t> tensor_slice_shape;
+    Shape4D<uint32_t> tensor_slice_offset;
+    std::vector<Shape4D<uint32_t>> worker_slice_shapes;
+    std::vector<Shape4D<uint32_t>> worker_slice_offsets;
+    uint32_t input_page_size;
+    bool row_major;
+    uint32_t partition_index;
+    uint32_t partition_size;
+};
+
 }  // namespace ccl
 }  // namespace ttnn

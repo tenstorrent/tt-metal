@@ -1123,35 +1123,6 @@ tt_xy_pair GenericWrappedTensorSlicer::calculate_tensor_slice_shape(
     return tensor_slice_shape;
 }
 
-Shape4D<uint32_t> GenericWrappedTensorSlicer::calculate_tensor_slice_offset(
-    const Tensor& input_tensor, int slice_dim, uint32_t partition_index) {
-    auto input_shape = input_tensor.get_legacy_shape();
-    Shape4D<uint32_t> offset(0, 0, 0, 0);
-
-    // Calculate the size of the slice along the given dimension
-    uint32_t dim_size = input_shape[slice_dim];
-    uint32_t slice_size = dim_size / partition_size;
-
-    // Set the offset based on the slice dimension
-    switch (slice_dim) {
-        case 0:  // w dimension
-            offset[0] = partition_index * slice_size;
-            break;
-        case 1:  // z dimension
-            offset[1] = partition_index * slice_size;
-            break;
-        case 2:  // y dimension
-            offset[2] = partition_index * (slice_size / 32);
-            break;
-        case 3:  // x dimension
-            offset[3] = partition_index * (slice_size / 32);
-            break;
-        default: TT_THROW("Invalid slice dimension");
-    }
-
-    return offset;
-}
-
 void GenericWrappedTensorSlicer::initialize(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -1171,9 +1142,6 @@ void GenericWrappedTensorSlicer::initialize(
     TT_FATAL(!this->row_major, "Row major not supported yet");
 
     this->tensor_slice_shape = calculate_tensor_slice_shape(input_tensor, slice_dim, partition_size);
-
-    // Calculate tensor slice offset
-    this->tensor_slice_offset = calculate_tensor_slice_offset(input_tensor, slice_dim, partition_index);
 
     // Calculate worker slice shapes (tile layout)
     this->worker_slice_shapes = create_worker_slice_shapes_for_tile_layout(
@@ -1202,18 +1170,6 @@ ccl::InterleavedTensorWorkerSlice GenericWrappedTensorSlicer::get_worker_slice(s
         this->worker_slice_offsets[global_worker_index],
         true  // wrapped
     );
-}
-
-ttnn::ccl::v2::TensorSlice GenericWrappedTensorSlicer::get_worker_slice_v2(std::size_t global_worker_index) {
-    assert(global_worker_index < this->worker_slice_shapes.size());
-    assert(global_worker_index < this->worker_slice_offsets.size());
-    return ttnn::ccl::v2::TensorSlice(
-        Shape4D<uint32_t>(1, 1, flattened_tensor_shape.y, flattened_tensor_shape.x),
-        Shape4D<uint32_t>(1, 1, tensor_slice_shape.y, tensor_slice_shape.x),
-        this->tensor_slice_offset,
-        Shape4D<uint32_t>(1, 1, worker_slice_shapes[global_worker_index].y, worker_slice_shapes[global_worker_index].x),
-        Shape4D<uint32_t>(
-            0, 0, worker_slice_offsets[global_worker_index].y, worker_slice_offsets[global_worker_index].x));
 }
 
 std::vector<tt_xy_pair> GenericWrappedTensorSlicer::compute_worker_slice_offsets(
@@ -1272,6 +1228,184 @@ std::vector<tt_xy_pair> GenericWrappedTensorSlicer::create_worker_slice_shapes_f
         if (remainder_worker_len_tiles > 0) {
             worker_slice_shapes.back() = tt_xy_pair{remainder_worker_len_tiles, 1};
         }
+    }
+
+    log_trace(tt::LogOp, "--------------------------------");
+
+    return worker_slice_shapes;
+}
+
+
+
+
+GenericWrappedTensorSlicerV2::GenericWrappedTensorSlicerV2(
+    const Tensor& input_tensor,
+    int slice_dim,
+    uint32_t partition_index,
+    uint32_t partition_size,
+    uint32_t total_num_workers)
+{
+    this->initialize(input_tensor, slice_dim, partition_index, partition_size, total_num_workers);
+}
+
+Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_shape(
+    Shape4D<uint32_t> const& input_shape,
+    int slice_dim,
+    uint32_t partition_size) {
+
+    // Calculate the size of the slice along the given dimension
+    uint32_t dim_size = input_shape[slice_dim];
+    uint32_t slice_size = dim_size / partition_size;
+
+    // Start with full shape
+    Shape4D<uint32_t> slice_shape(input_shape[0], input_shape[1], input_shape[2], input_shape[3]);
+
+    // Adjust the sliced dimension
+    switch(slice_dim) {
+        case 0: // w dimension
+            slice_shape[0] = slice_size;
+            break;
+        case 1: // z dimension
+            slice_shape[1] = slice_size;
+            break;
+        case 2: // y dimension
+            slice_shape[2] = slice_size;
+            break;
+        case 3: // x dimension
+            slice_shape[3] = slice_size;
+            break;
+        default:
+            TT_THROW("Invalid slice dimension");
+    }
+    return slice_shape;
+}
+
+Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_offset(
+    Shape4D<uint32_t> const& input_shape,
+    int slice_dim,
+    uint32_t partition_index) {
+
+    Shape4D<uint32_t> offset(0, 0, 0, 0);
+
+    // Calculate the size of the slice along the given dimension
+    uint32_t dim_size = input_shape[slice_dim];
+    uint32_t slice_size = dim_size / partition_size;
+
+    // Set the offset based on the slice dimension
+    switch(slice_dim) {
+        case 0: // w dimension
+            offset[0] = partition_index * slice_size;
+            break;
+        case 1: // z dimension
+            offset[1] = partition_index * slice_size;
+            break;
+        case 2: // y dimension
+            offset[2] = partition_index * slice_size;
+            break;
+        case 3: // x dimension
+            offset[3] = partition_index * slice_size;
+            break;
+        default:
+            TT_THROW("Invalid slice dimension");
+    }
+
+    return offset;
+}
+
+void GenericWrappedTensorSlicerV2::initialize(
+    const Tensor& input_tensor,
+    int slice_dim,
+    uint32_t partition_index,
+    uint32_t partition_size,
+    uint32_t total_num_workers)
+{
+    // Configure layout parameters
+    this->row_major = (input_tensor.get_layout() == Layout::ROW_MAJOR);
+    this->input_page_size = input_tensor.buffer()->page_size();
+    this->partition_index = partition_index;
+    this->partition_size = partition_size;
+
+    // Assume everything in Tile layout for now, row major not supported yet
+    TT_FATAL(!this->row_major, "Row major not supported yet");
+
+    // Record the input tensor shape
+    auto input_shape = input_tensor.get_legacy_shape();
+    this->tensor_shape = Shape4D<uint32_t>(input_shape[0], input_shape[1], input_shape[2]/tt::constants::TILE_HEIGHT, input_shape[3]/tt::constants::TILE_WIDTH);
+
+    // Calculate tensor slice shape
+    this->tensor_slice_shape = calculate_tensor_slice_shape(this->tensor_shape, slice_dim, partition_size);
+
+    // Calculate tensor slice offset
+    this->tensor_slice_offset = calculate_tensor_slice_offset(this->tensor_shape, slice_dim, partition_index);
+
+    // Calculate worker slice shapes in terms of flattened tiles
+    this->worker_slice_shapes = create_worker_slice_shapes_for_tile_layout(this->tensor_slice_shape, total_num_workers);
+
+    // Calculate worker slice offsets in terms of flattened tiles
+    this->worker_slice_offsets = compute_worker_slice_offsets(this->worker_slice_shapes);
+}
+
+ttnn::ccl::v2::TensorSlice GenericWrappedTensorSlicerV2::get_worker_slice_v2(std::size_t global_worker_index) {
+    assert(global_worker_index < this->worker_slice_shapes.size());
+    assert(global_worker_index < this->worker_slice_offsets.size());
+    return ttnn::ccl::v2::TensorSlice(
+        this->tensor_shape, // tensor_shape
+        this->tensor_slice_shape, // tensor_slice_shape
+        this->tensor_slice_offset, // tensor_slice_offset
+        this->worker_slice_shapes[global_worker_index], // worker_slice_shape
+        this->worker_slice_offsets[global_worker_index] // worker_slice_offset
+    );
+}
+
+/* Worker slices and offsets are 4D shapes but flattened to 1D in the last dimension*/
+
+std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::compute_worker_slice_offsets(std::vector<Shape4D<uint32_t>> const& worker_slice_shapes) {
+    Shape4D<uint32_t> offset(0, 0, 0, 0);
+    std::vector<Shape4D<uint32_t>> worker_slice_offsets;
+    worker_slice_offsets.reserve(worker_slice_shapes.size());
+    for (const auto& slice_shape : worker_slice_shapes) {
+        worker_slice_offsets.push_back(offset);
+        offset.x += slice_shape.x;
+    }
+    return worker_slice_offsets;
+}
+
+std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice_shapes_for_tile_layout(
+        Shape4D<uint32_t> const& tensor_slice_shape_in_tiles,
+        uint32_t num_workers)
+{
+    std::vector<Shape4D<uint32_t>> worker_slice_shapes;
+    worker_slice_shapes.reserve(num_workers);
+    const uint32_t total_num_tiles = tensor_slice_shape_in_tiles.x * tensor_slice_shape_in_tiles.y * tensor_slice_shape_in_tiles.z * tensor_slice_shape_in_tiles.w;
+    if (num_workers > total_num_tiles) {
+        log_warning(
+            tt::LogOp,
+            "More workers instantiated than is work to be done. Some workers will be idle and do nothing");
+        for (uint32_t w = 0; w < total_num_tiles; ++w) {
+            worker_slice_shapes.emplace_back(1,1,1,1);
+        }
+        for (uint32_t w = total_num_tiles; w < num_workers; ++w) {
+            worker_slice_shapes.emplace_back(0,0,0,0);
+        }
+        return worker_slice_shapes;
+    }
+
+    // Assign slices by assuming that the input tensor is flattened into a 1D Shape
+    std::size_t optim_worker_slice_len_tiles = std::ceil(static_cast<float>(total_num_tiles) / num_workers); // Ceil so that the remainder worker will have a smaller slice
+
+    log_trace(tt::LogOp, "---- GenericWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout ---- ");
+    log_trace(tt::LogOp, "total_num_tiles: {}", total_num_tiles);
+    log_trace(tt::LogOp, "num_workers: {}", num_workers);
+    log_trace(tt::LogOp, "optim_worker_slice_len_tiles: {}", optim_worker_slice_len_tiles);
+
+    uint32_t remainder_worker_len_tiles = total_num_tiles % optim_worker_slice_len_tiles;
+
+    for (uint32_t w = 0; w < num_workers; ++w) {
+        worker_slice_shapes.emplace_back(Shape4D<uint32_t>(1, 1, 1, optim_worker_slice_len_tiles));
+    }
+    // If there is a remainder worker, we need to adjust the last worker's slice shape to be smaller
+    if (remainder_worker_len_tiles > 0) {
+        worker_slice_shapes.back() = Shape4D<uint32_t>(1,1,1,remainder_worker_len_tiles);
     }
 
     log_trace(tt::LogOp, "--------------------------------");
