@@ -75,7 +75,6 @@ def test_add_fp32(device, ttnn_function):
     assert status
 
 
-@pytest.mark.skip(reason="skipped because add_int32 works for positive inputs only, will enable once it is fixed")
 @skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
