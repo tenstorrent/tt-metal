@@ -39,18 +39,18 @@ Testing for writer side:
 
 def get_core_ranges(num_reader_cores):
     all_dram_cores = [
-        # ttnn.CoreCoord(0, 0),  # Produces bad PCC, needs investigation!
         ttnn.CoreCoord(1, 0),
         ttnn.CoreCoord(2, 0),
         ttnn.CoreCoord(3, 0),
+        ttnn.CoreCoord(0, 0),
         ttnn.CoreCoord(4, 0),
-        ttnn.CoreCoord(5, 0),
         ttnn.CoreCoord(6, 0),
-        ttnn.CoreCoord(7, 0),
-        ttnn.CoreCoord(8, 0),
         ttnn.CoreCoord(9, 0),
         ttnn.CoreCoord(10, 0),
         ttnn.CoreCoord(11, 0),
+        ttnn.CoreCoord(8, 0),
+        ttnn.CoreCoord(7, 0),
+        ttnn.CoreCoord(5, 0),
     ]
     all_sender_cores = [
         ttnn.CoreCoord(0, 0),
