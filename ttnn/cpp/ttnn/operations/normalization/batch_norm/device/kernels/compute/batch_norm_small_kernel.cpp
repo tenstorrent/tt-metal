@@ -187,8 +187,8 @@ void MAIN {
             tile_regs_acquire();
             cb_reserve_back(cb_mean, onetile);
 
-            copy_tile_init_with_dt(cb_xsum, is_lastdim_layernorm);
-            copy_tile(cb_xsum, first_tile, dst0);
+            copy_tile_init_with_dt(cb_ex, is_lastdim_layernorm);
+            copy_tile(cb_ex, first_tile, dst0);
             tile_regs_commit();
 
             tile_regs_wait();
