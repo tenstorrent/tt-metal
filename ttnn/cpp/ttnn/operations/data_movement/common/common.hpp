@@ -167,6 +167,54 @@ ttnn::MemoryConfig create_sharded_memory_config(
     bool use_height_and_width_as_shard_shape = false,
     const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR);
 
+template <ShardStrategy strategy>
+std::pair<uint32_t, std::vector<uint32_t>> tensor_coord_to_shard_coord(
+    const std::span<const uint32_t>& tensor_shape,
+    const std::span<const uint32_t>& shard_shape,
+    const std::span<const uint32_t>& tensor_coord) {
+    static_assert(strategy == ShardStrategy::HEIGHT, "FIXME(jkruer): Only height strategy is supported currently.");
+
+    std::array<uint32_t, 2> tensor_shape_2d{0, 0};
+    for (size_t i = 0; i < tensor_shape.size(); i++) {
+        if (i == tensor_shape.size() - 1) {
+            // width dimension, goes unmodified
+            tensor_shape_2d[1] = tensor_shape[i];
+        } else {
+            // height dimension, squeeze into 2D shape
+            if (tensor_shape_2d[0] == 0) {
+                // first time we've seen this dimension
+                tensor_shape_2d[0] = tensor_shape[i];
+            } else {
+                tensor_shape_2d[0] *= tensor_shape[i];
+            }
+        }
+    }
+
+    std::array<uint32_t, 2> tensor_coord_2d{0, tensor_coord.back()};
+    uint32_t height_2d = 0;
+    for (size_t i = 0; i < tensor_coord.size() - 1; i++) {
+        std::vector<uint32_t> page_shapes(tensor_shape.begin() + i + 1, tensor_shape.end() - 1);
+        auto component_sum =
+            tensor_coord[i] * std::accumulate(page_shapes.begin(), page_shapes.end(), 1, std::multiplies<uint32_t>());
+        height_2d += component_sum;
+    }
+    tensor_coord_2d[0] = height_2d;
+
+    if (tensor_coord.size() == 4) {
+        uint32_t n = tensor_coord[0], c = tensor_coord[1], h = tensor_coord[2], w = tensor_coord[3];
+        uint32_t N = tensor_shape[0], C = tensor_shape[1], H = tensor_shape[2], W = tensor_shape[3];
+        assert(height_2d == n * (C * H) + c * H + h);
+    }
+
+    uint32_t shard_height = shard_shape[0];
+    uint32_t w_in_shard = tensor_coord_2d[1];
+    uint32_t h_in_shard = height_2d % shard_height;
+    uint32_t which_shard = height_2d / shard_height;
+
+    std::vector<uint32_t> shard_coord{h_in_shard, w_in_shard};
+    return std::make_pair(which_shard, shard_coord);
+}
+
 }  // namespace data_movement
 }  // namespace operations
 }  // namespace ttnn
