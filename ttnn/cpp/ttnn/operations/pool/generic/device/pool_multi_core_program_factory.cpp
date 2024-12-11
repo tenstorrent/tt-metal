@@ -10,6 +10,43 @@
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
 
+/*
+<in_n          1
+<in_h          2
+<in_w          2
+<out_h         2
+<out_w         2
+<kernel_size_h 3
+<kernel_size_w 3
+<stride_h      1
+<stride_w      1
+<pad_h         1
+<pad_w         1
+<dilation_h    1
+<dilation_w    1
+<num_shards_c  1
+<nblocks       1
+num_shards_c 1
+kernel_size_hw 9
+kernel_size_hw_padded 32
+in_ntiles_hw 1
+in_ntiles_c 12
+out_ntiles_c 12
+is_large_kernel 0
+is_wide_reduction 1
+out_w_loop_count 2
+ncores               1
+in_nhw_per_core      16
+in_nhw_per_core_cliff0
+out_nhw_per_core     4
+ncores_w             8
+in_cb_sz: 8192, in_cb_page_padded: 8192, in_cb_pagesize: 16384, in_cb_npages: 1
+in_tiled_cb_pagesize: 2048, in_tiled_cb_npages: 12
+shard 0: 4, shard 1: 384
+out_nbytes: 2, in_nblocks_c: 2
+out_cb_pagesize: 512, out_cb_npages: 8
+*/
+
 namespace ttnn::operations::pool {
 
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
@@ -35,6 +72,22 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const MemoryConfig& out_mem_config,
     uint32_t nblocks) {
     TT_FATAL(pool_type == Pool2DType::MAX_POOL2D, "Currently only support max pool2d (#12151)");
+
+    std::cout << "<in_n          " << in_n << std::endl;
+    std::cout << "<in_h          " << in_h << std::endl;
+    std::cout << "<in_w          " << in_w << std::endl;
+    std::cout << "<out_h         " << out_h << std::endl;
+    std::cout << "<out_w         " << out_w << std::endl;
+    std::cout << "<kernel_size_h " << kernel_size_h << std::endl;
+    std::cout << "<kernel_size_w " << kernel_size_w << std::endl;
+    std::cout << "<stride_h      " << stride_h << std::endl;
+    std::cout << "<stride_w      " << stride_w << std::endl;
+    std::cout << "<pad_h         " << pad_h << std::endl;
+    std::cout << "<pad_w         " << pad_w << std::endl;
+    std::cout << "<dilation_h    " << dilation_h << std::endl;
+    std::cout << "<dilation_w    " << dilation_w << std::endl;
+    std::cout << "<num_shards_c  " << num_shards_c << std::endl;
+    std::cout << "<nblocks       " << nblocks << std::endl;
 
     // This should allocate a DRAM buffer on the device
     Device* device = input.device();
@@ -70,13 +123,20 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     if (device->arch() == tt::ARCH::GRAYSKULL)
         max_rows_for_reduction /= 2; */
 
-    printf("in_tiles_c: %d\n", in_ntiles_c);
-
     // Hardware can do reduction of 8 tiles at a time.
     // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
+
+    std::cout << "num_shards_c " << num_shards_c << std::endl;
+    std::cout << "kernel_size_hw " << kernel_size_hw << std::endl;
+    std::cout << "kernel_size_hw_padded " << kernel_size_hw_padded << std::endl;
+    std::cout << "in_ntiles_hw " << in_ntiles_hw << std::endl;
+    std::cout << "in_ntiles_c " << in_ntiles_c << std::endl;
+    std::cout << "out_ntiles_c " << out_ntiles_c << std::endl;
+    std::cout << "is_large_kernel " << is_large_kernel << std::endl;
+    std::cout << "is_wide_reduction " << is_wide_reduction << std::endl;
 
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
@@ -86,6 +146,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         tile_w = tt::constants::FACE_WIDTH;
     }
     uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
+    std::cout << "out_w_loop_count " << out_w_loop_count << std::endl;
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
@@ -96,8 +157,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
     uint32_t in_nhw_per_core_cliff = 0;
     uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
-
     uint32_t ncores_w = grid_size.x;
+
+    std::cout << "ncores               " << ncores << std::endl;
+    std::cout << "in_nhw_per_core      " << in_nhw_per_core << std::endl;
+    std::cout << "in_nhw_per_core_cliff" << in_nhw_per_core_cliff << std::endl;
+    std::cout << "out_nhw_per_core     " << out_nhw_per_core << std::endl;
+    std::cout << "ncores_w             " << ncores_w << std::endl;
 
     // TODO: support generic nblocks
     TT_FATAL(

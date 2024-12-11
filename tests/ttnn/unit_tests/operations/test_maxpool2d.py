@@ -136,7 +136,7 @@ def run_max_pool(
     else:
         ttact = ttnn.from_torch(act_reshaped, dtype)
 
-    pre_shard = True  # shard_scheme == None
+    pre_shard = shard_scheme == None
 
     ttact_device = ttnn.to_device(ttact, device)
     if pre_shard:
