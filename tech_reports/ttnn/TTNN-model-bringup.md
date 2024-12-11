@@ -17,7 +17,7 @@
   - [3. End to end model in TTNN](#3-end-to-end-model-in-ttnn)
     - [3.1 Create TTNN unit tests per module and per op](#31-create-ttnn-unit-tests-per-module-and-per-op)
     - [3.2 PCC](#32-pcc--)
-    - [3.4 Optimization](#34-optimization)
+    - [3.3 Optimization](#34-optimization)
   - [4. End to end model performance](#4-end-to-end-model-performance)
     - [4.1 Performance sheet](#41-performance-sheet)
     - [4.2 Visualizer](#42-visualizer--)
@@ -74,7 +74,17 @@ The diagram below illustrates the corresponding Downsample1 module:
   - Similar to individual ops unit tests, user is highly encouraged to check per module [PCC](https://en.wikipedia.org/wiki/Pearson_correlation_coefficient) to ensure the accueacy of per module output from the TTNN implmenetation. Here is an example of it in DS1 module implementation of yolov4. [DS1 PCC assertion](https://github.com/tenstorrent/tt-metal/blob/2c4ab4cd2e5a54f1baada4ebb7c2977c721231b2/models/experimental/yolov4/ttnn/yolov4.py#L189)
 
 
-
+## 3.3 Optimization
+  - When writing TTNN models, there can be several levels of optimization. We can break them down into 3 stages. At the first stage, optimization can be acheived at per-op level. For instance, for a convolution op:
+  - STAGE 1: 
+  - Based on the height, width and number of chanels, you may decide the sharding stratefy (height-sharding, width-sharding, or block-sharding). You may refer to the documentation on convolutions for more details here: [Conv sharding strategy](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md#sharding) [sharding strategy explained in yolov4-tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#24-use-best-shardlayout-for-convolutio)  
+  - At the op-level, you may also optimize by selecting the optimal data type such as bfloat8_b over bfloat_16 when possible. Here is another example of it in yolo-v4 tech report: [data-type optimization](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#23-data-type-optimization)
+  - At the op-level, another argument is the math_fidelity. Always set the math_fidelity=ttnn.MathFidelity.LoFi unless you observe noticeable drop in PCC.
+  - At the module-level, there are parameters to optimize based on your module graph. For instance, for the convolution op, you should set the deallocate_activation to True if you will not be using the input tensor to the conv anywhere else on the model graph. Please refer to the example here: [Yolo-v4 architecture](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#3-yolov4-architecture).
+  - At the module-level as well as the full-model-level, there are intial oprimizations you may consider, for instance, when the module or the full model consists of cosequtive ops, idally there should be minimal changes in sharding strategy between ops. For instance, if the model starts with width-sharding op, it would be ideal to keep the same strategy for the following op as reshards can be expensive. So it is recommended to find the best sharding strategies per op. However, once you have a module implementation, you may generate the perf sheet (this will be covered on a following section of this reort) to analyze the device run-time of the full module/full model and identify where keeping the same sharding strategy could be beneficial looking at the end to end device time versus doing reshareds between ops.  
+  - STAGE 2: 
+  - at this stage, we need to utilize several tools available to us. We will start by the perf_sheet. You will need to build metal with perf-analyzer enabled fist. Then follow the instructions to generate the perf sheet per your module or full model.    
+ 
 In this representation, the convolution encompasses both the convolution and Batch Norm operations, as they have been folded together.
 
 Here is the code structure for the Downsample1 sub-module:
