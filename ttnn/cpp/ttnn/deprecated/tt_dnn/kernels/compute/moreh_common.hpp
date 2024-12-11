@@ -1018,8 +1018,6 @@ ALWI void power_tile_to_cb(
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    // DUONG: to check the value of dst before log_tile api is called, please comment out lines 1054-1055
-
     // x^p
     tile_regs_acquire();
     cb_wait_front(cb_x, onetile);
