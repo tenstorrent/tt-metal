@@ -403,7 +403,7 @@ Tensor _variance_impl(
     const std::optional<MemoryConfig>& output_mem_config) {
     ttnn::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
-    auto shape_wh = y.get_legacy_shape();
+    auto shape_wh = y.get_padded_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
     return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
@@ -599,10 +599,10 @@ Tensor ExecuteUnaryCompositeThreshold::invoke(
 std::vector<Tensor> split_tensor_for_glu(
     const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
-    tt::tt_metal::LegacyShape inshape(input_a.get_legacy_shape());
+    ttnn::SimpleShape inshape(input_a.get_padded_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
     ttnn::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
-    ttnn::SmallVector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttnn::SmallVector<uint32_t> e_a = {input_a.get_padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
     ttnn::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
     ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};

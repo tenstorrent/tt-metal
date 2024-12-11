@@ -19,7 +19,7 @@ void ComplexTensor::deallocate() {
 }
 
 ComplexTensor CreateComplexTensor::invoke(const Tensor& real, const Tensor& imag) {
-    TT_ASSERT(real.get_legacy_shape() == imag.get_legacy_shape(), "Tensor shapes of real and imag should be identical");
+    TT_ASSERT(real.get_padded_shape() == imag.get_padded_shape(), "Tensor shapes of real and imag should be identical");
     return ComplexTensor({real, imag});
 }
 
