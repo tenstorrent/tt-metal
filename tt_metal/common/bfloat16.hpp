@@ -18,20 +18,14 @@ private:
     uint16_t uint16_data;
 
 public:
-    static const size_t SIZEOF = 2;
-    bfloat16() {}
+    static constexpr size_t SIZEOF = 2;
+    bfloat16() = default;
 
     // create from float: no rounding, just truncate
     bfloat16(float float_num) {
-        uint32_t uint32_data;
-        TT_ASSERT(sizeof float_num == sizeof uint32_data);
+        static_assert(sizeof float_num == 4, "float must have size 4");
 
-        uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-        // just move upper 16 to lower 16 (truncate)
-        uint32_data = (uint32_data >> 16);
-
-        // store lower 16 as 16-bit uint
-        uint16_data = (uint16_t)uint32_data;
+        uint16_data = (*reinterpret_cast<uint32_t*>(&float_num)) >> 16;
     }
 
     // store lower 16 as 16-bit uint
