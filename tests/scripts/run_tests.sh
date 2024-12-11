@@ -6,6 +6,7 @@ set -eo pipefail
 default_tt_arch="grayskull"
 default_pipeline_type="post_commit"
 default_dispatch_mode="fast"
+default_model="None"
 
 assert_requested_module_matches() {
     local actual=$1
@@ -357,7 +358,7 @@ run_pipeline_tests() {
         model_perf_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     # TG pipelines
     elif [[ $pipeline_type == "unit_tg_device" ]]; then
-        unit_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        unit_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == "frequent_tg_device" ]]; then
         frequent_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "demos_tg_device" ]]; then
@@ -449,7 +450,7 @@ main() {
                 shift
                 ;;
             --model)
-                pipeline_type=$2
+                model=$2
                 shift
                 ;;
             *)
@@ -464,6 +465,7 @@ main() {
     tt_arch=${tt_arch:-$default_tt_arch}
     dispatch_mode=${dispatch_mode:-$default_dispatch_mode}
     pipeline_type=${pipeline_type:-$default_pipeline_type}
+    model=${model:-$default_model}
 
     available_dispatch_modes=("fast" "slow")
     available_tt_archs=("grayskull" "wormhole_b0" "blackhole")
@@ -488,7 +490,7 @@ main() {
         # Module invocation
         run_module_tests "$tt_arch" "$module" "$pipeline_type"
     elif [[ -n $pipeline_type ]]; then
-        run_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        run_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     else
         echo "You must have at least a module or pipeline_type specified"
         exit 1
