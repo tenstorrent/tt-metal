@@ -490,21 +490,21 @@ MeshSubDeviceManagerId MeshDevice::create_sub_device_manager(tt::stl::Span<const
     return mesh_sub_device_manager_id;
 }
 
-MeshSubDeviceManagerId MeshDevice::create_sub_device_manager(const std::vector<std::vector<SubDevice>>& mesh_sub_devices, DeviceAddr local_l1_size) {
+std::tuple<MeshSubDeviceManagerId, SubDeviceId> MeshDevice::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     MeshSubDeviceManagerId mesh_sub_device_manager_id(*this);
-    TT_FATAL(mesh_sub_devices.size() == this->num_devices(), "Number of devices does not match number of sub-device configurations");
+    SubDeviceId fabric_sub_device_id;
     for (uint32_t i = 0; i < this->num_devices(); i++) {
         auto* device = this->devices[i];
         auto& sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
-        tt::stl::Span<const SubDevice> sub_devices(mesh_sub_devices[i]);
-        device->push_work([device, sub_devices, local_l1_size, &sub_device_manager_id]() {
-            sub_device_manager_id = device->create_sub_device_manager(sub_devices, local_l1_size);
+        // All fabric sub-device ids will be the same, since all managers are created with the same sub_devices input
+        device->push_work([device, sub_devices, local_l1_size, &sub_device_manager_id, &fabric_sub_device_id]() {
+            std::tie(sub_device_manager_id, fabric_sub_device_id) = device->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
         });
     }
     for (auto* device : this->devices) {
         device->synchronize();
     }
-    return mesh_sub_device_manager_id;
+    return {mesh_sub_device_manager_id, fabric_sub_device_id};
 }
 
 void MeshDevice::load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id) {

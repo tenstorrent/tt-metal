@@ -68,6 +68,10 @@ public:
     bool has_allocations() const;
     DeviceAddr local_l1_size() const;
 
+    // #TODO #15944: Temporary until migration to actual fabric is complete
+    void set_fabric_sub_device_id(SubDeviceId sub_device_id);
+    std::optional<SubDeviceId> fabric_sub_device_id() const;
+
 private:
     void validate_sub_devices() const;
     uint8_t get_sub_device_index(SubDeviceId sub_device_id) const;
@@ -97,6 +101,9 @@ private:
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 
     std::vector<LaunchMessageRingBufferState> worker_launch_message_buffer_state_;
+
+    // TODO #15944: Temporary until migration to actual fabric is complete
+    std::optional<SubDeviceId> fabric_sub_device_id_ = std::nullopt;
 };
 
 }  // namespace detail
