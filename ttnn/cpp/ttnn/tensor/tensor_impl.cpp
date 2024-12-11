@@ -972,9 +972,6 @@ Tensor pad(
             uint32_t out_dim = output_spec.padded_shape()[index];
             uint32_t tensor_dim = index < tensor.padded_shape().size() ? tensor.padded_shape()[index] : 1;
             uint32_t start = index < input_tensor_start.size() ? input_tensor_start[index] : 0;
-            if (tensor_dim + start > out_dim) {
-                TT_THROW("Input tensor is out of bounds");
-            }
 
             // Check if input tensor fits in output tensor given the input tensor start indices
             TT_ASSERT(tensor_dim + start <= out_dim, "Input tensor is out of bounds");
