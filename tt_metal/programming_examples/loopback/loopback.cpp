@@ -66,6 +66,10 @@ int main(int argc, char** argv) {
         auto output_dram_buffer = CreateBuffer(dram_config);
         const uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
+        // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
+        const uint32_t input_bank_id = 0;
+        const uint32_t output_bank_id = 0;
+
         /*
          * Create input data and runtime arguments, then execute
          */
@@ -76,11 +80,9 @@ int main(int argc, char** argv) {
         const std::vector<uint32_t> runtime_args = {
             l1_buffer->address(),
             input_dram_buffer->address(),
-            static_cast<uint32_t>(input_dram_buffer->noc_coordinates().x),
-            static_cast<uint32_t>(input_dram_buffer->noc_coordinates().y),
+            input_bank_id,
             output_dram_buffer->address(),
-            static_cast<uint32_t>(output_dram_buffer->noc_coordinates().x),
-            static_cast<uint32_t>(output_dram_buffer->noc_coordinates().y),
+            output_bank_id,
             l1_buffer->size()};
 
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);

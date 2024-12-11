@@ -50,12 +50,12 @@ static fs::path get_file_path_relative_to_dir(const string& dir, const fs::path&
 static fs::path get_relative_file_path_from_config(const fs::path& file_path) {
     fs::path file_path_relative_to_dir;
 
-    if (llrt::OptionsG.is_root_dir_specified()) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::OptionsG.get_root_dir(), file_path);
+    if (llrt::RunTimeOptions::get_instance().is_root_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::RunTimeOptions::get_instance().get_root_dir(), file_path);
     }
 
-    if (!fs::exists(file_path_relative_to_dir) && llrt::OptionsG.is_kernel_dir_specified()) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::OptionsG.get_kernel_dir(), file_path);
+    if (!fs::exists(file_path_relative_to_dir) && llrt::RunTimeOptions::get_instance().is_kernel_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::RunTimeOptions::get_instance().get_kernel_dir(), file_path);
     }
 
     return file_path_relative_to_dir;

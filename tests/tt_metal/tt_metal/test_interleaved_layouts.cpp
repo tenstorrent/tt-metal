@@ -121,8 +121,6 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         auto dst_dram_buffer = CreateBuffer(dst_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input
         // CB CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math
         // kernel, input CB and reader
@@ -186,9 +184,8 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
-             (uint32_t)dram_dst_noc_xy.x,
-             (uint32_t)dram_dst_noc_xy.y,
-             (uint32_t)num_output_tiles});
+            (uint32_t) 0,
+            (uint32_t) num_output_tiles});
 
         CoreCoord debug_core = {1, 1};
 
@@ -287,8 +284,6 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 
         auto dst_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input
         // CB CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math
@@ -475,7 +470,11 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     if constexpr (dst_is_in_l1) {
         dst = CreateBuffer(l1_config);
 
-        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dst->address(), 0, 0, num_pages});
+        tt_metal::SetRuntimeArgs(
+            program,
+            unary_writer_kernel,
+            core,
+            {dst->address(), 0, num_pages});
 
         tt_metal::detail::LaunchProgram(device, program);
 
@@ -484,7 +483,11 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     } else {
         dst = CreateBuffer(dram_config);
 
-        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dst->address(), 0, 0, num_pages});
+        tt_metal::SetRuntimeArgs(
+            program,
+            unary_writer_kernel,
+            core,
+            {dst->address(), 0, num_pages});
 
         tt_metal::detail::LaunchProgram(device, program);
 

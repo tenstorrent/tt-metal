@@ -141,19 +141,21 @@ struct Tensor {
 
     Tensor to(
         Device* target_device,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        uint8_t cq_id = ttnn::DefaultQueueId,
+        const std::vector<SubDeviceId>& sub_device_ids = {}) const;
 
     Tensor to(
         distributed::MeshDevice* mesh_device,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
-
-    Tensor to(
-        CommandQueue& queue,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        uint8_t cq_id = ttnn::DefaultQueueId,
+        const std::vector<SubDeviceId>& sub_device_ids = {}) const;
 
     Tensor to(
         const std::vector<Device*>& workers,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        uint8_t cq_id = ttnn::DefaultQueueId,
+        const std::vector<SubDeviceId>& sub_device_ids = {}) const;
 
     Tensor to(Layout target_layout, Device* worker = nullptr) const;
 
@@ -164,7 +166,10 @@ struct Tensor {
         const ttnn::SimpleShape& input_tensor_start,
         float pad_value) const;
 
-    Tensor cpu(bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) const;
+    Tensor cpu(
+        bool blocking = true,
+        uint8_t cq_id = ttnn::DefaultQueueId,
+        const std::vector<SubDeviceId>& sub_device_ids = {}) const;
 
     Tensor cpu_sharded() const;
 
@@ -374,7 +379,11 @@ Tensor allocate_tensor_on_devices(
     const std::vector<Device*>& devices,
     const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
     const std::optional<Tile>& tile = std::nullopt);
-void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
+void write_tensor(
+    const Tensor& host_tensor,
+    Tensor device_tensor,
+    uint8_t cq_id = ttnn::DefaultQueueId,
+    const std::vector<SubDeviceId>& sub_device_ids = {});
 
 Tensor set_tensor_id(const Tensor& tensor);
 

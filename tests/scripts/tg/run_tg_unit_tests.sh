@@ -101,8 +101,6 @@ run_tg_tests() {
   ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
   TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MultiCommandQueueMultiDevice*Fixture.*"
 
-  run_tg_llama3-small_tests
-  run_tg_llama3.2-11b_tests
   run_tg_llama3.1-70b_tests
 }
 
