@@ -962,16 +962,23 @@ Tensor pad(
     auto pad_value_ = static_cast<T>(pad_value);
     const auto input_padded_shape = tensor.get_padded_shape();
     const auto input_strides = tensor.strides();
+    auto output_strides = output_spec.compute_strides();
+    auto tensor_padded_shape = tensor.padded_shape();
 
     auto pad = [&](const auto& input_buffer) {
         ttnn::SmallVector<std::array<uint32_t, 2>> pad_size{};
-        auto output_strides = output_spec.compute_strides();
         ttnn::SmallVector<uint32_t> input_indices(tensor.padded_shape().rank(), 0);
 
-        for (auto index = 0; index < output_spec.padded_shape().rank(); index++) {
-            uint32_t out_dim = output_spec.padded_shape()[index];
-            uint32_t tensor_dim = index < tensor.padded_shape().size() ? tensor.padded_shape()[index] : 1;
-            uint32_t start = index < input_tensor_start.size() ? input_tensor_start[index] : 0;
+        for (int index = 0; index < output_padded_shape.rank(); index++) {
+            uint32_t out_dim = output_padded_shape[index];
+
+            int tensor_idx =
+                index + static_cast<int>(tensor_padded_shape.size()) - static_cast<int>(output_padded_shape.size());
+            uint32_t tensor_dim = tensor_idx >= 0 ? tensor_padded_shape[tensor_idx] : 1;
+
+            int start_idx =
+                index + static_cast<int>(input_tensor_start.size()) - static_cast<int>(output_padded_shape.size());
+            uint32_t start = start_idx >= 0 ? input_tensor_start[start_idx] : 0;
 
             // Check if input tensor fits in output tensor given the input tensor start indices
             TT_ASSERT(tensor_dim + start <= out_dim, "Input tensor is out of bounds");
