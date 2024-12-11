@@ -48,7 +48,7 @@ void create_file(const string& file_path_str) {
 const std::string& get_reports_dir() {
     static std::string outpath;
     if (outpath == "") {
-        outpath = tt::llrt::OptionsG.get_root_dir() + "/generated/reports/";
+        outpath = tt::llrt::RunTimeOptions::get_instance().get_root_dir() + "/generated/reports/";
     }
     return outpath;
 }

@@ -23,7 +23,7 @@ namespace tt {
 
 namespace llrt {
 
-static inline const char *get_core_type_name(CoreType ct) {
+static inline const char* get_core_type_name(CoreType ct) {
     switch (ct) {
         case CoreType::ARC: return "ARC";
         case CoreType::DRAM: return "DRAM";
@@ -67,8 +67,8 @@ enum RunTimeDebugClass {
     RunTimeDebugClassCount
 };
 
-extern const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];
-extern const char *RunTimeDebugClassNames[RunTimeDebugClassCount];
+extern const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];
+extern const char* RunTimeDebugClassNames[RunTimeDebugClassCount];
 
 // TargetSelection stores the targets for a given debug feature. I.e. for which chips, cores, harts
 // to enable the feature.
@@ -126,14 +126,22 @@ class RunTimeOptions {
 
     tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
 
-   public:
     RunTimeOptions();
 
+public:
+    static RunTimeOptions& get_instance() {
+        static RunTimeOptions instance;
+        return instance;
+    }
+
+    RunTimeOptions(const RunTimeOptions&) = delete;
+    RunTimeOptions& operator=(const RunTimeOptions&) = delete;
+
     inline bool is_root_dir_specified() const { return this->is_root_dir_env_var_set; }
-    const std::string &get_root_dir();
+    const std::string& get_root_dir();
 
     inline bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
-    const std::string &get_kernel_dir() const;
+    const std::string& get_kernel_dir() const;
 
     inline bool get_build_map_enabled() { return build_map_enabled; }
 
@@ -151,7 +159,7 @@ class RunTimeOptions {
     inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_auto_unpause = auto_unpause; }
     inline int get_watcher_noinline() { return watcher_noinline; }
     inline void set_watcher_noinline(bool noinline) { watcher_noinline = noinline; }
-    inline std::set<std::string> &get_watcher_disabled_features() { return watcher_disabled_features; }
+    inline std::set<std::string>& get_watcher_disabled_features() { return watcher_disabled_features; }
     inline bool watcher_status_disabled() { return watcher_feature_disabled(watcher_waypoint_str); }
     inline bool watcher_noc_sanitize_disabled() { return watcher_feature_disabled(watcher_noc_sanitize_str); }
     inline bool watcher_assert_disabled() { return watcher_feature_disabled(watcher_assert_str); }
@@ -167,7 +175,7 @@ class RunTimeOptions {
         feature_targets[feature].enabled = enabled;
     }
     // Note: dprint cores are logical
-    inline std::map<CoreType, std::vector<CoreCoord>> &get_feature_cores(RunTimeDebugFeatures feature) {
+    inline std::map<CoreType, std::vector<CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) {
         return feature_targets[feature].cores;
     }
     inline void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
@@ -190,7 +198,7 @@ class RunTimeOptions {
             }
         }
     }
-    inline std::vector<int> &get_feature_chip_ids(RunTimeDebugFeatures feature) {
+    inline std::vector<int>& get_feature_chip_ids(RunTimeDebugFeatures feature) {
         return feature_targets[feature].chip_ids;
     }
     inline void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
@@ -282,14 +290,14 @@ class RunTimeOptions {
 
     inline tt_metal::DispatchCoreConfig get_dispatch_core_config() { return dispatch_core_config; }
 
-   private:
+private:
     // Helper functions to parse feature-specific environment vaiables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature);
-    void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string &env_var, CoreType core_type);
-    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var);
-    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var);
-    void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var);
-    void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
+    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
 
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
@@ -304,15 +312,13 @@ class RunTimeOptions {
     const std::string watcher_stack_usage_str = "STACK_USAGE";
     const std::string watcher_dispatch_str = "DISPATCH";
     std::set<std::string> watcher_disabled_features;
-    bool watcher_feature_disabled(const std::string &name) {
+    bool watcher_feature_disabled(const std::string& name) {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();
     }
 
     // Helper function to generate a message string when an environment variable has not been set
-    std::string generate_env_var_not_set_message(const std::string &env_var) const;
+    std::string generate_env_var_not_set_message(const std::string& env_var) const;
 };
-
-extern RunTimeOptions OptionsG;
 
 }  // namespace llrt
 

@@ -221,6 +221,13 @@ def run_bert_question_and_answering_inference(
     profiler.end("processing_output_to_string")
 
     del tt_out
+    del tt_embedding
+    del tt_attention_mask
+    del tt_embedding_inputs
+    del bert_input
+    del pytorch_out
+    if "single_inputs" in locals():
+        del single_inputs
 
     profiler.print()
 

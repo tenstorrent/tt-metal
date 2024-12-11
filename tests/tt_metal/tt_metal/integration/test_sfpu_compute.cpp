@@ -120,10 +120,8 @@ bool run_sfpu_all_same_buffer(CommandQueue& cq, const SfpuConfig& test_config) {
         .buffer_type = tt::tt_metal::BufferType::DRAM};
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     vector<uint32_t> compute_kernel_args = {
         uint32_t(test_config.num_tiles),  // per_core_block_cnt
@@ -145,15 +143,13 @@ bool run_sfpu_all_same_buffer(CommandQueue& cq, const SfpuConfig& test_config) {
     // Same runtime args for every core
     vector<uint32_t> reader_rt_args = {
         (uint32_t)input_dram_byte_address,
-        (uint32_t)input_dram_noc_xy.x,
-        (uint32_t)input_dram_noc_xy.y,
+        0,
         (uint32_t)test_config.num_tiles,
     };
 
     vector<uint32_t> writer_rt_args = {
         (uint32_t)output_dram_byte_address,
-        (uint32_t)output_dram_noc_xy.x,
-        (uint32_t)output_dram_noc_xy.y,
+        0,
         (uint32_t)test_config.num_tiles,
     };
 
