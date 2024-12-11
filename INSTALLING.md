@@ -33,21 +33,21 @@ sudo ./install_dependencies.sh
 | Enterprise Linux Based | ```dnf install epel-release && dnf install dkms``` |
 
 - Install the driver TT-KMD:
-```
-git clone https://github.com/tenstorrent/tt-kmd.git
-cd tt-kmd
-git checkout -b ttkmd-1.29 ttkmd-1.29
-sudo dkms add .
-sudo dkms install tenstorrent/1.29
-sudo modprobe tenstorrent
-cd ..
-```
+  ```
+  git clone https://github.com/tenstorrent/tt-kmd.git
+  cd tt-kmd
+  git checkout -b ttkmd-1.29 ttkmd-1.29
+  sudo dkms add .
+  sudo dkms install tenstorrent/1.29
+  sudo modprobe tenstorrent
+  cd ..
+  ```
 
 - For more information visit Tenstorrents [TT-KMD GitHub repository](https://github.com/tenstorrent/tt-kmd).
 
 ---
 
-#### Install TT-Flash
+#### Use TT-Flash to Update Device TT-Firmware
 - Install Cargo (Rust package manager):
   | OS | Command |
   |---|---|
@@ -55,29 +55,32 @@ cd ..
   | Fedora / EL9 | ```sudo dnf install cargo``` |
 
 - Install TT-Flash:
+  ```
+  pip install git+https://github.com/tenstorrent/tt-flash.git
+  ```
 
-```
-pip install git+https://github.com/tenstorrent/tt-flash.git
-```
-
-- For more information visit Tenstorrent's [TT-Flash repository](https://github.com/tenstorrent/tt-flash).
-
----
-
-#### Update Device TT-Firmware with TT-Flash
+- To load changes, either reboot or add to PATH the directory where TT-Flash was installed:
+  - To add to PATH, run the following (replace <Directory> with the actual path to where TT-Flash was installed):
+    ```
+    export PATH="<Directory>:$PATH"
+    ```
+  - To reboot:
+    ```
+    sudo reboot
+    ```
 
 - Check if TT-Flash is installed:
-```
-tt-flash --version
-```
+  ```
+  tt-flash --version
+  ```
 
 - Download and install the latest TT-Firmware version:
-```
-file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
-full_url="https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
-curl -L -o "$file_name" "$full_url"
-tt-flash flash --fw-tar $file_name
-```
+  ```
+  file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
+  full_url="https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
+  curl -L -o "$file_name" "$full_url"
+  tt-flash flash --fw-tar $file_name
+  ```
 
 - For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash Github Repository](https://github.com/tenstorrent/tt-flash).
 
@@ -85,18 +88,18 @@ tt-flash flash --fw-tar $file_name
 
 #### Install System Management Interface (TT-SMI)
 - Install Tenstorrent Software Management Interface (TT-SMI):
-```
-pip install git+https://github.com/tenstorrent/tt-smi
-```
+  ```
+  pip install git+https://github.com/tenstorrent/tt-smi
+  ```
 
 - Verify System Configuration
 
 Once hardware and system software are installed, verify that the system has been configured correctly.
 
   - Run the TT-SMI utility:
-  ```
-  tt-smi
-  ```
+    ```
+    tt-smi
+    ```
   A display with device information, telemetry, and firmware will appear:<br>
 
 ![image](https://docs.tenstorrent.com/_images/tt_smi.png)
@@ -169,10 +172,10 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
   ```
 
 - (recomended) For an out-of-the-box virtual environment to use, execute:
-```
-./create_venv.sh
-source python_env/bin/activate
-```
+  ```
+  ./create_venv.sh
+  source python_env/bin/activate
+  ```
 
 - Continue to [You Are All Set!](#you-are-all-set)
 
