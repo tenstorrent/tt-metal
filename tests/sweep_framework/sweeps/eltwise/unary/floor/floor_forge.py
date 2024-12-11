@@ -29,7 +29,7 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": [[197], [19]],
-        "input_a_dtype": [ttnn.float32],
+        "input_a_dtype": [["ttnn.float32"]],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
