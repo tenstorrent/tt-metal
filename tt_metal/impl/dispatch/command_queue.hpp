@@ -516,7 +516,7 @@ class HWCommandQueue {
 
     ~HWCommandQueue();
 
-    CoreCoord physical_enqueue_program_dispatch_core;
+    CoreCoord virtual_enqueue_program_dispatch_core;
     CoreCoord completion_queue_writer_core;
     NOC noc_index;
     volatile bool is_dprint_server_hung();

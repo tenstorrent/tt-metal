@@ -62,23 +62,26 @@ bool SimpleTiledL1WriteCBRead(
         tt_metal::CircularBufferConfig(byte_size, {{cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(cb_index, page_size);
     auto l1_cb = tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
-
+    std::map<std::string, std::string> defines = {{"INTERFACE_WITH_L1", "1"}};
+    uint32_t bank_id = device->bank_ids_from_logical_core(BufferType::L1, core)[0];
     auto reader_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/direct_reader_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::NOC_0,
-            .compile_args = {cb_index}});
+            .compile_args = {cb_index},
+            .defines = defines});
     auto writer_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/direct_writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::NOC_1,
-            .compile_args = {cb_index}});
+            .compile_args = {cb_index},
+            .defines = defines});
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -86,8 +89,7 @@ bool SimpleTiledL1WriteCBRead(
         core,
         {
             (uint32_t)input_local_address,
-            (uint32_t)phys_core.x,
-            (uint32_t)phys_core.y,
+            bank_id,
             (uint32_t)num_tiles,
         });
     tt_metal::SetRuntimeArgs(
@@ -96,8 +98,7 @@ bool SimpleTiledL1WriteCBRead(
         core,
         {
             (uint32_t)output_local_address,
-            (uint32_t)phys_core.x,
-            (uint32_t)phys_core.y,
+            bank_id,
             (uint32_t)num_tiles,
         });
 
@@ -114,6 +115,7 @@ bool SimpleTiledL1WriteCBRead(
     }
     return pass;
 }
+
 }  // namespace tt::test::buffer::detail
 
 TEST_F(DeviceFixture, TestSimpleL1BufferReadOnlyLo) {

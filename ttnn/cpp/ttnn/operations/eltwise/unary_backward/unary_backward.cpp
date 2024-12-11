@@ -24,6 +24,7 @@
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -1863,7 +1864,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     if (all_dimensions == true) {
         Tensor temp = ttnn::multiply(
             prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
-        Tensor fill_tensor = numpy::fill_first_val_into_tensor<::bfloat16>(
+        Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
             temp, temp.get_dtype(), temp.get_layout(), temp.device(), output_memory_config);
         Tensor all_dimension_result = ttnn::multiply(
             ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
