@@ -822,10 +822,6 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
             // Currently data-movement ops have too many restrictions to support shallow convs with tiled input.
             conv_config.input_channels_alignment = constants::TILE_WIDTH / 2;
         }
-
-        // Set act_block_h_override to min value to
-        // be conservative with L1 memory usage.
-        conv_config.act_block_h_override = constants::TILE_HEIGHT;
     }
 
     if (conv_config.act_block_w_div == 1 && conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
