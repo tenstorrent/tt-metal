@@ -720,9 +720,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     // act
     uint32_t act_dram_addr = src0_dram_buffer->address();
-    auto act_dram_noc_xy = src0_dram_buffer->noc_coordinates();
-    uint32_t act_noc_x = act_dram_noc_xy.x;
-    uint32_t act_noc_y = act_dram_noc_xy.y;
 
     assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
     assert(act_block_h_ntiles % out_subblock_h_ntiles == 0);
@@ -1793,7 +1790,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     uint32_t groups,
     bool untilize_out,
     bool fuse_relu,
-    MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     DataType output_dtype,

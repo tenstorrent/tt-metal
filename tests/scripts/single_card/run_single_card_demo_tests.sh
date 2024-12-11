@@ -15,6 +15,20 @@ run_common_func_tests() {
   # Qwen7B
   QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/demo/demo.py -k instruct --timeout 420; fail+=$?
 
+  # Llama3 Accuracy tests
+  # Llama3.2-1B
+  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  # Llama3.2-3B
+  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.1-8B (11B weights are the same)
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+
+  # Run Llama3 accuracy tests for 1B, 3B, 8B weights
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py -k perf --timeout 420; fail+=$?
+    echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
+  done
+
   #VGG11/VGG16
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg/demo/demo.py --timeout 600; fail+=$?
 
@@ -38,6 +52,9 @@ run_common_func_tests() {
 
   # Mnist
   pytest --disable-warnings models/demos/mnist/demo/demo.py --timeout 600; fail+=$?
+
+  # SqueezeBERT
+  pytest --disable-warnings models/demos/squeezebert/demo/demo.py --timeout 600; fail+=$?
 
   return $fail
 }

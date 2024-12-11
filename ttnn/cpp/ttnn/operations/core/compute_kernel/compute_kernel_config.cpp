@@ -8,8 +8,9 @@
 
 #define DATUMS_PER_ROW 16
 
-// FIXME: ARCH_NAME specific include
-#include "tensix_types.h"  // DEST_REGISTER_FULL_SIZE
+// This parameter is the same for all supported architectures
+// Check this invariant when adding new architectures
+#define DEST_REGISTER_FULL_SIZE 64 * 16
 
 namespace ttnn {
 

@@ -9,7 +9,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "common/bfloat16.hpp"
 #include "ttnn/async_runtime.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include <cmath>
 #include <thread>
