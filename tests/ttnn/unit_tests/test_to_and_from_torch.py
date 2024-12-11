@@ -100,5 +100,6 @@ def test_from_torch_large(device):
 def test_to_for_01_rank(shape, layout, dtype):
     torch_input_tensor = torch.rand(shape, dtype=dtype)
     tensor = ttnn.from_torch(torch_input_tensor, layout=layout)
+    # Conversion in the opposite direction is not yet supported
     # torch_output_tensor = ttnn.to_torch(tensor)
     # assert torch.allclose(torch_input_tensor, torch_output_tensor)
