@@ -48,19 +48,25 @@ def extract_memconfig_info(layout_str):
 def generate_unary_test_file(test_data, filename):
     ops = test_data[0]["name"]
     shapes = list()
+
+    def get_dtype(dtype):
+        if dtype == "i32":
+            return "ttnn.int32"
+        if sdtype == "f32":
+            return "ttnn.float32"
+        if sdtype == "bf16":
+            return "ttnn.bfloat16"
+        return "ttnn.bfloat16"
+
     for i in range(len(test_data)):
         if test_data[i]["runs_on_ttnn"] != "yes":
             continue
         shape, sdtype = extract_tensor_info(test_data[i]["input_shapes"][0])
         oshape, odtype = extract_tensor_info(test_data[i]["output_shapes"][0])
+        print(shape, sdtype)
         print(oshape, odtype)
-        dtype = "ttnn.bfloat16"
-        if sdtype == "i32":
-            dtype = "ttnn.int32"
-        if sdtype == "f32":
-            dtype = "ttnn.float32"
-        if sdtype == "bf16":
-            dtype = "ttnn.bfloat16"
+        in_dtype = get_dtype(sdtype)
+        out_dtype = get_dtype(odtype)
 
         in_layout, in_mem_connfig = extract_memconfig_info(test_data[i]["input_layouts"])
         out_layout, out_mem_connfig = extract_memconfig_info(test_data[i]["output_layouts"])
@@ -71,7 +77,7 @@ parameters = {{
     "nightly": {{
         "input_shape":
            {shapes},
-        "input_a_dtype": [{dtype}],
+        "input_a_dtype": [{in_dtype}],
         "input_a_layout": [{in_layout}],
         "input_a_memory_config": [{in_mem_connfig}],
         "output_memory_config": [{out_mem_connfig}],
