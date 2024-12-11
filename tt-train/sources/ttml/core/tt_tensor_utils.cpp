@@ -287,21 +287,6 @@ tt::tt_metal::Tensor from_vector<int32_t, DataType::INT32>(
     return output;
 }
 
-template <>
-std::vector<float> to_vector<float>(const tt::tt_metal::Tensor& tensor) {
-    return ttnn::experimental::xtensor::to_vector<float>(tensor);
-}
-
-template <>
-std::vector<uint32_t> to_vector<uint32_t>(const tt::tt_metal::Tensor& tensor) {
-    return ttnn::experimental::xtensor::to_vector<uint32_t>(tensor);
-}
-
-template <>
-std::vector<int32_t> to_vector<int32_t>(const tt::tt_metal::Tensor& tensor) {
-    return ttnn::experimental::xtensor::to_vector<int32_t>(tensor);
-}
-
 bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {
     return tensor.tensor_attributes != nullptr;
 }

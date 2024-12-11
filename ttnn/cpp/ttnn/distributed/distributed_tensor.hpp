@@ -28,7 +28,7 @@ public:
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device);
 
 // Creates a mapper that shards a tensor along a single dimension.
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int shard_dim);
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim);
 
 // Creates a mapper that shards a tensor along two dimensions, which will be intepreted as rows and columns.
 // If either dimension is not specified, the tensor is replicated along that dimension.
@@ -36,10 +36,11 @@ struct Shard2dConfig {
     std::optional<int> row_dim;
     std::optional<int> col_dim;
 };
-std::unique_ptr<TensorToMesh> shard_tensor_2d_to_mesh_mapper(const MeshShape& mesh_shape, const Shard2dConfig& config);
+std::unique_ptr<TensorToMesh> shard_tensor_2d_to_mesh_mapper(
+    MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config);
 
 // Creates a composer that concatenates a tensor across a single dimension.
-std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int concat_dim);
+std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int dim);
 
 // Creates a composer that concatenates a tensor across two dimensions.
 struct Concat2dConfig {

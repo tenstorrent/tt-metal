@@ -11,10 +11,10 @@
 namespace ttnn::experimental::xtensor {
 
 template <typename E>
-ttnn::Shape get_shape_from_xarray(const E& expr) {
+ttnn::Shape get_shape_from_xarray(const E& xarr) {
     ttnn::SmallVector<uint32_t> shape_dims;
-    for (size_t i = 0; i < expr.shape().size(); ++i) {
-        shape_dims.push_back(expr.shape()[i]);
+    for (size_t i = 0; i < xarr.shape().size(); ++i) {
+        shape_dims.push_back(xarr.shape()[i]);
     }
     return ttnn::Shape(shape_dims);
 }

@@ -35,7 +35,7 @@ private:
 
 class ShardTensorToMesh : public TensorToMesh {
 public:
-    ShardTensorToMesh(MeshDevice& mesh_device, int shard_dim) : mesh_device_(mesh_device), shard_dim_(shard_dim) {}
+    ShardTensorToMesh(MeshDevice& mesh_device, int dim) : mesh_device_(mesh_device), shard_dim_(dim) {}
 
     std::vector<Tensor> map(const Tensor& tensor) override {
         return experimental::xtensor::chunk(tensor, mesh_device_.num_devices(), shard_dim_);
@@ -45,13 +45,13 @@ public:
 
 private:
     MeshDevice& mesh_device_;
-    int shard_dim_;
+    int shard_dim_ = -1;
 };
 
 class Shard2dTensorToMesh : public TensorToMesh {
 public:
-    Shard2dTensorToMesh(MeshDevice& mesh_device, const Shard2dConfig& config) :
-        mesh_shape_(mesh_device.shape()), config_(config) {}
+    Shard2dTensorToMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
+        mesh_shape_(mesh_shape), config_(config) {}
 
     std::vector<Tensor> map(const Tensor& tensor) override {
         const auto [rows, cols] = mesh_shape_;
@@ -105,7 +105,7 @@ private:
 
 class ConcatMeshToTensor : public MeshToTensor {
 public:
-    ConcatMeshToTensor(int concat_dim) : concat_dim_(concat_dim) {}
+    ConcatMeshToTensor(int dim) : concat_dim_(dim) {}
 
     Tensor compose(const std::vector<Tensor>& tensors) override {
         return experimental::xtensor::concatenate(tensors, concat_dim_);
@@ -147,8 +147,8 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
     return std::make_unique<ReplicateTensorToMesh>(mesh_device);
 }
 
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int shard_dim) {
-    return std::make_unique<ShardTensorToMesh>(mesh_device, shard_dim);
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim) {
+    return std::make_unique<ShardTensorToMesh>(mesh_device, dim);
 }
 
 std::unique_ptr<TensorToMesh> shard_tensor_2d_to_mesh_mapper(
@@ -156,11 +156,15 @@ std::unique_ptr<TensorToMesh> shard_tensor_2d_to_mesh_mapper(
     TT_FATAL(
         config.row_dim.has_value() || config.col_dim.has_value(),
         "ShardTensor2dMesh requires at least one dimension to shard");
-    return std::make_unique<Shard2dTensorToMesh>(mesh_device, config);
+    TT_FATAL(
+        mesh_shape.num_rows <= mesh_device.shape().num_rows &&  //
+            mesh_shape.num_cols <= mesh_device.shape().num_cols,
+        "ShardTensor2dMesh: Device mesh shape does not match the provided mesh shape.");
+    return std::make_unique<Shard2dTensorToMesh>(mesh_shape, config);
 }
 
-std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int concat_dim) {
-    return std::make_unique<ConcatMeshToTensor>(concat_dim);
+std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int dim) {
+    return std::make_unique<ConcatMeshToTensor>(dim);
 }
 
 std::unique_ptr<MeshToTensor> concat_mesh_2d_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config) {

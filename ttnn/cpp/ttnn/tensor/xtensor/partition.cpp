@@ -45,17 +45,20 @@ consteval auto create_array() {
 
 template <typename T>
 std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& xtensor, int num_chunks, int dim) {
-    if (num_chunks <= 0) {
-        throw std::invalid_argument("num_chunks must be > 0");
-    }
-    if (dim < 0 || static_cast<std::size_t>(dim) >= xtensor.dimension()) {
-        throw std::invalid_argument("invalid dimension index");
-    }
+    TT_FATAL(num_chunks > 0, "num_chunks must be > 0; got num_chunks: {}", num_chunks);
+    TT_FATAL(
+        dim >= 0 && dim < xtensor.dimension(),
+        "invalid dimension index; got dim: {}, tensor dimension: {}",
+        dim,
+        xtensor.dimension());
 
     const int size_along_dim = static_cast<int>(xtensor.shape()[dim]);
-    if (num_chunks > size_along_dim) {
-        throw std::invalid_argument("num_chunks cannot exceed the size of the tensor along the given dimension.");
-    }
+    TT_FATAL(
+        num_chunks <= size_along_dim,
+        "num_chunks cannot exceed the size of the tensor along the given dimension; got num_chunks: {}, "
+        "size_along_dim: {}",
+        num_chunks,
+        size_along_dim);
 
     if (num_chunks == 1) {
         return {xtensor};
@@ -112,6 +115,7 @@ template xt::xarray<float> concatenate(const std::vector<xt::xarray<float>>& v, 
 template xt::xarray<uint32_t> concatenate(const std::vector<xt::xarray<uint32_t>>& v, int dim);
 template xt::xarray<int32_t> concatenate(const std::vector<xt::xarray<int32_t>>& v, int dim);
 
+// Adaptor APIs from xtensor to ttnn::Tensor.
 namespace adaptor {
 namespace {
 
