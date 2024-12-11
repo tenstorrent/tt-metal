@@ -9,6 +9,9 @@ inputs:
     description: 'Docker image architecture'
     required: false
     default: tt-metalium/ubuntu-20.04-amd64
+  docker_version:
+    description: 'Specify version for the Docker image tag to use.'
+    required: false
   docker_username:
     description: docker login username
     required: true
@@ -38,6 +41,7 @@ runs:
       uses: ./.github/actions/generate-docker-tag
       with:
         image: ${{ inputs.docker_os_arch }}
+        version: ${{ inputs.docker_version }}
     - name: Set
       shell: bash
       run: |
