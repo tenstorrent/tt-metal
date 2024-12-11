@@ -11,8 +11,8 @@ jobs:
         test-group: [
           { name: "TG Llama3 frequent tests", arch: wormhole_b0, model: llama3, timeout: 90, owner_id: U06F3ER8X9A}, # Stuti Raizada
           { name: "TG Llama3-70B (old) frequent tests", arch: wormhole_b0, model: llama3-70b-old, timeout: 90, owner_id: U03FJB5TM5Y}, #Colman Glagovich
-          { name: "TG resnet50 frequent tests", arch: wormhole_b0, model: resnet50, timeout: 90},
-          { name: "TG unit/distributed frequent tests", arch: wormhole_b0, model: unit, timeout: 90},
+          { name: "TG resnet50 frequent tests", arch: wormhole_b0, model: resnet50, timeout: 90, owner_id: XXXXX}, # Add owner
+          { name: "TG unit/distributed frequent tests", arch: wormhole_b0, model: unit, timeout: 90, owner_id: XXXXX}, # Add owner
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -38,9 +38,14 @@ jobs:
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent regression tests
-        timeout-minutes: 90
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
