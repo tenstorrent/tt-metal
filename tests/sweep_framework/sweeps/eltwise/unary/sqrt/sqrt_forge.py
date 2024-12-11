@@ -74,7 +74,7 @@ parameters = {
             [640],
             [112],
         ],
-        "input_a_dtype": [["ttnn.float32"]],
+        "input_a_dtype": [ttnn.float32],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -123,7 +123,8 @@ def run(
 
     start_time = start_measuring_time()
     result = ttnn.sqrt(input_tensor_a, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(result)
+    # ToDo: Update it once the tensor layout support with rank < 2 is supported in mid of Jan
+    output_tensor = ttnn.to_torch(result, torch_rank=len(input_shape))
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
