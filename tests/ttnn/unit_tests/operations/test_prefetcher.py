@@ -218,8 +218,8 @@ def get_core_ranges(num_reader_cores):
         ttnn.CoreCoord(4, 0),
         ttnn.CoreCoord(4, 9),
         ttnn.CoreCoord(4, 1),
-        ttnn.CoreCoord(4, 7),
-        ttnn.CoreCoord(4, 6),
+        ttnn.CoreCoord(4, 8),
+        ttnn.CoreCoord(4, 3),
         ttnn.CoreCoord(4, 2),
         ttnn.CoreCoord(4, 4),
         ttnn.CoreCoord(4, 5),
@@ -239,10 +239,10 @@ def get_core_ranges(num_reader_cores):
         (6, 9),
         (5, 1),
         (6, 1),
-        (5, 7),
-        (6, 7),
-        (5, 6),
-        (6, 6),
+        (5, 8),
+        (6, 8),
+        (5, 3),
+        (6, 3),
         (5, 2),
         (6, 2),
         (5, 4),
@@ -317,16 +317,16 @@ def get_core_ranges(num_reader_cores):
         ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(
-                    ttnn.CoreCoord(5, 7),
-                    ttnn.CoreCoord(6, 7),
+                    ttnn.CoreCoord(5, 8),
+                    ttnn.CoreCoord(6, 8),
                 ),
             ]
         ),
         ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(
-                    ttnn.CoreCoord(5, 6),
-                    ttnn.CoreCoord(6, 6),
+                    ttnn.CoreCoord(5, 3),
+                    ttnn.CoreCoord(6, 3),
                 ),
             ]
         ),
