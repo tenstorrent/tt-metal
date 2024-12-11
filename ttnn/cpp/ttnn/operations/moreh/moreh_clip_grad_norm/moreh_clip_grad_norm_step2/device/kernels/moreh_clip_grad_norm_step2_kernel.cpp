@@ -70,8 +70,6 @@ void MAIN {
             tile_regs_release();
         }
     }
-
-    // Maybe bug here. Produce very incorrect result
     // x^p
     power_tile_to_cb(cb_x, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y, p, p_is_negative);
 }  // void MAIN

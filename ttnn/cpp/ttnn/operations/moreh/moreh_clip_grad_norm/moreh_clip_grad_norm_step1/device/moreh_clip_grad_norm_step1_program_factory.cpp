@@ -51,7 +51,6 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     }
 
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(norm_type);
-    std::cout << "step1: p: " << p << " ;decimal: " << decimal << " ;p_is_negative: " << p_is_negative << std::endl;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
