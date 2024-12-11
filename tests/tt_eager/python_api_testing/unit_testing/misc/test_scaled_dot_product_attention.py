@@ -299,59 +299,6 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
     run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=sk)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-# @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
-@pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
-@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
-@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
-@pytest.mark.parametrize("prefill_chunk_size", [1024, 2048])
-@pytest.mark.parametrize("page_block_size", [64, 128])
-@pytest.mark.parametrize(
-    "b, nh, nkv, s, d",
-    ([1, 8, 1, 16 * 1024, 128],),  # Llama2-70B
-)
-def test_sdpa_chunked(
-    device,
-    b,
-    nh,
-    nkv,
-    s,
-    d,
-    q_chunk_size,
-    k_chunk_size,
-    prefill_chunk_size,
-    page_block_size,
-    q_dtype,
-    k_dtype,
-    use_program_cache,
-    use_high_precision_compute=False,
-):
-    for _ in range(2):
-        run_test_chunked_sdpa(
-            device,
-            b,
-            nh,
-            nkv,
-            s,
-            d,
-            q_chunk_size,
-            k_chunk_size,
-            prefill_chunk_size,
-            page_block_size,
-            q_dtype,
-            k_dtype,
-            use_high_precision_compute,
-        )
-
-    # Print number of program cache entries
-    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
-        device.num_program_cache_entries()
-    )
-
-
 def run_test_chunked_sdpa(
     device,
     b,
@@ -366,9 +313,10 @@ def run_test_chunked_sdpa(
     q_dtype,
     k_dtype,
     use_high_precision_compute,
+    grid_size=None,
 ):
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=grid_size or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -464,3 +412,115 @@ def run_test_chunked_sdpa(
         out_pass, out_pcc = comp_pcc(gt_chunk, tt_back, 0.998)
         logger.debug(f"python vs pytorch: {out_pcc}")
         assert out_pass
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
+@pytest.mark.parametrize("prefill_chunk_size", [1024, 2048])
+@pytest.mark.parametrize("page_block_size", [64, 128])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    [
+        [1, 8, 1, 16 * 1024, 128],
+    ],  # Llama2-70B
+)
+def test_sdpa_chunked(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    prefill_chunk_size,
+    page_block_size,
+    q_dtype,
+    k_dtype,
+    use_program_cache,
+    use_high_precision_compute=False,
+):
+    for _ in range(2):
+        run_test_chunked_sdpa(
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            q_chunk_size,
+            k_chunk_size,
+            prefill_chunk_size,
+            page_block_size,
+            q_dtype,
+            k_dtype,
+            use_high_precision_compute,
+        )
+
+    # Print number of program cache entries
+    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
+        device.num_program_cache_entries()
+    )
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("q_chunk_size", [128])
+@pytest.mark.parametrize("k_chunk_size", [128])
+@pytest.mark.parametrize("prefill_chunk_size", [1024])
+@pytest.mark.parametrize("page_block_size", [64])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    [
+        [2, 1, 1, 4096, 128],
+    ],  # Llama2-70B
+)
+def test_sdpa_chunked_iterate_batch(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    prefill_chunk_size,
+    page_block_size,
+    q_dtype,
+    k_dtype,
+    use_program_cache,
+    use_high_precision_compute=False,
+):
+    """
+    This tests chunked prefill where a single core has more than one user to process.
+    """
+    for _ in range(2):
+        run_test_chunked_sdpa(
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            q_chunk_size,
+            k_chunk_size,
+            prefill_chunk_size,
+            page_block_size,
+            q_dtype,
+            k_dtype,
+            use_high_precision_compute,
+            grid_size=(1, 1),
+        )
+
+    # Print number of program cache entries
+    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
+        device.num_program_cache_entries()
+    )

@@ -71,6 +71,7 @@ void kernel_main() {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_id_page_table = tt::CBIndex::c_6;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
@@ -109,7 +110,6 @@ void kernel_main() {
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         if constexpr (is_chunked) {
             // Chunked means that we have paged attention
-            constexpr uint32_t cb_id_page_table = tt::CBIndex::c_6;
             const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
                 .bank_base_address = page_table_addr, .page_size = page_table_stick_size};
             cb_reserve_back(cb_id_page_table, 1);
@@ -305,6 +305,10 @@ void kernel_main() {
                     }
                 }
             }
+        }
+
+        if constexpr (is_chunked) {
+            cb_pop_front(cb_id_page_table, 1);
         }
     }
 }
