@@ -15,19 +15,6 @@ from tests.ttnn.utils_for_testing import assert_equal
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
-def to_npu(
-    cpu_tensor,
-    device,
-    *,
-    npu_layout=ttnn.TILE_LAYOUT,
-    npu_dtype=ttnn.bfloat16,
-    padding_value=float("nan"),
-):
-    if cpu_tensor is None:
-        return None
-    return ttnn.from_torch(cpu_tensor, npu_dtype, device=device, layout=npu_layout)
-
-
 @pytest.mark.parametrize("num_iters_of_each_case", [2])
 @pytest.mark.parametrize("range_of_padding", [(0, 21, 10)])  # [0, 10, 20]
 @pytest.mark.parametrize("range_of_n", [(1, 4)])
@@ -80,7 +67,10 @@ def test_moreh_clip_grad_norm(
             param.grad = grad
 
             cpu_inputs.append(param)
-            npu_inputs.append(to_npu(grad.clone().bfloat16(), device, npu_dtype=npu_dtype))
+            npu_inputs.append(
+                ttnn.from_torch(grad.clone().bfloat16(), dtype=npu_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            )
+            # npu_inputs.append(to_npu(grad.clone().bfloat16(), device, npu_dtype=npu_dtype))
             input_shapes.append(input_shape)
 
         cpu_total_norm = torch.nn.utils.clip_grad_norm_(cpu_inputs, max_norm, norm_type)
@@ -135,7 +125,10 @@ def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device
     # Check tt behavior
     try:
         ttnn.operations.moreh.clip_grad_norm(
-            [to_npu(param.grad.bfloat16(), device, npu_dtype=npu_dtype)], max_norm, norm_type, error_if_nonfinite
+            [ttnn.from_torch(param.grad.bfloat16(), dtype=npu_dtype, layout=ttnn.TILE_LAYOUT, device=device)],
+            max_norm,
+            norm_type,
+            error_if_nonfinite,
         )
         assert not error_if_nonfinite
     except RuntimeError as actual_error_msg:
