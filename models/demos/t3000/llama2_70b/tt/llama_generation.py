@@ -74,7 +74,7 @@ class TtLlamaModelForGeneration:
             tt_page_table,
             tt_inp,
             rot_idxs_tt,
-        ) = self.tt_model.prepare_device_inputs(
+        ) = self.tt_model.prepare_device_inputs_decode(
             tokens,
             start_pos,
             mode="decode",
@@ -173,7 +173,7 @@ class TtLlamaModelForGeneration:
         batch = tokens.shape[0]
 
         # Get inputs on device
-        tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.tt_model.prepare_device_inputs(
+        tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.tt_model.prepare_device_inputs_decode(
             tokens, start_pos, mode="decode", page_table=page_table
         )
 
@@ -205,29 +205,99 @@ class TtLlamaModelForGeneration:
         assert batch == 1
         assert start_pos == 0, "start_pos must be 0 for prefill_forward_single_user"
 
-        tt_inp_emb, start_pos, rot_mat, _, tt_page_table = self.tt_model.prepare_device_inputs(
-            tokens, start_pos=start_pos, valid_seq_len=seq_len, mode="prefill", page_table=page_table
-        )
+        use_chunked_prefill = seq_len > self.tt_model.model_config["MAX_PREFILL_SEQ_LEN"]
+        if use_chunked_prefill:
+            """
+            Chunked prefill requires paged attention. There are some strange constraints which we must meet:
+             - page_table, which is used in SDPA, must match batch size of inputs, which is 1. This is because SDPA
+             checks that page table batch dim matches input batch dim. Therefore we must slice the page table for the current user.
+             - chunked_page_table is the slice of the page table for the current chunk. This is used by paged_fill_cache
+             to keep it otherwise unaware that it is operating on a chunk.
+             - due to the above point, we must always set user_id to 0 for chunked prefill.
+            """
+            assert page_table is not None, "page_table must be provided for chunked prefill"
+            assert kv_cache is not None, "kv_cache must be provided for chunked prefill"
+            chunk_size = get_max_prefill_chunk_size(seq_len, self.tt_model.model_config["MAX_PREFILL_SEQ_LEN"])
+            block_size = get_block_size(kv_cache)
+            last_token_idx_in_chunk = last_token_idx % chunk_size
+            page_table_user = page_table[user_id : user_id + 1, :]
+            CHUNK_USER_ID = 0
+            logger.info(f"Using chunked prefill with chunk_size={chunk_size}")
+            logger.info(f"Page table shape: {page_table.shape}")
+            logger.info(f"Page table user shape: {page_table_user.shape}")
+            logger.info(f"Block size: {block_size}")
+            logger.info(f"Last token idx in chunk: {last_token_idx_in_chunk}")
+            logger.info(f"Sequence length: {seq_len}")
+            for chunk_start in range(0, seq_len, chunk_size):
+                chunk_end = chunk_start + chunk_size
+                assert (
+                    chunk_end <= seq_len
+                ), f"Chunk end should be less than seq_len, got chunk_end={chunk_end} and seq_len={seq_len}"
+                chunk_tokens = tokens[:, chunk_start:chunk_end]
+                chunk_page_table = page_table_user[:, chunk_start // block_size : chunk_end // block_size]
+                logger.info(f"Chunk start: {chunk_start}")
+                logger.info(f"Chunk end: {chunk_end}")
+                logger.info(f"Chunk tokens shape: {chunk_tokens.shape}")
+                logger.info(f"Chunk page table shape: {chunk_page_table.shape}")
+                (
+                    tt_inp_emb,
+                    start_pos,
+                    rot_mat,
+                    _rot_idxs_tt,
+                    _cache_idxs_tt,
+                    page_table_tt,
+                    chunk_page_table_tt,
+                ) = self.tt_model.prepare_inputs(
+                    tokens,
+                    start_pos=chunk_start,
+                    mode="prefill",
+                    page_table=page_table_user,
+                    chunk_page_table=chunk_page_table,
+                )
+                tt_logits = self.tt_model.prefill_forward_single_user(
+                    chunk_tokens,
+                    start_pos,
+                    user_id=CHUNK_USER_ID,
+                    last_token_idx=last_token_idx_in_chunk,
+                    page_table=page_table_tt,
+                    kv_cache=kv_cache,
+                    mode="prefill",
+                    chunk_page_table=chunk_page_table_tt,
+                    chunk_start_idx=chunk_start,
+                )
+                logger.info(f"TT logits shape: {tt_logits.shape}")
+        else:
+            (
+                tt_inp_emb,
+                start_pos,
+                rot_mat,
+                _rot_idxs_tt,
+                _cache_idxs_tt,
+                tt_page_table,
+                _chunk_page_table,
+            ) = self.tt_model.prepare_inputs(
+                tokens, start_pos=start_pos, valid_seq_len=seq_len, mode="prefill", page_table=page_table
+            )
 
-        tt_logits = self.tt_model(
-            tt_inp_emb,
-            rot_mat,
-            start_pos,
-            user_id=user_id,
-            last_token_idx=last_token_idx,
-            page_table=tt_page_table,
-            kv_cache=kv_cache,
-            mode="prefill",
-        )
+            tt_logits = self.tt_model(
+                tt_inp_emb,
+                rot_mat,
+                start_pos,
+                user_id=user_id,
+                last_token_idx=last_token_idx,
+                page_table=tt_page_table,
+                kv_cache=kv_cache,
+                mode="prefill",
+            )
 
-        del tt_inp_emb
-        del rot_mat
-        del tt_page_table
+            del tt_inp_emb
+            del rot_mat
+            del tt_page_table
 
-        logits = self._process_logits(tt_logits)
-        logits = logits.squeeze(1)
-        del tt_logits
-        return logits
+            logits = self._process_logits(tt_logits)
+            logits = logits.squeeze(1)
+            del tt_logits
+            return logits
 
     def prefill_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None, prompt_lens=None):
         batch, batch_seq_len = tokens.shape
@@ -305,3 +375,34 @@ def num_blocks_in_seq(seq_len, block_size):
 
 def nearest_pow_2(x):
     return 2 ** math.ceil(math.log2(x))
+
+
+def get_max_prefill_chunk_size(seq_len, max_prefill_seq_len):
+    """
+    Determine the largest multiple of 1024 that divides `seq_len` and is less than or equal to `max_prefill_seq_len`.
+
+    **Assumptions**:
+    - `seq_len` is a multiple of 1024.
+    - `max_prefill_seq_len` is a multiple of 1024.
+    """
+
+    if not isinstance(seq_len, int) or not isinstance(max_prefill_seq_len, int):
+        raise TypeError("Both seq_len and max_prefill_seq_len must be integers.")
+    if seq_len <= 0 or max_prefill_seq_len <= 0:
+        raise ValueError("Both seq_len and max_prefill_seq_len must be positive integers.")
+
+    if seq_len % 1024 != 0:
+        raise ValueError("seq_len must be a multiple of 1024.")
+    if max_prefill_seq_len % 1024 != 0:
+        raise ValueError("max_prefill_seq_len must be a multiple of 1024.")
+
+    # Calculate the maximum possible chunk size
+    # It cannot exceed either max_prefill_seq_len or seq_len
+    max_possible_chunk = min(max_prefill_seq_len, seq_len)
+
+    # Iterate from the largest possible multiple of 1024 down to 1024
+    for chunk_size in range(max_possible_chunk, 0, -1024):
+        if seq_len % chunk_size == 0:
+            return chunk_size
+
+    raise ValueError("No valid chunk size found")
