@@ -542,7 +542,8 @@ void generate_multi_input_test_worker_reader_kernel(
     bool fabric_enabled = std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args) || std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args);
     using namespace ttnn::ccl::cmd::uops;
     using namespace ttnn::ccl::cmd;
-    tt::log_trace(tt::LogTest, "Generating multi input test worker reader kernel for command type: {}", static_cast<uint32_t>(command_type));
+    // tt::log_trace(tt::LogTest, "Generating multi input test worker reader kernel for command type: {}",
+    // static_cast<uint32_t>(command_type));
 
     TT_FATAL(command_type == ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB || command_type == ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR, "Unsupported tensor IO command type");
 
@@ -2388,7 +2389,10 @@ bool RunPipelinedWorkersTest(
         TT_FATAL(num_workers_per_stage[i] > 0, "Must have at least 1 worker per stage");
         TT_FATAL(num_workers_per_stage[i] < 8, "Must have at most 8 workers per stage");
     }
+    std::chrono::duration<double, std::nano> duration;
 
+    auto start = std::chrono::high_resolution_clock::now();
+    // EnqueueProgram(device->command_queue(), program, false);
     std::vector<TensorSpec> tensor_specs;
     tensor_specs.reserve(num_stages + 1);
     for (size_t i = 0; i < num_stages + 1; ++i) {
@@ -2613,6 +2617,10 @@ bool RunPipelinedWorkersTest(
     //     dt.deallocate();
     // }
 
+    Finish(device->command_queue());
+    auto end = std::chrono::high_resolution_clock::now();
+    duration = end - start;
+    tt_metal::DumpDeviceProfileResults(device, program);
     return pass;
 }
 
