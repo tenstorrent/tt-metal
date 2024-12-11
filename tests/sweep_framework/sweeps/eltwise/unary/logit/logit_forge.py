@@ -29,31 +29,31 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": [
-            [1, 1, 256, 256],
-            [1, 1, 480, 640],
-            [1, 2, 120, 160],
-            [1, 2, 30, 40],
-            [1, 2, 60, 80],
-            [1, 50, 3072],
-            [2, 7, 2048],
-            [6, 1, 100, 4],
-            [1, 1280, 16, 16],
             [1, 1280, 32, 32],
-            [1, 1280, 8, 8],
-            [1, 1920, 16, 16],
+            [2, 7, 2048],
             [1, 1920, 32, 32],
-            [1, 2560, 16, 16],
-            [1, 2560, 8, 8],
-            [1, 320, 32, 32],
-            [1, 320, 64, 64],
-            [1, 32, 11008],
-            [1, 640, 16, 16],
-            [1, 640, 32, 32],
             [1, 640, 64, 64],
-            [1, 960, 32, 32],
+            [1, 2, 30, 40],
+            [1, 640, 32, 32],
+            [1, 320, 32, 32],
+            [1, 2, 60, 80],
+            [1, 320, 64, 64],
+            [1, 1, 480, 640],
             [1, 960, 64, 64],
+            [1, 960, 32, 32],
+            [1, 1280, 16, 16],
+            [1, 2560, 16, 16],
+            [1, 640, 16, 16],
+            [1, 1920, 16, 16],
+            [1, 1280, 8, 8],
+            [1, 1, 256, 256],
+            [1, 2, 120, 160],
+            [1, 32, 11008],
+            [1, 2560, 8, 8],
+            [1, 50, 3072],
+            [6, 1, 100, 4],
         ],
-        "eps": [0.2, 1],
+        "eps": [2.0, 0.1, 10e-3],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -91,7 +91,8 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    torch_output_tensor = torch.logit(torch_input_tensor_a, eps)
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    torch_output_tensor = golden_function(torch_input_tensor_a, eps=eps, device=device)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
