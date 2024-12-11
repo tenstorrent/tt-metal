@@ -69,7 +69,7 @@ def get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, out_sharded=False, fp
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, clear_profiler_runtime_artifacts
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
@@ -212,6 +212,7 @@ def test_matmul_2d_host_perf(
                 matmul_shapes = matmul_shapes_bfloat4_b
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
                 profiler.clear()
+                clear_profiler_runtime_artifacts()
 
                 in0_shape = [1, 1, m, k]
                 in1_shape = [1, 1, k, n]
@@ -404,6 +405,7 @@ def test_matmul_2d_host_perf(
                         utilization_full_grid_percentage,
                     ]
                 )
+                file.flush()
 
 
 matmul_shapes_oob = [
@@ -494,6 +496,7 @@ def test_matmul_2d_host_perf_out_of_box(
                 math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:
                 profiler.clear()
+                clear_profiler_runtime_artifacts()
 
                 in0_shape = [1, 1, m, k]
                 in1_shape = [1, 1, k, n]
@@ -591,3 +594,4 @@ def test_matmul_2d_host_perf_out_of_box(
                         utilization_full_grid_percentage,
                     ]
                 )
+                file.flush()
