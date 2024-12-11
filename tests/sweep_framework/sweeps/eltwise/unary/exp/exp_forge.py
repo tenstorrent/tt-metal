@@ -27,9 +27,47 @@ random.seed(0)
 
 
 parameters = {
-    "exp": {
-        "input_shape": [[160], [19, 256008], [1, 10], [3234, 1]],
-        "input_a_dtype": [ttnn.float32],
+    "nightly": {
+        "input_shape": [
+            [1, 12, 201, 201],
+            [1, 8, 2048, 256],
+            [1, 1, 16384, 256],
+            [1, 16, 5, 5],
+            [1, 12, 197, 197],
+            [8, 920, 920],
+            [1, 16, 32, 32],
+            [1, 12, 8, 8],
+            [1, 5, 1200, 300],
+            [1, 16, 10, 10],
+            [1, 1, 19200, 300],
+            [1, 8, 256, 256],
+            [160],
+            [1, 6, 1, 15],
+            [1, 16, 1, 1],
+            [1, 12, 10, 10],
+            [1, 16, 1, 10],
+            [8, 100, 100],
+            [1, 5, 1024, 256],
+            [1, 12, 1, 1],
+            [1, 8, 10, 10],
+            [1, 12, 1, 10],
+            [19, 256008],
+            [8, 100, 920],
+            [1, 8, 1, 1],
+            [1, 8, 1, 10],
+            [1, 2, 4800, 300],
+            [1, 8, 256, 2048],
+            [1, 2, 4096, 256],
+            [1, 6, 15, 15],
+            [1, 6, 1, 1],
+            [1, 8, 300, 300],
+            [1, 10],
+            [3234, 1],
+            [1, 16, 197, 197],
+        ],
+        "input_a_dtype": [
+            ttnn.float32,
+        ],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -81,4 +119,6 @@ def run(
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
+    if len(input_shape) == 1:
+        output_tensor = output_tensor[0]
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
