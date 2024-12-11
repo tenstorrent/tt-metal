@@ -37,8 +37,7 @@ CclHostLowLevelWorkerCommand read_tensor_slice_to_cb_for_eventual_fabric_write(
         // Hack to add packet header padding when doing reads
         ttnn::ccl::cmd::UnicastCommandDestArgs(0, true)};
 };
-CclHostLowLevelWorkerCommand read_tensor_slice_to_cb(
-    ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id) {
+CclHostLowLevelWorkerCommand read_tensor_slice_to_cb(ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id) {
     return CclHostLowLevelWorkerCommand{
         CclCommandCode::STREAM_TENSOR_TO_CB,
         slice,
@@ -57,8 +56,7 @@ CclHostLowLevelWorkerCommand read_tensor_slice_to_cb(
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs()};
 };
 
-CclHostLowLevelWorkerCommand local_write_cb_to_tensor_slice(
-    ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id) {
+CclHostLowLevelWorkerCommand local_write_cb_to_tensor_slice(ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id) {
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::STREAM_CB_TO_TENSOR,
         ttnn::ccl::cmd::CclCommandArgs(slice),
@@ -82,21 +80,25 @@ CclHostLowLevelWorkerCommand fabric_write_cb_to_tensor_slice(
             [](ttnn::ccl::cmd::MulticastCommandDestArgs const&) { return CclCommandDestType::CHIP_MULTICAST; },
             [](auto&&) -> void {
                 TT_THROW(
-                    "ttnn::ccl::cmd::uops::fabric_write_cb_to_tensor_slice called with unsupported fabric dest_args types. "
+                    "ttnn::ccl::cmd::uops::fabric_write_cb_to_tensor_slice called with unsupported fabric dest_args "
+                    "types. "
                     "Currently supported types are UnicastCommandDestArgs and MulticastCommandDestArgs");
-            }
-        },
+            }},
         dest_args);
     auto dest_args_variant = std::visit(
         tt::stl::overloaded{
-            [](ttnn::ccl::cmd::UnicastCommandDestArgs const& arg) -> ttnn::ccl::cmd::CclCommandDestArgs { return ttnn::ccl::cmd::UnicastCommandDestArgs(arg); },
-            [](ttnn::ccl::cmd::MulticastCommandDestArgs const& arg) -> ttnn::ccl::cmd::CclCommandDestArgs { return ttnn::ccl::cmd::MulticastCommandDestArgs(arg); },
+            [](ttnn::ccl::cmd::UnicastCommandDestArgs const& arg) -> ttnn::ccl::cmd::CclCommandDestArgs {
+                return ttnn::ccl::cmd::UnicastCommandDestArgs(arg);
+            },
+            [](ttnn::ccl::cmd::MulticastCommandDestArgs const& arg) -> ttnn::ccl::cmd::CclCommandDestArgs {
+                return ttnn::ccl::cmd::MulticastCommandDestArgs(arg);
+            },
             [](auto&&) -> void {
                 TT_THROW(
-                    "ttnn::ccl::cmd::uops::fabric_write_cb_to_tensor_slice called with unsupported fabric dest_args types. "
+                    "ttnn::ccl::cmd::uops::fabric_write_cb_to_tensor_slice called with unsupported fabric dest_args "
+                    "types. "
                     "Currently supported types are UnicastCommandDestArgs and MulticastCommandDestArgs");
-            }
-        },
+            }},
         dest_args);
 
     return CclHostLowLevelWorkerCommand(
@@ -126,8 +128,7 @@ static ttnn::ccl::cmd::CclCommandAddrType get_semaphore_addr_type(semaphore_id_t
                 TT_THROW(
                     "ttnn::ccl::cmd::uops::get_semaphore_addr_type called with unsupported semaphore types. "
                     "Currently supported types are uint32_t (semaphore ID) and GlobalSemaphore");
-            }
-        },
+            }},
         semaphore_id);
 }
 static ttnn::ccl::cmd::CclCommandAddrArgs get_semaphore_addr_val(semaphore_id_t const& semaphore_id) {
@@ -163,7 +164,11 @@ CclHostLowLevelWorkerCommand local_semaphore_wait(semaphore_id_t const& semaphor
 }
 
 CclHostLowLevelWorkerCommand local_core_semaphore_set(semaphore_id_t const& semaphore_id, size_t value) {
-    TT_FATAL(value < std::numeric_limits<uint32_t>::max(), "When invoking: local_core_inline_write. Raw inline writes currently are limited to values no larger than {} due to a command encoding limitation. Support for larger values is not yet added", std::numeric_limits<uint32_t>::max());
+    TT_FATAL(
+        value < std::numeric_limits<uint32_t>::max(),
+        "When invoking: local_core_inline_write. Raw inline writes currently are limited to values no larger than {} "
+        "due to a command encoding limitation. Support for larger values is not yet added",
+        std::numeric_limits<uint32_t>::max());
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::RAW_INLINE_WRITE_BYTES,
         ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandInlineReadWrite{value}),
@@ -176,7 +181,6 @@ CclHostLowLevelWorkerCommand local_core_semaphore_set(semaphore_id_t const& sema
         ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
 }
-
 
 CclHostLowLevelWorkerCommand local_core_semaphore_inc(semaphore_id_t const& semaphore_id, size_t value) {
     return CclHostLowLevelWorkerCommand(
@@ -193,7 +197,6 @@ CclHostLowLevelWorkerCommand local_core_semaphore_inc(semaphore_id_t const& sema
         ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
 }
-
 
 CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
     size_t dest_noc0_x,
@@ -216,9 +219,12 @@ CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
 }
 
-static std::pair<CclCommandCoreDescriptorType, CclCommandCoreDescriptorArgs> optimize_mcast_core_desc_args(CclCommandCoreDescriptorTypeMcast const& noc_mcast_args) {
-    bool is_really_a_unicast = noc_mcast_args.noc0_end_x == noc_mcast_args.noc0_start_x && noc_mcast_args.noc0_end_y == noc_mcast_args.noc0_start_y;
-    auto core_desc_type = is_really_a_unicast ? CclCommandCoreDescriptorType::NOC_XY : CclCommandCoreDescriptorType::RECTANGLE;
+static std::pair<CclCommandCoreDescriptorType, CclCommandCoreDescriptorArgs> optimize_mcast_core_desc_args(
+    CclCommandCoreDescriptorTypeMcast const& noc_mcast_args) {
+    bool is_really_a_unicast = noc_mcast_args.noc0_end_x == noc_mcast_args.noc0_start_x &&
+                               noc_mcast_args.noc0_end_y == noc_mcast_args.noc0_start_y;
+    auto core_desc_type =
+        is_really_a_unicast ? CclCommandCoreDescriptorType::NOC_XY : CclCommandCoreDescriptorType::RECTANGLE;
     CclCommandCoreDescriptorArgs core_desc_args = is_really_a_unicast
                                                       ? CclCommandCoreDescriptorArgs{CclCommandCoreDescriptorTypeNocXY{
                                                             noc_mcast_args.noc0_start_x, noc_mcast_args.noc0_start_y}}
@@ -231,9 +237,10 @@ static std::pair<CclCommandCoreDescriptorType, CclCommandCoreDescriptorArgs> opt
     CclCommandAtomicInc const& increment_args,
     CclCommandCoreDescriptorTypeMcast const& mcast_spec,
     UnicastCommandDestArgs const& unicast_args) {
-
     auto const [core_desc_type, core_desc_args] = optimize_mcast_core_desc_args(mcast_spec);
-    TT_FATAL(core_desc_type != CclCommandCoreDescriptorType::RECTANGLE, "semaphore inc commands don't support noc multicast yet");
+    TT_FATAL(
+        core_desc_type != CclCommandCoreDescriptorType::RECTANGLE,
+        "semaphore inc commands don't support noc multicast yet");
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::ATOMIC_INC,
         increment_args,
@@ -254,9 +261,10 @@ static std::pair<CclCommandCoreDescriptorType, CclCommandCoreDescriptorArgs> opt
     semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     CclCommandCoreDescriptorTypeMcast const& mcast_spec) {
-
     auto const [core_desc_type, core_desc_args] = optimize_mcast_core_desc_args(mcast_spec);
-    TT_FATAL(core_desc_type != CclCommandCoreDescriptorType::RECTANGLE, "semaphore inc commands don't support noc multicast yet");
+    TT_FATAL(
+        core_desc_type != CclCommandCoreDescriptorType::RECTANGLE,
+        "semaphore inc commands don't support noc multicast yet");
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::ATOMIC_INC,
         increment_args,
@@ -273,10 +281,7 @@ static std::pair<CclCommandCoreDescriptorType, CclCommandCoreDescriptorArgs> opt
 }
 
 CclHostLowLevelWorkerCommand local_chip_noc_absolute_address_semaphore_inc(
-    size_t dest_noc0_x,
-    size_t dest_noc0_y,
-    size_t bank_address,
-    size_t value) {
+    size_t dest_noc0_x, size_t dest_noc0_y, size_t bank_address, size_t value) {
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::ATOMIC_INC,
         ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandAtomicInc{value}),
@@ -352,7 +357,7 @@ CclHostLowLevelWorkerCommand fabric_unicast_absolute_address_semaphore_inc(
     size_t dest_noc0_y,
     UnicastCommandDestArgs const& unicast_args) {
     return CclHostLowLevelWorkerCommand(
-         CclCommandCode::ATOMIC_INC,
+        CclCommandCode::ATOMIC_INC,
         ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandAtomicInc{increment_args}),
 
         // src

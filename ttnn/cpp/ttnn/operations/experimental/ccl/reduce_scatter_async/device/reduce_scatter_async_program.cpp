@@ -19,14 +19,10 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operation.hpp"
 
-// #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 // For reduction op
-// #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
-// #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
-// #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -427,7 +423,7 @@ static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links) 
         worker_cores.all_worker_cores = worker_cores.all_worker_cores.merge(worker_cores.partial_reducers[d]);
     }
     worker_cores.all_worker_cores = worker_cores.all_worker_cores.merge(worker_cores.final_reducers);
-    log_info(tt::LogOp, "Worker cores: ", worker_cores.all_worker_cores);
+    log_trace(tt::LogOp, "Worker cores: ", worker_cores.all_worker_cores);
 
     worker_cores.all_worker_cores_vec = corerange_to_cores(worker_cores.all_worker_cores, std::nullopt, true);
     worker_cores.final_reducers_vec = corerange_to_cores(worker_cores.final_reducers, std::nullopt, true);
@@ -2027,7 +2023,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
             auto& worker_writer_runtime_args_by_core = GetRuntimeArgs(program, kernel_ids.writer);
         };
 
-    log_info(tt::LogOp, "Done program factory");
+    log_trace(tt::LogOp, "Done program factory");
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }

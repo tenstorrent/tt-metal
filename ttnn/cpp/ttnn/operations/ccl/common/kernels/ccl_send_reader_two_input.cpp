@@ -56,7 +56,8 @@ constexpr uint32_t cb1_id = get_compile_time_arg_val(8);
 FORCE_INLINE std::pair<WorkerXY, uint32_t> get_noc_address_components(uint64_t noc_addr) {
     const size_t bank_addr = noc_addr & 0xFFFFFFFF;
     const size_t noc_x = (noc_addr >> NOC_ADDR_LOCAL_BITS) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
-    const size_t noc_y = (noc_addr >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
+    const size_t noc_y =
+        (noc_addr >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
     return {WorkerXY(noc_x, noc_y), bank_addr};
 }
 
@@ -72,7 +73,7 @@ struct sharded_addrgen_fields {
 };
 
 #ifdef TENSOR0_SHARDED_MEM_LAYOUT
-  #ifndef SINGLE_TENSOR
+#ifndef SINGLE_TENSOR
 // TWO INPUT MODE
 constexpr sharded_addrgen_fields in0_sharded_addrgen_fields = {
     true,
@@ -82,9 +83,8 @@ constexpr sharded_addrgen_fields in0_sharded_addrgen_fields = {
     get_compile_time_arg_val(12),
     get_compile_time_arg_val(13),
     get_compile_time_arg_val(14),
-    get_compile_time_arg_val(15) != 0
-};
-  #else
+    get_compile_time_arg_val(15) != 0};
+#else
 // SINGLE INPUT MODE - SHARDED
 constexpr sharded_addrgen_fields in0_sharded_addrgen_fields = {
     true,
@@ -94,14 +94,12 @@ constexpr sharded_addrgen_fields in0_sharded_addrgen_fields = {
     get_compile_time_arg_val(8),
     get_compile_time_arg_val(9),
     get_compile_time_arg_val(10),
-    get_compile_time_arg_val(11) != 0
-};
+    get_compile_time_arg_val(11) != 0};
 
-  #endif
-#else
-  constexpr sharded_addrgen_fields in0_sharded_addrgen_fields = {0, 0, 0, 0, 0, 0, 0, 0};
 #endif
-
+#else
+constexpr sharded_addrgen_fields in0_sharded_addrgen_fields = {0, 0, 0, 0, 0, 0, 0, 0};
+#endif
 
 #ifndef SINGLE_TENSOR
 #if defined(TENSOR1_SHARDED_MEM_LAYOUT)
@@ -132,21 +130,31 @@ constexpr sharded_addrgen_fields in1_sharded_addrgen_fields = {0, 0, 0, 0, 0, 0,
 #endif
 #endif
 
-
-template <tt::tt_metal::TensorMemoryLayout tensor_layout, tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
-FORCE_INLINE auto build_source_address_generator(std::size_t &arg_idx, address_t tensor_address, std::size_t page_size, sharded_addrgen_fields const& tensor_sharded_addrgen_fields, uint32_t cb_id_in) -> typename source_tensor_addrgen<tensor_layout, buffer_type, page_layout>::type {
+template <
+    tt::tt_metal::TensorMemoryLayout tensor_layout,
+    tt::tt_metal::BufferType buffer_type,
+    tt::tt_metal::Layout page_layout>
+FORCE_INLINE auto build_source_address_generator(
+    std::size_t& arg_idx,
+    address_t tensor_address,
+    std::size_t page_size,
+    sharded_addrgen_fields const& tensor_sharded_addrgen_fields,
+    uint32_t cb_id_in) -> typename source_tensor_addrgen<tensor_layout, buffer_type, page_layout>::type {
     constexpr bool is_sharded = is_sharded_tensor_layout(tensor_layout);
     constexpr bool is_interleaved = tensor_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
     constexpr bool is_tile_page_layout = page_layout == tt::tt_metal::Layout::TILE;
     constexpr bool is_row_major_layout = page_layout == tt::tt_metal::Layout::ROW_MAJOR;
-    static_assert(is_sharded || is_interleaved, "Only sharded and interleaved tensor layouts are supported but the unified address generator. A tensor layout not matching TensorMemoryLayout::WIDTH_SHARDED, TensorMemoryLayout::HEIGHT_SHARDED, TensorMemoryLayout::BLOCK_SHARDED, or TensorMemoryLayout::INTERLEAVED was specified.");
+    static_assert(
+        is_sharded || is_interleaved,
+        "Only sharded and interleaved tensor layouts are supported but the unified address generator. A tensor layout "
+        "not matching TensorMemoryLayout::WIDTH_SHARDED, TensorMemoryLayout::HEIGHT_SHARDED, "
+        "TensorMemoryLayout::BLOCK_SHARDED, or TensorMemoryLayout::INTERLEAVED was specified.");
 
     using addrgen_type = typename source_tensor_addrgen<tensor_layout, buffer_type, page_layout>::type;
 
     if constexpr (tensor_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         if constexpr (is_row_major_layout) {
-            return addrgen_type{
-                .bank_base_address = tensor_address, .page_size = page_size};
+            return addrgen_type{.bank_base_address = tensor_address, .page_size = page_size};
         } else {
             return addrgen_type{
                 .bank_base_address = tensor_address, .page_size = page_size, .data_format = get_dataformat(cb_id_in)};
@@ -156,18 +164,15 @@ FORCE_INLINE auto build_source_address_generator(std::size_t &arg_idx, address_t
         tensor_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
         uint8_t input_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
-        const auto * const input_shard_grid_row_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+        const auto* const input_shard_grid_row_map = reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
         arg_idx += input_shard_grid_nrows;
         uint8_t input_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
-        const auto * const input_shard_grid_col_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+        const auto* const input_shard_grid_col_map = reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
         arg_idx += input_shard_grid_ncols;
 
         return tt::tt_metal::address_generators::build_sharded_addr_gen<tensor_layout>(
             tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(
-                input_shard_grid_nrows,
-                input_shard_grid_row_map,
-                input_shard_grid_ncols,
-                input_shard_grid_col_map),
+                input_shard_grid_nrows, input_shard_grid_row_map, input_shard_grid_ncols, input_shard_grid_col_map),
             typename tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<tensor_layout>::type(
                 tensor_sharded_addrgen_fields.tensor_shard_pages_per_shard_y,
                 tensor_sharded_addrgen_fields.tensor_shard_pages_per_shard_x,
@@ -175,11 +180,9 @@ FORCE_INLINE auto build_source_address_generator(std::size_t &arg_idx, address_t
                 tensor_sharded_addrgen_fields.tensor_shard_grid_width,
                 tensor_sharded_addrgen_fields.tensor_shard_grid_start_y_logical,
                 tensor_sharded_addrgen_fields.tensor_shard_grid_start_x_logical,
-                tensor_sharded_addrgen_fields.tensor_shard_grid_transposed
-            ),
+                tensor_sharded_addrgen_fields.tensor_shard_grid_transposed),
             page_size,
-            tensor_address
-        );
+            tensor_address);
     } else {
         ASSERT(false);
     }
@@ -209,7 +212,7 @@ union cmd_specific_context {
 };
 
 class FabricConnectionManager final {
-   public:
+public:
     // return if there is/should be a connection - doesn't return whether or not the connection
     // is actually live
     bool is_logically_connected() const { return has_forward_connection() || has_backward_connection(); }
@@ -234,30 +237,33 @@ class FabricConnectionManager final {
         }
     }
 
-    static FabricConnectionManager build_from_args(std::size_t &arg_idx) {
+    static FabricConnectionManager build_from_args(std::size_t& arg_idx) {
         FabricConnectionManager connection_manager;
-        connection_manager.connection_flags = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0) << FORWARD_CONNECTION_FLAG_OFFSET;
+        connection_manager.connection_flags = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0)
+                                              << FORWARD_CONNECTION_FLAG_OFFSET;
         if (connection_manager.has_forward_connection()) {
-          connection_manager.forward_fabric_sender = tt::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            connection_manager.forward_fabric_sender =
+                tt::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
         }
-        connection_manager.connection_flags |= static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0) << BACKWARD_CONNECTION_FLAG_OFFSET;
+        connection_manager.connection_flags |= static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0)
+                                               << BACKWARD_CONNECTION_FLAG_OFFSET;
         if (connection_manager.has_backward_connection()) {
-          connection_manager.backward_fabric_sender = tt::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            connection_manager.backward_fabric_sender =
+                tt::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
         }
         return connection_manager;
     }
 
-    tt::fabric::WorkerToFabricEdmSender &get_forward_connection() {
+    tt::fabric::WorkerToFabricEdmSender& get_forward_connection() {
         ASSERT(has_forward_connection());
         return forward_fabric_sender;
     }
-    tt::fabric::WorkerToFabricEdmSender &get_backward_connection() {
+    tt::fabric::WorkerToFabricEdmSender& get_backward_connection() {
         ASSERT(has_backward_connection());
         return backward_fabric_sender;
     }
 
-   private:
-
+private:
     static constexpr uint8_t FORWARD_CONNECTION_FLAG_MASK = 0x01;
     static constexpr uint8_t BACKWARD_CONNECTION_FLAG_MASK = 0x02;
     static constexpr uint8_t FORWARD_CONNECTION_FLAG_OFFSET = 0x0;
@@ -282,15 +288,13 @@ struct command_context_t;
 
 template <typename Addrgen>
 void update_ccl_command(
-    arg_idx_t &arg_idx,
-    command_context_t<Addrgen> &cmd_ctx,
-    ttnn::ccl::cmd::CclCommandHeader const& cmd_header);
+    arg_idx_t& arg_idx, command_context_t<Addrgen>& cmd_ctx, ttnn::ccl::cmd::CclCommandHeader const& cmd_header);
 
 template <typename Addrgen>
 struct command_context_t final {
     FORCE_INLINE command_context_t(
-        FabricConnectionManager &fabric_connection,
-        Addrgen &addrgen,
+        FabricConnectionManager& fabric_connection,
+        Addrgen& addrgen,
         uint16_t num_commands,
         arg_idx_t start_arg_idx,
         uint8_t cb_id,
@@ -306,18 +310,17 @@ struct command_context_t final {
         command_idx(0),
         page_size(page_size),
         cb_id(cb_id),
-        packet_size_in_pages(packet_size_in_pages)
-        {
-            ASSERT(num_commands == 0 || arg_idx > 4);
-        }
-    FabricConnectionManager &fabric_connection;
+        packet_size_in_pages(packet_size_in_pages) {
+        ASSERT(num_commands == 0 || arg_idx > 4);
+    }
+    FabricConnectionManager& fabric_connection;
     ttnn::ccl::cmd::CclCommandTensor command_tensor;
     ttnn::ccl::cmd::CclCommandHeader current_cmd_header;
     // TODO: optimize packing
     address_info_t src_addr_info;
     address_info_t dest_addr_info;
     core_descriptor_info_t core_desc_info;
-    Addrgen &tensor_addrgen;
+    Addrgen& tensor_addrgen;
     cmd_specific_context cmd_specific_ctx;
     size_t packet_header_buffer_addr = 0;
 
@@ -338,96 +341,91 @@ struct command_context_t final {
         return current_cmd_header.dest_type != ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY;
     }
 
-    FORCE_INLINE bool is_complete() const {
-        return command_idx >= num_commands;
-    }
+    FORCE_INLINE bool is_complete() const { return command_idx >= num_commands; }
 
     FORCE_INLINE void complete_current_command() {
         command_idx++;
         populated = false;
     }
 
-    FORCE_INLINE bool current_command_active() const {
-        return populated;
-    }
+    FORCE_INLINE bool current_command_active() const { return populated; }
 
     FORCE_INLINE void fetch_next_command() {
         populated = true;
 
         this->current_cmd_header = ttnn::ccl::cmd::CclCommandHeader::from_uint32(get_arg_val<uint32_t>(arg_idx++));
-        #ifdef DEBUG_PRINT_ENABLED
-        DPRINT << "CMD (code=" << (uint32_t)current_cmd_header.code << ", args=" << (uint32_t)current_cmd_header.arg_count << ", idx=" << (uint32_t)(arg_idx-1) <<"\n";
-        #endif
-        update_ccl_command(
-            arg_idx,
-            *this,
-            current_cmd_header);
+#ifdef DEBUG_PRINT_ENABLED
+        DPRINT << "CMD (code=" << (uint32_t)current_cmd_header.code
+               << ", args=" << (uint32_t)current_cmd_header.arg_count << ", idx=" << (uint32_t)(arg_idx - 1) << "\n";
+#endif
+        update_ccl_command(arg_idx, *this, current_cmd_header);
         switch (current_cmd_header.code) {
             case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
             case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM: {
-                #ifndef NO_TENSOR_MODE
-                shape_t const worker_start_offset_global = v2::worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
+#ifndef NO_TENSOR_MODE
+                shape_t const worker_start_offset_global = v2::worker_wrapped_offset_to_coord(
+                    command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
                 shape_t const global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
 
                 size_t const curr_tile_id = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
                 cmd_specific_ctx.wrapped_worker_slice_read_ctx = wrapped_worker_slice_read_context{curr_tile_id};
-                #endif
+#endif
             } break;
             case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
                 DPRINT << (uint32_t)src_addr_info.address << "\n";
                 DPRINT << (uint32_t)cmd_specific_ctx.inline_value_ctx.value << "\n";
             case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
-            case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
-                break;
-            default:
-                ASSERT(false);
+            case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES: break;
+            default: ASSERT(false);
         }
     }
 };
 
-
 template <typename Addrgen>
 void update_ccl_command(
-    arg_idx_t &arg_idx,
-    command_context_t<Addrgen> &cmd_ctx,
-    ttnn::ccl::cmd::CclCommandHeader const& cmd_header) {
-
+    arg_idx_t& arg_idx, command_context_t<Addrgen>& cmd_ctx, ttnn::ccl::cmd::CclCommandHeader const& cmd_header) {
     using namespace ttnn::ccl::cmd;
 
     arg_idx_t arg_idx_old = arg_idx;
     for (arg_idx_t i = 0; i < cmd_header.arg_count; i++) {
-
         // Note that we choose to reinterpret our pointers as volatile so that in the future we can add streaming
         // of additional commands from some backing memory (e.g. dram or L1), potentially by another core, without
         // having to track down this code and add volatile casts later (which would be a potentially tricky bug to
         // root cause).
-        const CclCommandArgHeader command_arg_header = CclCommandArgHeader::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+        const CclCommandArgHeader command_arg_header =
+            CclCommandArgHeader::from_uint32(get_arg_val<uint32_t>(arg_idx++));
         const CclCommandArgCode command_arg_code = command_arg_header.code;
-        auto &cmd_tensor = cmd_ctx.command_tensor;
+        auto& cmd_tensor = cmd_ctx.command_tensor;
         switch (command_arg_code) {
             case CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES:
-                CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.tensor_shape);
+                CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::unpack(
+                    reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.tensor_shape);
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::size_in_words();
                 break;
             case CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES:
-                CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.tensor_slice_shape);
+                CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::unpack(
+                    reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.tensor_slice_shape);
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::size_in_words();
                 break;
             case CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES:
                 CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::unpack(
-                    reinterpret_cast<volatile uint32_t *>(get_arg_addr(arg_idx)), cmd_tensor.tensor_slice_offset);
+                    reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.tensor_slice_offset);
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::size_in_words();
                 break;
             case CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES:
-                CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.worker_start_offset_in_slice);
+                CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::unpack(
+                    reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)),
+                    cmd_tensor.worker_start_offset_in_slice);
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::size_in_words();
                 break;
             case CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE:
-                CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.worker_pages_per_slice);
+                CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::unpack(
+                    reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.worker_pages_per_slice);
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
                 break;
             case CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES:
-                CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor);
+                CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::unpack(
+                    reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor);
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::size_in_words();
                 break;
 
@@ -441,9 +439,11 @@ void update_ccl_command(
 
             case CclCommandArgCode::SET_ADDRESS_INFO: {
                 const auto src_dest_type = static_cast<SRC_DEST_TYPE>(command_arg_header.inline_value0);
-                const auto addr_type = static_cast<ttnn::ccl::cmd::CclCommandAddrType>(command_arg_header.inline_value1);
+                const auto addr_type =
+                    static_cast<ttnn::ccl::cmd::CclCommandAddrType>(command_arg_header.inline_value1);
                 auto& addr_info = src_dest_type == SRC_DEST_TYPE::SRC ? cmd_ctx.src_addr_info : cmd_ctx.dest_addr_info;
-                auto& cmd_ctx_addr_type = src_dest_type == SRC_DEST_TYPE::SRC ? cmd_ctx.src_addr_type : cmd_ctx.dest_addr_type;
+                auto& cmd_ctx_addr_type =
+                    src_dest_type == SRC_DEST_TYPE::SRC ? cmd_ctx.src_addr_type : cmd_ctx.dest_addr_type;
                 cmd_ctx_addr_type = addr_type;
                 switch (addr_type) {
                     case ttnn::ccl::cmd::CclCommandAddrType::CIRCULAR_BUFFER_ID:
@@ -456,54 +456,55 @@ void update_ccl_command(
                     case ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID:
                         addr_info.address = get_semaphore(command_arg_header.inline_value2);
                         break;
-                    case ttnn::ccl::cmd::CclCommandAddrType::NONE:
-                        break;
-                    default:
-                        ASSERT(false);
-                        break;
+                    case ttnn::ccl::cmd::CclCommandAddrType::NONE: break;
+                    default: ASSERT(false); break;
                 };
             } break;
 
             case CclCommandArgCode::SET_CORE_DESCRIPTOR_INFO: {
-                cmd_ctx.core_desc_type = static_cast<ttnn::ccl::cmd::CclCommandCoreDescriptorType>(command_arg_header.inline_value0);
+                cmd_ctx.core_desc_type =
+                    static_cast<ttnn::ccl::cmd::CclCommandCoreDescriptorType>(command_arg_header.inline_value0);
                 switch (cmd_ctx.core_desc_type) {
                     case ttnn::ccl::cmd::CclCommandCoreDescriptorType::ADDRGEN:
-                    case ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL:
-                        break;
+                    case ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL: break;
                     case ttnn::ccl::cmd::CclCommandCoreDescriptorType::NOC_XY:
-                        cmd_ctx.core_desc_info.core_desc_args.noc_unicast = ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY{
-                            command_arg_header.inline_value1,
-                            command_arg_header.inline_value2
-                        };
+                        cmd_ctx.core_desc_info.core_desc_args.noc_unicast =
+                            ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY{
+                                command_arg_header.inline_value1, command_arg_header.inline_value2};
                         break;
                     case ttnn::ccl::cmd::CclCommandCoreDescriptorType::RECTANGLE:
-                        cmd_ctx.core_desc_info.core_desc_args.noc_multicast = ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast::from_uint32(
-                            get_arg_val<uint32_t>(arg_idx++));
+                        cmd_ctx.core_desc_info.core_desc_args.noc_multicast =
+                            ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast::from_uint32(
+                                get_arg_val<uint32_t>(arg_idx++));
                         break;
-                    default:
-                        ASSERT(false);
+                    default: ASSERT(false);
                 };
 
             } break;
 
             default: {
                 ASSERT(false);
-
             }
         };
     }
 }
 
 template <typename Addrgen>
-FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
+FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx) {
     const size_t value = cmd_ctx.cmd_specific_ctx.inline_value_ctx.value;
     const size_t dest_bank_addr = cmd_ctx.dest_addr_info.address;
     bool is_remote_atomic_inc_over_fabric = cmd_ctx.command_requires_fabric();
 
     // noc mcast atomic inc not supported yet
-    ASSERT(cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::NOC_XY || cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL);
-    const uint8_t dest_noc0_x = cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL ? my_x[0] : cmd_ctx.core_desc_info.core_desc_args.noc_unicast.x;
-    const uint8_t dest_noc0_y = cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL ? my_y[0] : cmd_ctx.core_desc_info.core_desc_args.noc_unicast.y;
+    ASSERT(
+        cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::NOC_XY ||
+        cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL);
+    const uint8_t dest_noc0_x = cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL
+                                    ? my_x[0]
+                                    : cmd_ctx.core_desc_info.core_desc_args.noc_unicast.x;
+    const uint8_t dest_noc0_y = cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL
+                                    ? my_y[0]
+                                    : cmd_ctx.core_desc_info.core_desc_args.noc_unicast.y;
 
     if (is_remote_atomic_inc_over_fabric) {
         ASSERT(cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::NOC_XY);
@@ -515,26 +516,33 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
         }
 
         ASSERT(cmd_ctx.packet_header_buffer_addr != 0);
-        auto *pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
+        auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
         if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
             pkt_hdr->to_atomic_inc();
         } else {
             pkt_hdr->to_write();
         }
         pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
-                dest_bank_addr, static_cast<uint16_t>(value), 32, static_cast<uint8_t>(dest_noc0_x), static_cast<uint8_t>(dest_noc0_y)
-            });
+            dest_bank_addr,
+            static_cast<uint16_t>(value),
+            32,
+            static_cast<uint8_t>(dest_noc0_x),
+            static_cast<uint8_t>(dest_noc0_y)});
 
         switch (cmd_ctx.current_cmd_header.dest_type) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
-                pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops});
+                pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{
+                    cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops});
 
-                auto& fabric_connection = cmd_ctx.current_cmd_header.get_unicast_dest_args().is_forward_direction ? cmd_ctx.fabric_connection.get_forward_connection() : cmd_ctx.fabric_connection.get_backward_connection();
+                auto& fabric_connection = cmd_ctx.current_cmd_header.get_unicast_dest_args().is_forward_direction
+                                              ? cmd_ctx.fabric_connection.get_forward_connection()
+                                              : cmd_ctx.fabric_connection.get_backward_connection();
                 fabric_connection.wait_for_empty_write_slot();
-                fabric_connection.send_payload_flush_blocking_from_address(cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                fabric_connection.send_payload_flush_blocking_from_address(
+                    cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
             } break;
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
-                const auto &mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
+                const auto& mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
                 if (cmd_ctx.fabric_connection.has_forward_connection()) {
                     cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
@@ -549,14 +557,15 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
                     pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                     cmd_ctx.fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                    cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                    cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
+                        cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
                 }
 
                 uint64_t dest_noc_addr = get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
 
                 if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
                     noc_semaphore_inc(dest_noc_addr, value);
-                } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES){
+                } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES) {
                     noc_inline_dw_write(dest_noc_addr, value);
                 }
 
@@ -571,28 +580,30 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
         const uint64_t dest_noc_addr = get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
         if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
             noc_semaphore_inc(dest_noc_addr, value);
-        } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES){
+        } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES) {
             noc_inline_dw_write(dest_noc_addr, value);
         }
-
     }
 }
 
-
 #ifndef NO_TENSOR_MODE
-template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT,typename Addrgen>
-FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen> &cmd_ctx) {
-
+template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename Addrgen>
+FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_ctx) {
     if (!cb_pages_reservable_at_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages)) {
         return;
     }
     // Hack for now - we will eventually move to having a packet header buffer that will render this pointless
-    uint16_t header_padding = cmd_ctx.command_requires_fabric() ? sizeof(tt::fabric::PacketHeader) : 0; // Fabric doesn't support reads, nor do current use cases expect/require this behaviour
+    uint16_t header_padding =
+        cmd_ctx.command_requires_fabric()
+            ? sizeof(tt::fabric::PacketHeader)
+            : 0;  // Fabric doesn't support reads, nor do current use cases expect/require this behaviour
 
     DPRINT << "tensor -> CB: " << (uint32_t)cmd_ctx.cb_id << "\n";
 
-    wrapped_worker_slice_read_context &cmd_specific_ctx = cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx;
-    const uint16_t max_pages_readable = std::min<size_t>(cmd_ctx.packet_size_in_pages, cmd_ctx.command_tensor.worker_pages_per_slice - cmd_specific_ctx.offset_into_worker_slice);
+    wrapped_worker_slice_read_context& cmd_specific_ctx = cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx;
+    const uint16_t max_pages_readable = std::min<size_t>(
+        cmd_ctx.packet_size_in_pages,
+        cmd_ctx.command_tensor.worker_pages_per_slice - cmd_specific_ctx.offset_into_worker_slice);
 
     uint16_t contig_pages_advanced = 1;
     cb_reserve_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages);
@@ -618,14 +629,13 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen> &cmd_
         l1_write_addr += cmd_ctx.page_size * contig_pages_advanced;
 
         bool done_worker_slice = ttnn::ccl::v2::advance_worker_global_page(
-            cmd_specific_ctx.curr_tile_id, // Updated internally
+            cmd_specific_ctx.curr_tile_id,  // Updated internally
             cmd_specific_ctx.offset_into_worker_slice,
             cmd_ctx.command_tensor.worker_start_offset_in_slice,
             cmd_ctx.command_tensor.worker_pages_per_slice,
             cmd_ctx.command_tensor.tensor_slice_shape,
             cmd_ctx.command_tensor.tensor_shape,
-            contig_pages_advanced
-        );
+            contig_pages_advanced);
     }
 
     noc_async_read_barrier();
@@ -633,15 +643,13 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen> &cmd_
 }
 #endif
 
-
 template <typename Addrgen>
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
-    command_context_t<Addrgen> &cmd_ctx,
-    wrapped_worker_slice_read_context &cmd_specific_ctx,
-    size_t &l1_read_addr,
-    uint16_t contig_pages_advanced
-) {
+    command_context_t<Addrgen>& cmd_ctx,
+    wrapped_worker_slice_read_context& cmd_specific_ctx,
+    size_t& l1_read_addr,
+    uint16_t contig_pages_advanced) {
     // All fabric writes have noc0 coordinates specified in the header. Therefore, we need to regenerate the noc
     // address noc_index coordinates
     const size_t payload_size_bytes = static_cast<size_t>(contig_pages_advanced) * cmd_ctx.page_size;
@@ -651,14 +659,14 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
 
     auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(l1_read_addr);
-    pkt_hdr->to_write()
-        ->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
-            dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)
-        });
+    pkt_hdr->to_write()->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
+        dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)});
     switch (cmd_ctx.current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
-            const auto &unicast_args = cmd_ctx.current_cmd_header.get_unicast_dest_args();
-            auto &fabric_connection = unicast_args.is_forward_direction ? cmd_ctx.fabric_connection.get_forward_connection() : cmd_ctx.fabric_connection.get_backward_connection();
+            const auto& unicast_args = cmd_ctx.current_cmd_header.get_unicast_dest_args();
+            auto& fabric_connection = unicast_args.is_forward_direction
+                                          ? cmd_ctx.fabric_connection.get_forward_connection()
+                                          : cmd_ctx.fabric_connection.get_backward_connection();
 
             pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{unicast_args.distance_in_hops});
             fabric_connection.wait_for_empty_write_slot();
@@ -666,18 +674,22 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
 
         } break;
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
-            const auto &mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
+            const auto& mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
             if (cmd_ctx.fabric_connection.has_forward_connection()) {
-                pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
+                pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                    1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
                 cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(l1_read_addr, packet_send_size_bytes);
+                cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                    l1_read_addr, packet_send_size_bytes);
             }
 
             // Write the mcast packet (backward)
             if (cmd_ctx.fabric_connection.has_backward_connection()) {
-                pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
+                pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                    1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                 cmd_ctx.fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(l1_read_addr, packet_send_size_bytes);
+                cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
+                    l1_read_addr, packet_send_size_bytes);
             }
         } break;
         default: {
@@ -690,31 +702,23 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     l1_read_addr += payload_size_bytes;
 }
 
-
 template <typename Addrgen>
 FORCE_INLINE void write_payload_then_advance_read_address(
     uint64_t noc0_dest_noc_addr,
-    command_context_t<Addrgen> &cmd_ctx,
-    wrapped_worker_slice_read_context &cmd_specific_ctx,
-    size_t &l1_read_addr,
+    command_context_t<Addrgen>& cmd_ctx,
+    wrapped_worker_slice_read_context& cmd_specific_ctx,
+    size_t& l1_read_addr,
     size_t header_padding,
-    uint16_t contig_pages_advanced
-) {
+    uint16_t contig_pages_advanced) {
     static_assert(
         ((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0,
         "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
     switch (cmd_ctx.current_cmd_header.dest_type) {
-        case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST:
-            [[fallthrough]];
+        case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: [[fallthrough]];
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST:
             write_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr,
-                cmd_ctx,
-                cmd_specific_ctx,
-                l1_read_addr,
-                contig_pages_advanced
-            );
-        break;
+                noc0_dest_noc_addr, cmd_ctx, cmd_specific_ctx, l1_read_addr, contig_pages_advanced);
+            break;
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY: {
             auto const [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
             // Conver to our local noc_index based address
@@ -725,7 +729,6 @@ FORCE_INLINE void write_payload_then_advance_read_address(
     }
 }
 
-
 #ifndef NO_TENSOR_MODE
 // Both this and try_advance_read_tensor_to_cb are very similar - particularly with the main
 // packetization loop. We should look into refactoring this to reduce code size (and duplication)
@@ -733,15 +736,17 @@ FORCE_INLINE void write_payload_then_advance_read_address(
 // At the very least, we can have templatization of the main function that can specialize
 // based on command type so we can avoid the perf overhead of the branching that would otherwise
 // be required.
-template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT,typename Addrgen>
-FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen> &cmd_ctx) {
+template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename Addrgen>
+FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& cmd_ctx) {
     if (!cb_pages_available_at_front(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages)) {
         return;
     }
     size_t header_padding = cmd_ctx.command_requires_fabric() ? sizeof(tt::fabric::PacketHeader) : 0;
 
-    wrapped_worker_slice_read_context &cmd_specific_ctx = cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx;
-    const uint16_t max_pages_writable = std::min<size_t>(cmd_ctx.packet_size_in_pages, cmd_ctx.command_tensor.worker_pages_per_slice - cmd_specific_ctx.offset_into_worker_slice);
+    wrapped_worker_slice_read_context& cmd_specific_ctx = cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx;
+    const uint16_t max_pages_writable = std::min<size_t>(
+        cmd_ctx.packet_size_in_pages,
+        cmd_ctx.command_tensor.worker_pages_per_slice - cmd_specific_ctx.offset_into_worker_slice);
     ASSERT(cmd_ctx.command_tensor.worker_pages_per_slice >= cmd_specific_ctx.offset_into_worker_slice);
 
     cb_wait_front(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages);
@@ -749,42 +754,34 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen> &c
 
     uint16_t contig_pages_advanced = 1;
     for (uint16_t i = 0; i < max_pages_writable; i += contig_pages_advanced) {
-
         // This needs to be cleaned up a little bit.
         // There's a basic usability issue here in that when/if the write is sent over the fabric,
         // then the fabric expects noc x/y coordinates to be provided as noc0 coordinates.
         // However, if we're writing locally, then we need to actually write using `noc_index` based coordinates.
         // This can lead to a discrepancy, so to stay consistent, we always generate noc0 based addresses here
         // so we can reliably translate to `noc_index` based addresses writing locally, inside the write function
-       auto const [noc0_dest_noc_addr, contig_pages_] = get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT, MEM_LAYOUT>(
-            cmd_specific_ctx.curr_tile_id,
-            cmd_specific_ctx.offset_into_worker_slice,
-            cmd_ctx.command_tensor.worker_start_offset_in_slice,
-            cmd_ctx.tensor_addrgen,
-            cmd_ctx.command_tensor.tensor_slice_shape);
+        auto const [noc0_dest_noc_addr, contig_pages_] =
+            get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT, MEM_LAYOUT>(
+                cmd_specific_ctx.curr_tile_id,
+                cmd_specific_ctx.offset_into_worker_slice,
+                cmd_ctx.command_tensor.worker_start_offset_in_slice,
+                cmd_ctx.tensor_addrgen,
+                cmd_ctx.command_tensor.tensor_slice_shape);
 
         contig_pages_advanced = std::min<uint16_t>(contig_pages_, max_pages_writable);
         contig_pages_advanced = std::min<uint16_t>(cmd_ctx.packet_size_in_pages - i, contig_pages_);
 
         write_payload_then_advance_read_address(
-            noc0_dest_noc_addr,
-            cmd_ctx,
-            cmd_specific_ctx,
-            l1_read_addr,
-            header_padding,
-            contig_pages_advanced
-        );
-
+            noc0_dest_noc_addr, cmd_ctx, cmd_specific_ctx, l1_read_addr, header_padding, contig_pages_advanced);
 
         auto done_worker_slice = ttnn::ccl::v2::advance_worker_global_page(
-            cmd_specific_ctx.curr_tile_id, // Updated internally
+            cmd_specific_ctx.curr_tile_id,  // Updated internally
             cmd_specific_ctx.offset_into_worker_slice,
             cmd_ctx.command_tensor.worker_start_offset_in_slice,
             cmd_ctx.command_tensor.worker_pages_per_slice,
             cmd_ctx.command_tensor.tensor_slice_shape,
             cmd_ctx.command_tensor.tensor_shape,
-            contig_pages_advanced
-        );
+            contig_pages_advanced);
     }
     noc_async_writes_flushed();
 
@@ -793,127 +790,124 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen> &c
 #endif
 
 template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename Addrgen>
-FORCE_INLINE void try_advance(command_context_t<Addrgen> &cmd_ctx) {
+FORCE_INLINE void try_advance(command_context_t<Addrgen>& cmd_ctx) {
     switch (cmd_ctx.current_cmd_header.code) {
-        case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM: // STREAM TENSOR TO CB
-            #ifndef NO_TENSOR_MODE
+        case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM:  // STREAM TENSOR TO CB
+#ifndef NO_TENSOR_MODE
             try_advance_read_tensor_to_cb<TENSOR_LAYOUT, MEM_LAYOUT>(cmd_ctx);
-            #endif
+#endif
             break;
         case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
-            #ifndef NO_TENSOR_MODE
+#ifndef NO_TENSOR_MODE
             try_advance_write_tensor_from_cb<TENSOR_LAYOUT, MEM_LAYOUT>(cmd_ctx);
-            #endif
+#endif
             break;
 
-
-        case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
-            [[fallthrough]];
+        case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC: [[fallthrough]];
         case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
             try_advance_inline_write_or_atomic_inc(cmd_ctx);
             break;
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
             // Nothing to actively do to advance - just needs to wait for completion
             break;
-        default:
-            ASSERT(false);
-            break;
+        default: ASSERT(false); break;
     };
 
     // Advance to next command index
     switch (cmd_ctx.current_cmd_header.code) {
-        case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM: // STREAM TENSOR TO CB
+        case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM:  // STREAM TENSOR TO CB
         case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
-            if (cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx.offset_into_worker_slice >= cmd_ctx.command_tensor.worker_pages_per_slice) {
+            if (cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx.offset_into_worker_slice >=
+                cmd_ctx.command_tensor.worker_pages_per_slice) {
                 DPRINT << "t_stream cmd cmpl\n";
                 cmd_ctx.complete_current_command();
             }
             break;
 
-        case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
-            [[fallthrough]];
+        case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC: [[fallthrough]];
         case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
             DPRINT << "at_inc cmd cmpl\n";
-                cmd_ctx.complete_current_command();
+            cmd_ctx.complete_current_command();
             break;
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
             // Technically we are implementating semaphore wait as WAIT_MIN. FUTURE work to make separate commands
-            if (*reinterpret_cast<volatile uint32_t *>(cmd_ctx.src_addr_info.address) >= cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
+            if (*reinterpret_cast<volatile uint32_t*>(cmd_ctx.src_addr_info.address) >=
+                cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
                 DPRINT << "Completing waitval command\n";
                 cmd_ctx.complete_current_command();
             }
-        break;
-        default:
-            ASSERT(false);
             break;
+        default: ASSERT(false); break;
     };
 }
 
-
 /*
-* CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time) dispatch
-* implementations depending on those invocation parameters.
-*/
+ * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
+ * dispatch implementations depending on those invocation parameters.
+ */
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
     DPRINT << "START my_y " << (uint32_t)my_y[0] << ", my_x " << (uint32_t)my_x[0] << "\n";
     size_t arg_idx = 0;
-    #ifndef NO_TENSOR_MODE
+#ifndef NO_TENSOR_MODE
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
-    #ifndef SINGLE_TENSOR
+#ifndef SINGLE_TENSOR
     address_t tensor_address1 = get_arg_val<address_t>(arg_idx++);
-    #endif
-    #endif
+#endif
+#endif
     uint8_t num_commands0 = get_arg_val<address_t>(arg_idx++);
     arg_idx_t command0_start_offset = get_arg_val<address_t>(arg_idx++);
 
-    #ifndef SINGLE_INPUT_MODE
+#ifndef SINGLE_INPUT_MODE
     uint8_t num_commands1 = get_arg_val<address_t>(arg_idx++);
     arg_idx_t command1_start_offset = get_arg_val<address_t>(arg_idx++);
-    #endif
+#endif
 
     // Assuming whole page transmissions (which is the only mode we support at the moment)
     // -> however, wanted to call it out here to make it clear that we need to pull this
     //    out when we start enabling other modes
     const uint16_t packet_size_in_pages = get_arg_val<uint32_t>(arg_idx++);
     const uint16_t tensor0_page_size =
-    #ifndef NO_TENSOR_MODE
+#ifndef NO_TENSOR_MODE
         get_arg_val<uint32_t>(arg_idx++);
-    #else
+#else
         0;
-    #endif
+#endif
     const uint16_t tensor1_page_size =
-    #if !defined(NO_TENSOR_MODE) and !defined(SINGLE_TENSOR)
+#if !defined(NO_TENSOR_MODE) and !defined(SINGLE_TENSOR)
         get_arg_val<uint32_t>(arg_idx++);
-    #else
+#else
         0;
-    #endif
+#endif
 
     auto tensor0_addrgen =
-    #ifndef NO_TENSOR_MODE
-        build_source_address_generator<tensor0_layout, buffer0_type, tensor0_page_layout>(arg_idx, tensor_address0, tensor0_page_size, in0_sharded_addrgen_fields, cb0_id);
-    #else
+#ifndef NO_TENSOR_MODE
+        build_source_address_generator<tensor0_layout, buffer0_type, tensor0_page_layout>(
+            arg_idx, tensor_address0, tensor0_page_size, in0_sharded_addrgen_fields, cb0_id);
+#else
         no_addrgen{};
-    #endif
+#endif
 
-    #if !defined(SINGLE_INPUT_MODE)
+#if !defined(SINGLE_INPUT_MODE)
     auto tensor1_addrgen =
-    #if !defined(NO_TENSOR_MODE) && !defined(SINGLE_TENSOR)
-        build_source_address_generator<tensor1_layout, buffer1_type, tensor1_page_layout>(arg_idx, tensor_address1, tensor1_page_size, in1_sharded_addrgen_fields, cb1_id);
-    #else
+#if !defined(NO_TENSOR_MODE) && !defined(SINGLE_TENSOR)
+        build_source_address_generator<tensor1_layout, buffer1_type, tensor1_page_layout>(
+            arg_idx, tensor_address1, tensor1_page_size, in1_sharded_addrgen_fields, cb1_id);
+#else
         no_addrgen{};
-    #endif
-    #endif
+#endif
+#endif
 
     // TODO: move to common
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
     cb_reserve_back(reserved_packet_header_cb_id, num_packet_headers_storable);
     auto packet_header_buffer_addr0 = get_write_ptr(reserved_packet_header_cb_id);
-    auto packet_header_buffer_addr1 = packet_header_buffer_addr0 + (num_packet_headers_storable >> 2) * sizeof(tt::fabric::PacketHeader);
+    auto packet_header_buffer_addr1 =
+        packet_header_buffer_addr0 + (num_packet_headers_storable >> 2) * sizeof(tt::fabric::PacketHeader);
 
     auto operand_0_cmd_ctx = command_context_t(
         fabric_connection,
@@ -928,11 +922,11 @@ void kernel_main() {
     // enabling either of the writes will cause the issue
     static_assert(sizeof(command_context_t<decltype(tensor0_addrgen)>) <= 120, "command_context_t is too big");
     uint8_t stream_done_mask =
-    #ifndef SINGLE_INPUT_MODE
+#ifndef SINGLE_INPUT_MODE
         (static_cast<uint8_t>(num_commands1 == 0) << 1) |
-    #endif
+#endif
         static_cast<uint8_t>(num_commands0 == 0);
-    #ifndef SINGLE_INPUT_MODE
+#ifndef SINGLE_INPUT_MODE
     const uint8_t finish_value = 0x3;
     static_assert(sizeof(command_context_t<decltype(tensor1_addrgen)>) <= 120, "command_context_t is too big");
     auto operand_1_cmd_ctx = command_context_t(
@@ -944,9 +938,9 @@ void kernel_main() {
         tensor1_page_size,
         packet_size_in_pages,
         packet_header_buffer_addr1);
-    #else
+#else
     const uint8_t finish_value = 0x1;
-    #endif
+#endif
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open();
@@ -960,7 +954,7 @@ void kernel_main() {
             try_advance<tensor0_layout, tensor0_page_layout>(operand_0_cmd_ctx);
         }
         stream_done_mask |= static_cast<uint8_t>(operand_0_cmd_ctx.is_complete());
-        #ifndef SINGLE_INPUT_MODE
+#ifndef SINGLE_INPUT_MODE
         if ((stream_done_mask & 0x2) == 0) {
             if (!operand_1_cmd_ctx.current_command_active()) {
                 DPRINT << "get_cmd1\n";
@@ -969,11 +963,10 @@ void kernel_main() {
             try_advance<tensor1_layout, tensor1_page_layout>(operand_1_cmd_ctx);
         }
         stream_done_mask |= (static_cast<uint8_t>(operand_1_cmd_ctx.is_complete()) << 1);
-        #endif
+#endif
     }
 
     if (fabric_connection.is_logically_connected()) {
-
         fabric_connection.close();
     }
 

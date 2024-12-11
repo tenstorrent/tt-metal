@@ -25,38 +25,25 @@ namespace ttnn {
 namespace ccl {
 namespace worker_detail {
 
-CCLWorkerArgBuilder::CCLWorkerArgBuilder (
+CCLWorkerArgBuilder::CCLWorkerArgBuilder(
     Device const* device,
     ttnn::ccl::CCLOpConfig const& op_config,
     ttnn::ccl::TensorPartition const& input_tensor_partition,
     ttnn::ccl::TensorPartition const& output_tensor_partition,
-    std::size_t operating_dim):
+    std::size_t operating_dim) :
     device(device),
     op_config(op_config),
     input_tensor_partition(input_tensor_partition),
     output_tensor_partition(output_tensor_partition),
-    operating_dim(operating_dim) {
-}
+    operating_dim(operating_dim) {}
 
-Shape4D<uint32_t> to_4d_shape(Shape4D<uint32_t> const& shape) {
-    return shape;
-}
-Shape4D<uint32_t> to_4d_offset(Shape4D<uint32_t> const& offset) {
-    return offset;
-}
-size_t get_volume(Shape4D<uint32_t> const& shape) {
-    return shape.volume();
-}
+Shape4D<uint32_t> to_4d_shape(Shape4D<uint32_t> const& shape) { return shape; }
+Shape4D<uint32_t> to_4d_offset(Shape4D<uint32_t> const& offset) { return offset; }
+size_t get_volume(Shape4D<uint32_t> const& shape) { return shape.volume(); }
 
-Shape4D<uint32_t> to_4d_shape(tt_xy_pair const& shape) {
-    return Shape4D<uint32_t>(1, 1, shape.y, shape.x);
-}
-Shape4D<uint32_t> to_4d_offset(tt_xy_pair const& offset) {
-    return Shape4D<uint32_t>(0, 0, offset.y, offset.x);
-}
-size_t get_volume(tt_xy_pair const& shape) {
-    return shape.x * shape.y;
-}
+Shape4D<uint32_t> to_4d_shape(tt_xy_pair const& shape) { return Shape4D<uint32_t>(1, 1, shape.y, shape.x); }
+Shape4D<uint32_t> to_4d_offset(tt_xy_pair const& offset) { return Shape4D<uint32_t>(0, 0, offset.y, offset.x); }
+size_t get_volume(tt_xy_pair const& shape) { return shape.x * shape.y; }
 
 template <cmd::CclCommandArgCode code>
 struct tensor_slice_command_arg_field {
@@ -96,7 +83,6 @@ struct tensor_slice_command_arg_field<cmd::CclCommandArgCode::SET_FULL_TENSOR_SL
 
 template <ttnn::ccl::cmd::CclCommandArgCode arg_code>
 void add_ccl_command_arg_to_runtime_args(v2::TensorSlice const& tensor_slice, std::vector<uint32_t>& rt_args_out) {
-
     rt_args_out.push_back(static_cast<uint32_t>(arg_code));
     auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<arg_code>::size_in_words();
     log_trace(tt::LogOp, "Emitting {} args for tensor_shape field", num_words_for_args);
@@ -104,16 +90,15 @@ void add_ccl_command_arg_to_runtime_args(v2::TensorSlice const& tensor_slice, st
 
     ttnn::ccl::cmd::CclCommandArg<arg_code>::pack_to(
         &rt_args_out[rt_args_out.size() - num_words_for_args],
-        tensor_slice_command_arg_field<arg_code>::get_value(tensor_slice)
-    );
+        tensor_slice_command_arg_field<arg_code>::get_value(tensor_slice));
 
     for (std::size_t j = rt_args_out.size() - num_words_for_args; j < rt_args_out.size(); j++) {
         log_trace(tt::LogOp, "\t{}", rt_args_out[j]);
     }
 }
 template <>
-void add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>(v2::TensorSlice const& tensor_slice, std::vector<uint32_t>& rt_args_out) {
-
+void add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>(
+    v2::TensorSlice const& tensor_slice, std::vector<uint32_t>& rt_args_out) {
     rt_args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE));
     auto num_words_for_args = 1;
     log_trace(tt::LogOp, "Emitting {} args for tensor_shape field", num_words_for_args);
@@ -121,14 +106,13 @@ void add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_
 
     ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::pack_to(
         &rt_args_out[rt_args_out.size() - num_words_for_args],
-        tensor_slice_command_arg_field<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::get_value(tensor_slice)
-    );
+        tensor_slice_command_arg_field<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::get_value(
+            tensor_slice));
 
     for (std::size_t j = rt_args_out.size() - num_words_for_args; j < rt_args_out.size(); j++) {
         log_trace(tt::LogOp, "\t{}", rt_args_out[j]);
     }
 }
-
 
 template <typename TensorSliceType>
 void generate_ccl_slice_sequence_commands_impl(
@@ -146,26 +130,26 @@ void generate_ccl_slice_sequence_commands_impl(
                 ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1})));
 
             // push back arg 0 header
-            args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES));
+            args_out.push_back(
+                static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES));
             auto const& ccl_command_tensor = ttnn::ccl::cmd::CclCommandTensor{
                 to_4d_shape(slice.tensor_shape),
                 to_4d_shape(slice.tensor_slice_shape),
                 to_4d_offset(slice.tensor_slice_offset),
                 to_4d_offset(slice.worker_slice_offset),
                 get_volume(slice.worker_slice_shape)};
-            const auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::size_in_words();
+            const auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<
+                ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::size_in_words();
             log_trace(tt::LogOp, "Emitting {} args for full tensor slice command", num_words_for_args);
             args_out.resize(args_out.size() + num_words_for_args);
             // push_back arg 0 payload
             ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::
-                pack_to(
-                    &args_out[args_out.size() - num_words_for_args],
-                    ccl_command_tensor
-                    );
+                pack_to(&args_out[args_out.size() - num_words_for_args], ccl_command_tensor);
             const std::size_t args_index_new = args_out.size();
 
             TT_ASSERT(i < slices.size(), "Internal Error");
-            std::stringstream ss; ss << "ccl_send command " << std::to_string(i) << " has " << args_index_new - args_index_old << " args:\n";
+            std::stringstream ss;
+            ss << "ccl_send command " << std::to_string(i) << " has " << args_index_new - args_index_old << " args:\n";
             for (std::size_t j = args_index_old; j < args_index_new; j++) {
                 ss << "\targ " << j << ":" << args_out[j] << "\n";
             }
@@ -182,13 +166,12 @@ void generate_ccl_slice_sequence_commands_impl(
             // tensor shape
             if (last_slice.tensor_shape != slice.tensor_shape) {
                 args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES));
-                auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::size_in_words();
+                auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<
+                    ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::size_in_words();
                 log_trace(tt::LogOp, "Emitting {} args for tensor_shape field", num_words_for_args);
                 args_out.resize(args_out.size() + num_words_for_args);
                 ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::pack_to(
-                    &args_out[args_out.size() - num_words_for_args],
-                    to_4d_shape(slice.tensor_shape)
-                );
+                    &args_out[args_out.size() - num_words_for_args], to_4d_shape(slice.tensor_shape));
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
@@ -198,14 +181,14 @@ void generate_ccl_slice_sequence_commands_impl(
 
             // tensor slice shape
             if (last_slice.tensor_slice_shape != slice.tensor_slice_shape) {
-                args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES));
-                auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::size_in_words();
+                args_out.push_back(
+                    static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES));
+                auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<
+                    ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::size_in_words();
                 log_trace(tt::LogOp, "Emitting {} args for tensor_slice_shape field", num_words_for_args);
                 args_out.resize(args_out.size() + num_words_for_args);
-                ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::pack_to(
-                    &args_out[args_out.size() - num_words_for_args],
-                    to_4d_shape(slice.tensor_slice_shape)
-                );
+                ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::
+                    pack_to(&args_out[args_out.size() - num_words_for_args], to_4d_shape(slice.tensor_slice_shape));
                 for (std::size_t i = args_out.size() - num_words_for_args; i < args_out.size(); i++) {
                     log_trace(tt::LogOp, "\t{}", args_out[i]);
                 }
@@ -215,14 +198,14 @@ void generate_ccl_slice_sequence_commands_impl(
 
             // tensor slice offset
             if (last_slice.tensor_slice_offset != slice.tensor_slice_offset) {
-                args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES));
-                auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::size_in_words();
+                args_out.push_back(
+                    static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES));
+                auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<
+                    ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::size_in_words();
                 log_trace(tt::LogOp, "Emitting {} args for tensor_slice_offset field", num_words_for_args);
                 args_out.resize(args_out.size() + num_words_for_args);
-                ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::pack_to(
-                    &args_out[args_out.size() - num_words_for_args],
-                    to_4d_offset(slice.tensor_slice_offset)
-                );
+                ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::
+                    pack_to(&args_out[args_out.size() - num_words_for_args], to_4d_offset(slice.tensor_slice_offset));
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
@@ -232,14 +215,15 @@ void generate_ccl_slice_sequence_commands_impl(
 
             // worker slice offset
             if (last_slice.worker_slice_offset != slice.worker_slice_offset) {
-                args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES));
-                auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::size_in_words();
+                args_out.push_back(static_cast<uint32_t>(
+                    ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES));
+                auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<
+                    ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::size_in_words();
                 log_trace(tt::LogOp, "Emitting {} args for worker_slice_offset field", num_words_for_args);
                 args_out.resize(args_out.size() + num_words_for_args);
-                ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::pack_to(
-                    &args_out[args_out.size() - num_words_for_args],
-                    to_4d_offset(slice.worker_slice_offset)
-                );
+                ttnn::ccl::cmd::CclCommandArg<
+                    ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::
+                    pack_to(&args_out[args_out.size() - num_words_for_args], to_4d_offset(slice.worker_slice_offset));
 
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
@@ -249,14 +233,14 @@ void generate_ccl_slice_sequence_commands_impl(
 
             // worker_pages_per_slice
             if (last_slice.worker_slice_shape != slice.worker_slice_shape) {
-                args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE));
-                auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
+                args_out.push_back(
+                    static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE));
+                auto num_words_for_args = ttnn::ccl::cmd::CclCommandArg<
+                    ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
                 log_trace(tt::LogOp, "Emitting {} args for worker_pages_per_slice field", num_words_for_args);
                 args_out.resize(args_out.size() + num_words_for_args);
                 ttnn::ccl::cmd::CclCommandArg<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::pack_to(
-                    &args_out[args_out.size() - num_words_for_args],
-                    get_volume(slice.worker_slice_shape)
-                );
+                    &args_out[args_out.size() - num_words_for_args], get_volume(slice.worker_slice_shape));
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
@@ -268,7 +252,8 @@ void generate_ccl_slice_sequence_commands_impl(
                 ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1}));
 
             std::size_t args_index_new = args_out.size();
-            std::stringstream ss; ss << "ccl_send command " << i << " has " << args_index_new - args_index_old << " args:\n";
+            std::stringstream ss;
+            ss << "ccl_send command " << i << " has " << args_index_new - args_index_old << " args:\n";
             for (std::size_t j = args_index_old; j < args_index_new; j++) {
                 ss << "\targ " << j << ":" << args_out[j] << "\n";
             }
@@ -276,7 +261,6 @@ void generate_ccl_slice_sequence_commands_impl(
         }
     }
 }
-
 
 /*
  * Number of CCL command arguments generated - note that this does not necessarily match
@@ -294,7 +278,8 @@ size_t generate_ccl_tensor_slice_command_args(
         // push back Command Header
         // push back arg 0 header
         log_trace(tt::LogOp, "Generating full tensor spec command args");
-        add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>(current_tensor_slice, args_out);
+        add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>(
+            current_tensor_slice, args_out);
         const size_t args_index_new = args_out.size();
         // We can reused cached values for the first slice
         num_command_args_added++;
@@ -305,53 +290,62 @@ size_t generate_ccl_tensor_slice_command_args(
 
         // tensor shape
         if (last_slice.tensor_shape != current_tensor_slice.tensor_shape) {
-            add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>(current_tensor_slice, args_out);
+            add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>(
+                current_tensor_slice, args_out);
             num_command_args_added++;
         }
 
         // tensor slice shape
         if (last_slice.tensor_slice_shape != current_tensor_slice.tensor_slice_shape) {
-            add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>(current_tensor_slice, args_out);
+            add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>(
+                current_tensor_slice, args_out);
             num_command_args_added++;
         }
 
         // tensor slice offset
         if (last_slice.tensor_slice_offset != current_tensor_slice.tensor_slice_offset) {
-            add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>(current_tensor_slice, args_out);
+            add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>(
+                current_tensor_slice, args_out);
             num_command_args_added++;
         }
 
         // worker slice offset
         if (last_slice.worker_slice_offset != current_tensor_slice.worker_slice_offset) {
-            add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>(current_tensor_slice, args_out);
+            add_ccl_command_arg_to_runtime_args<
+                ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>(
+                current_tensor_slice, args_out);
             num_command_args_added++;
         }
 
         // worker_pages_per_slice
         if (last_slice.worker_slice_shape != current_tensor_slice.worker_slice_shape) {
-            add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>(current_tensor_slice, args_out);
+            add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>(
+                current_tensor_slice, args_out);
             num_command_args_added++;
         }
     }
 
-    log_trace(tt::LogOp, "\t{} rt_args added, {} cmd args added", args_out.size() - args_index_old, num_command_args_added);
+    log_trace(
+        tt::LogOp, "\t{} rt_args added, {} cmd args added", args_out.size() - args_index_old, num_command_args_added);
 
     return num_command_args_added;
 }
 
-
 // TODO: commonize with all uncached arg types (e.g. this can be commonized with atomic inc arg generation)
 size_t generate_ccl_wait_value_command_args(
-    ttnn::ccl::cmd::CclCommandWaitValue const& wait_value_args,
-    std::vector<uint32_t>& args_out) {
+    ttnn::ccl::cmd::CclCommandWaitValue const& wait_value_args, std::vector<uint32_t>& args_out) {
     auto const arg_code = ttnn::ccl::cmd::CclCommandArgCode::SET_TARGET_VALUE;
     ttnn::ccl::cmd::CclCommandArgHeader hdr;
     hdr.code = arg_code;
     hdr.inline_value0 = static_cast<uint8_t>(true);
     hdr.inline_value1 = wait_value_args.target_value;
     args_out.push_back(hdr.to_uint32());
-    log_trace(tt::LogOp, "Emitting header only for for wait_value field. header.code={}, .inline_val0={}, .inline_val1={}",
-        static_cast<int>(hdr.code), hdr.inline_value0, hdr.inline_value1);
+    log_trace(
+        tt::LogOp,
+        "Emitting header only for for wait_value field. header.code={}, .inline_val0={}, .inline_val1={}",
+        static_cast<int>(hdr.code),
+        hdr.inline_value0,
+        hdr.inline_value1);
 
     return 1;
 }
@@ -374,57 +368,72 @@ size_t generate_ccl_raw_inline_write_command_args(
 }
 
 static size_t generate_ccl_atomic_inc_command_args(
-    ttnn::ccl::cmd::CclCommandAtomicInc const& atomic_inc_args,
-    std::vector<uint32_t>& args_out) {
+    ttnn::ccl::cmd::CclCommandAtomicInc const& atomic_inc_args, std::vector<uint32_t>& args_out) {
     auto const arg_code = ttnn::ccl::cmd::CclCommandArgCode::SET_ATOMIC_INC_VALUE;
     ttnn::ccl::cmd::CclCommandArgHeader hdr;
     hdr.code = arg_code;
     hdr.inline_value0 = static_cast<uint8_t>(true);
     hdr.inline_value1 = atomic_inc_args.value;
-    TT_FATAL(atomic_inc_args.value < std::numeric_limits<uint8_t>::max(), "Atomic increment value is too large: {}", atomic_inc_args.value);
+    TT_FATAL(
+        atomic_inc_args.value < std::numeric_limits<uint8_t>::max(),
+        "Atomic increment value is too large: {}",
+        atomic_inc_args.value);
     args_out.push_back(hdr.to_uint32());
 
-    log_trace(tt::LogOp, "Emitting header only for for atomic_inc field. header.code={}, .inline_val0={}, .inline_val1={}",
-        static_cast<int>(hdr.code), hdr.inline_value0, hdr.inline_value1);
+    log_trace(
+        tt::LogOp,
+        "Emitting header only for for atomic_inc field. header.code={}, .inline_val0={}, .inline_val1={}",
+        static_cast<int>(hdr.code),
+        hdr.inline_value0,
+        hdr.inline_value1);
 
     return 1;
 }
-
-
 
 /*
  * Returns the number of ccl command args added
  */
 static size_t generate_ccl_address_info_command_args(
-    std::optional<std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs>> const& last_addr_type,
+    std::optional<std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs>> const&
+        last_addr_type,
     std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs> const& current_addr_type_args,
     ttnn::ccl::cmd::SRC_DEST_TYPE src_dest_type,
     std::vector<uint32_t>& args_out) {
     auto requires_args_to_be_generated = [](auto const& last_addr_type, auto const& current_addr_type_args) {
         bool different_type_or_args = !last_addr_type.has_value();
-        different_type_or_args = different_type_or_args || (last_addr_type.value().first != current_addr_type_args.first);
-        different_type_or_args = different_type_or_args || (last_addr_type.value().second.index() != current_addr_type_args.second.index());
+        different_type_or_args =
+            different_type_or_args || (last_addr_type.value().first != current_addr_type_args.first);
+        different_type_or_args =
+            different_type_or_args || (last_addr_type.value().second.index() != current_addr_type_args.second.index());
         if (different_type_or_args) {
             return true;
         }
         if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrSemaphoreId>(current_addr_type_args.second)) {
-            auto const& last_semaphore_id = std::get<ttnn::ccl::cmd::CclCommandAddrSemaphoreId>(last_addr_type.value().second);
-            auto const& current_semaphore_id = std::get<ttnn::ccl::cmd::CclCommandAddrSemaphoreId>(current_addr_type_args.second);
+            auto const& last_semaphore_id =
+                std::get<ttnn::ccl::cmd::CclCommandAddrSemaphoreId>(last_addr_type.value().second);
+            auto const& current_semaphore_id =
+                std::get<ttnn::ccl::cmd::CclCommandAddrSemaphoreId>(current_addr_type_args.second);
             return last_semaphore_id.semaphore_id != current_semaphore_id.semaphore_id;
         }
         if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrCircularBufferId>(current_addr_type_args.second)) {
-            auto const& last_circular_buffer_id = std::get<ttnn::ccl::cmd::CclCommandAddrCircularBufferId>(last_addr_type.value().second);
-            auto const& current_circular_buffer_id = std::get<ttnn::ccl::cmd::CclCommandAddrCircularBufferId>(current_addr_type_args.second);
+            auto const& last_circular_buffer_id =
+                std::get<ttnn::ccl::cmd::CclCommandAddrCircularBufferId>(last_addr_type.value().second);
+            auto const& current_circular_buffer_id =
+                std::get<ttnn::ccl::cmd::CclCommandAddrCircularBufferId>(current_addr_type_args.second);
             return last_circular_buffer_id.circular_buffer_id != current_circular_buffer_id.circular_buffer_id;
         }
         if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress>(current_addr_type_args.second)) {
-            auto const& last_absolute_address = std::get<ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress>(last_addr_type.value().second);
-            auto const& current_absolute_address = std::get<ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress>(current_addr_type_args.second);
+            auto const& last_absolute_address =
+                std::get<ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress>(last_addr_type.value().second);
+            auto const& current_absolute_address =
+                std::get<ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress>(current_addr_type_args.second);
             return last_absolute_address.absolute_address != current_absolute_address.absolute_address;
         }
         if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrRelativeAddress>(current_addr_type_args.second)) {
-            auto const& last_relative_address = std::get<ttnn::ccl::cmd::CclCommandAddrRelativeAddress>(last_addr_type.value().second);
-            auto const& current_relative_address = std::get<ttnn::ccl::cmd::CclCommandAddrRelativeAddress>(current_addr_type_args.second);
+            auto const& last_relative_address =
+                std::get<ttnn::ccl::cmd::CclCommandAddrRelativeAddress>(last_addr_type.value().second);
+            auto const& current_relative_address =
+                std::get<ttnn::ccl::cmd::CclCommandAddrRelativeAddress>(current_addr_type_args.second);
             return last_relative_address.relative_address != current_relative_address.relative_address;
         }
         if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrNone>(current_addr_type_args.second)) {
@@ -445,28 +454,34 @@ static size_t generate_ccl_address_info_command_args(
             header.inline_value0 = src_dest_type;
             header.inline_value1 = static_cast<uint8_t>(ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS);
 
-            auto const& absolute_address = std::get<ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress>(current_addr_type_args.second);
+            auto const& absolute_address =
+                std::get<ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress>(current_addr_type_args.second);
             args_out.push_back(absolute_address.absolute_address);
-        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrRelativeAddress>(current_addr_type_args.second)) {
+        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrRelativeAddress>(
+                       current_addr_type_args.second)) {
             log_trace(tt::LogOp, "Emitting {} args for relative_address field at index {}", 2, header_index);
             header.inline_value0 = src_dest_type;
             header.inline_value1 = static_cast<uint8_t>(ttnn::ccl::cmd::CclCommandAddrType::RELATIVE_ADDRESS);
 
-            auto const& relative_address = std::get<ttnn::ccl::cmd::CclCommandAddrRelativeAddress>(current_addr_type_args.second);
+            auto const& relative_address =
+                std::get<ttnn::ccl::cmd::CclCommandAddrRelativeAddress>(current_addr_type_args.second);
             args_out.push_back(relative_address.relative_address);
         } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrSemaphoreId>(current_addr_type_args.second)) {
             log_trace(tt::LogOp, "Emitting {} args for semaphore_id field at index {}", 1, header_index);
             header.inline_value0 = src_dest_type;
             header.inline_value1 = static_cast<uint8_t>(ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID);
 
-            auto const& semaphore_id = std::get<ttnn::ccl::cmd::CclCommandAddrSemaphoreId>(current_addr_type_args.second);
+            auto const& semaphore_id =
+                std::get<ttnn::ccl::cmd::CclCommandAddrSemaphoreId>(current_addr_type_args.second);
             header.inline_value2 = semaphore_id.semaphore_id;
-        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrCircularBufferId>(current_addr_type_args.second)) {
+        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrCircularBufferId>(
+                       current_addr_type_args.second)) {
             log_trace(tt::LogOp, "Emitting {} args for circular_buffer_id field at index {}", 1, header_index);
             header.inline_value0 = src_dest_type;
             header.inline_value1 = static_cast<uint8_t>(ttnn::ccl::cmd::CclCommandAddrType::CIRCULAR_BUFFER_ID);
 
-            auto const& circular_buffer_id = std::get<ttnn::ccl::cmd::CclCommandAddrCircularBufferId>(current_addr_type_args.second);
+            auto const& circular_buffer_id =
+                std::get<ttnn::ccl::cmd::CclCommandAddrCircularBufferId>(current_addr_type_args.second);
             header.inline_value2 = circular_buffer_id.circular_buffer_id;
         } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandAddrNone>(current_addr_type_args.second)) {
             log_trace(tt::LogOp, "Emitting {} args for NONE addr field at index {}", 1, header_index);
@@ -476,34 +491,51 @@ static size_t generate_ccl_address_info_command_args(
         } else {
             TT_THROW("Unsupported address type: {}", static_cast<int>(current_addr_type_args.first));
         }
-        log_trace(tt::LogOp, "\theader.code={}, .inline_val0={}, .inline_val1={}, .inline_val2={}",
-            static_cast<int>(header.code), header.inline_value0, header.inline_value1, header.inline_value2);
+        log_trace(
+            tt::LogOp,
+            "\theader.code={}, .inline_val0={}, .inline_val1={}, .inline_val2={}",
+            static_cast<int>(header.code),
+            header.inline_value0,
+            header.inline_value1,
+            header.inline_value2);
         args_out[header_index] = header.to_uint32();
     }
 
     return num_ccl_command_args_added;
 }
 
-
 size_t generate_ccl_core_descriptor_info_command_args(
-    std::optional<std::pair<ttnn::ccl::cmd::CclCommandCoreDescriptorType, ttnn::ccl::cmd::CclCommandCoreDescriptorArgs>> const& last_core_descriptor,
-    std::pair<ttnn::ccl::cmd::CclCommandCoreDescriptorType, ttnn::ccl::cmd::CclCommandCoreDescriptorArgs> const& current_core_descriptor,
+    std::optional<
+        std::pair<ttnn::ccl::cmd::CclCommandCoreDescriptorType, ttnn::ccl::cmd::CclCommandCoreDescriptorArgs>> const&
+        last_core_descriptor,
+    std::pair<ttnn::ccl::cmd::CclCommandCoreDescriptorType, ttnn::ccl::cmd::CclCommandCoreDescriptorArgs> const&
+        current_core_descriptor,
     std::vector<uint32_t>& args_out) {
     size_t num_ccl_command_args_added = 0;
-    bool requires_update_to_args = !last_core_descriptor.has_value() || (last_core_descriptor.value().first != current_core_descriptor.first);
-    requires_update_to_args = requires_update_to_args || (last_core_descriptor.value().second.index() != current_core_descriptor.second.index());
+    bool requires_update_to_args =
+        !last_core_descriptor.has_value() || (last_core_descriptor.value().first != current_core_descriptor.first);
+    requires_update_to_args = requires_update_to_args ||
+                              (last_core_descriptor.value().second.index() != current_core_descriptor.second.index());
     if (!requires_update_to_args) {
-        if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeAddrgen>(current_core_descriptor.second)) {
+        if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeAddrgen>(
+                current_core_descriptor.second)) {
             requires_update_to_args = false;
-        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeLocal>(current_core_descriptor.second)) {
+        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeLocal>(
+                       current_core_descriptor.second)) {
             requires_update_to_args = true;
-        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY>(current_core_descriptor.second)) {
-            auto const& last_noc_xy = std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY>(last_core_descriptor.value().second);
-            auto const& current_noc_xy = std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY>(current_core_descriptor.second);
+        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY>(
+                       current_core_descriptor.second)) {
+            auto const& last_noc_xy =
+                std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY>(last_core_descriptor.value().second);
+            auto const& current_noc_xy =
+                std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY>(current_core_descriptor.second);
             requires_update_to_args = (last_noc_xy.x != current_noc_xy.x) || (last_noc_xy.y != current_noc_xy.y);
-        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast>(current_core_descriptor.second)) {
-            auto const& last_rectangle = std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast>(last_core_descriptor.value().second);
-            auto const& current_rectangle = std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast>(current_core_descriptor.second);
+        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast>(
+                       current_core_descriptor.second)) {
+            auto const& last_rectangle =
+                std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast>(last_core_descriptor.value().second);
+            auto const& current_rectangle =
+                std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast>(current_core_descriptor.second);
             requires_update_to_args = (last_rectangle.noc0_start_x != current_rectangle.noc0_start_x) ||
                                       (last_rectangle.noc0_start_y != current_rectangle.noc0_start_y) ||
                                       (last_rectangle.noc0_end_x != current_rectangle.noc0_end_x) ||
@@ -518,15 +550,23 @@ size_t generate_ccl_core_descriptor_info_command_args(
         hdr.code = ttnn::ccl::cmd::CclCommandArgCode::SET_CORE_DESCRIPTOR_INFO;
         hdr.inline_value0 = static_cast<uint8_t>(current_core_descriptor.first);
         if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY>(current_core_descriptor.second)) {
-            auto const& noc_xy = std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY>(current_core_descriptor.second);
+            auto const& noc_xy =
+                std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY>(current_core_descriptor.second);
             hdr.inline_value1 = noc_xy.x;
             hdr.inline_value2 = noc_xy.y;
-        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast>(current_core_descriptor.second)) {
-            auto const& rectangle = std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast>(current_core_descriptor.second);
+        } else if (std::holds_alternative<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast>(
+                       current_core_descriptor.second)) {
+            auto const& rectangle =
+                std::get<ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast>(current_core_descriptor.second);
             args_out.push_back(rectangle.to_uint32());
         }
-        log_trace(tt::LogOp, "\theader.code={}, .inline_val0={}, .inline_val1={}, .inline_val2={}",
-            static_cast<int>(hdr.code), hdr.inline_value0, hdr.inline_value1, hdr.inline_value2);
+        log_trace(
+            tt::LogOp,
+            "\theader.code={}, .inline_val0={}, .inline_val1={}, .inline_val2={}",
+            static_cast<int>(hdr.code),
+            hdr.inline_value0,
+            hdr.inline_value1,
+            hdr.inline_value2);
         args_out[header_index] = hdr.to_uint32();
         num_ccl_command_args_added++;
     }
@@ -534,12 +574,13 @@ size_t generate_ccl_core_descriptor_info_command_args(
 }
 
 void validate_ccl_command_dest_args(ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
-    bool valid =
-        std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args) ||
-        std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args) ||
-        std::holds_alternative<ttnn::ccl::cmd::LocalOnlyCommandDestArgs>(dest_args);
+    bool valid = std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args) ||
+                 std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args) ||
+                 std::holds_alternative<ttnn::ccl::cmd::LocalOnlyCommandDestArgs>(dest_args);
     if (!valid) {
-        TT_THROW("Unsupported CCL command dest args. Expected one of UnicastCommandDestArgs, MulticastCommandDestArgs, or LocalOnlyCommandDestArgs");
+        TT_THROW(
+            "Unsupported CCL command dest args. Expected one of UnicastCommandDestArgs, MulticastCommandDestArgs, or "
+            "LocalOnlyCommandDestArgs");
     }
 }
 void validate_ccl_command_dest_type(ttnn::ccl::cmd::CclCommandDestType dest_type) {
@@ -556,11 +597,16 @@ void validate_command(ttnn::ccl::cmd::CclHostLowLevelWorkerCommand const& comman
     validate_ccl_command_dest_args(command.fabric_transfer_args);
 }
 
-void generate_ccl_command_stream_to_kernel_args(std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream, std::vector<uint32_t>& rt_args_out) {
+void generate_ccl_command_stream_to_kernel_args(
+    std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream,
+    std::vector<uint32_t>& rt_args_out) {
     std::optional<v2::TensorSlice> last_tensor_slice = std::nullopt;
-    std::optional<std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs>> last_src_addr_type = std::nullopt;
-    std::optional<std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs>> last_dest_addr_type = std::nullopt;
-    std::optional<std::pair<ttnn::ccl::cmd::CclCommandCoreDescriptorType, ttnn::ccl::cmd::CclCommandCoreDescriptorArgs>> last_core_descriptor = std::nullopt;
+    std::optional<std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs>>
+        last_src_addr_type = std::nullopt;
+    std::optional<std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs>>
+        last_dest_addr_type = std::nullopt;
+    std::optional<std::pair<ttnn::ccl::cmd::CclCommandCoreDescriptorType, ttnn::ccl::cmd::CclCommandCoreDescriptorArgs>>
+        last_core_descriptor = std::nullopt;
 
     log_trace(tt::LogOp, "Generating CCL command stream to kernel args, starting at index {}", rt_args_out.size());
 
@@ -580,35 +626,35 @@ void generate_ccl_command_stream_to_kernel_args(std::vector<ttnn::ccl::cmd::CclH
         switch (command.command_code) {
             case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
             case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB: {
-                auto const& current_tensor_slice = std::get<ttnn::ccl::cmd::CclCommandStreamTensorSlice>(command.command_args);
-                num_ccl_command_args_added += generate_ccl_tensor_slice_command_args(
-                    last_tensor_slice,
-                    current_tensor_slice,
-                    rt_args_out);
+                auto const& current_tensor_slice =
+                    std::get<ttnn::ccl::cmd::CclCommandStreamTensorSlice>(command.command_args);
+                num_ccl_command_args_added +=
+                    generate_ccl_tensor_slice_command_args(last_tensor_slice, current_tensor_slice, rt_args_out);
                 last_tensor_slice = current_tensor_slice;
             } break;
 
             case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
                 num_ccl_command_args_added += generate_ccl_raw_inline_write_command_args(
-                    std::get<ttnn::ccl::cmd::CclCommandInlineReadWrite>(command.command_args),
-                    rt_args_out);
+                    std::get<ttnn::ccl::cmd::CclCommandInlineReadWrite>(command.command_args), rt_args_out);
                 break;
 
             case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
                 num_ccl_command_args_added += generate_ccl_atomic_inc_command_args(
-                    std::get<ttnn::ccl::cmd::CclCommandAtomicInc>(command.command_args),
-                    rt_args_out);
+                    std::get<ttnn::ccl::cmd::CclCommandAtomicInc>(command.command_args), rt_args_out);
                 break;
             case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
                 num_ccl_command_args_added += generate_ccl_wait_value_command_args(
-                    std::get<ttnn::ccl::cmd::CclCommandWaitValue>(command.command_args),
-                    rt_args_out);
+                    std::get<ttnn::ccl::cmd::CclCommandWaitValue>(command.command_args), rt_args_out);
                 break;
 
             case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
-                TT_THROW("CCL command STREAM_EDM_TO_TENSOR is not useable, supported, or intended to be supported in CCL v2. This command is deprecated.");
+                TT_THROW(
+                    "CCL command STREAM_EDM_TO_TENSOR is not useable, supported, or intended to be supported in CCL "
+                    "v2. This command is deprecated.");
                 break;
-                TT_THROW("CCL command STREAM_TENSOR_TO_EDM is not useable, supported, or intended to be supported in CCL v2. This command is deprecated.");
+                TT_THROW(
+                    "CCL command STREAM_TENSOR_TO_EDM is not useable, supported, or intended to be supported in CCL "
+                    "v2. This command is deprecated.");
                 break;
 
             default:
@@ -633,15 +679,17 @@ void generate_ccl_command_stream_to_kernel_args(std::vector<ttnn::ccl::cmd::CclH
         last_dest_addr_type = {command.dest_addr_type, command.dest_addr_args};
         // populate the core_desc_type
         num_ccl_command_args_added += generate_ccl_core_descriptor_info_command_args(
-            last_core_descriptor,
-            {command.core_desc_type, command.core_desc_args},
-            rt_args_out);
+            last_core_descriptor, {command.core_desc_type, command.core_desc_args}, rt_args_out);
         last_core_descriptor = {command.core_desc_type, command.core_desc_args};
-
 
         // populate the fabric_transfer_type
         // Handled by header
-        log_trace(tt::LogOp, "Emitting command_header at index {}. code={}. fabric_transfer_type={}", command_header_rt_arg_index, command.command_code, command.fabric_transfer_type);
+        log_trace(
+            tt::LogOp,
+            "Emitting command_header at index {}. code={}. fabric_transfer_type={}",
+            command_header_rt_arg_index,
+            command.command_code,
+            command.fabric_transfer_type);
         TT_FATAL(command.command_code != ttnn::ccl::cmd::CclCommandCode::INVALID, "Invalid command code");
         rt_args_out[command_header_rt_arg_index] =
             static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(ttnn::ccl::cmd::CclCommandHeader{
@@ -649,51 +697,73 @@ void generate_ccl_command_stream_to_kernel_args(std::vector<ttnn::ccl::cmd::CclH
                 command.fabric_transfer_args,
                 num_ccl_command_args_added,
             }));
-        TT_FATAL(ttnn::ccl::cmd::CclCommandHeader::from_uint32(rt_args_out[command_header_rt_arg_index]).code != ttnn::ccl::cmd::CclCommandCode::INVALID, "Invalid command code");
+        TT_FATAL(
+            ttnn::ccl::cmd::CclCommandHeader::from_uint32(rt_args_out[command_header_rt_arg_index]).code !=
+                ttnn::ccl::cmd::CclCommandCode::INVALID,
+            "Invalid command code");
 
         const size_t new_rt_args_start_index = rt_args_out.size();
-        std::stringstream ss; ss << "ccl_send command " << i << " has " << new_rt_args_start_index - old_rt_args_start_index << " args starting at arg index: " << old_rt_args_start_index << "\n";
+        std::stringstream ss;
+        ss << "ccl_send command " << i << " has " << new_rt_args_start_index - old_rt_args_start_index
+           << " args starting at arg index: " << old_rt_args_start_index << "\n";
         for (std::size_t j = old_rt_args_start_index; j < new_rt_args_start_index; j++) {
             ss << "\targ " << j << ":" << rt_args_out[j] << "\n";
         }
         log_trace(tt::LogOp, "{}", ss.str());
-
     }
-
 }
 
-void generate_ccl_slice_sequence_commands(std::vector<TensorSlice> const& slices, ttnn::ccl::cmd::CclCommandCode command_type, std::vector<uint32_t>& args_out) {
-    generate_ccl_slice_sequence_commands_impl(slices, command_type, args_out, ttnn::ccl::cmd::LocalOnlyCommandDestArgs{});
+void generate_ccl_slice_sequence_commands(
+    std::vector<TensorSlice> const& slices,
+    ttnn::ccl::cmd::CclCommandCode command_type,
+    std::vector<uint32_t>& args_out) {
+    generate_ccl_slice_sequence_commands_impl(
+        slices, command_type, args_out, ttnn::ccl::cmd::LocalOnlyCommandDestArgs{});
 }
-void generate_ccl_slice_sequence_commands(std::vector<v2::TensorSlice> const& slices, ttnn::ccl::cmd::CclCommandCode command_type, std::vector<uint32_t>& args_out, ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
+void generate_ccl_slice_sequence_commands(
+    std::vector<v2::TensorSlice> const& slices,
+    ttnn::ccl::cmd::CclCommandCode command_type,
+    std::vector<uint32_t>& args_out,
+    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
     generate_ccl_slice_sequence_commands_impl(slices, command_type, args_out, dest_args);
 }
 
 void emit_ccl_send_slice_sequence_commands(std::vector<TensorSlice> const& slices, std::vector<uint32_t>& args_out) {
     generate_ccl_slice_sequence_commands(slices, ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM, args_out);
 }
-void generate_ccl_read_to_cb_slice_sequence_commands(std::vector<v2::TensorSlice> const& slices, std::vector<uint32_t>& args_out, ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
-    generate_ccl_slice_sequence_commands(slices, ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB, args_out, dest_args);
+void generate_ccl_read_to_cb_slice_sequence_commands(
+    std::vector<v2::TensorSlice> const& slices,
+    std::vector<uint32_t>& args_out,
+    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
+    generate_ccl_slice_sequence_commands(
+        slices, ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB, args_out, dest_args);
 }
-void generate_ccl_cb_to_tensor_slice_sequence_commands(std::vector<v2::TensorSlice> const& slices, std::vector<uint32_t>& args_out, ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
-    generate_ccl_slice_sequence_commands(slices, ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR, args_out, dest_args);
+void generate_ccl_cb_to_tensor_slice_sequence_commands(
+    std::vector<v2::TensorSlice> const& slices,
+    std::vector<uint32_t>& args_out,
+    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
+    generate_ccl_slice_sequence_commands(
+        slices, ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR, args_out, dest_args);
 }
-
 
 KernelHandle generate_multi_command_stream_kernel_ct_args(
     Program& program,
-    std::vector<uint32_t> const& cb_indices, // TODO: move to RT arg
+    std::vector<uint32_t> const& cb_indices,  // TODO: move to RT arg
     std::vector<Tensor const*> const& tensors,
     CoreRangeSet const& worker_core_range,
     DataMovementConfig datamovement_kernel_config,
-    const size_t num_command_streams
-) {
+    const size_t num_command_streams) {
     TT_FATAL(cb_indices.size() == tensors.size(), "Number of CB indices must match number of tensors");
-    TT_FATAL(num_command_streams > 0 && num_command_streams <= 2, "Invalid number of command streams: {}. Must be 1 or 2", num_command_streams);
+    TT_FATAL(
+        num_command_streams > 0 && num_command_streams <= 2,
+        "Invalid number of command streams: {}. Must be 1 or 2",
+        num_command_streams);
 
     log_trace(tt::LogOp, "Generating multi command stream kernel CT args");
 
-    std::ranges::for_each(tensors, [](auto const& t) { TT_FATAL(t != nullptr, "Null tensor passed to generate_multi_command_stream_kernel_ct_args"); });
+    std::ranges::for_each(tensors, [](auto const& t) {
+        TT_FATAL(t != nullptr, "Null tensor passed to generate_multi_command_stream_kernel_ct_args");
+    });
     if (tensors.size() > 0 && tensors[0]->is_sharded()) {
         datamovement_kernel_config.defines["TENSOR0_SHARDED_MEM_LAYOUT"] = "1";
     }
@@ -713,21 +783,27 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
     }
     if (datamovement_kernel_config.defines.size() > 0) {
         log_trace(tt::LogOp, "Command Kernel Defines:");
-        for (auto const&[k,v] : datamovement_kernel_config.defines) {
+        for (auto const& [k, v] : datamovement_kernel_config.defines) {
             log_trace(tt::LogOp, "\t{}: {}", k, v);
         }
     }
 
     for (auto i : cb_indices) {
-        TT_FATAL(i != tt::CB::c_in7 && i != tt::CB::c_in6, "Command processor kernel reserves cb in7 for use but user specified CBs included it. Please choose another CBv besides c_in6 and c_in7.");
+        TT_FATAL(
+            i != tt::CB::c_in7 && i != tt::CB::c_in6,
+            "Command processor kernel reserves cb in7 for use but user specified CBs included it. Please choose "
+            "another CBv besides c_in6 and c_in7.");
     }
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = datamovement_kernel_config.processor == DataMovementProcessor::RISCV_0 ? tt::CB::c_in6 : tt::CB::c_in7;
+    const auto reserved_packet_header_CB_index =
+        datamovement_kernel_config.processor == DataMovementProcessor::RISCV_0 ? tt::CB::c_in6 : tt::CB::c_in7;
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(num_packet_headers_storable * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
+        tt::tt_metal::CircularBufferConfig(
+            num_packet_headers_storable * packet_header_size_bytes,
+            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     log_info(
         tt::LogOp,
@@ -740,26 +816,27 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
         worker_core_range);
     auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, worker_core_range, cb_config);
 
-    { // CT ARGS
+    {  // CT ARGS
         std::vector<uint32_t> ct_args;
         ct_args.push_back(reserved_packet_header_CB_index);
         for (size_t i = 0; i < tensors.size(); i++) {
             std::ranges::copy(
                 std::array<uint32_t, 4>{
                     static_cast<uint32_t>(
-                     tensors[i]->buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
-                 static_cast<uint32_t>(tensors[i]->buffer()->buffer_type()),
-                 static_cast<uint32_t>(tensors[i]->layout()),
-                 static_cast<uint32_t>(cb_indices[i])},
+                        tensors[i]->buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
+                    static_cast<uint32_t>(tensors[i]->buffer()->buffer_type()),
+                    static_cast<uint32_t>(tensors[i]->layout()),
+                    static_cast<uint32_t>(cb_indices[i])},
                 std::back_inserter(ct_args));
         }
         for (size_t i = 0; i < tensors.size(); i++) {
-            std::ranges::copy(ttnn::ccl::emit_address_generator_compile_time_args(*tensors[i]), std::back_inserter(ct_args));
+            std::ranges::copy(
+                ttnn::ccl::emit_address_generator_compile_time_args(*tensors[i]), std::back_inserter(ct_args));
         }
 
         datamovement_kernel_config.compile_args = ct_args;
         log_trace(tt::LogOp, "\tSenderReader Kernel Defines");
-        for (auto const&[k,v] : datamovement_kernel_config.defines) {
+        for (auto const& [k, v] : datamovement_kernel_config.defines) {
             log_trace(tt::LogOp, "\t\t{}: {}", k, v);
         }
         log_trace(tt::LogOp, "\tSenderReader CT Args");
@@ -781,7 +858,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
     using namespace ttnn::ccl;
     using namespace ttnn::ccl::cmd;
     size_t index = 0;
-    for (auto const& c: commands) {
+    for (auto const& c : commands) {
         index++;
         std::stringstream tabs_ss;
         for (size_t i = 0; i < tab_level; i++) {
@@ -841,25 +918,23 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                     [&ss](CclCommandWaitValue const& a) { ss << fmt::format("(wait_value: {})", a.target_value); },
                     [&ss](CclCommandInlineReadWrite const& a) { ss << fmt::format("(value: {})", a.value); },
                     [&ss](CclCommandReadWrite const& a) { ss << fmt::format("(size_bytes: {})", a.size_bytes); },
-                    [&ss](auto const&&) { ss << "ERROR"; }
-                },
+                    [&ss](auto const&&) { ss << "ERROR"; }},
                 args);
         };
 
         auto get_core_desc_args_str = [](std::stringstream& ss, CclCommandCoreDescriptorArgs const& args) {
             std::visit(
                 tt::stl::overloaded{
-                    [&ss](CclCommandCoreDescriptorTypeAddrgen const& a) {
-                        ss << fmt::format("(addrgen)");
-                    },
-                    [&ss](CclCommandCoreDescriptorTypeLocal const& a) {
-                        ss << fmt::format("(local_core)");
-                    },
-                    [&ss](CclCommandCoreDescriptorTypeNocXY const& a) {
-                        ss << fmt::format("(x:{}, y:{})", a.x, a.y);
-                    },
+                    [&ss](CclCommandCoreDescriptorTypeAddrgen const& a) { ss << fmt::format("(addrgen)"); },
+                    [&ss](CclCommandCoreDescriptorTypeLocal const& a) { ss << fmt::format("(local_core)"); },
+                    [&ss](CclCommandCoreDescriptorTypeNocXY const& a) { ss << fmt::format("(x:{}, y:{})", a.x, a.y); },
                     [&ss](CclCommandCoreDescriptorTypeMcast const& a) {
-                        ss << fmt::format("(noc0_start_x:{}, noc0_start_y:{}, noc0_end_x:{}, noc0_end_y:{})", a.noc0_start_x, a.noc0_start_y, a.noc0_end_x, a.noc0_end_y);
+                        ss << fmt::format(
+                            "(noc0_start_x:{}, noc0_start_y:{}, noc0_end_x:{}, noc0_end_y:{})",
+                            a.noc0_start_x,
+                            a.noc0_start_y,
+                            a.noc0_end_x,
+                            a.noc0_end_y);
                     },
                 },
                 args);
@@ -869,14 +944,18 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
             std::visit(
                 tt::stl::overloaded{
                     [&ss](UnicastCommandDestArgs const& a) {
-                        ss << fmt::format("(distance_in_hops:{}, is_forward_direction:{})", a.distance_in_hops, a.is_forward_direction);
+                        ss << fmt::format(
+                            "(distance_in_hops:{}, is_forward_direction:{})",
+                            a.distance_in_hops,
+                            a.is_forward_direction);
                     },
                     [&ss](MulticastCommandDestArgs const& a) {
-                        ss << fmt::format("(num_targets_forward_direction:{}, num_targets_backward_direction:{})", a.num_targets_forward_direction, a.num_targets_backward_direction);
+                        ss << fmt::format(
+                            "(num_targets_forward_direction:{}, num_targets_backward_direction:{})",
+                            a.num_targets_forward_direction,
+                            a.num_targets_backward_direction);
                     },
-                    [&ss](LocalOnlyCommandDestArgs const& a) {
-                        ss << fmt::format("(None)");
-                    },
+                    [&ss](LocalOnlyCommandDestArgs const& a) { ss << fmt::format("(None)"); },
                 },
                 args);
         };
@@ -892,7 +971,9 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
         get_fabric_transfer_args_str(fabric_attrs_ss, c.fabric_transfer_args);
         get_cmd_args_str(cmd_attrs_ss, c.command_args);
 
-        log_trace(tt::LogOp,"{}{}. SRC({})[{}] -> CMD({})[{}] -> DST({})[{}]; CORE({})[{}]; FABRIC({})[{}]",
+        log_trace(
+            tt::LogOp,
+            "{}{}. SRC({})[{}] -> CMD({})[{}] -> DST({})[{}]; CORE({})[{}]; FABRIC({})[{}]",
             tabs_ss.str(),
             index,
             c.source_addr_type,
@@ -914,16 +995,19 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::vector<Tensor const*> const& tensors,
     std::vector<size_t> const& page_sizes,
     Device* device,
-    uint32_t num_pages_per_edm_buffer, // TODO: get from fabric
+    uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
     CoreRangeSet const& worker_core_range,
     ttnn::ccl::cmd::CclHostLowLevelCommandSequence const& ccl_command_stream0,
     std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& ccl_command_stream1,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<std::unordered_map<const Tensor*,Device*>> const& tensor_device_override
-) {
+    std::optional<std::unordered_map<const Tensor*, Device*>> const& tensor_device_override) {
     // TODO: see if we can pull the kernel defines to understand if we built the kernel in single command stream mode
-    log_trace(tt::LogOp, "Generating multi command stream kernel RT args for kernel {} on core(s): {}", kernel_id, worker_core_range);
+    log_trace(
+        tt::LogOp,
+        "Generating multi command stream kernel RT args for kernel {} on core(s): {}",
+        kernel_id,
+        worker_core_range);
     log_trace(tt::LogOp, "Command stream 0:");
     log_command_stream(ccl_command_stream0, 1);
     if (ccl_command_stream1) {
@@ -958,15 +1042,15 @@ void generate_multi_input_command_stream_kernel_rt_args(
         }
     }
     for (size_t i = 0; i < num_command_streams; i++) {
-        rt_args.push_back(command_streams[i]->size()); // in0_read_command_slices
+        rt_args.push_back(command_streams[i]->size());  // in0_read_command_slices
         command_stream_start_arg_indices[i] = rt_args.size();
-        rt_args.push_back(0); // in0_command_start_offset
+        rt_args.push_back(0);  // in0_command_start_offset
     }
     rt_args.push_back(num_pages_per_edm_buffer);
     TT_FATAL(tensors.size() == page_sizes.size(), "Number of pages must match with the number of tensors");
     for (size_t i = 0; i < tensors.size(); i++) {
         if (tensors[i]) {
-            rt_args.push_back(page_sizes[i]); // in0
+            rt_args.push_back(page_sizes[i]);  // in0
         } else {
             rt_args.push_back(0xdeaddead);
         }
@@ -974,10 +1058,15 @@ void generate_multi_input_command_stream_kernel_rt_args(
 
     for (Tensor const* t : tensors) {
         if (t) {
-            if (tensor_device_override.has_value() and tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
-                std::ranges::copy(ttnn::ccl::emit_address_generator_runtime_args(tensor_device_override->at(t), *t), std::back_inserter(rt_args));
+            if (tensor_device_override.has_value() and
+                tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
+                std::ranges::copy(
+                    ttnn::ccl::emit_address_generator_runtime_args(tensor_device_override->at(t), *t),
+                    std::back_inserter(rt_args));
             } else {
-                std::ranges::copy(ttnn::ccl::emit_address_generator_runtime_args(t->buffer()->device(), *t), std::back_inserter(rt_args));
+                std::ranges::copy(
+                    ttnn::ccl::emit_address_generator_runtime_args(t->buffer()->device(), *t),
+                    std::back_inserter(rt_args));
             }
         } else {
             // Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
@@ -989,13 +1078,21 @@ void generate_multi_input_command_stream_kernel_rt_args(
     if (forward_fabric_connections.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
-        append_worker_to_fabric_edm_sender_rt_args(forward_fabric_connections.value(), sender_worker_flow_control_semaphore_id, sender_worker_buffer_index_semaphore_id, rt_args);
+        append_worker_to_fabric_edm_sender_rt_args(
+            forward_fabric_connections.value(),
+            sender_worker_flow_control_semaphore_id,
+            sender_worker_buffer_index_semaphore_id,
+            rt_args);
     }
     rt_args.push_back(backward_fabric_connections.has_value());
     if (backward_fabric_connections.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
-        append_worker_to_fabric_edm_sender_rt_args(backward_fabric_connections.value(), sender_worker_flow_control_semaphore_id, sender_worker_buffer_index_semaphore_id, rt_args);
+        append_worker_to_fabric_edm_sender_rt_args(
+            backward_fabric_connections.value(),
+            sender_worker_flow_control_semaphore_id,
+            sender_worker_buffer_index_semaphore_id,
+            rt_args);
     }
 
     for (size_t i = 0; i < num_command_streams; i++) {
@@ -1013,23 +1110,21 @@ void generate_multi_input_command_stream_kernel_rt_args(
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
 }
 
-
 void generate_multi_command_stream_kernel_rt_args(
     Program& program,
     KernelHandle kernel_id,
     std::vector<uint32_t> const& cb_ids,
     std::vector<const Tensor*> const& tensors,
     Device* device,
-    uint32_t page_size,                // TODO: get from tensors
+    uint32_t page_size,  // TODO: get from tensors
     CoreRangeSet const& worker_core_range,
-    uint32_t num_pages_per_edm_buffer, // TODO: get from fabric
+    uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
     std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> const& command_tensor_slices,
-    ttnn::ccl::cmd::CclCommandCode command_type, // TODAY REQURED TO BE SAME - FUTURE - wrapped with above
+    ttnn::ccl::cmd::CclCommandCode command_type,  // TODAY REQURED TO BE SAME - FUTURE - wrapped with above
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
     std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> const& edm_termination_infos,
-    std::vector<ttnn::ccl::cmd::CclCommandDestArgs> const& dest_args
-) {
+    std::vector<ttnn::ccl::cmd::CclCommandDestArgs> const& dest_args) {
     for (size_t i = 0; i < tensors.size(); i++) {
         TT_FATAL(tensors[i] != nullptr, "Tensor at index {} is nullptr", i);
     }
@@ -1047,17 +1142,18 @@ void generate_multi_command_stream_kernel_rt_args(
         rt_args.push_back(tensors[i]->buffer()->address());
     }
     for (size_t i = 0; i < num_command_streams; i++) {
-        rt_args.push_back(command_tensor_slices[i].size()); // input_tensor_0_read_command_slices
+        rt_args.push_back(command_tensor_slices[i].size());  // input_tensor_0_read_command_slices
         command_stream_start_arg_indices[i] = rt_args.size();
-        rt_args.push_back(0); // in0_command_start_offset
+        rt_args.push_back(0);  // in0_command_start_offset
     }
     rt_args.push_back(num_pages_per_edm_buffer);
     for (size_t i = 0; i < num_command_streams; i++) {
-        rt_args.push_back(page_size); // in0
+        rt_args.push_back(page_size);  // in0
     }
 
     for (size_t i = 0; i < num_command_streams; i++) {
-        std::ranges::copy(ttnn::ccl::emit_address_generator_runtime_args(device, *tensors[i]), std::back_inserter(rt_args));
+        std::ranges::copy(
+            ttnn::ccl::emit_address_generator_runtime_args(device, *tensors[i]), std::back_inserter(rt_args));
     }
 
     // TODO: Handle teardown signalling
@@ -1065,13 +1161,21 @@ void generate_multi_command_stream_kernel_rt_args(
     if (forward_fabric_connections.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
-        append_worker_to_fabric_edm_sender_rt_args(forward_fabric_connections.value(), sender_worker_flow_control_semaphore_id, sender_worker_buffer_index_semaphore_id, rt_args);
+        append_worker_to_fabric_edm_sender_rt_args(
+            forward_fabric_connections.value(),
+            sender_worker_flow_control_semaphore_id,
+            sender_worker_buffer_index_semaphore_id,
+            rt_args);
     }
     rt_args.push_back(backward_fabric_connections.has_value());
     if (backward_fabric_connections.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
-        append_worker_to_fabric_edm_sender_rt_args(backward_fabric_connections.value(), sender_worker_flow_control_semaphore_id, sender_worker_buffer_index_semaphore_id, rt_args);
+        append_worker_to_fabric_edm_sender_rt_args(
+            backward_fabric_connections.value(),
+            sender_worker_flow_control_semaphore_id,
+            sender_worker_buffer_index_semaphore_id,
+            rt_args);
     }
     size_t fabric_teardown_arg_idx = 0;
     if (edm_termination_infos.has_value()) {
@@ -1083,20 +1187,21 @@ void generate_multi_command_stream_kernel_rt_args(
         case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB:
             for (size_t i = 0; i < num_command_streams; i++) {
                 rt_args[command_stream_start_arg_indices[i]] = rt_args.size();
-                ttnn::ccl::worker_detail::generate_ccl_read_to_cb_slice_sequence_commands(command_tensor_slices[i], rt_args, dest_args[i]);
+                ttnn::ccl::worker_detail::generate_ccl_read_to_cb_slice_sequence_commands(
+                    command_tensor_slices[i], rt_args, dest_args[i]);
             }
-        break;
+            break;
         case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
             for (size_t i = 0; i < num_command_streams; i++) {
                 rt_args[command_stream_start_arg_indices[i]] = rt_args.size();
-                ttnn::ccl::worker_detail::generate_ccl_cb_to_tensor_slice_sequence_commands(command_tensor_slices[i], rt_args, dest_args[i]);
+                ttnn::ccl::worker_detail::generate_ccl_cb_to_tensor_slice_sequence_commands(
+                    command_tensor_slices[i], rt_args, dest_args[i]);
             }
-        break;
+            break;
 
         case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
         case ttnn::ccl::cmd::CclCommandCode::INVALID:
-        default:
-            TT_ASSERT(false);
+        default: TT_ASSERT(false);
     };
 
     if (edm_termination_infos.has_value()) {
@@ -1110,19 +1215,17 @@ void generate_multi_command_stream_kernel_rt_args(
         log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
     }
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
-
 }
 
 ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_commands(
     tt::tt_metal::Program& program,
-    Device *device,
-    Device *forward_device,
+    Device* device,
+    Device* forward_device,
     size_t line_size,
     size_t line_index,
     std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos,
     ccl::SyncModeSpec const& sync_details,
-    ccl::EdmLineFabricOpInterface& fabric_interface
-) {
+    ccl::EdmLineFabricOpInterface& fabric_interface) {
     TT_FATAL(sync_details.num_signals == 1, "Only one signal is supported for CCL command processor teardown");
     TT_FATAL(sync_details.sem_ids.size() == 1, "Only one signal is supported for CCL command processor teardown");
     TT_FATAL(sync_details.wait_counts.size() == 1, "Only one signal is supported for CCL command processor teardown");
@@ -1131,7 +1234,8 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
     auto remote_sem_id = sync_details.sem_ids.at(0);
 
     ttnn::ccl::cmd::CclHostLowLevelCommandSequence teardown_cmd_stream = {
-        // + 1 because we need to wait for our left/backward neighbour to tell us it's safe to teardown (because they are
+        // + 1 because we need to wait for our left/backward neighbour to tell us it's safe to teardown (because they
+        // are
         // done tearing down - we teardown from first to last)
         cmd::uops::local_semaphore_wait(local_wait_sem_id, sync_details.wait_counts.at(0) + (line_index != 0)),
     };
@@ -1139,32 +1243,33 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
     // If there is a forward connection, notify that neighbour that they can teardown
     if (forward_device != nullptr) {
         auto remote_worker_noc0_core = forward_device->worker_core_from_logical_core(sync_details.core);
-        teardown_cmd_stream.push_back(
-            cmd::uops::fabric_unicast_semaphore_inc(
-                remote_sem_id,
-                ttnn::ccl::cmd::CclCommandAtomicInc{1},
-                remote_worker_noc0_core.x,
-                remote_worker_noc0_core.y,
-                ttnn::ccl::cmd::UnicastCommandDestArgs{1, true}));
+        teardown_cmd_stream.push_back(cmd::uops::fabric_unicast_semaphore_inc(
+            remote_sem_id,
+            ttnn::ccl::cmd::CclCommandAtomicInc{1},
+            remote_worker_noc0_core.x,
+            remote_worker_noc0_core.y,
+            ttnn::ccl::cmd::UnicastCommandDestArgs{1, true}));
     }
 
     // Finally teardown our local chip's fabric endpoint(s)
     if (edm_termination_infos.size() > 0) {
         log_info(tt::LogOp, "{} termination infos", edm_termination_infos.size());
     }
-    for (auto &info : edm_termination_infos) {
+    for (auto& info : edm_termination_infos) {
         if (info.distance == 0) {
-            log_info(tt::LogOp, "Adding local chip fabric teardown command for termination address {},", info.termination_addr);
-            teardown_cmd_stream.push_back(
-                cmd::uops::local_chip_noc_absolute_address_semaphore_inc(
-                    info.edm_noc_x,
-                    info.edm_noc_y,
-                    info.termination_addr,
-                    1));
+            log_info(
+                tt::LogOp,
+                "Adding local chip fabric teardown command for termination address {},",
+                info.termination_addr);
+            teardown_cmd_stream.push_back(cmd::uops::local_chip_noc_absolute_address_semaphore_inc(
+                info.edm_noc_x, info.edm_noc_y, info.termination_addr, 1));
         } else {
-            log_info(tt::LogOp, "Adding remote chip fabric teardown command for termination address {} of distance {}", info.termination_addr, info.distance);
-            teardown_cmd_stream.push_back(
-                ttnn::ccl::cmd::uops::fabric_unicast_absolute_address_semaphore_inc(
+            log_info(
+                tt::LogOp,
+                "Adding remote chip fabric teardown command for termination address {} of distance {}",
+                info.termination_addr,
+                info.distance);
+            teardown_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_unicast_absolute_address_semaphore_inc(
                 ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{info.termination_addr},
                 ttnn::ccl::cmd::CclCommandAtomicInc{1},
                 info.edm_noc_x,
@@ -1177,7 +1282,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
 }
 
 void build_sync_kernels(
-    Device *device,
+    Device* device,
     tt::tt_metal::Program& program,
     ccl::SyncModeSpec const& sync_details,
     bool terminate_fabric,
@@ -1215,8 +1320,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     ttnn::ccl::InterleavedTensorWorkerSlice worker_slice,
     std::size_t operating_dim,
     uint32_t num_pages_per_packet,
-    uint32_t worker_slice_index) const
-{
+    uint32_t worker_slice_index) const {
     const std::size_t num_commands_expected = this->input_tensor_partition.partition_size;
 
     auto const& tensor_shape = worker_slice.tensor_shape;
@@ -1238,31 +1342,38 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
         num_slices,
         start_slice_index,
         end_slice_index_exclusive,
-        worker_slice_index
-    );
+        worker_slice_index);
     TT_ASSERT(num_commands_expected == slices.size());
 
     // If we are on device zero, we send n-1 chunks in ascending order
-    auto &input_tensor = this->op_config.get_input_tensor(0);
+    auto& input_tensor = this->op_config.get_input_tensor(0);
     TT_ASSERT(input_tensor.get_legacy_shape().size() == 4, "Only 4D tensors are supported for ccl");
-    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {input_tensor.get_legacy_shape()[0], input_tensor.get_legacy_shape()[1],input_tensor.get_legacy_shape()[2],input_tensor.get_legacy_shape()[3]};
+    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {
+        input_tensor.get_legacy_shape()[0],
+        input_tensor.get_legacy_shape()[1],
+        input_tensor.get_legacy_shape()[2],
+        input_tensor.get_legacy_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
         static_cast<uint32_t>(slices.size()),
         num_pages_per_packet,
-        this->op_config.get_page_size()
-    };
+        this->op_config.get_page_size()};
     std::size_t logged_arg_idx = 0;
-    log_trace(tt::LogOp, "ccl_send_reader arg[{}]: buffer_address = {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
-    log_trace(tt::LogOp, "ccl_send_reader arg[{}]: num_commands = {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
-    log_trace(tt::LogOp, "ccl_send_reader arg[{}]: pages_per_packet {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
-    log_trace(tt::LogOp, "ccl_send_reader arg[{}]: page_size {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
+    log_trace(tt::LogOp, "ccl_send_reader arg[{}]: buffer_address = {}", logged_arg_idx, args[logged_arg_idx]);
+    logged_arg_idx++;
+    log_trace(tt::LogOp, "ccl_send_reader arg[{}]: num_commands = {}", logged_arg_idx, args[logged_arg_idx]);
+    logged_arg_idx++;
+    log_trace(tt::LogOp, "ccl_send_reader arg[{}]: pages_per_packet {}", logged_arg_idx, args[logged_arg_idx]);
+    logged_arg_idx++;
+    log_trace(tt::LogOp, "ccl_send_reader arg[{}]: page_size {}", logged_arg_idx, args[logged_arg_idx]);
+    logged_arg_idx++;
 
     auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_runtime_args(this->device, input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
     for (auto const& arg : addr_gen_rt_args) {
-        log_trace(tt::LogOp, "ccl_send_reader arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
+        log_trace(tt::LogOp, "ccl_send_reader arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);
+        logged_arg_idx++;
     }
 
     log_trace(tt::LogOp, "ccl_send_reader Generating {} ccl send commands", slices.size());
@@ -1286,8 +1397,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
     std::size_t operating_dim,
     uint32_t num_pages_per_packet,
     uint32_t worker_slice_index,
-    std::optional<ttnn::ccl::SyncModeSpec> sync_details) const
-{
+    std::optional<ttnn::ccl::SyncModeSpec> sync_details) const {
     const std::size_t num_commands_expected = this->output_tensor_partition.partition_size - 1;
 
     auto const& tensor_shape = worker_slice.tensor_shape;
@@ -1309,14 +1419,17 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
         num_slices,
         start_slice_index,
         end_slice_index_exclusive,
-        worker_slice_index
-    );
+        worker_slice_index);
     TT_ASSERT(num_commands_expected == slices.size());
 
     // If we are on device zero, we send n-1 chunks in ascending order
-    auto &output_tensor = this->op_config.get_output_tensor(0);
+    auto& output_tensor = this->op_config.get_output_tensor(0);
     TT_ASSERT(output_tensor.get_legacy_shape().size() == 4, "Only 4D tensors are supported for ccl");
-    ttnn::ccl::Shape4D<uint32_t> output_tensor_shape = {output_tensor.get_legacy_shape()[0], output_tensor.get_legacy_shape()[1],output_tensor.get_legacy_shape()[2],output_tensor.get_legacy_shape()[3]};
+    ttnn::ccl::Shape4D<uint32_t> output_tensor_shape = {
+        output_tensor.get_legacy_shape()[0],
+        output_tensor.get_legacy_shape()[1],
+        output_tensor.get_legacy_shape()[2],
+        output_tensor.get_legacy_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(output_tensor.buffer()->address()),
@@ -1324,43 +1437,73 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
         num_pages_per_packet,
         this->op_config.get_page_size(),
         forward_direction_distance_to_end_of_line,
-        backward_direction_distance_to_end_of_line
-    };
+        backward_direction_distance_to_end_of_line};
     std::size_t logged_arg_idx = 0;
-    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: buffer_address = {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
-    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: num_commands = {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
-    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: pages_per_packet {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
-    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: page_size {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
+    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: buffer_address = {}", logged_arg_idx, args[logged_arg_idx]);
+    logged_arg_idx++;
+    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: num_commands = {}", logged_arg_idx, args[logged_arg_idx]);
+    logged_arg_idx++;
+    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: pages_per_packet {}", logged_arg_idx, args[logged_arg_idx]);
+    logged_arg_idx++;
+    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: page_size {}", logged_arg_idx, args[logged_arg_idx]);
+    logged_arg_idx++;
     args.push_back(forward_fabric_connection.has_value() ? 1 : 0);
     if (forward_fabric_connection.has_value()) {
-        TT_FATAL(forward_direction_distance_to_end_of_line > 0, "Forward direction distance to end of line must be greater than 0");
+        TT_FATAL(
+            forward_direction_distance_to_end_of_line > 0,
+            "Forward direction distance to end of line must be greater than 0");
         log_info(tt::LogOp, "ccl_send_writer has forward fabric connection");
         log_info(tt::LogOp, "\tedm_noc_x: {}", forward_fabric_connection.value().edm_noc_x);
         log_info(tt::LogOp, "\tedm_noc_y: {}", forward_fabric_connection.value().edm_noc_y);
         log_info(tt::LogOp, "\tedm_buffer_base_addr: {}", forward_fabric_connection.value().edm_buffer_base_addr);
         log_info(tt::LogOp, "\tnum_buffers_per_channel: {}", forward_fabric_connection.value().num_buffers_per_channel);
         log_info(tt::LogOp, "\tedm_l1_sem_addr: {}", forward_fabric_connection.value().edm_l1_sem_addr);
-        log_info(tt::LogOp, "\tedm_connection_handshake_addr: {}", forward_fabric_connection.value().edm_connection_handshake_addr);
-        log_info(tt::LogOp, "\tedm_worker_location_info_addr: {}", forward_fabric_connection.value().edm_worker_location_info_addr);
+        log_info(
+            tt::LogOp,
+            "\tedm_connection_handshake_addr: {}",
+            forward_fabric_connection.value().edm_connection_handshake_addr);
+        log_info(
+            tt::LogOp,
+            "\tedm_worker_location_info_addr: {}",
+            forward_fabric_connection.value().edm_worker_location_info_addr);
         log_info(tt::LogOp, "\tbuffer_size_bytes: {}", forward_fabric_connection.value().buffer_size_bytes);
-        log_info(tt::LogOp, "\tbuffer_index_semaphore_id: {}", forward_fabric_connection.value().buffer_index_semaphore_id);
-        ttnn::ccl::append_worker_to_fabric_edm_sender_rt_args(forward_fabric_connection.value(), sender_worker_forward_flow_control_semaphore_id, sender_worker_forward_buffer_index_semaphore_id, args);
+        log_info(
+            tt::LogOp, "\tbuffer_index_semaphore_id: {}", forward_fabric_connection.value().buffer_index_semaphore_id);
+        ttnn::ccl::append_worker_to_fabric_edm_sender_rt_args(
+            forward_fabric_connection.value(),
+            sender_worker_forward_flow_control_semaphore_id,
+            sender_worker_forward_buffer_index_semaphore_id,
+            args);
         logged_arg_idx = ttnn::ccl::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
     }
     args.push_back(backward_fabric_connection.has_value() ? 1 : 0);
     if (backward_fabric_connection.has_value()) {
-        TT_FATAL(backward_direction_distance_to_end_of_line > 0, "Backward direction distance to end of line must be greater than 0");
+        TT_FATAL(
+            backward_direction_distance_to_end_of_line > 0,
+            "Backward direction distance to end of line must be greater than 0");
         log_info(tt::LogOp, "ccl_send_writer has backward fabric connection");
         log_info(tt::LogOp, "\tedm_noc_x: {}", backward_fabric_connection.value().edm_noc_x);
         log_info(tt::LogOp, "\tedm_noc_y: {}", backward_fabric_connection.value().edm_noc_y);
         log_info(tt::LogOp, "\tedm_buffer_base_addr: {}", backward_fabric_connection.value().edm_buffer_base_addr);
-        log_info(tt::LogOp, "\tnum_buffers_per_channel: {}", backward_fabric_connection.value().num_buffers_per_channel);
+        log_info(
+            tt::LogOp, "\tnum_buffers_per_channel: {}", backward_fabric_connection.value().num_buffers_per_channel);
         log_info(tt::LogOp, "\tedm_l1_sem_addr: {}", backward_fabric_connection.value().edm_l1_sem_addr);
-        log_info(tt::LogOp, "\tedm_connection_handshake_addr: {}", backward_fabric_connection.value().edm_connection_handshake_addr);
-        log_info(tt::LogOp, "\tedm_worker_location_info_addr: {}", backward_fabric_connection.value().edm_worker_location_info_addr);
+        log_info(
+            tt::LogOp,
+            "\tedm_connection_handshake_addr: {}",
+            backward_fabric_connection.value().edm_connection_handshake_addr);
+        log_info(
+            tt::LogOp,
+            "\tedm_worker_location_info_addr: {}",
+            backward_fabric_connection.value().edm_worker_location_info_addr);
         log_info(tt::LogOp, "\tbuffer_size_bytes: {}", backward_fabric_connection.value().buffer_size_bytes);
-        log_info(tt::LogOp, "\tbuffer_index_semaphore_id: {}", backward_fabric_connection.value().buffer_index_semaphore_id);
-        ttnn::ccl::append_worker_to_fabric_edm_sender_rt_args(backward_fabric_connection.value(), sender_worker_backward_flow_control_semaphore_id, sender_worker_backward_buffer_index_semaphore_id, args);
+        log_info(
+            tt::LogOp, "\tbuffer_index_semaphore_id: {}", backward_fabric_connection.value().buffer_index_semaphore_id);
+        ttnn::ccl::append_worker_to_fabric_edm_sender_rt_args(
+            backward_fabric_connection.value(),
+            sender_worker_backward_flow_control_semaphore_id,
+            sender_worker_backward_buffer_index_semaphore_id,
+            args);
         logged_arg_idx = ttnn::ccl::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
     }
 
@@ -1368,8 +1511,15 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
     if (sync_details.has_value()) {
         args.push_back(sync_details.value().num_signals);
         for (size_t i = 0; i < sync_details.value().num_signals; ++i) {
-            auto const noc_coord = this->device->physical_core_from_logical_core(sync_details.value().core, CoreType::WORKER);
-            log_info(tt::LogOp, "ccl_send_writer on device {} adding sync signal dest to (y={},x={},id={})", this->device->id(), noc_coord.y, noc_coord.x, sync_details.value().sem_ids[i]);
+            auto const noc_coord =
+                this->device->physical_core_from_logical_core(sync_details.value().core, CoreType::WORKER);
+            log_info(
+                tt::LogOp,
+                "ccl_send_writer on device {} adding sync signal dest to (y={},x={},id={})",
+                this->device->id(),
+                noc_coord.y,
+                noc_coord.x,
+                sync_details.value().sem_ids[i]);
             args.push_back(sync_details.value().sem_ids[i]);
             args.push_back(noc_coord.x);
             args.push_back(noc_coord.y);
@@ -1379,7 +1529,8 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
     auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_runtime_args(this->device, output_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
     for (auto const& arg : addr_gen_rt_args) {
-        log_trace(tt::LogOp, "ccl_send_writer arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
+        log_trace(tt::LogOp, "ccl_send_writer arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);
+        logged_arg_idx++;
     }
 
     log_info(tt::LogOp, "ccl_send_writer Generating {} ccl send commands", slices.size());
@@ -1390,14 +1541,13 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
     return args;
 }
 
-std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args() const
-{
+std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args() const {
     auto const& input_tensor = this->op_config.get_input_tensor(0);
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(input_tensor.memory_config().memory_layout), // tensor memory layout
-        static_cast<uint32_t>(input_tensor.buffer()->buffer_type()), // buffer type
-        static_cast<uint32_t>(input_tensor.layout()), // page layout
-        static_cast<uint32_t>(tt::CB::c_in0) // cb_id
+        static_cast<uint32_t>(input_tensor.memory_config().memory_layout),  // tensor memory layout
+        static_cast<uint32_t>(input_tensor.buffer()->buffer_type()),        // buffer type
+        static_cast<uint32_t>(input_tensor.layout()),                       // page layout
+        static_cast<uint32_t>(tt::CB::c_in0)                                // cb_id
     };
 
     auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_compile_time_args(input_tensor);
@@ -1406,14 +1556,13 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args
     return args;
 }
 
-std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args() const
-{
+std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args() const {
     auto const& output_tensor = this->op_config.get_output_tensor(0);
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(output_tensor.memory_config().memory_layout), // tensor memory layout
-        static_cast<uint32_t>(output_tensor.buffer()->buffer_type()), // buffer type
-        static_cast<uint32_t>(output_tensor.layout()), // page layout
-        static_cast<uint32_t>(tt::CB::c_in0) // cb_id
+        static_cast<uint32_t>(output_tensor.memory_config().memory_layout),  // tensor memory layout
+        static_cast<uint32_t>(output_tensor.buffer()->buffer_type()),        // buffer type
+        static_cast<uint32_t>(output_tensor.layout()),                       // page layout
+        static_cast<uint32_t>(tt::CB::c_in0)                                 // cb_id
     };
 
     auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_compile_time_args(output_tensor);
@@ -1422,6 +1571,6 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args
     return args;
 }
 
-} // namespace worker_detail
-} // namespace ccl
-} // namespace ttnn
+}  // namespace worker_detail
+}  // namespace ccl
+}  // namespace ttnn
