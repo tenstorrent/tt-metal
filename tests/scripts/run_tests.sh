@@ -263,7 +263,7 @@ frequent_tg_device() {
     local dispatch_mode=$3
     local model=$4
 
-    ./tests/scripts/tg/run_tg_frequent_tests.sh
+    ./tests/scripts/tg/run_tg_frequent_tests.sh --model "$model"
 }
 
 # Run tg demo tests
