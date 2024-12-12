@@ -48,7 +48,7 @@ def mesh_device_fixture():
     ttnn.close_device(device)
 
 
-def run_full(
+def run_conv2d_full_sweep(
     input_specs,
     input_channels,
     output_channels,
@@ -174,7 +174,7 @@ def run_full(
     return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
 
 
-def run_short(
+def run_conv2d_short_sweep(
     input_specs,
     device,
 ) -> list:
@@ -254,5 +254,79 @@ def run_short(
     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+
+    return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
+
+
+def run_conv1d_short_sweep(
+    input_specs,
+    device,
+) -> list:
+    [
+        batch_size,
+        output_channels,
+        input_channels,
+        input_length,
+        kernel_size,
+        stride,
+        padding,
+        groups,
+        has_bias,
+        dilation,
+    ] = input_specs
+    print(input_specs)
+
+    # has_bias = False
+    torch.manual_seed(0)
+    conv_input_shape = [batch_size, input_channels, input_length]
+    conv_weight_shape = [output_channels, input_channels // groups, kernel_size]
+    conv_bias_shape = [1, 1, 1, output_channels]
+    torch_input_tensor_ncl = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor = torch.permute(torch_input_tensor_ncl, (0, 2, 1))
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
+    torch_out_golden_tensor = torch.nn.functional.conv1d(
+        torch_input_tensor_ncl,
+        torch_weight_tensor,
+        bias=torch_bias_tensor.reshape(-1) if has_bias else None,
+        stride=stride,
+        padding=padding,
+        groups=groups,
+    )
+
+    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
+    tt_bias_tensor = None
+    if has_bias:
+        tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+
+    start_time = start_measuring_time()
+    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.Conv1d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        batch_size=batch_size,
+        input_length=input_length,
+        groups=groups,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+    )
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    e2e_perf = stop_measuring_time(start_time)
+
+    # torch_output_tensor is in row major layout and NLC shape
+    # NLC to NCL
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_length, output_channels)
+
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 2, 1))
 
     return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
