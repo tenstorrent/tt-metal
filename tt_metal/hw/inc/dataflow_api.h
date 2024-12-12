@@ -585,6 +585,7 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
  * */
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
+    DPRINT << "cb_wait_front, " << operand << ", " << num_pages << ENDL();
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
     uint32_t pages_received_ptr = (uint32_t) get_cb_tiles_received_ptr(operand);
 
@@ -1084,7 +1085,9 @@ struct InterleavedAddrGenFast {
 
         uint32_t src_noc_x = get_noc_x(src_noc_xy);
         uint32_t src_noc_y = get_noc_y(src_noc_xy);
-        DPRINT << "noc_async_read, " << static_cast<uint32_t>(noc) << ", " << read_cmd_buf << ", " << dest_addr << ", " << src_addr << ", " << src_noc_x << ", " << src_noc_y << ", " << this->page_size << ENDL();
+        constexpr uint32_t noc_cmd_field = 0;
+        // TODO: figure out how vc is set
+        DPRINT << "noc_async_read, " << static_cast<uint32_t>(noc) << ", " << read_cmd_buf << ", " << dest_addr << ", " << src_addr << ", " << src_noc_x << ", " << src_noc_y << ", " << this->page_size << ", " << noc_cmd_field << ENDL();
 
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);      // (uint32_t)src_addr
@@ -1110,6 +1113,10 @@ struct InterleavedAddrGenFast {
                                  NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | 0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                                  0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
                                  NOC_CMD_RESP_MARKED;
+
+        uint32_t dest_noc_x = get_noc_x(dest_noc_xy);
+        uint32_t dest_noc_y = get_noc_y(dest_noc_xy);
+        DPRINT << "noc_async_write, " << static_cast<uint32_t>(noc) << ", " << write_cmd_buf << ", " << src_addr << ", " << dest_addr << ", " << dest_noc_x << ", " << dest_noc_y << ", " << this->page_size << ", " << noc_cmd_field << ENDL();
 
         NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
         NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_addr);
@@ -1622,6 +1629,7 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
+    DPRINT << "noc_async_write_barrier, " << static_cast<uint32_t>(noc) << ENDL();
     WAYPOINT("NWBW");
     while (!ncrisc_noc_nonposted_writes_flushed(noc))
         ;
