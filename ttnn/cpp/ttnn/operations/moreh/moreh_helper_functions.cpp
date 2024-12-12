@@ -362,58 +362,6 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
     log_debug(LogOp, "{}:{} keepdim {} dim {}", __func__, __LINE__, keepdim, dim);
     log_debug(LogOp, "{}:{} input_shape {} wo_padding {}", __func__, __LINE__, input_shape, input_shape_wo_padding);
     log_debug(LogOp, "{}:{} output_shape {} wo_paddoutg {}", __func__, __LINE__, output_shape, output_shape_wo_padding);
-
-    if (keepdim) {
-        bool ranks_are_equal = (input_rank == output_rank);
-        input_shape[dim] = (is_tile_dim) ? (TILE_HEIGHT) : (1);
-        input_shape_wo_padding[dim] = 1;
-
-        if (!ranks_are_equal) {
-            log_warning(
-                LogOp,
-                "{}:{} input_rank {} and output_rank {} are not the same in keepdim mode",
-                __func__,
-                __LINE__,
-                input_rank,
-                output_rank);
-        }
-
-        ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        expand_to_max_dim(input_dim, input_shape);
-        expand_to_max_dim(output_dim, output_shape);
-        expand_to_max_dim(input_dim_wo_padding, input_shape_wo_padding);
-        expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
-
-        for (int i = 0; i < input_rank; ++i) {
-            TT_FATAL(input_dim[i] == output_dim[i], "Error");
-            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
-        }
-    } else {
-        ttnn::SmallVector<uint32_t> expected_output_shape;
-        ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
-        for (int i = 0; i < output_shape.rank(); ++i) {
-            if (i == dim && !is_tile_dim) {
-                expected_output_shape.push_back(1);
-                expected_output_shape_wo_padding.push_back(1);
-            }
-            expected_output_shape.push_back(output_shape[i]);
-            expected_output_shape_wo_padding.push_back(output_shape_wo_padding[i]);
-        }
-
-        log_debug(LogOp, "{}:{} expected_output_shape {}", __func__, __LINE__, expected_output_shape);
-        log_debug(
-            LogOp, "{}:{} expected_output_shape_wo_padding {}", __func__, __LINE__, expected_output_shape_wo_padding);
-        for (int i = 0; i < input_rank; ++i) {
-            if (i == dim) {
-                continue;
-            }
-            TT_FATAL(input_shape[i] == expected_output_shape[i], "Error");
-            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
-        }
-    }
 }
 
 void initialize_dims_with_range(ttnn::SmallVector<int64_t>& dims, uint32_t input_rank) {

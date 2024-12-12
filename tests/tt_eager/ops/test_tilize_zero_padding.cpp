@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
         log_debug(LogTest, "Moving src data to host to validate");
         Tensor host_a = a.cpu();  // Move tensor a to host to validate
         // TODO: Update when tensor.pad_to_tile() function is added
-        auto padded_shape = a.get_legacy_shape();
+        auto padded_shape = a.get_padded_shape();
         padded_shape[2] = round_up(padded_shape[2], TILE_HEIGHT);
         padded_shape[3] = round_up(padded_shape[3], TILE_WIDTH);
         Tensor padded_host_a = host_a.pad(padded_shape, ttnn::SimpleShape{0, 0, 0, 0}, 0);
