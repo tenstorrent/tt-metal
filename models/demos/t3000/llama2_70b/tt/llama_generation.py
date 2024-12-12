@@ -267,7 +267,6 @@ class TtLlamaModelForGeneration:
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
                 )
-                logger.info(f"TT logits shape: {tt_logits.shape}")
 
                 logits = self._process_logits(tt_logits)
                 logits = logits.squeeze(1)
