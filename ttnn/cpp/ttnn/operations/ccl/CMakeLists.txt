@@ -6,11 +6,15 @@ set(CCL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl_host_datastructures.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/types/ccl_types_args_emitters.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/uops/ccl_command.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/host/ccl_worker_builder.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/host/ccl_worker_builder.cpp
     # CCL Ops
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather/all_gather.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather/all_gather_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather/device/all_gather_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather/device/multi_core/all_gather_op_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_v2/device/multi_core/all_gather_op_multi_core_new.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_v2/device/all_gather_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce_scatter/device/reduce_scatter_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce_scatter/reduce_scatter.cpp
