@@ -42,7 +42,7 @@ def ref_stable_softmax(x):
 
 
 if __name__ == "__main__":
-    device = ttnn.open_device(0)
+    device = ttnn.open_device(device_id=0)
 
     H, W = 64, 96
     torch.manual_seed(123)

@@ -5,8 +5,7 @@ target_link_libraries(
     test_common_libs
     INTERFACE
         pthread
-        gtest
-        gtest_main
+        gmock_main
         magic_enum
         fmt::fmt-header-only
         span

@@ -1,7 +1,9 @@
-sudo
-nano
 acl
+emacs
 jq
-openssh-server
-vim
+less
 libmpfr-dev
+nano
+openssh-server
+sudo
+vim

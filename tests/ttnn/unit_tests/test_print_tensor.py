@@ -7,14 +7,8 @@ import pytest
 import torch
 
 import ttnn
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
-ttnn_dtype_to_torch_dtype = {
-    ttnn.uint16: torch.int16,
-    ttnn.uint32: torch.int32,
-    ttnn.float32: torch.float,
-    ttnn.bfloat16: torch.bfloat16,
-    ttnn.bfloat8_b: torch.float,
-}
 
 GOLDEN_TENSOR_STRINGS = {
     (
@@ -77,7 +71,7 @@ def test_print(device, dtype, layout, profile, deallocate):
 
     ttnn.set_printoptions(profile=profile)
 
-    torch_dtype = ttnn_dtype_to_torch_dtype[dtype]
+    torch_dtype = tt_dtype_to_torch_dtype[dtype]
     shape = (2, 16, 64, 32)
 
     if torch_dtype in {torch.int16, torch.int32}:
