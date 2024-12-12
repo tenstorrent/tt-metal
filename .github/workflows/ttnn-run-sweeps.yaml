@@ -12,6 +12,7 @@ on:
           - ALL SWEEPS (Nightly)
           - add
           - tilize
+          - tilize_with_val_padding
           - untilize
           - untilize_with_unpadding
           - ccl.line_all_gather
