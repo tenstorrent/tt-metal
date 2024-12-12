@@ -220,6 +220,10 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
     uint32_t pages_sent = len_bytes / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
     uint32_t num_receivers = remote_cb.num_receivers;
 
+    // DPRINT << "remote_cb_push_back_and_write_pages len_bytes " << len_bytes <<ENDL();
+    // DPRINT << "remote_cb_push_back_and_write_pages fifo_page_size " << remote_cb.fifo_page_size <<ENDL();
+    // DPRINT << "remote_cb_push_back_and_write_pages pages_sent " << pages_sent <<ENDL();
+
     uint32_t next_receiver_start_addr_stride = coalesced_num_pages_per_row * coalesced_page_size;
     uint32_t next_block_row_stride = next_receiver_start_addr_stride * num_receivers;
 
@@ -279,6 +283,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
 
         uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
         noc_semaphore_inc(remote_sent_ptr_addr, pages_sent, noc);
+        // DPRINT << "remote_cb_push_back_and_write_pages pages_sent " << pages_sent <<ENDL();
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         remote_noc_xy_ptr += 2;
     }

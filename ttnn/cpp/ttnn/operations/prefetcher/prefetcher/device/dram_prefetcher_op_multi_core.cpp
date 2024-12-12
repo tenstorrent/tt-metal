@@ -56,8 +56,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     }
 
     /* Dataforamts */
-    tt::DataFormat reader_cb_data_format = tt::DataFormat::Bfp4_b;  // TODO: update?
-    // tt::DataFormat reader_cb_data_format = tt::DataFormat::Float16_b;  // TODO: update?
+    tt::DataFormat reader_cb_data_format = tt::DataFormat::Float16_b;  // TODO: update?
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.get_dtype());
     std::vector<tt::DataFormat> tensor_data_formats;
     for (const auto& tensor : tensors) {
@@ -90,10 +89,11 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     auto receiver_core_range = global_cb->receiver_cores();
 
     /* read cb setup */
-    uint32_t reader_cb_size = global_cb->size();
-    // uint32_t reader_cb_single_tile_size = 2048;  // bfloat16 tile size
+    uint32_t reader_cb_single_tile_size = 2048;  // bfloat16 tile size
+    uint32_t reader_cb_size = (global_cb->size() / reader_cb_single_tile_size) * reader_cb_single_tile_size;
+
     // uint32_t reader_cb_single_tile_size = 1088;  // bfp8_b tile size
-    uint32_t reader_cb_single_tile_size = 576;  // bfp4_b tile size
+    // uint32_t reader_cb_single_tile_size = 576;  // bfp4_b tile size
 
     uint32_t reader_cb_index = tt::CB::c_in0;
     CircularBufferConfig reader_cb_config =
@@ -131,15 +131,15 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::v1::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, *global_cb);
 
     /* output buffer (based on reader_cb) */
-    uint32_t reader_output_single_tile_size = reader_cb_single_tile_size;
-    uint32_t reader_output_cb_size = tensor_block_num_tiles[0] * num_blocks * tensor_tile_sizes[0];
+    // uint32_t reader_output_single_tile_size = reader_cb_single_tile_size;
+    // uint32_t reader_output_cb_size = tensor_block_num_tiles[0] * num_blocks * tensor_tile_sizes[0];
 
-    uint32_t reader_output_cb_index = tt::CB::c_in2;
-    CircularBufferConfig reader_output_cb_config =
-        CircularBufferConfig(reader_output_cb_size, {{reader_output_cb_index, tensor_data_formats[0]}})
-            .set_page_size(reader_output_cb_index, reader_output_single_tile_size)
-            .set_globally_allocated_address(*reader_output_buffer);
-    auto reader_output_cb = CreateCircularBuffer(program, reader_core_range, reader_output_cb_config);
+    // uint32_t reader_output_cb_index = tt::CB::c_in2;
+    // CircularBufferConfig reader_output_cb_config =
+    //     CircularBufferConfig(reader_output_cb_size, {{reader_output_cb_index, tensor_data_formats[0]}})
+    //         .set_page_size(reader_output_cb_index, reader_output_single_tile_size)
+    //         .set_globally_allocated_address(*reader_output_buffer);
+    // auto reader_output_cb = CreateCircularBuffer(program, reader_core_range, reader_output_cb_config);
 
     /* output buffer (based on writer_cb) */
     // uint32_t writer_output_single_tile_size = reader_cb_single_tile_size;
@@ -165,7 +165,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,  // TODO: Is this needed?
+            // .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,  // TODO: Is this needed?
             .compile_args = reader_ct_args});
 
     // Writer kernel
@@ -178,7 +178,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,  // TODO: Is this needed?
+            // .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,  // TODO: Is this needed?
             .compile_args = writer_ct_args});
 
     /* Runtime args */
