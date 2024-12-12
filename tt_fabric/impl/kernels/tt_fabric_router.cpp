@@ -111,7 +111,11 @@ void kernel_main() {
             // current invocatoin may still result in sync pending,
             // while previous sync pending has been serviced and pushed to sync buf
             while (!fvc_consumer_state.sync_buf_empty()) {
-                fvc_consumer_state.forward_data_from_fvc_buffer();
+                if (fvc_consumer_state.forward_data_from_fvc_buffer() == 0) {
+                    // not able to forward any data over ethernet.
+                    // should break and retry.
+                    break;
+                }
             }
             if (!fvc_consumer_state.check_sync_pending()) {
                 if (fvc_consumer_state.packet_in_progress == 1 and fvc_consumer_state.packet_words_remaining == 0) {
@@ -130,7 +134,11 @@ void kernel_main() {
         if (fvc_req_buf_is_empty(fvc_consumer_req_buf)) {
             noc_async_read_barrier();
             while (!fvc_consumer_state.sync_buf_empty()) {
-                fvc_consumer_state.forward_data_from_fvc_buffer();
+                if (fvc_consumer_state.forward_data_from_fvc_buffer() == 0) {
+                    // not able to forward any data over ethernet.
+                    // should break and retry.
+                    break;
+                }
             }
         }
 

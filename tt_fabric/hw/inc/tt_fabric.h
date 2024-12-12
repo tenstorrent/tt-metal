@@ -900,6 +900,14 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
         if (!req_buf_ptrs_full(wrptr, local_pull_request->rdptr.ptr)) {
             break;
         }
+#if defined(COMPILE_FOR_ERISC)
+        else {
+            // Consumer pull request buffer is full
+            // Context switch to enable base firmware routing
+            // as it might be handling slow dispatch traffic
+            internal_::risc_context_switch();
+        }
+#endif
     }
     uint32_t dest_wr_index = wrptr & CHAN_REQ_BUF_SIZE_MASK;
     noc_addr = dest_addr + offsetof(chan_req_buf, chan_req) + dest_wr_index * sizeof(pull_request_t);

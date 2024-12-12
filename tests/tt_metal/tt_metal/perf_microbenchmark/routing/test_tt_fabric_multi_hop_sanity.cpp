@@ -81,6 +81,10 @@ int main(int argc, char** argv) {
     constexpr uint32_t default_test_device_id_l = 0;
     constexpr uint32_t default_test_device_id_r = -1;
 
+    constexpr uint32_t default_target_address = 0x30000;
+
+    constexpr uint32_t default_atomic_increment = 4;
+
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
         log_info(LogTest, "Usage:");
@@ -201,7 +205,10 @@ int main(int argc, char** argv) {
         input_args, "--tx_data_sent_per_iter_high", default_tx_data_sent_per_iter_high);
     uint32_t fabric_command =
         test_args::get_command_option_uint32(input_args, "--fabric_command", default_fabric_command);
-
+    uint32_t target_address =
+        test_args::get_command_option_uint32(input_args, "--target_address", default_target_address);
+    uint32_t atomic_increment =
+        test_args::get_command_option_uint32(input_args, "--atomic_increment", default_atomic_increment);
     assert(
         (pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE &&
             rx_disable_header_check ||
@@ -351,6 +358,8 @@ int main(int argc, char** argv) {
                 tx_data_sent_per_iter_low,                                              // 16: data_sent_per_iter_low
                 tx_data_sent_per_iter_high,                                             // 17: data_sent_per_iter_high
                 fabric_command,                                                         // 18: fabric command
+                target_address,
+                atomic_increment,
                 (dev_r_mesh_id << 16 | dev_r_chip_id),  // 19: receiver/dest device/mesh id
 
             };
