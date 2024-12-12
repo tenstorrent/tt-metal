@@ -30,7 +30,7 @@ jobs:
         with:
           arch: ${{ matrix.test-group.arch }}
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./.github/actions/docker-run
         with:
           docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
