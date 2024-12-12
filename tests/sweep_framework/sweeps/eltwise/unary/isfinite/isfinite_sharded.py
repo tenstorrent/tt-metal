@@ -49,18 +49,19 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     (
         input_shape,
         core_grid_size,
-        shard_orientation,
+        x,
+        y,
         sharding_strategy,
         tensor_hw_as_shard_shape,
-        shard_height_mul_of_32,
         input_layout,
+        shard_height_mul_of_32,
     ) = input_spec
     invlidated, output_str = invalidate_vector_sharding(*input_spec)
-    if invlidated:
-        return invlidated, output_str
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is only supported on tiled layout"
+    if invlidated:
+        return invlidated, output_str
 
     return False, None
 
@@ -80,14 +81,14 @@ def run(
 
     (
         input_shape,
-        core_grid_size,
-        shard_orientation,
+        x,
+        y,
         sharding_strategy,
+        shard_orientation,
         tensor_hw_as_shard_shape,
-        shard_height_mul_of_32,
         input_layout,
+        shard_height_mul_of_32,
     ) = parse_sharding_spec(input_spec)
-    y, x = core_grid_size
     device_grid_size = ttnn.CoreGrid(y=y, x=x)
 
     sharded_config = ttnn.create_sharded_memory_config_(
@@ -96,7 +97,7 @@ def run(
         strategy=sharding_strategy,
         orientation=shard_orientation,
         use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
-        tile_layout=True,
+        tile_layout=shard_height_mul_of_32,
     )
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:

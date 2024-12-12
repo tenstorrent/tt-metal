@@ -29,21 +29,31 @@ def roundup(a, b):
     return result
 
 
-def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
+def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
     # device.compute_with_storage_grid_size()
-    y = 8
-    x = 8
+    Y = 8
+    X = 8
 
     # ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
-    sharding_strategy_list = ["BLOCK", "WIDTH", "HEIGHT", "TENSOR_HW"]
+    sharding_strategy_list = ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     shard_orientation_list = ["COL_MAJOR", "ROW_MAJOR"]
     spec_list = []
 
     for sharding_strategy, shard_orientation, rank, layout in itertools.product(
         sharding_strategy_list, shard_orientation_list, [4, 3, 2], layouts
     ):
+        if sharding_strategy == "tensor_wh":
+            tensor_hw_as_shard_shape = True
+            sharding_strategy = "BLOCK"
+        else:
+            tensor_hw_as_shard_shape = False
+
         for _ in range(num_shapes):
-            if sharding_strategy == "TENSOR_HW":
+            x = random.randint(1, X)
+            y = random.randint(1, Y)
+            max_tensor_size = max_tensor_size_per_core * x * y
+
+            if tensor_hw_as_shard_shape:
                 # Gets stuck:
                 # X 8 Y 8 input_shape [1, 17792, 8] DataType.BFLOAT8_B Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape True
 
@@ -67,11 +77,6 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=
                     input_shape[-1] *= 2
                     input_shape[-2] //= 2
 
-                if shard_orientation == "COL_MAJOR":
-                    tmp = input_shape[-2]
-                    input_shape[-2] = input_shape[-1]
-                    input_shape[-1] = tmp
-
             elif sharding_strategy == "BLOCK":
                 min_shard_size_y = 32 * y
                 min_shard_size_x = 32 * x
@@ -81,6 +86,11 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=
                 physical_shape = list(physical_shape["reshape_dims"])
                 physical_shape[1] *= min_shard_size_y
                 physical_shape[0] *= min_shard_size_x
+
+                if shard_orientation == "ROW_MAJOR":
+                    tmp = physical_shape[-2]
+                    physical_shape[-2] = physical_shape[-1]
+                    physical_shape[-1] = tmp
 
                 input_shape = random.choice(_gen_reshape_args_from_volume(physical_shape[0], step=1, out_dims=rank - 1))
                 input_shape = list(input_shape["reshape_dims"])
@@ -125,10 +135,11 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=
             spec_list.append(
                 {
                     "input_shape": input_shape,
-                    "core_grid_size": (y, x),
+                    "X": x,
+                    "Y": y,
                     "sharding_strategy": sharding_strategy,
                     "shard_orientation": shard_orientation,
-                    "shard_height_mul_of_32": False,
+                    "tensor_hw_as_shard_shape": tensor_hw_as_shard_shape,
                     "input_layout": layout,
                 }
             )
@@ -138,35 +149,39 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=
 
 def gen_sharded_spec_unary_2(
     num_shapes,
-    max_tensor_size_per_core=256 * 256,
+    max_tensor_size_per_core=36 * 1024,
     layouts=["ROW_MAJOR_LAYOUT", "TILE_LAYOUT"],
 ):
-    sharding_strategy_list = ["HEIGHT", "WIDTH", "BLOCK", "TENSOR_HW"]
+    sharding_strategy_list = ["HEIGHT", "WIDTH", "BLOCK", "tensor_hw"]
     shard_orientation_list = ["COL_MAJOR", "ROW_MAJOR"]
     shard_height_mul_of_32_list = [True, False]
 
-    for sharding_strategy, shard_orientation, shard_height_mul_of_32, input_layout, rank in itertools.product(
+    for sharding_strategy, shard_orientation, shard_height_mul_of_32, layout, rank in itertools.product(
         sharding_strategy_list, shard_orientation_list, shard_height_mul_of_32_list, layouts, [4, 3, 2]
     ):
+        if sharding_strategy == "tensor_hw":
+            tensor_hw_as_shard_shape = True
+            sharding_strategy = "BLOCK"
+        else:
+            tensor_hw_as_shard_shape = False
         i = 0
         while i < num_shapes:
             y = random.randint(1, Y)
             x = random.randint(1, X)
             max_tensor_size = y * x * max_tensor_size_per_core
-            if sharding_strategy == "TENSOR_HW":
-                if input_layout == "TILE_LAYOUT":
+            if tensor_hw_as_shard_shape:
+                if layout == "TILE_LAYOUT":
                     min_tensor_height = 32
                     min_tensor_width = 32
                     max_tensor_height = int(math.sqrt(max_tensor_size_per_core))
                     max_tensor_width = int(math.sqrt(max_tensor_size_per_core))
                     tensor_height = random.randrange(min_tensor_height, max_tensor_height + 1, 32)
                     tensor_width = random.randrange(min_tensor_width, max_tensor_width + 1, 32)
-                    input_shape = [tensor_height, tensor_width]
                 else:
                     tensor_size = random.randrange(1024, max_tensor_size_per_core + 1, 1024)
-                    input_shape = random.choice(_gen_reshape_args_from_volume(tensor_size, step=1, out_dims=2))
-                    input_shape = list(input_shape["reshape_dims"])
-
+                    tensor_width = random.randrange(16, tensor_size // 2 + 1, 16)
+                    tensor_height = tensor_size // tensor_width
+                input_shape = [tensor_height, tensor_width]
                 if rank != 2:
                     rest_volume = random.randint(1, max_tensor_size // math.prod(input_shape))
                     rest_dims = random.choice(_gen_reshape_args_from_volume(rest_volume, step=1, out_dims=rank - 2))
@@ -287,36 +302,32 @@ def gen_sharded_spec_unary_2(
             i += 1
             yield {
                 "input_shape": input_shape,
-                "core_grid_size": (y, x),
+                "X": x,
+                "Y": y,
                 "sharding_strategy": sharding_strategy,
                 "shard_orientation": shard_orientation,
+                "tensor_hw_as_shard_shape": tensor_hw_as_shard_shape,
+                "input_layout": layout,
                 "shard_height_mul_of_32": shard_height_mul_of_32,
-                "input_layout": input_layout,
             }
 
 
 def parse_sharding_spec(input_spec):
     input_shape = input_spec["input_shape"]
+    x = input_spec["X"]
+    y = input_spec["Y"]
     sharding_strategy = input_spec["sharding_strategy"]
     shard_orientation = input_spec["shard_orientation"]
-    core_grid_size = input_spec["core_grid_size"]
-    shard_height_mul_of_32 = input_spec["shard_height_mul_of_32"]
+    tensor_hw_as_shard_shape = input_spec["tensor_hw_as_shard_shape"]
     input_layout = input_spec["input_layout"]
-
-    assert sharding_strategy in ["HEIGHT", "WIDTH", "BLOCK", "TENSOR_HW"]
-    assert input_layout in ["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]
-
-    tensor_hw_as_shard_shape = False
+    shard_height_mul_of_32 = input_spec.get("shard_height_mul_of_32", False)
 
     if sharding_strategy == "HEIGHT":
         sharding_strategy = ttnn.ShardStrategy.HEIGHT
     elif sharding_strategy == "WIDTH":
         sharding_strategy = ttnn.ShardStrategy.WIDTH
-    elif sharding_strategy == "BLOCK":
+    else:  # sharding_strategy == "BLOCK":
         sharding_strategy = ttnn.ShardStrategy.BLOCK
-    else:
-        sharding_strategy = ttnn.ShardStrategy.BLOCK
-        tensor_hw_as_shard_shape = True
 
     if shard_orientation == "COL_MAJOR":
         shard_orientation = ttnn.ShardOrientation.COL_MAJOR
@@ -330,25 +341,26 @@ def parse_sharding_spec(input_spec):
 
     return (
         input_shape,
-        core_grid_size,
-        shard_orientation,
+        x,
+        y,
         sharding_strategy,
+        shard_orientation,
         tensor_hw_as_shard_shape,
-        shard_height_mul_of_32,
         input_layout,
+        shard_height_mul_of_32,
     )
 
 
 def invalidate_vector_sharding(
     input_shape,
-    core_grid_size,
+    x,
+    y,
     sharding_strategy,
     shard_orientation,
     tensor_hw_as_shard_shape,
-    shard_height_mul_of_32,
     input_layout,
+    shard_height_mul_of_32=False,
 ):
-    y, x = core_grid_size
     pre_sharded_height = math.prod(input_shape[:-1])
     pre_sharded_width = input_shape[-1]
 
