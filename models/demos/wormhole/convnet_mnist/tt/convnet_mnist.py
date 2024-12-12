@@ -11,6 +11,8 @@ def convnet_mnist(
     input_tensor,
     parameters,
     device,
+    mesh_mapper,
+    mesh_composer,
 ):
     batch_size = input_tensor.shape[0]
 
@@ -18,12 +20,12 @@ def convnet_mnist(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         activation="",
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         input_channels_alignment=32,
         transpose_shards=False,
         reshard_if_not_optimal=True,
         deallocate_activation=True,
         reallocate_halo_output=True,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -32,9 +34,8 @@ def convnet_mnist(
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    x = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
     [x, [out_height, out_width]] = ttnn.conv2d(
-        input_tensor=x,
+        input_tensor=input_tensor,
         weight_tensor=parameters.conv1.weight,
         in_channels=1,
         out_channels=32,
@@ -47,13 +48,13 @@ def convnet_mnist(
         input_height=input_tensor.shape[1],
         input_width=input_tensor.shape[2],
         conv_config=conv_config,
-        compute_config=compute_config,
         conv_op_cache={},
         debug=True,
         groups=1,
         return_output_dim=True,
         return_weights_and_bias=False,
     )
+
     x = ttnn.relu(x)
 
     x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
@@ -70,7 +71,7 @@ def convnet_mnist(
         dilation=[1, 1],
     )
 
-    x, [out_height, out_width] = ttnn.conv2d(
+    [x, [out_height, out_width]] = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=parameters.conv2.weight,
         in_channels=32,
@@ -90,8 +91,11 @@ def convnet_mnist(
         return_output_dim=True,
         return_weights_and_bias=False,
     )
+
     x = ttnn.relu(x)
 
+    x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.max_pool2d(
         input_tensor=x,
         batch_size=batch_size,
@@ -105,17 +109,23 @@ def convnet_mnist(
     )
 
     x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-
     x = ttnn.reshape(x, (batch_size, 6, 6, 64))
     x = ttnn.permute(x, (0, 3, 1, 2))
-
-    x = ttnn.reshape(x, (batch_size, -1))
-
-    x = ttnn.to_device(x, device)
+    x = torch.reshape(ttnn.to_torch(x, mesh_composer=mesh_composer), (2 * batch_size, -1))
+    x = ttnn.from_torch(x, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper, device=device)
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-    x = ttnn.linear(x, parameters.fc1.weight, bias=parameters.fc1.bias, activation="relu")
+    x = ttnn.linear(
+        x,
+        parameters.fc1.weight,
+        bias=parameters.fc1.bias,
+        activation="relu",
+    )
 
-    x = ttnn.linear(x, parameters.fc2.weight, bias=parameters.fc2.bias)
+    x = ttnn.linear(
+        x,
+        parameters.fc2.weight,
+        bias=parameters.fc2.bias,
+    )
 
     output = ttnn.softmax(x, dim=-1, numeric_stable=True)
     return output
