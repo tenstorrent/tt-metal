@@ -16,7 +16,10 @@ from models.utility_functions import skip_for_wormhole_b0
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [230])
 @pytest.mark.parametrize("w", [224])
-@pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (3, 25), (32, 32)), (32, 32, 3, 25, 0, 1))])
+@pytest.mark.parametrize(
+    "padding,torch_padding",
+    [(((0, 1), (3, 25), (32, 32)), (32, 32, 3, 25, 0, 1)), (((0, 1), (3, 25), (4, 6)), (4, 6, 3, 25, 0, 1))],
+)
 @pytest.mark.parametrize("value", [0])
 def test_pad_rm(device, n, c, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
