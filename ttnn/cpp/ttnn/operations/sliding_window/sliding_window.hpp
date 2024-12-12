@@ -52,6 +52,7 @@ struct SlidingWindowConfig {
     bool snap_to_tile = false;
     bool is_bilinear = false;
     bool is_transpose = false;
+    bool ceil_mode = false;
 
     std::string to_string() const;
     bool has_parallel_config() const;

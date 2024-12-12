@@ -26,6 +26,8 @@ bool SlidingWindowConfig::has_parallel_config() const {
  */
 Shape SlidingWindowConfig::get_output_shape() const {
     if (is_transpose) {
+        TT_FATAL(!ceil_mode, "ceil_mode is not supported for transposed operation");
+
         // This is the inverse calculation of the shape used in the forward pass.
         // Given the same values of stride, padding, dilation, and kernel size, the output shape of conv_transpose2d is
         // the input shape of conv2d, and vice versa.
@@ -43,15 +45,23 @@ Shape SlidingWindowConfig::get_output_shape() const {
         return Shape({batch_size, output_h, output_w, 0});
     }
 
-    uint32_t output_h =
-        (input_hw.first + 2 * pad_hw.first - window_hw.first - (dilation_hw.first - 1) * (window_hw.first - 1)) /
-            stride_hw.first +
-        1;
-    uint32_t output_w =
-        (input_hw.second + 2 * pad_hw.second - window_hw.second - (dilation_hw.second - 1) * (window_hw.second - 1)) /
-            stride_hw.second +
-        1;
+    uint32_t output_h;
+    uint32_t output_w;
+    float eff_size_h =
+        (float)(input_hw.first + 2 * pad_hw.first - window_hw.first + (dilation_hw.first - 1) * (window_hw.first - 1));
+    float eff_size_w = (float)(input_hw.second + 2 * pad_hw.second - window_hw.second +
+                               (dilation_hw.second - 1) * (window_hw.second - 1));
+    if (ceil_mode) {
+        output_h = std::ceil(eff_size_h / stride_hw.first) + 1;
+        output_w = std::ceil(eff_size_w / stride_hw.second) + 1;
+    } else {
+        output_h = std::floor(eff_size_h / stride_hw.first) + 1;
+        output_w = std::floor(eff_size_w / stride_hw.second) + 1;
+    }
+
     if (is_bilinear) {
+        TT_FATAL(!ceil_mode, "ceil_mode is not supported for bilinear operation");
+
         // for bilinear input and output should be same.. and kernel size is 2x2
         //  we need neighboring width in the output tensor
         output_h = input_hw.first;
