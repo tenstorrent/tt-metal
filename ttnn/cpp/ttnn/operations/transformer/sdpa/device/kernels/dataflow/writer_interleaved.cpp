@@ -50,7 +50,6 @@ void fill_diagonal_tile(uint32_t cb_id, uint32_t tile_id, uint32_t partial_val) 
 
     fill_tile<tile_bytes>(cb_id, tile_id, 0);
 
-    // DPRINT << "Fill partial tile" << ENDL();
     const uint16_t datum_val = partial_val >> 16;
     volatile tt_l1_ptr uint16_t* uint16_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
@@ -147,6 +146,7 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(11);
     constexpr uint32_t is_causal = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(14) == 1;
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -156,6 +156,7 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(5);
     const uint32_t local_q_start = get_arg_val<uint32_t>(6);
     const uint32_t local_q_end = get_arg_val<uint32_t>(7);
+    const uint32_t chunk_start_t_in_q_chunks = get_arg_val<uint32_t>(8);
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -205,9 +206,13 @@ void kernel_main() {
                 out_tile_id = q_batch_offset + q_head_offset + q_chunk_offset;
 
                 if constexpr (is_causal) {
-                    const uint32_t q_low_idx =
+                    if constexpr (is_chunked) {
+                        // Bump it up to the chunk start
+                        q_chunk = chunk_start_t_in_q_chunks + q_chunk;
+                    }
+                    uint32_t q_low_idx =
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
-                    const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
+                    uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
 
                     for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                         const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
