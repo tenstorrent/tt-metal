@@ -11,14 +11,7 @@
 #define u8_vol_ptr volatile uint8_t*
 #define u8_ptr uint8_t*
 
-#define DEBUG 1
-
-#ifdef DEBUG
-#include "debug/dprint.h"
-#endif
-
 void kernel_main() {
-    DPRINT << "entered reader" << ENDL();
     constexpr uint32_t unpadded_stick_bytes         = get_compile_time_arg_val(0);
     constexpr uint32_t padded_stick_bytes         = get_compile_time_arg_val(1);
     constexpr uint32_t unpadded_shard_height        = get_compile_time_arg_val(2);
@@ -31,7 +24,6 @@ void kernel_main() {
     constexpr uint32_t padded_stick_step = get_compile_time_arg_val(8);
 
     auto output_offset_bytes = get_arg_val<uint32_t>(0);
-
     uint32_t input_shard_base_addr = get_write_ptr(input_shard_cb);
     uint32_t output_shard_base_addr = get_write_ptr(output_shard_cb);
     // for the first stick, we need to add the front padding by adjusting where
@@ -49,12 +41,16 @@ void kernel_main() {
         // front padding
 
         // FIXME: this isn't aligned. we need to do a memcpy for now. we can try
-        // to do a noc_async_read for better performance later on with a trick.
+        // to do a noc_async_read later on with a trick.
+
+        // noc_async_read(output_stick_addr + W_front_pad_bytes, input_stick_addr, unpadded_stick_bytes);
 
         // NOTE: memcpy is safe here because the input/output tensors have disjoint buffers.
         for (uint32_t i = 0; i < unpadded_stick_bytes; i++) {
             output_stick_ptr[W_front_pad_bytes + i] = input_stick_ptr[i];
         }
+
+        cb_pop_front(output_shard_cb, 1);
 
         input_stick_ptr += unpadded_stick_step;
         output_stick_ptr += padded_stick_step;
