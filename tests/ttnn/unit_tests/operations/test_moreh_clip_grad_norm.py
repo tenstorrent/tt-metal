@@ -15,27 +15,6 @@ from tests.ttnn.utils_for_testing import assert_equal
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
-    if npu_tensor is None:
-        return None
-    cpu_tensor = npu_tensor.cpu().to(cpu_layout).unpad_from_tile(shape).to_torch()
-    return cpu_tensor
-
-
-def to_npu(
-    cpu_tensor,
-    device,
-    *,
-    npu_layout=ttnn.TILE_LAYOUT,
-    npu_dtype=ttnn.bfloat16,
-    padding_value=float("nan"),
-):
-    if cpu_tensor is None:
-        return None
-    return ttnn.from_torch(cpu_tensor, npu_dtype, device=device, layout=npu_layout)
-
-
-@pytest.mark.skip(reason="assertion fails during binary op input shape comparison because of different padding")
 @pytest.mark.parametrize("num_iters_of_each_case", [2])
 @pytest.mark.parametrize("range_of_padding", [(0, 21, 10)])  # [0, 10, 20]
 @pytest.mark.parametrize("range_of_n", [(1, 4)])
@@ -88,66 +67,70 @@ def test_moreh_clip_grad_norm(
             param.grad = grad
 
             cpu_inputs.append(param)
-            npu_inputs.append(to_npu(grad.clone().bfloat16(), device, npu_dtype=npu_dtype))
+            npu_inputs.append(
+                ttnn.from_torch(grad.clone().bfloat16(), dtype=npu_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            )
+            # npu_inputs.append(to_npu(grad.clone().bfloat16(), device, npu_dtype=npu_dtype))
             input_shapes.append(input_shape)
 
         cpu_total_norm = torch.nn.utils.clip_grad_norm_(cpu_inputs, max_norm, norm_type)
         npu_total_norm = ttnn.operations.moreh.clip_grad_norm(npu_inputs, max_norm, norm_type)
-
+        actual_total_norm = ttnn.to_torch(npu_total_norm).reshape(1)
         expected_total_norm = cpu_total_norm
-        actual_total_norm = to_cpu(npu_total_norm, [1, 1, 1, 1])
 
         rtol = atol = 0.1
         # Check total_norm
         pass_total_norm, out_total_norm = comp_allclose_and_pcc(
-            actual_total_norm.double(), expected_total_norm.double(), rtol=rtol, atol=atol
+            actual_total_norm, expected_total_norm, rtol=rtol, atol=atol
         )
         logger.debug(f"total_norm's {out_total_norm}")
         assert pass_total_norm
 
         # Check inputs
         for i in range(num_parameters):
-            expected_input_i = cpu_inputs[i].grad.double()
-            actual_input_i = to_cpu(npu_inputs[i], input_shapes[i]).double()
+            expected_input_i = cpu_inputs[i].grad
+            actual_input_i = ttnn.to_torch(npu_inputs[i])
             pass_input_i, out_input_i = comp_allclose_and_pcc(expected_input_i, actual_input_i, rtol=rtol, atol=atol)
             logger.debug(f"inputs[{i}]-shape[{input_shapes[i]}]'s {out_input_i}")
             assert pass_input_i
 
 
-# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-# @pytest.mark.parametrize("error_if_nonfinite", [True, False])
-# def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device):
-#     torch.manual_seed(2023)
+@pytest.mark.parametrize("error_if_nonfinite", [True, False])
+def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device):
+    torch.manual_seed(2023)
 
-#     cpu_dtype = torch.bfloat16
-#     npu_dtype = ttnn.bfloat16
+    cpu_dtype = torch.bfloat16
+    npu_dtype = ttnn.bfloat16
 
-#     input_shape = [4, 4, 4 * TILE_HEIGHT, 4 * TILE_WIDTH]
-#     param = torch.nn.Parameter(torch.empty(input_shape, dtype=cpu_dtype))
-#     grad = torch.randn(input_shape, dtype=cpu_dtype)
-#     param.grad = grad
+    input_shape = [4, 4, 4 * TILE_HEIGHT, 4 * TILE_WIDTH]
+    param = torch.nn.Parameter(torch.empty(input_shape, dtype=cpu_dtype))
+    grad = torch.randn(input_shape, dtype=cpu_dtype)
+    param.grad = grad
 
-#     max_norm = 1.0
-#     norm_type = float("nan")
+    max_norm = 1.0
+    norm_type = float("nan")
 
-#     expected_error_msg = (
-#         f"The total norm of order {norm_type} for gradients from `parameters` is non-finite, so it cannot be clipped."
-#     )
+    expected_error_msg = (
+        f"The total norm of order {norm_type} for gradients from `parameters` is non-finite, so it cannot be clipped."
+    )
 
-#     # Check vanilla torch behavior
-#     try:
-#         torch.nn.utils.clip_grad_norm_((param), max_norm, norm_type, error_if_nonfinite)
-#         assert not error_if_nonfinite
-#     except RuntimeError as actual_error_msg:
-#         assert expected_error_msg in str(actual_error_msg)
-#         assert error_if_nonfinite
+    # Check vanilla torch behavior
+    try:
+        torch.nn.utils.clip_grad_norm_((param), max_norm, norm_type, error_if_nonfinite)
+        assert not error_if_nonfinite
+    except RuntimeError as actual_error_msg:
+        assert expected_error_msg in str(actual_error_msg)
+        assert error_if_nonfinite
 
-#     # Check tt behavior
-#     try:
-#         ttnn.operations.moreh.clip_grad_norm(
-#             [to_npu(param.grad.bfloat16(), device, npu_dtype=npu_dtype)], max_norm, norm_type, error_if_nonfinite
-#         )
-#         assert not error_if_nonfinite
-#     except RuntimeError as actual_error_msg:
-#         assert expected_error_msg in str(actual_error_msg)
-#         assert error_if_nonfinite
+    # Check tt behavior
+    try:
+        ttnn.operations.moreh.clip_grad_norm(
+            [ttnn.from_torch(param.grad.bfloat16(), dtype=npu_dtype, layout=ttnn.TILE_LAYOUT, device=device)],
+            max_norm,
+            norm_type,
+            error_if_nonfinite,
+        )
+        assert not error_if_nonfinite
+    except RuntimeError as actual_error_msg:
+        assert expected_error_msg in str(actual_error_msg)
+        assert error_if_nonfinite
