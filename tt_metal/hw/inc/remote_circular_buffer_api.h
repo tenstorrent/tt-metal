@@ -26,9 +26,9 @@ FORCE_INLINE void resize_remote_sender_cb_interface(uint32_t cb_id, uint32_t pag
     uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
 
     uint32_t next_fifo_wr_ptr = fifo_start_addr + align(fifo_wr_ptr - fifo_start_addr, page_size);
-    if (next_fifo_wr_ptr > fifo_limit_page_aligned) {
+    if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
         next_fifo_wr_ptr = fifo_start_addr;
-    } else if (next_fifo_wr_ptr != fifo_wr_ptr) {
+    } else {
 #ifndef COMPILE_FOR_TRISC
         if constexpr (update_remote_over_noc) {
             uint32_t aligned_pages_sent_addr = sender_cb_interface.aligned_pages_sent_ptr;
@@ -69,9 +69,9 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(uint32_t cb_id, uint32_t p
     uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
 
     uint32_t next_fifo_rd_ptr = fifo_start_addr + align(fifo_rd_ptr - fifo_start_addr, page_size);
-    if (next_fifo_rd_ptr > fifo_limit_page_aligned) {
+    if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
         next_fifo_rd_ptr = fifo_start_addr;
-    } else if (next_fifo_rd_ptr != fifo_rd_ptr) {
+    } else {
 #ifndef COMPILE_FOR_TRISC
         if constexpr (update_remote_over_noc) {
             uint32_t aligned_pages_acked_addr = receiver_cb_interface.aligned_pages_acked_ptr;
