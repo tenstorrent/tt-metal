@@ -436,7 +436,7 @@ class TtLlamaAttention(LightweightModule):
                 cluster_axis=0,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
-                dim=0 if (TG and self.hidden_size < 8192) else 3,
+                dim=0 if (self.TG and self.hidden_size < 8192) else 3,
                 memory_config=(
                     self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
                     if self.hidden_size == 8192
