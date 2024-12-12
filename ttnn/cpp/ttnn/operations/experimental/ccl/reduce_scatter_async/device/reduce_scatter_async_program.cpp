@@ -711,7 +711,7 @@ void generate_partial_reducer_reader_worker_command_streams(
                 if (in0_tensor_sync.has_value()) {
                     // NOTE: per-worker sync
                     worker_command_stream0.push_back(
-                        local_semaphore_wait(in0_tensor_sync.value().get_tensor_sync_semaphore(w), i));
+                        local_semaphore_wait(in0_tensor_sync.value().get_tensor_sync_semaphore(w), i + 1));
                 }
                 if (last_slice) {
                     // Make sure not to add the space at the beginning of the CB chunk for packet header
@@ -728,7 +728,7 @@ void generate_partial_reducer_reader_worker_command_streams(
                 bool last_slice = i == worker_tensor_slices[w].size() - 1;
                 auto const& s = worker_tensor_slices[w][i];
                 worker_command_stream1.push_back(
-                    local_semaphore_wait(from_remote_input_tensor_sync.value().get_tensor_sync_semaphore(w), i));
+                     local_semaphore_wait(from_remote_input_tensor_sync.value().get_tensor_sync_semaphore(w), i + 1));
                 // local_semaphore_wait(from_remote_input_tensor_sync.value().get_tensor_sync_semaphore(i),
                 // num_workers));
                 if (last_slice) {
@@ -1171,7 +1171,7 @@ void populate_partial_reduce_rt_args(
     for (auto line_direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
         bool is_forward_direction = line_direction == LineDirection::FORWARD;
         auto fwd_fabric_connection = get_fabric_connection(is_forward_direction, Direction::FORWARD);
-        auto bwd_fabric_connection = get_fabric_connection(!is_forward_direction, Direction::FORWARD);
+        auto bwd_fabric_connection = get_fabric_connection(!is_forward_direction, Direction::BACKWARD);
         // auto fwd_fabric_connection =
         // is_forward_direction ? std::make_optional<ttnn::ccl::SenderWorkerAdapterSpec>(fabric.uniquely_connect_worker(
         //                            builder_config.device, ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD))
@@ -1636,9 +1636,10 @@ void create_non_end_of_line_worker_commands(
 
     // backward sequence from end to current chip
     auto const in_slices_fwd = vslice(input_tensor_slices, last_chip, topology_config.line_index());
-    auto const in_slices_bwd = vslice(input_tensor_slices, 0, topology_config.line_index());  //
+    // auto const in_slices_bwd = vslice(input_tensor_slices, 0, topology_config.line_index());  //
+    auto const in_slices_bwd = vslice(input_tensor_slices, topology_config.line_index(), 0);  //
     auto const out_remote_slices_fwd = vslice(input_tensor_slices, last_chip, topology_config.line_index() + 1);
-    auto const out_remote_slices_bwd = vslice(input_tensor_slices, topology_config.line_index(), last_chip);
+    auto const out_remote_slices_bwd = vslice(input_tensor_slices, topology_config.line_index() - 1, 0);//last_chip);
 
     std::array<std::vector<std::vector<ttnn::ccl::v2::TensorSlice>>, 2> reader_worker_slices_by_direction = {
         split_tensor_slices_across_workers_page_aligned(num_workers, in_slices_fwd),
@@ -1746,8 +1747,7 @@ void initialize_op_internal_tensor_syncs(
     std::array<Device*, 2> const& neighbour_devices,
     ProgramTensorsBundle& all_tensors,
     WorkerCoreBundle const& worker_cores,
-    GlobalSemaphore const& from_remote_sem,
-    GlobalSemaphore const& teardown_sem) {
+    GlobalSemaphore const& from_remote_sem) {
     auto core_coord_lt = [](CoreCoord const& a, CoreCoord const& b) { return a.y < b.y || (a.y == b.y && a.x < b.x); };
 
     TT_FATAL(worker_cores.partial_reducers_vec[LineDirection::BACKWARD].size() > 0, "Internal error. Expected at least one partial reducer worker");
@@ -1912,9 +1912,10 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
 
     fabric_lifetime_mode fabric_mode,
     GlobalSemaphore const& from_remote_sems,
-    GlobalSemaphore const& teardown_sems) {
+    std::optional<GlobalSemaphore> const& teardown_sems) {
     using namespace ttnn::ccl::worker_detail;
     bool do_dynamic_fabric_bringup_and_teardown = fabric_mode == fabric_lifetime_mode::TRANSIENT;
+
 
     // Constants/ "Globals"
     constexpr auto math_in0_cb = tt::CBIndex::c_0;
@@ -1973,6 +1974,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
         size_t num_final_output_writer_cores = worker_cores.final_reducers.num_cores();
         size_t num_completion_signals_before_teardown = num_final_output_writer_cores - 1;
         auto const& teardown_core = worker_cores.partial_reducers_vec.at(LineDirection::FORWARD).at(0);
+        TT_FATAL(teardown_sems.has_value(), "Internal error: non persistent fabric mode was specified but not fabric teardown semaphores were created");
         fabric_teardown_cmd_info = generate_teardown_commands(
             program,
             device,
@@ -1981,10 +1983,10 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
             topology_config,
             teardown_core,
             num_completion_signals_before_teardown,
-            teardown_sems);
+            teardown_sems.value());
     }
     initialize_op_internal_tensor_syncs(
-        program, device, neighbour_devices, all_tensors, worker_cores, from_remote_sems, teardown_sems);
+        program, device, neighbour_devices, all_tensors, worker_cores, from_remote_sems);
 
     validate_tensors(all_tensors, topology_config);
 
@@ -2032,29 +2034,6 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     }
 
     populate_worker_runtime_args(builder_config, fabric_mode, command_streams, math_page_counts);
-
-    // if (is_end_of_line) {
-    //     // COMMANDS
-    //     create_end_of_line_worker_commands(builder_config, fabric_mode, command_streams, math_page_counts);
-    //     // TEARDOWN COMMANDS
-    //     create_end_of_line_worker_teardown_commands(
-    //         builder_config, fabric_mode, fabric_teardown_cmd_info, command_streams);
-
-    //     // RT ARGS
-    //     create_worker_runtime_args_for_inactive_workers(
-    //         program, device, all_tensors, kernel_ids, worker_cores.final_reducers);
-    //     create_end_of_line_worker_runtime_args(builder_config, command_streams, math_page_counts);
-    // } else {
-    //     // COMMANDS
-    //     create_non_end_of_line_worker_commands(builder_config, command_streams, math_page_counts);
-
-    //     create_non_end_of_line_teardown_commands(
-    //         builder_config, fabric_mode, fabric_teardown_cmd_info, command_streams);
-
-    //     // RT ARGS
-    //     create_worker_runtime_args_not_end_of_line(
-    //         builder_config, fabric_mode, fabric_teardown_cmd_info, command_streams, math_page_counts);
-    // }
 
     if (do_dynamic_fabric_bringup_and_teardown) {
         fabric.build_kernels();
@@ -2108,7 +2087,8 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     ttnn::ccl::Topology topology,
     std::optional<size_t> num_links_preferred,
     tt::tt_metal::GlobalSemaphore const& from_remote_sem,
-    tt::tt_metal::GlobalSemaphore const& teardown_sem) {
+    tt::tt_metal::GlobalSemaphore const& teardown_sem,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> &fabric_handle) {
     auto program = tt::tt_metal::Program();
 
     bool persistent_fabric = true;
@@ -2117,15 +2097,18 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
 
     Device* device = input_tensor.device();
 
+    fabric_lifetime_mode fabric_mode = fabric_handle.has_value() ? fabric_lifetime_mode::PERSISTENT : fabric_lifetime_mode::TRANSIENT;
     // We only build the local chip's part of the fabric
-    auto line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        device, forward_device, backward_device, &program, persistent_fabric, num_links_preferred.value_or(line_size));
+    if (!fabric_handle.has_value()) {
+        fabric_handle = ttnn::ccl::EdmLineFabricOpInterface(
+            device, forward_device, backward_device, &program, persistent_fabric, num_links_preferred.value_or(line_size));
+    }
 
     // const auto num_links = resolve_num_links(num_links_preferred, line_fabric);
 
     return reduce_scatter_async_on_instantiated_edm_fabric(
         program,
-        line_fabric,
+        fabric_handle.value(),
         forward_device,
         backward_device,
         input_tensor,
@@ -2140,11 +2123,11 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
         line_size,
         line_index,
         dim,
-        line_fabric.get_num_links(),
+        fabric_handle.value().get_num_links(),
         ttnn::ccl::Topology::Linear,
-        fabric_lifetime_mode::TRANSIENT,
+        fabric_mode,
         from_remote_sem,
-        teardown_sem);
+        fabric_mode == fabric_lifetime_mode::PERSISTENT ? std::optional<GlobalSemaphore>{std::nullopt} : teardown_sem);
 }
 
 }  // namespace ttnn::ccl::reduce_scatter_detail

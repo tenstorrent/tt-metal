@@ -646,8 +646,8 @@ std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_ordered_t
 }
 
 
-void FabricEriscDatamoverBuilder::teardown_from_host(Device *d) const {
-    std::vector<uint32_t> val(1, tt::fabric::GRACEFULLY_TERMINATE);
+void FabricEriscDatamoverBuilder::teardown_from_host(Device *d, tt::fabric::TerminationSignal termination_signal) const {
+    std::vector<uint32_t> val(1, termination_signal);
     tt::tt_metal::detail::WriteToDeviceL1(
         d,
         d->logical_core_from_ethernet_core(CoreCoord(this->my_noc_x, this->my_noc_y)),
@@ -656,16 +656,16 @@ void FabricEriscDatamoverBuilder::teardown_from_host(Device *d) const {
         CoreType::ETH);
 }
 
-void EdmLineFabricOpInterface::teardown_from_host() const {
+void EdmLineFabricOpInterface::teardown_from_host(tt::fabric::TerminationSignal termination_signal) const {
     for (Device *d : this->device_sequence) {
         if (edm_builders_forward_direction.find(d->id()) != edm_builders_forward_direction.end()) {
             for (auto& edm_builder : edm_builders_forward_direction.at(d->id())) {
-                edm_builder.teardown_from_host(d);
+                edm_builder.teardown_from_host(d, termination_signal);
             }
         }
         if (edm_builders_backward_direction.find(d->id()) != edm_builders_backward_direction.end()) {
             for (auto& edm_builder : edm_builders_backward_direction.at(d->id())) {
-                edm_builder.teardown_from_host(d);
+                edm_builder.teardown_from_host(d, termination_signal);
             }
         }
     }

@@ -166,7 +166,7 @@ struct WorkerToFabricEdmSender{
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
         noc_async_read_barrier();
         ASSERT(*this->buffer_index_ptr < 20);
-        // DPRINT << "Connecting to EDM fabric @ " << (uint64_t)edm_connection_handshake_noc_addr << "\n";
+        DPRINT << "Connecting to EDM fabric @ " << (uint64_t)edm_connection_handshake_noc_addr << "\n";
         // DPRINT << "\t&sem_addr: " << (uint32_t)&(this->worker_sem_addr) << "\n";
         // DPRINT << "remote buffer index @: " << (uint64_t)remote_buffer_index_addr << "\n";
         // DPRINT << "Buffer index: " << (uint32_t)*this->buffer_index_ptr << "\n";

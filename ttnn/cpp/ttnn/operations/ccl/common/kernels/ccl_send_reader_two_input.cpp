@@ -375,7 +375,7 @@ struct command_context_t final {
         // TODO: based on command category/class, some of this setup could be shared
         #ifdef DEBUG_PRINT_ENABLED
         DPRINT << "CMD (code=" << (uint32_t)current_cmd_header.code << ", args=" << (uint32_t)current_cmd_header.arg_count << ", idx=" << (uint32_t)(arg_idx-1) <<"\n";
-        DPRINT << (uint32_t)get_arg_val<uint32_t>(arg_idx-1) << "\n";
+        // DPRINT << (uint32_t)get_arg_val<uint32_t>(arg_idx-1) << "\n";
         #endif
         update_ccl_command(
             arg_idx,
@@ -404,8 +404,10 @@ struct command_context_t final {
 
                 #endif
             } break;
-            case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
             case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
+                DPRINT << (uint32_t)src_addr_info.address << "\n";
+                DPRINT << (uint32_t)cmd_specific_ctx.inline_value_ctx.value << "\n";
+            case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
             case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
                 break;
             default:
@@ -953,8 +955,8 @@ FORCE_INLINE void try_advance(command_context_t<Addrgen> &cmd_ctx) {
                 cmd_ctx.complete_current_command();
             break;
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
-            if (*reinterpret_cast<volatile uint32_t *>(cmd_ctx.src_addr_info.address) == cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
-                // DPRINT << "Completing waitval command\n";
+            if (*reinterpret_cast<volatile uint32_t *>(cmd_ctx.src_addr_info.address) >= cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
+                DPRINT << "Completing waitval command\n";
                 cmd_ctx.complete_current_command();
             }
         break;
@@ -973,7 +975,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-    DPRINT << "START\n";
+    DPRINT << "START my_y " << (uint32_t)my_y[0] << ", my_x " << (uint32_t)my_x[0] << "\n";
     size_t arg_idx = 0;
     #ifndef NO_TENSOR_MODE
     // Load the input tensor spec
