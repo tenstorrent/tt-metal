@@ -81,6 +81,7 @@ struct TargetSelection {
     uint32_t riscv_mask = 0;
     std::string file_name;  // File name to write output to.
     bool one_file_per_risc = false;
+    bool prepend_device_core_risc;
 };
 
 class RunTimeOptions {
@@ -225,6 +226,12 @@ public:
     inline void set_feature_one_file_per_risc(RunTimeDebugFeatures feature, bool one_file_per_risc) {
         feature_targets[feature].one_file_per_risc = one_file_per_risc;
     }
+    inline bool get_feature_prepend_device_core_risc(RunTimeDebugFeatures feature) {
+        return feature_targets[feature].prepend_device_core_risc;
+    }
+    inline void set_feature_prepend_device_core_risc(RunTimeDebugFeatures feature, bool prepend_device_core_risc) {
+        feature_targets[feature].prepend_device_core_risc = prepend_device_core_risc;
+    }
     inline TargetSelection get_feature_targets(RunTimeDebugFeatures feature) { return feature_targets[feature]; }
     inline void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
         feature_targets[feature] = targets;
@@ -293,11 +300,12 @@ public:
 private:
     // Helper functions to parse feature-specific environment vaiables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature);
-    void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
-    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);
-    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var);
-    void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
-    void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string &env_var, CoreType core_type);
+    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string &env_var);
 
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
@@ -315,9 +323,6 @@ private:
     bool watcher_feature_disabled(const std::string& name) {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();
     }
-
-    // Helper function to generate a message string when an environment variable has not been set
-    std::string generate_env_var_not_set_message(const std::string& env_var) const;
 };
 
 }  // namespace llrt

@@ -204,6 +204,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS");
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
     ParseFeatureOneFilePerRisc(feature, feature_env_prefix + "_ONE_FILE_PER_RISC");
+    ParseFeaturePrependDeviceCoreRisc(feature, feature_env_prefix + "_PREPEND_DEVICE_CORE_RISC");
 
     // Set feature enabled if the user asked for any feature cores
     feature_targets[feature].enabled = false;
@@ -354,6 +355,12 @@ void RunTimeOptions::ParseFeatureFileName(RunTimeDebugFeatures feature, const st
 void RunTimeOptions::ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var) {
     char* env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].one_file_per_risc = (env_var_str != nullptr);
+}
+
+void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string &env_var) {
+    char *env_var_str = std::getenv(env_var.c_str());
+    feature_targets[feature].prepend_device_core_risc =
+        (env_var_str != nullptr) ? (strcmp(env_var_str, "1") == 0) : true;
 }
 
 }  // namespace llrt
