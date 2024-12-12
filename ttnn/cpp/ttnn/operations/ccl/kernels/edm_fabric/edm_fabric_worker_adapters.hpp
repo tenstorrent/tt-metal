@@ -93,10 +93,6 @@ struct WorkerToFabricEdmSender{
         edm_noc_x(edm_worker_x),
         edm_noc_y(edm_worker_y)
     {
-        DPRINT << "edm_l1_sem_id: " << (uint32_t)edm_l1_sem_id << "\n";
-        // DPRINT << "edm_buffer_index_addr: " << (uint32_t)edm_buffer_index_addr << "\n";
-        // DPRINT << "edm_l1_sem_addr: " << (uint32_t)edm_l1_sem_addr << "\n";
-
         ASSERT(buffer_size_bytes > 0);
     }
 
