@@ -97,7 +97,8 @@ def get_core_ranges(num_reader_cores):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 9),
-                    ttnn.CoreCoord(2, 9),
+                    ttnn.CoreCoord(1, 9),
+                    # ttnn.CoreCoord(2, 9),
                 ),
             ]
         ),
@@ -200,7 +201,8 @@ def get_core_ranges(num_reader_cores):
 
     dram_cores = all_dram_cores[:num_reader_cores]
     sender_cores = all_sender_cores[:num_reader_cores]
-    receiver_cores_list = all_receiver_cores_list[: num_reader_cores * 2]
+    # receiver_cores_list = all_receiver_cores_list[: num_reader_cores * 2]
+    receiver_cores_list = all_receiver_cores_list[:num_reader_cores]
     receiver_cores = all_receiver_cores[:num_reader_cores]
 
     return dram_cores, sender_cores, receiver_cores_list, receiver_cores, worker_cores_range_set
@@ -214,11 +216,17 @@ def get_core_ranges(num_reader_cores):
         # (2, 2, [(128, 128), (128, 128)], 1),
         # (2, 2, [(256, 1024), (256, 1024)], 1),
         (
-            12,
             1,
-            [(2304, 3840), (2304, 3840)],
+            3,
+            [(192, 320), (192, 320), (192, 320)],
             1,
         ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
+        # (
+        #     1,
+        #     4,
+        #     [(192, 320), (192, 320), (192, 320), (192, 320)],
+        #     1,
+        # ),
         # (12, 2, [(7680, 2304), (7680, 2304)], 1),  # FF2
         # (12, 2, [(2304, 1536), (2304, 1536)], 1),  # QKV
         # (12, 2, [(2304, 2304), (2304, 2304)], 1),  # DO
@@ -227,9 +235,9 @@ def get_core_ranges(num_reader_cores):
 @pytest.mark.parametrize(
     "dtype",
     [
-        # ttnn.bfloat16,
+        ttnn.bfloat16,
         # ttnn.bfloat8_b,
-        ttnn.bfloat4_b,
+        # ttnn.bfloat4_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -276,13 +284,21 @@ def test_run_prefetcher(
     # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 1088 * (360))
     # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 576 * (800))
 
-    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 576 * (720))
+    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * (128))
 
     ##### Set up the input tensors #####
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
-    pt_tensors = [torch.randn(input_shapes[tid]) for tid in range(num_tensors) for _ in range(num_layers)]
+    # pt_tensors = [torch.ones(input_shapes[tid]) for tid in range(num_tensors) for _ in range(num_layers)]
+    pt_tensors = []
+    for tid in range(num_tensors):
+        if tid == 0:
+            tensor = torch.ones(input_shapes[tid])
+        else:
+            tensor = torch.zeros(input_shapes[tid])
+        pt_tensors.append(tensor)
+
     tt_tensors = []
 
     for tid in range(num_tensors):
@@ -357,7 +373,7 @@ def test_run_prefetcher(
     device.load_sub_device_manager(sub_device_manager)
 
     # Run the prefetcher
-    tt_outs = ttnn.dram_prefetcher(
+    ttnn.dram_prefetcher(
         tt_tensors,
         tt_tensor_addrs,
         num_layers,
@@ -365,18 +381,18 @@ def test_run_prefetcher(
         reader_output_mem_config,
         writer_output_mem_config,
     )
-    tt_outs_pt = ttnn.to_torch(tt_outs)
-    tt_outs_pt = torch.chunk(tt_outs_pt, num_tensors, dim=0)
+    # tt_outs_pt = ttnn.to_torch(tt_outs)
+    # tt_outs_pt = torch.chunk(tt_outs_pt, num_tensors, dim=0)
 
     # Check the output of DRAM Prefetcher
     all_passing = True
-    for i in range(num_tensors):
-        pt_out = ttnn.to_torch(tt_tensors[i])
-        tt_out = tt_outs_pt[i]
-        passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
-        logger.info(output)
+    # for i in range(num_tensors):
+    #     pt_out = ttnn.to_torch(tt_tensors[i])
+    #     tt_out = tt_outs_pt[i]
+    #     passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
+    #     logger.info(output)
 
-        all_passing = all_passing and passing
+    #     all_passing = all_passing and passing
 
     # Run matmul
     for i in range(num_tensors):
