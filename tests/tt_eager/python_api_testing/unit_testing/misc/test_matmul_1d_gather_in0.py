@@ -170,15 +170,6 @@ def run_multi_core_matmul_1d(
             }
         )
 
-    # core_range_set = ttnn.CoreRangeSet(
-    #     {
-    #         ttnn.CoreRange(
-    #             ttnn.CoreCoord(1, 1),
-    #             ttnn.CoreCoord(1, 1),
-    #         ),
-    #     }
-    # )
-
     print(f"num_cores: {num_cores}")
 
     in0_sharded_mem_config = ttnn.MemoryConfig(
@@ -259,67 +250,19 @@ def run_multi_core_matmul_1d(
             dst_full_sync_en=True,
         )
 
-    # Global CB
-    if global_cb is None:
-        sender_cores = [ttnn.CoreCoord(0, 0)]
-        receiver_cores = [
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(1, 1),
-                        ttnn.CoreCoord(1, 1),
-                    ),
-                }
-            ),
-        ]
-        sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
-        global_cb = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 207360)
-
-    for _ in range(num_iters):
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=output_sharded_mem_config,
-            compute_kernel_config=compute_kernel_config,
-            global_cb=global_cb,
-        )
-        if mm_chain:
-            a_t = ttnn.from_torch(
-                in0,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=in0_dtype,
-            )
-            b_t = ttnn.from_torch(
-                in1,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=in1_dtype,
-            )
-            c_t = ttnn.matmul(a_t, b_t)
-            c_out = ttnn.to_torch(c_t)
-            passing, output = comp_pcc(in0 * in1, c_out)
-            assert passing
-
-            c_t = ttnn.matmul(
-                in0_t,
-                in1_t,
-                program_config=program_config,
-                memory_config=output_sharded_mem_config,
-                compute_kernel_config=compute_kernel_config,
-            )
-            c_out = ttnn.to_torch(c_t)
-            passing, output = comp_pcc(in0 * in1, c_out, pcc_threshold)
-            assert passing
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        program_config=program_config,
+        memory_config=output_sharded_mem_config,
+        compute_kernel_config=compute_kernel_config,
+        global_cb=global_cb,
+    )
 
     tt_out = ttnn.to_torch(output_t)
 
-    if global_cb is not None:
-        pt_out = in0 @ prefetched_weights_pt
-        logger.info("Using prefetched weights")
-    else:
-        pt_out = in0 @ in1
+    pt_out = in0 @ prefetched_weights_pt
+    logger.info("Using prefetched weights")
 
     if activation:
         act_fnc = torch.nn.functional.silu if activation == ttnn.UnaryOpType.SILU else torch.nn.functional.relu
