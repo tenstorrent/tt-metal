@@ -10,6 +10,7 @@
 #include "mod_div_lib.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "remote_circular_buffer_api.h"
 // #include "debug/dprint.h"
 
 namespace NAMESPACE {
@@ -35,6 +36,15 @@ FORCE_INLINE void reload_from_cb_to_dst(
     // Reconfigure srcA back
     mm_block_init_short_with_dt(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+}
+
+FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    return local_cb.fifo_rd_ptr;
+}
+FORCE_INLINE void set_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    local_cb.fifo_rd_ptr = val;
 }
 
 void MAIN {
@@ -70,6 +80,18 @@ void MAIN {
 
     constexpr uint32_t mm_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
+    constexpr uint32_t remote_cb_id = 31;
+    constexpr uint32_t sync_cb = 5;
+    // UNPACK(( LocalCBInterface& local_cb = get_local_cb_interface(in1_cb_id) ));
+    // UNPACK(( local_cb.fifo_rd_ptr = 1236992 ));
+    // UNPACK(( set_local_cb_rd_ptr(in1_cb_id, 1236992) ));
+    // cb_wait_front(sync_cb, 1);
+    // // cb_pop_front(sync_cb, 1);
+    // UNPACK(( experimental::resize_remote_receiver_cb_interface(remote_cb_id, in1_block_num_tiles * 2048, 0) ));
+    // UNPACK(( experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {in1_cb_id}) ));
+    // UNPACK(( DPRINT << "compute " << get_local_cb_rd_ptr(in1_cb_id) <<ENDL() ));
+    // for (volatile int i=0; i<100000;++i) {};
+
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -100,6 +122,14 @@ void MAIN {
         }
 
         cb_wait_front(in1_cb_id, in1_block_num_tiles * num_blocks);
+        // UNPACK (( DPRINT  << in1_block_num_tiles <<ENDL()));
+        // UNPACK (( DPRINT  << num_blocks <<ENDL()));
+        // for (int i=0; i<36;i++)
+        // UNPACK (( DPRINT  << TSLICE(in1_cb_id, i, SliceRange::h0_w0_32()) << ENDL() ));
+        // UNPACK (( DPRINT  << TSLICE(in1_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
+        // UNPACK (( DPRINT  << TSLICE(in1_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
+        // UNPACK (( DPRINT  << TSLICE(in1_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
+
         cb_pop_front(in1_cb_id, in1_block_num_tiles * ring_idx);
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
@@ -185,8 +215,9 @@ void MAIN {
 
                         tile_regs_release();
                         cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
-                        cb_wait_front(mm_out_cb_id, out_subblock_num_tiles);
-                        // UNPACK (( DPRINT  << TSLICE(mm_out_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
+                        // cb_wait_front(mm_out_cb_id, out_subblock_num_tiles);
+                        // UNPACK (( DPRINT  << TSLICE(mm_out_cb_id, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0,
+                        // .w1 = 32, .ws = 1}) << ENDL() ));
 
                     } else if (spill) {
                         tile_regs_commit();
@@ -237,6 +268,9 @@ void MAIN {
 
             cb_pop_front(input0_cb_id, in0_block_num_tiles);
             cb_pop_front(in1_cb_id, in1_block_num_tiles);
+
+            cb_reserve_back(sync_cb, 1);
+            cb_push_back(sync_cb, 1);
         }
 
         if constexpr (batch > 1) {
@@ -247,5 +281,7 @@ void MAIN {
             reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
         }
     }
+
+    DPRINT << "COMPUTE DONE" << ENDL();
 }
 }  // namespace NAMESPACE

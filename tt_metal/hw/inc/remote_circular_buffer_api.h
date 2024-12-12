@@ -123,6 +123,7 @@ FORCE_INLINE void remote_cb_pop_front(uint32_t cb_id, uint32_t num_pages, uint8_
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_acked_ptr);
 
     *pages_acked_ptr += num_aligned_pages;
+    DPRINT << "num_aligned_pages " << num_aligned_pages << ENDL();
     remote_cb.fifo_rd_ptr += len_bytes;
 
     if (remote_cb.fifo_rd_ptr >= remote_cb.fifo_limit_page_aligned) {
@@ -160,7 +161,8 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
             uint32_t pages_acked = *pages_acked_ptr;
             uint32_t pages_sent = *pages_sent_ptr;
             free_pages = fifo_aligned_num_pages - (pages_sent - pages_acked);
-            // DPRINT << "pages_acked " << *pages_acked_ptr <<ENDL();
+            // DPRINT << "pages_sent " << pages_sent <<ENDL();
+            // DPRINT << "pages_acked " << pages_acked <<ENDL();
         } while (free_pages < num_pages_wait);
         pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
@@ -241,6 +243,8 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         next_receiver_start_addr_offset += next_receiver_start_addr_stride;
         *pages_sent_ptr += pages_sent;
 
+        DPRINT << "pages_sent " << pages_sent << ENDL();
+
         uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
         noc_semaphore_inc(remote_sent_ptr_addr, pages_sent, noc);
         // DPRINT << "remote_cb_push_back_and_write_pages pages_sent " << pages_sent <<ENDL();
@@ -272,8 +276,6 @@ FORCE_INLINE void align_local_cbs_to_remote_cb(
         local_cb.fifo_wr_ptr = fifo_ptr;
         local_cb.fifo_rd_ptr = fifo_ptr;
     }
-
-    // DPRINT << "b "<< remote_cb.fifo_rd_ptr <<ENDL();
 }
 
 FORCE_INLINE void update_remote_cb_config_in_l1(uint32_t remote_cb_index) {
@@ -281,14 +283,9 @@ FORCE_INLINE void update_remote_cb_config_in_l1(uint32_t remote_cb_index) {
     // so just update the fifo_ptr using either interface
     RemoteReceiverCBInterface& remote_cb_interface = get_remote_receiver_cb_interface(remote_cb_index);
 
-    // DPRINT << "a "<< remote_cb_interface.fifo_rd_ptr <<ENDL();
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         remote_cb_interface.config_ptr + offsetof(RemoteReceiverCBInterface, fifo_rd_ptr)) =
         remote_cb_interface.fifo_rd_ptr;
-
-    uint32_t saved_value = *reinterpret_cast<volatile uint32_t*>(
-        remote_cb_interface.config_ptr + offsetof(RemoteReceiverCBInterface, fifo_rd_ptr));
-    DPRINT << "saved_value " << saved_value << ENDL();
 }
 
 template <uint32_t num_remote_cbs>

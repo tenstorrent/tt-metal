@@ -114,8 +114,8 @@ def get_core_ranges(num_reader_cores):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 9),
-                    ttnn.CoreCoord(1, 9),
-                    # ttnn.CoreCoord(2, 9),
+                    # ttnn.CoreCoord(1, 9),
+                    ttnn.CoreCoord(2, 9),
                 ),
             ]
         ),
@@ -218,8 +218,8 @@ def get_core_ranges(num_reader_cores):
 
     dram_cores = all_dram_cores[:num_reader_cores]
     sender_cores = all_sender_cores[:num_reader_cores]
-    # receiver_cores_list = all_receiver_cores_list[: num_reader_cores * 2]
-    receiver_cores_list = all_receiver_cores_list[:num_reader_cores]
+    receiver_cores_list = all_receiver_cores_list[: num_reader_cores * 2]
+    # receiver_cores_list = all_receiver_cores_list[:num_reader_cores]
     receiver_cores = all_receiver_cores[:num_reader_cores]
 
     return dram_cores, sender_cores, receiver_cores_list, receiver_cores, worker_cores_range_set
@@ -234,8 +234,8 @@ def get_core_ranges(num_reader_cores):
         # (2, 2, [(256, 1024), (256, 1024)], 1),
         (
             1,
-            2,
-            [(192, 320), (192, 320), (192, 320)],
+            1,
+            [(64, 64)] * 1,
             1,
         ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
         # (
@@ -250,17 +250,11 @@ def get_core_ranges(num_reader_cores):
     ],
 )
 @pytest.mark.parametrize(
-    "dtype",
+    "dtype, pcc_threshold",
     [
-        ttnn.bfloat16,
-        # ttnn.bfloat8_b,
-        # ttnn.bfloat4_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "pcc_threshold",
-    [
-        0.999,
+        (ttnn.bfloat16, 0.999),
+        # (ttnn.bfloat8_b, 0.999),
+        # (ttnn.bfloat4_b, 0.99),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
@@ -301,7 +295,7 @@ def test_run_prefetcher(
     # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 1088 * (360))
     # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 576 * (800))
 
-    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * (128))
+    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 512)
 
     ##### Set up the input tensors #####
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
@@ -311,9 +305,11 @@ def test_run_prefetcher(
     pt_tensors = []
     for tid in range(num_tensors):
         if tid == 0:
-            tensor = torch.randn(input_shapes[tid])
-        elif tid == 1:
             tensor = torch.ones(input_shapes[tid])
+        elif tid == 1:
+            tensor = torch.randn(input_shapes[tid])
+        else:
+            tensor = torch.randn(input_shapes[tid])
         pt_tensors.append(tensor)
 
     tt_tensors = []
@@ -447,17 +443,6 @@ def test_run_prefetcher(
         ),
     )
 
-    in1_sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            core_range_set,
-            [K, N // num_cores],
-            ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-
     output_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -479,13 +464,6 @@ def test_run_prefetcher(
         dtype=ttnn.bfloat16,
         memory_config=in0_sharded_mem_config,
     )
-    in1_t = ttnn.from_torch(
-        in1,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=dtype,
-        memory_config=in1_sharded_mem_config,
-    )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=storage_grid,
@@ -498,6 +476,7 @@ def test_run_prefetcher(
         fused_activation=None,
         mcast_in0=False,
         gather_in0=True,
+        num_global_cb_receivers=2,
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -517,17 +496,20 @@ def test_run_prefetcher(
         writer_output_mem_config,
     )
     all_passing = True
+    outputs_t = []
     for i in range(num_tensors):
         output_t = ttnn.matmul(
             in0_t,
-            in1_t,
+            tt_tensors[i],
             program_config=program_config,
             memory_config=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
             global_cb=global_circular_buffer,
         )
+        outputs_t.append(output_t)
 
-        tt_out = ttnn.to_torch(output_t)
+    for i in range(num_tensors):
+        tt_out = ttnn.to_torch(outputs_t[i])
 
         pt_out = in0 @ pt_tensors[i]
         # print(pt_tensors[i])

@@ -44,8 +44,8 @@ void kernel_launch(uint32_t kernel_base_addr) {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         kernel_main();
     }
-#ifdef UPDATE_REMOTE_CB_CONFIGS_IN_L1
-    UPDATE_REMOTE_CB_CONFIGS_IN_L1
-#endif
+// #ifdef UPDATE_REMOTE_CB_CONFIGS_IN_L1
+//     UPDATE_REMOTE_CB_CONFIGS_IN_L1
+// #endif
 #endif
 }
