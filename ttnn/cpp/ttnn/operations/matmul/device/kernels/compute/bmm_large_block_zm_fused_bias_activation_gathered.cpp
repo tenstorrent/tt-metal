@@ -100,8 +100,9 @@ void MAIN {
         }
 
         cb_wait_front(in1_cb_id, in1_block_num_tiles * num_blocks);
+        cb_pop_front(in1_cb_id, in1_block_num_tiles * ring_idx);
         for (uint32_t block = 0; block < num_blocks; block++) {
-            const uint32_t input_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
+            const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
             bool last_out = block == (num_blocks - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
@@ -111,16 +112,16 @@ void MAIN {
             }
 #endif
 
-            cb_wait_front(input_cb_id, in0_block_num_tiles);
+            cb_wait_front(input0_cb_id, in0_block_num_tiles);
 
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                int in1_index_subblock_offset = in1_block_num_tiles * ((ring_idx + block) % num_blocks);
+                int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
                     if (enable_reload) {
                         reload_from_cb_to_dst(
-                            input_cb_id,
+                            input0_cb_id,
                             in1_cb_id,
                             mm_partials_cb_id,
                             in1_transpose_tile,
@@ -141,7 +142,7 @@ void MAIN {
                         // accumulation is done by iterating matmul_block across inner dim
                         // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
                         matmul_block(
-                            input_cb_id,
+                            input0_cb_id,
                             in1_cb_id,
                             in0_index,
                             in1_index,
@@ -232,13 +233,13 @@ void MAIN {
             }
 #endif
 
-            cb_pop_front(input_cb_id, in0_block_num_tiles);
+            cb_pop_front(input0_cb_id, in0_block_num_tiles);
+            cb_pop_front(in1_cb_id, in1_block_num_tiles);
         }
-        cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
 
         if constexpr (batch > 1) {
             // reconfigure init for matmul
-            mm_block_init_short(in0_cb_id, in1_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+            mm_block_init_short(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 
             // reconfigure unpacker df for src A
             reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
