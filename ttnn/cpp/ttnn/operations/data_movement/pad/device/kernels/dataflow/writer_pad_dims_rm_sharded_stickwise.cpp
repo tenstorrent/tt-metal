@@ -5,13 +5,6 @@
 #include <stdint.h>
 #include <cstring>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/debug.hpp"
-
-#define DEBUG 1
-
-#ifdef DEBUG
-#include "debug/dprint.h"
-#endif
 
 #define u16_l1_ptr volatile tt_l1_ptr uint16_t*
 #define u32_l1_ptr volatile tt_l1_ptr uint32_t*
@@ -35,22 +28,13 @@ inline __attribute__((always_inline)) void fill_cb_with_padding_value(
         for (uint32_t i = 0; i < num_bytes / sizeof(uint16_t); i++) {
             cb_write_addr_as_u16[i] = padding_value_as_u16;
         }
-    } else if constexpr (padding_value_num_bytes == 1) {
-        // FIXME: is this actually what we should do for bf8 variants?
-        uint8_t padding_value_as_u8 = static_cast<uint8_t>(padding_value_as_u32);
-        u8_l1_ptr cb_write_addr_as_u8 = reinterpret_cast<u8_l1_ptr>(cb_write_addr);
-        for (uint32_t i = 0; i < num_bytes; i++) {
-            cb_write_addr_as_u8[i] = padding_value_as_u8;
-        }
     } else {
         static_assert(
-            padding_value_num_bytes == 1 || padding_value_num_bytes == 2 || padding_value_num_bytes == 4,
-            "padding_value_num_bytes is not 1, 2, or 4");
+            padding_value_num_bytes == 2 || padding_value_num_bytes == 4, "padding_value_num_bytes is not 2 or 4");
     }
 }
 
 void kernel_main() {
-    DPRINT << "entered writer" << ENDL();
     constexpr uint32_t padded_stick_bytes         = get_compile_time_arg_val(0);
     constexpr uint32_t padded_shard_height        = get_compile_time_arg_val(1);
     constexpr uint32_t padding_value_as_u32         = get_compile_time_arg_val(2);
@@ -61,7 +45,7 @@ void kernel_main() {
 
     cb_reserve_back(output_shard_cb, padded_shard_height);
     uint32_t output_shard_base_addr = get_write_ptr(output_shard_cb);
-    ;
+
     fill_cb_with_padding_value<padding_value_num_bytes>(padding_value_cb, padded_stick_bytes, padding_value_as_u32);
     uint32_t padding_value_base_addr = get_read_ptr(padding_value_cb);
 
@@ -74,11 +58,8 @@ void kernel_main() {
             output_stick_ptr[i] = padding_value_ptr[i];
         }
 
-        DPRINT << "pushing back output shard cb" << ENDL();
         cb_push_back(output_shard_cb, 1);
-        DPRINT << "pushed back output shard cb" << ENDL();
 
         output_stick_addr += padded_stick_bytes;
     }
-    DPRINT << "exiting writer" << ENDL();
 }
