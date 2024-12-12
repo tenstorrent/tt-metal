@@ -91,3 +91,9 @@ CPMAddPackage(NAME range-v3 GITHUB_REPOSITORY ericniebler/range-v3 GIT_TAG 0.12.
 ############################################################################################################################
 
 CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84)
+
+############################################################################################################################
+# taskflow : https://github.com/taskflow/taskflow
+############################################################################################################################
+
+CPMAddPackage(NAME taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0)
