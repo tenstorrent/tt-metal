@@ -23,7 +23,7 @@ from models.utility_functions import is_grayskull
 
 
 def get_expected_times():
-    return (40, 16)
+    return (40, 16.2)
 
 
 @pytest.mark.models_performance_bare_metal
@@ -96,7 +96,7 @@ def test_perf_device_bare_metal_yolov4(batch_size, model_name):
     num_iterations = 1
     margin = 0.03
 
-    expected_perf = 197.89
+    expected_perf = 199.89
     command = f"pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

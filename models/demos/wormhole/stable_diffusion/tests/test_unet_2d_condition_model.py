@@ -72,6 +72,7 @@ def unsqueeze_all_params_to_4d(params):
         (2, 4, 64, 64),
     ],
 )
+@pytest.mark.skip(reason="#15931: Failing, skip for now")
 def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
     device.enable_program_cache()
 

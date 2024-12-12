@@ -43,6 +43,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
@@ -130,6 +132,8 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::size_t in0_block_w;
     std::size_t out_subblock_h;
     std::size_t out_subblock_w;
+    std::size_t out_block_h;
+    std::size_t out_block_w;
     std::size_t per_core_M;
     std::size_t per_core_N;
     bool fuse_batch;
