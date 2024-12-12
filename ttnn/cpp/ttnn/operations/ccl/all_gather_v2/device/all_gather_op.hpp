@@ -16,7 +16,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
 
-
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
@@ -78,15 +77,16 @@ struct AllGatherV2 {
         return attrs;
     }
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-namespace ccl{
-namespace all_gather_v2_detail{
+namespace ccl {
+namespace all_gather_v2_detail {
 AllGatherV2 create_all_gather_struct(
     const Tensor& input_tensor,
     const uint32_t dim,
@@ -95,11 +95,10 @@ AllGatherV2 create_all_gather_struct(
     const std::vector<Device*>& devices,
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore_handles,
-    std::unordered_map<chip_id_t, SubDeviceId> &sub_device_id_map,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> &fabric_handle
-);
-} // namespace all_gather_detail
-} // namespace ccl
+    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
+}  // namespace all_gather_v2_detail
+}  // namespace ccl
 
 // All Gather Variants
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
@@ -113,10 +112,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     const uint32_t ring_index,
     ccl::Topology topology,
     std::optional<GlobalSemaphore> semaphore_handle,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> &fabric_handle
-    );
-
-
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 
 namespace operations {
 namespace ccl {
@@ -143,7 +139,7 @@ Tensor all_gather_v2(
     const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
 
-} // namespace ccl
-} // namespace operations
+}  // namespace ccl
+}  // namespace operations
 
 }  // namespace ttnn

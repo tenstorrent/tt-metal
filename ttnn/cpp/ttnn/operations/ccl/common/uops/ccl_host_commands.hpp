@@ -7,7 +7,6 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
 
-
 namespace ttnn::ccl::cmd {
 
 // This file defines commands that are resolved on a per worker level. This is the lowest level of
@@ -40,21 +39,23 @@ namespace uops {
 
 using semaphore_id_t = std::variant<uint32_t, tt::tt_metal::GlobalSemaphore>;
 
-[[nodiscard]] CclHostLowLevelWorkerCommand read_tensor_slice_to_cb_for_eventual_fabric_write(ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);
-[[nodiscard]] CclHostLowLevelWorkerCommand read_tensor_slice_to_cb(ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);
+[[nodiscard]] CclHostLowLevelWorkerCommand read_tensor_slice_to_cb_for_eventual_fabric_write(
+    ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);
+[[nodiscard]] CclHostLowLevelWorkerCommand read_tensor_slice_to_cb(
+    ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);
 [[nodiscard]] CclHostLowLevelWorkerCommand local_write_cb_to_tensor_slice(
     ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);
 [[nodiscard]] CclHostLowLevelWorkerCommand fabric_write_cb_to_tensor_slice(
-    ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id, std::variant<UnicastCommandDestArgs, MulticastCommandDestArgs> const& dest_args_variant);
+    ttnn::ccl::v2::TensorSlice const& slice,
+    size_t cb_id,
+    std::variant<UnicastCommandDestArgs, MulticastCommandDestArgs> const& dest_args_variant);
 [[nodiscard]] CclHostLowLevelWorkerCommand local_semaphore_wait(semaphore_id_t const& semaphore_id, size_t value);
-[[nodiscard]] CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(size_t dest_noc0_x, size_t dest_noc0_y, semaphore_id_t const& semaphore_id, size_t value);
+[[nodiscard]] CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
+    size_t dest_noc0_x, size_t dest_noc0_y, semaphore_id_t const& semaphore_id, size_t value);
 [[nodiscard]] CclHostLowLevelWorkerCommand local_core_semaphore_inc(semaphore_id_t const& semaphore_id, size_t value);
 [[nodiscard]] CclHostLowLevelWorkerCommand local_core_semaphore_set(semaphore_id_t const& semaphore_id, size_t value);
 [[nodiscard]] [[deprecated]] CclHostLowLevelWorkerCommand local_chip_noc_absolute_address_semaphore_inc(
-    size_t dest_noc0_x,
-    size_t dest_noc0_y,
-    size_t bank_address,
-    size_t value);
+    size_t dest_noc0_x, size_t dest_noc0_y, size_t bank_address, size_t value);
 [[nodiscard]] CclHostLowLevelWorkerCommand fabric_multicast_semaphore_inc(
     semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
@@ -83,5 +84,5 @@ using semaphore_id_t = std::variant<uint32_t, tt::tt_metal::GlobalSemaphore>;
     size_t dest_noc0_y,
     UnicastCommandDestArgs const& unicast_args);
 
-}; // namespace uops
-}; // namespace ttnn::ccl::cmd
+};  // namespace uops
+};  // namespace ttnn::ccl::cmd

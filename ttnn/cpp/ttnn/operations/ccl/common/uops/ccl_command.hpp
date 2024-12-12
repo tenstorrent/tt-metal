@@ -17,28 +17,35 @@
 namespace ttnn {
 namespace ccl {
 namespace v2 {
-    struct TensorSlice {
-        using ords_t = Shape4D<uint32_t>;
-        ords_t tensor_shape;
-        ords_t tensor_slice_shape;
-        ords_t tensor_slice_offset;
-        ords_t worker_slice_shape;
-        ords_t worker_slice_offset;
+struct TensorSlice {
+    using ords_t = Shape4D<uint32_t>;
+    ords_t tensor_shape;
+    ords_t tensor_slice_shape;
+    ords_t tensor_slice_offset;
+    ords_t worker_slice_shape;
+    ords_t worker_slice_offset;
 
-        TensorSlice(TensorSlice const& rhs) = default;
-        TensorSlice(TensorSlice&& rhs) = default;
-        TensorSlice& operator=(TensorSlice const& rhs) = default;
-        TensorSlice& operator=(TensorSlice&& rhs) = default;
+    TensorSlice(TensorSlice const& rhs) = default;
+    TensorSlice(TensorSlice&& rhs) = default;
+    TensorSlice& operator=(TensorSlice const& rhs) = default;
+    TensorSlice& operator=(TensorSlice&& rhs) = default;
 
-        TensorSlice()=default;
-        TensorSlice(ords_t tensor_shape, ords_t tensor_slice_shape, ords_t tensor_slice_offset, ords_t worker_slice_shape, ords_t worker_slice_offset)
-            : tensor_shape(tensor_shape), tensor_slice_shape(tensor_slice_shape), tensor_slice_offset(tensor_slice_offset), worker_slice_shape(worker_slice_shape), worker_slice_offset(worker_slice_offset) {}
-    };
-}
+    TensorSlice() = default;
+    TensorSlice(
+        ords_t tensor_shape,
+        ords_t tensor_slice_shape,
+        ords_t tensor_slice_offset,
+        ords_t worker_slice_shape,
+        ords_t worker_slice_offset) :
+        tensor_shape(tensor_shape),
+        tensor_slice_shape(tensor_slice_shape),
+        tensor_slice_offset(tensor_slice_offset),
+        worker_slice_shape(worker_slice_shape),
+        worker_slice_offset(worker_slice_offset) {}
+};
+}  // namespace v2
 
 namespace cmd {
-
-
 
 constexpr std::size_t round_up(std::size_t a, std::size_t multiple) {
     return ((a + multiple - 1) / multiple) * multiple;
@@ -59,12 +66,14 @@ struct CclCommandInlineReadWrite {
 struct CclCommandReadWrite {
     uint32_t size_bytes = 0;
 };
-using CclCommandArgs = std::variant<CclCommandStreamTensorSlice, CclCommandWaitValue, CclCommandAtomicInc, CclCommandInlineReadWrite, CclCommandReadWrite>;
+using CclCommandArgs = std::variant<
+    CclCommandStreamTensorSlice,
+    CclCommandWaitValue,
+    CclCommandAtomicInc,
+    CclCommandInlineReadWrite,
+    CclCommandReadWrite>;
 
-enum SRC_DEST_TYPE : uint8_t {
-    SRC = 0,
-    DEST = 1
-};
+enum SRC_DEST_TYPE : uint8_t { SRC = 0, DEST = 1 };
 
 // Explicitly assigned integer values for easier debug
 enum class CclCommandArgCode : uint8_t {
@@ -112,7 +121,6 @@ struct CclCommandArgHeader {
 };
 static_assert(sizeof(CclCommandArgHeader) == sizeof(uint32_t));
 
-
 struct CclCommandTensor {
     Shape4D<uint32_t> tensor_shape;
     Shape4D<uint32_t> tensor_slice_shape;
@@ -121,23 +129,49 @@ struct CclCommandTensor {
     uint32_t worker_pages_per_slice;
 };
 
-template <CclCommandArgCode code>  struct command_arg_field                                         {  using type = std::nullptr_t; };
-template <> struct command_arg_field<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>                  {  using type = Shape4D<uint32_t>; };
-template <> struct command_arg_field<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>            {  using type = Shape4D<uint32_t>; };
-template <> struct command_arg_field<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>           {  using type = Shape4D<uint32_t>; };
-template <> struct command_arg_field<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>  {  using type = Shape4D<uint32_t>; };
-template <> struct command_arg_field<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>                 {  using type = uint32_t; };
-template <> struct command_arg_field<CclCommandArgCode::SET_TARGET_VALUE>                           {  using type = uint32_t; };
-template <> struct command_arg_field<CclCommandArgCode::SET_ATOMIC_INC_VALUE>                       {  using type = CclCommandAtomicInc; };
-template <> struct command_arg_field<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>        {  using type = CclCommandTensor; };
-template <> struct command_arg_field<CclCommandArgCode::SET_ADDRESS_INFO>                           {  using type = uint32_t; };
-
-
-template <CclCommandArgCode T>
-struct CclCommandArg {
-
+template <CclCommandArgCode code>
+struct command_arg_field {
+    using type = std::nullptr_t;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES> {
+    using type = Shape4D<uint32_t>;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES> {
+    using type = Shape4D<uint32_t>;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES> {
+    using type = Shape4D<uint32_t>;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES> {
+    using type = Shape4D<uint32_t>;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE> {
+    using type = uint32_t;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_TARGET_VALUE> {
+    using type = uint32_t;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_ATOMIC_INC_VALUE> {
+    using type = CclCommandAtomicInc;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES> {
+    using type = CclCommandTensor;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_ADDRESS_INFO> {
+    using type = uint32_t;
 };
 
+template <CclCommandArgCode T>
+struct CclCommandArg {};
 
 using args_elem_t = uint32_t;
 template <typename T, CclCommandArgCode CODE>
@@ -171,8 +205,10 @@ inline void unpack_field_without_header(volatile args_elem_t const* args, Shape4
 void pack_field_without_header(args_elem_t* args, Shape4D<uint32_t> const& out);
 
 template <>
-struct CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>, CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES> {
-
+struct CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>
+    : public CclCommandArgBase<
+          CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>,
+          CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES> {
     static void pack_to(args_elem_t* args, CclCommandTensor const& out) {
         pack_field_without_header(&args[0], out.tensor_shape);
     }
@@ -182,13 +218,17 @@ struct CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES> : public CclC
     static void unpack(volatile args_elem_t const* args, CclCommandTensor& out) {
         unpack_field_without_header(&args[0], out.tensor_shape);
     }
-    static void unpack(volatile args_elem_t const* args, field_type& out) { unpack_field_without_header(&args[0], out); }
+    static void unpack(volatile args_elem_t const* args, field_type& out) {
+        unpack_field_without_header(&args[0], out);
+    }
     void unpack(volatile args_elem_t const* args) { unpack_field_without_header(&args[0], this->value); }
 };
 
 template <>
-struct CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>, CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES> {
-
+struct CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>
+    : public CclCommandArgBase<
+          CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>,
+          CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES> {
     static void pack_to(args_elem_t* args, CclCommandTensor const& out) {
         pack_field_without_header(&args[0], out.tensor_slice_shape);
     }
@@ -203,7 +243,10 @@ struct CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES> : publi
 };
 
 template <>
-struct CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>, CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES> {
+struct CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>
+    : public CclCommandArgBase<
+          CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>,
+          CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES> {
     using type = Shape4D<uint32_t>;
 
     static void pack_to(args_elem_t* args, CclCommandTensor const& out) {
@@ -220,7 +263,10 @@ struct CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES> : publ
 };
 
 template <>
-struct CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>, CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES> {
+struct CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>
+    : public CclCommandArgBase<
+          CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>,
+          CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES> {
     using type = Shape4D<uint32_t>;
 
     static void pack_to(args_elem_t* args, CclCommandTensor const& out) {
@@ -237,21 +283,28 @@ struct CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGE
 };
 
 template <>
-struct CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>, CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE> {
+struct CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>
+    : public CclCommandArgBase<
+          CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>,
+          CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE> {
     using type = uint32_t;
 
     static void pack_to(args_elem_t* args, CclCommandTensor const& out) { args[0] = out.worker_pages_per_slice; }
     static void pack_to(args_elem_t* args, field_type const& out) { args[0] = out; }
     void pack_to(args_elem_t* args) const { args[0] = this->value; }
 
-    static void unpack(volatile args_elem_t const* args, CclCommandTensor& out) { out.worker_pages_per_slice = args[0]; }
+    static void unpack(volatile args_elem_t const* args, CclCommandTensor& out) {
+        out.worker_pages_per_slice = args[0];
+    }
     static void unpack(volatile args_elem_t const* args, field_type& out) { out = args[0]; }
     void unpack(volatile args_elem_t const* args) { this->value = args[0]; }
 };
 
 template <>
 struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
-    : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>, CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES> {
+    : public CclCommandArgBase<
+          CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>,
+          CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES> {
     using type = CclCommandTensor;
 
     // considering making this some generator type that implements operator[]
@@ -263,16 +316,20 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
         CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::pack_to(&args[i], command_tensor.tensor_shape);
         i += CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::size_in_words();
 
-        CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::pack_to(&args[i], command_tensor.tensor_slice_shape);
+        CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::pack_to(
+            &args[i], command_tensor.tensor_slice_shape);
         i += CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::size_in_words();
 
-        CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::pack_to(&args[i], command_tensor.tensor_slice_offset);
+        CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::pack_to(
+            &args[i], command_tensor.tensor_slice_offset);
         i += CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::size_in_words();
 
-        CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::pack_to(&args[i], command_tensor.worker_start_offset_in_slice);
+        CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::pack_to(
+            &args[i], command_tensor.worker_start_offset_in_slice);
         i += CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::size_in_words();
 
-        CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::pack_to(&args[i], command_tensor.worker_pages_per_slice);
+        CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::pack_to(
+            &args[i], command_tensor.worker_pages_per_slice);
         i += CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
     }
 
@@ -291,7 +348,8 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
         CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::unpack(&args[i], out.tensor_slice_offset);
         i += CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::size_in_words();
 
-        CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::unpack(&args[i], out.worker_start_offset_in_slice);
+        CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::unpack(
+            &args[i], out.worker_start_offset_in_slice);
         i += CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::size_in_words();
 
         CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::unpack(&args[i], out.worker_pages_per_slice);
@@ -304,11 +362,10 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
 };
 
 template <>
-struct CclCommandArg<CclCommandArgCode::SET_TARGET_VALUE> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_TARGET_VALUE>, CclCommandArgCode::SET_TARGET_VALUE> {
-
-    static void pack_to(args_elem_t* args, uint32_t value) {
-        args[0] = value;
-    }
+struct CclCommandArg<CclCommandArgCode::SET_TARGET_VALUE> : public CclCommandArgBase<
+                                                                CclCommandArg<CclCommandArgCode::SET_TARGET_VALUE>,
+                                                                CclCommandArgCode::SET_TARGET_VALUE> {
+    static void pack_to(args_elem_t* args, uint32_t value) { args[0] = value; }
     void pack_to(args_elem_t* args) { pack_to(&args[0], this->value); }
 
     static void unpack(volatile args_elem_t const* args, CclCommandTensor& out) {
@@ -319,8 +376,10 @@ struct CclCommandArg<CclCommandArgCode::SET_TARGET_VALUE> : public CclCommandArg
 };
 
 template <>
-struct CclCommandArg<CclCommandArgCode::SET_ATOMIC_INC_VALUE> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_ATOMIC_INC_VALUE>, CclCommandArgCode::SET_ATOMIC_INC_VALUE> {
-
+struct CclCommandArg<CclCommandArgCode::SET_ATOMIC_INC_VALUE>
+    : public CclCommandArgBase<
+          CclCommandArg<CclCommandArgCode::SET_ATOMIC_INC_VALUE>,
+          CclCommandArgCode::SET_ATOMIC_INC_VALUE> {
     static void pack_to(args_elem_t* args, CclCommandAtomicInc const& atomic_inc_args) {
         args[0] = atomic_inc_args.value;
         args[1] = atomic_inc_args.wrap_value;
@@ -338,11 +397,10 @@ struct CclCommandArg<CclCommandArgCode::SET_ATOMIC_INC_VALUE> : public CclComman
 };
 
 template <>
-struct CclCommandArg<CclCommandArgCode::SET_ADDRESS_INFO> : public CclCommandArgBase<CclCommandArg<CclCommandArgCode::SET_ADDRESS_INFO>, CclCommandArgCode::SET_ADDRESS_INFO> {
-
-    static void pack_to(args_elem_t* args, uint32_t value) {
-        args[0] = value;
-    }
+struct CclCommandArg<CclCommandArgCode::SET_ADDRESS_INFO> : public CclCommandArgBase<
+                                                                CclCommandArg<CclCommandArgCode::SET_ADDRESS_INFO>,
+                                                                CclCommandArgCode::SET_ADDRESS_INFO> {
+    static void pack_to(args_elem_t* args, uint32_t value) { args[0] = value; }
     void pack_to(args_elem_t* args) { pack_to(&args[0], this->value); }
 
     static void unpack(volatile args_elem_t const* args, CclCommandTensor& out) {
@@ -381,8 +439,7 @@ struct CclCommandAddrAbsoluteAddress {
 struct CclCommandAddrRelativeAddress {
     uint32_t relative_address;
 };
-struct CclCommandAddrNone {
-};
+struct CclCommandAddrNone {};
 
 using CclCommandAddrArgs = std::variant<
     CclCommandAddrSemaphoreId,
@@ -400,10 +457,8 @@ enum class CclCommandCoreDescriptorType : uint8_t {
     RECTANGLE = 3
     // Future types may include: list, rectangle_list, etc.
 };
-struct CclCommandCoreDescriptorTypeAddrgen {
-};
-struct CclCommandCoreDescriptorTypeLocal {
-};
+struct CclCommandCoreDescriptorTypeAddrgen {};
+struct CclCommandCoreDescriptorTypeLocal {};
 struct CclCommandCoreDescriptorTypeNocXY {
     uint8_t x;
     uint8_t y;
@@ -432,17 +487,21 @@ struct CclCommandCoreDescriptorTypeMcast {
     uint8_t noc0_end_x;
     uint8_t noc0_end_y;
 };
-using CclCommandCoreDescriptorArgs = std::variant<CclCommandCoreDescriptorTypeAddrgen, CclCommandCoreDescriptorTypeLocal, CclCommandCoreDescriptorTypeNocXY, CclCommandCoreDescriptorTypeMcast>;
+using CclCommandCoreDescriptorArgs = std::variant<
+    CclCommandCoreDescriptorTypeAddrgen,
+    CclCommandCoreDescriptorTypeLocal,
+    CclCommandCoreDescriptorTypeNocXY,
+    CclCommandCoreDescriptorTypeMcast>;
 
 // A command is composed of one or more arguments
 // This enum specifies the high level command
 // Future commands are to be added and will enable
 // functionalilty such as synchronizing
 enum class CclCommandCode : uint8_t {
-    STREAM_TENSOR_TO_EDM = 0, // TODO: rename uses of to the below
+    STREAM_TENSOR_TO_EDM = 0,  // TODO: rename uses of to the below
     STREAM_TENSOR_TO_CB = 0,
     STREAM_CB_TO_TENSOR = 1,
-    STREAM_EDM_TO_TENSOR = 2, // TODO: rename uses of to the above
+    STREAM_EDM_TO_TENSOR = 2,  // TODO: rename uses of to the above
 
     WAIT_VALUE = 3,
 
@@ -459,7 +518,6 @@ enum class CclCommandCode : uint8_t {
     INVALID = 8
 };
 
-
 enum CclCommandDestType : uint8_t {
     CHIP_UNICAST = tt::fabric::CHIP_UNICAST,
     CHIP_MULTICAST = tt::fabric::CHIP_MULTICAST,
@@ -467,8 +525,7 @@ enum CclCommandDestType : uint8_t {
 };
 static_assert(tt::fabric::CHIP_UNICAST < 2);
 static_assert(tt::fabric::CHIP_MULTICAST < 2);
-struct DestTypeArgsNull {
-};
+struct DestTypeArgsNull {};
 static_assert(sizeof(DestTypeArgsNull) <= 2);
 struct UnicastCommandDestArgs {
     uint8_t distance_in_hops;
@@ -483,9 +540,7 @@ using LocalOnlyCommandDestArgs = DestTypeArgsNull;
 // Used only for host code paths
 using CclCommandDestArgs = std::variant<UnicastCommandDestArgs, MulticastCommandDestArgs, LocalOnlyCommandDestArgs>;
 
-namespace v2 {
-
-};
+namespace v2 {};
 
 struct CclCommandHeader {
     CclCommandCode code : 6;
@@ -503,7 +558,8 @@ struct CclCommandHeader {
     } command_dest_args;
 
     CclCommandHeader() : code(CclCommandCode::INVALID), dest_type(CclCommandDestType::CHIP_LOCAL_ONLY), arg_count(0) {}
-    CclCommandHeader(CclCommandCode code, CclCommandDestArgs const &args, uint8_t arg_count) : code(code), arg_count(arg_count) {
+    CclCommandHeader(CclCommandCode code, CclCommandDestArgs const& args, uint8_t arg_count) :
+        code(code), arg_count(arg_count) {
         if (std::holds_alternative<UnicastCommandDestArgs>(args)) {
             command_dest_args.unicast = std::get<UnicastCommandDestArgs>(args);
             this->dest_type = CclCommandDestType::CHIP_UNICAST;
@@ -515,10 +571,12 @@ struct CclCommandHeader {
             this->dest_type = CclCommandDestType::CHIP_LOCAL_ONLY;
         }
     }
-    CclCommandHeader(CclCommandCode code, MulticastCommandDestArgs const &multicast_args, uint8_t arg_count) : code(code), dest_type(CclCommandDestType::CHIP_MULTICAST), arg_count(arg_count) {
+    CclCommandHeader(CclCommandCode code, MulticastCommandDestArgs const& multicast_args, uint8_t arg_count) :
+        code(code), dest_type(CclCommandDestType::CHIP_MULTICAST), arg_count(arg_count) {
         this->command_dest_args.multicast = multicast_args;
     }
-    CclCommandHeader(CclCommandCode code, LocalOnlyCommandDestArgs const &local_only_args, uint8_t arg_count) : code(code), dest_type(CclCommandDestType::CHIP_LOCAL_ONLY), arg_count(arg_count) {
+    CclCommandHeader(CclCommandCode code, LocalOnlyCommandDestArgs const& local_only_args, uint8_t arg_count) :
+        code(code), dest_type(CclCommandDestType::CHIP_LOCAL_ONLY), arg_count(arg_count) {
         this->command_dest_args.local_only = local_only_args;
     }
 
@@ -530,11 +588,11 @@ struct CclCommandHeader {
         // decoded.dest_type = static_cast<CclCommandDestType>((cmd_header >> 6) & 0x3);
         // switch (decoded.dest_type) {
         //     case CclCommandDestType::CHIP_UNICAST:
-        //         decoded.command_dest_args.unicast = UnicastCommandDestArgs{static_cast<uint8_t>((cmd_header >> 16) & 0xFF), static_cast<bool>((cmd_header >> 24) & 0x1)};
-        //         break;
+        //         decoded.command_dest_args.unicast = UnicastCommandDestArgs{static_cast<uint8_t>((cmd_header >> 16) &
+        //         0xFF), static_cast<bool>((cmd_header >> 24) & 0x1)}; break;
         //     case CclCommandDestType::CHIP_MULTICAST:
-        //         decoded.command_dest_args.multicast = MulticastCommandDestArgs{static_cast<uint8_t>((cmd_header >> 16) & 0xFF), static_cast<uint8_t>((cmd_header >> 24) & 0xFF)};
-        //         break;
+        //         decoded.command_dest_args.multicast = MulticastCommandDestArgs{static_cast<uint8_t>((cmd_header >>
+        //         16) & 0xFF), static_cast<uint8_t>((cmd_header >> 24) & 0xFF)}; break;
         //     default:
         //         break;
         // }
@@ -556,28 +614,17 @@ struct CclCommandHeader {
                 encoded |= (cmd_header.command_dest_args.multicast.num_targets_forward_direction << 16);
                 encoded |= (cmd_header.command_dest_args.multicast.num_targets_backward_direction << 24);
                 break;
-            default:
-                break;
+            default: break;
         };
         return encoded;
     }
-    uint32_t to_uint32() const {
-        return to_uint32(*this);
-    }
+    uint32_t to_uint32() const { return to_uint32(*this); }
 
-    UnicastCommandDestArgs const& get_unicast_dest_args() const {
-        return command_dest_args.unicast;
-    }
-    MulticastCommandDestArgs const& get_multicast_dest_args() const {
-        return command_dest_args.multicast;
-    }
-    LocalOnlyCommandDestArgs const& get_local_only_dest_args() const {
-        return command_dest_args.local_only;
-    }
-
+    UnicastCommandDestArgs const& get_unicast_dest_args() const { return command_dest_args.unicast; }
+    MulticastCommandDestArgs const& get_multicast_dest_args() const { return command_dest_args.multicast; }
+    LocalOnlyCommandDestArgs const& get_local_only_dest_args() const { return command_dest_args.local_only; }
 };
 static_assert(sizeof(CclCommandHeader) == sizeof(uint32_t));
-
 
 }  // namespace cmd
 }  // namespace ccl
