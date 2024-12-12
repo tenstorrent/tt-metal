@@ -33,7 +33,7 @@ struct WorkerToFabricEdmSender{
         WorkerXY const edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
         auto const edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
         uint8_t const num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
-        uint8_t const edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
+        size_t const edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
         auto const edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
         auto const edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
         uint16_t const buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
@@ -70,7 +70,7 @@ struct WorkerToFabricEdmSender{
         uint8_t edm_worker_y,
         std::size_t edm_buffer_base_addr,
         uint8_t num_buffers_per_channel,
-        uint32_t edm_l1_sem_id, // may also be an address
+        size_t edm_l1_sem_id, // may also be an address
         std::size_t edm_connection_handshake_l1_id,
         std::size_t edm_worker_location_info_addr, // The EDM's location for `EDMChannelWorkerLocationInfo`
         uint16_t buffer_size_bytes,
@@ -93,7 +93,7 @@ struct WorkerToFabricEdmSender{
         edm_noc_x(edm_worker_x),
         edm_noc_y(edm_worker_y)
     {
-        // DPRINT << "edm_semaphore_addr: " << (uint32_t)edm_semaphore_addr << "\n";
+        DPRINT << "edm_l1_sem_id: " << (uint32_t)edm_l1_sem_id << "\n";
         // DPRINT << "edm_buffer_index_addr: " << (uint32_t)edm_buffer_index_addr << "\n";
         // DPRINT << "edm_l1_sem_addr: " << (uint32_t)edm_l1_sem_addr << "\n";
 
@@ -107,7 +107,7 @@ struct WorkerToFabricEdmSender{
         noc_semaphore_set(this->worker_sem_addr, 0);
     }
     FORCE_INLINE void wait_for_empty_write_slot() const {
-        DPRINT << "Waiting for empty write slot @ " << (uint32_t)this->worker_sem_addr << "\n";
+        DPRINT << "Wait for write slot @ " << (uint32_t)this->worker_sem_addr << "\n";
         noc_semaphore_wait(this->worker_sem_addr, 1);
     }
 
@@ -170,8 +170,8 @@ struct WorkerToFabricEdmSender{
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
         noc_async_read_barrier();
         ASSERT(*this->buffer_index_ptr < 20);
-        DPRINT << "Connecting to EDM fabric @ " << (uint64_t)edm_connection_handshake_noc_addr << "\n";
-        DPRINT << "\t&sem_addr: " << (uint32_t)&(this->worker_sem_addr) << "\n";
+        // DPRINT << "Connecting to EDM fabric @ " << (uint64_t)edm_connection_handshake_noc_addr << "\n";
+        // DPRINT << "\t&sem_addr: " << (uint32_t)&(this->worker_sem_addr) << "\n";
         // DPRINT << "remote buffer index @: " << (uint64_t)remote_buffer_index_addr << "\n";
         // DPRINT << "Buffer index: " << (uint32_t)*this->buffer_index_ptr << "\n";
         // DPRINT << "edm_buffer_base_addr: " << (uint64_t)edm_buffer_base_addr << "\n";
