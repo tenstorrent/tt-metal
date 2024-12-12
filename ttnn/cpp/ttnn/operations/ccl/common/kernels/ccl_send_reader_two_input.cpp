@@ -204,6 +204,7 @@ struct wrapped_worker_slice_read_context {
 // using cmd_specific_context = std::variant<wrapped_worker_slice_read_context>;
 struct inline_value_context {
     uint32_t value = 0;
+    uint32_t wrap = 0;
 };
 struct remote_sem_change_context {
     uint32_t value = 0;
@@ -259,9 +260,11 @@ class FabricConnectionManager final {
     }
 
     tt::fabric::WorkerToFabricEdmSender &get_forward_connection() {
+        ASSERT(has_forward_connection());
         return forward_fabric_sender;
     }
     tt::fabric::WorkerToFabricEdmSender &get_backward_connection() {
+        ASSERT(has_backward_connection());
         return backward_fabric_sender;
     }
 
@@ -318,7 +321,9 @@ struct command_context_t final {
         page_size(page_size),
         cb_id(cb_id),
         packet_size_in_pages(packet_size_in_pages)
-        {}
+        {
+            ASSERT(num_commands == 0 || arg_idx > 4);
+        }
     FabricConnectionManager &fabric_connection;
     ttnn::ccl::cmd::CclCommandTensor command_tensor;
     ttnn::ccl::cmd::CclCommandHeader current_cmd_header;
@@ -370,7 +375,7 @@ struct command_context_t final {
         // TODO: based on command category/class, some of this setup could be shared
         #ifdef DEBUG_PRINT_ENABLED
         DPRINT << "CMD (code=" << (uint32_t)current_cmd_header.code << ", args=" << (uint32_t)current_cmd_header.arg_count << ", idx=" << (uint32_t)(arg_idx-1) <<"\n";
-        DPRINT << (uint32_t)get_arg_val<uint32_t>(arg_idx-1) << "\n";
+        // DPRINT << (uint32_t)get_arg_val<uint32_t>(arg_idx-1) << "\n";
         #endif
         update_ccl_command(
             arg_idx,
@@ -399,8 +404,11 @@ struct command_context_t final {
 
                 #endif
             } break;
-            case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
             case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
+                DPRINT << (uint32_t)src_addr_info.address << "\n";
+                DPRINT << (uint32_t)cmd_specific_ctx.inline_value_ctx.value << "\n";
+            case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
+            case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
                 break;
             default:
                 // DPRINT << "OOPS\n";
@@ -501,10 +509,11 @@ void update_ccl_command(
                 // DPRINT << "addr info tp: " << (uint32_t)addr_type << "\n";
                 switch (addr_type) {
                     case ttnn::ccl::cmd::CclCommandAddrType::CIRCULAR_BUFFER_ID:
-                        DPRINT << "\tcbid: " << (uint32_t)command_arg_header.inline_value2 << "\n";
+                        // DPRINT << "\tcbid: " << (uint32_t)command_arg_header.inline_value2 << "\n";
                         cmd_ctx.cb_id = command_arg_header.inline_value2;
                         break;
                     case ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS:
+                    case ttnn::ccl::cmd::CclCommandAddrType::RELATIVE_ADDRESS:
                         addr_info.address = get_arg_val<uint32_t>(arg_idx++);
                         break;
                     case ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID:
@@ -513,7 +522,7 @@ void update_ccl_command(
                     case ttnn::ccl::cmd::CclCommandAddrType::NONE:
                         break;
                     default:
-                        addr_info.address = get_arg_val<uint32_t>(arg_idx++);
+                        ASSERT(false);
                         break;
                 };
             } break;
@@ -533,6 +542,7 @@ void update_ccl_command(
                     case ttnn::ccl::cmd::CclCommandCoreDescriptorType::RECTANGLE:
                         cmd_ctx.core_desc_info.core_desc_args.noc_multicast = ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast::from_uint32(
                             get_arg_val<uint32_t>(arg_idx++));
+                        break;
                     default:
                         ASSERT(false);
                 };
@@ -550,8 +560,8 @@ void update_ccl_command(
 }
 
 template <typename Addrgen>
-FORCE_INLINE void try_advance_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
-    const size_t increment_value = cmd_ctx.cmd_specific_ctx.inline_value_ctx.value;
+FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
+    const size_t value = cmd_ctx.cmd_specific_ctx.inline_value_ctx.value;
     const size_t dest_bank_addr = cmd_ctx.dest_addr_info.address;
     bool is_remote_atomic_inc_over_fabric = cmd_ctx.command_requires_fabric();
 
@@ -572,25 +582,30 @@ FORCE_INLINE void try_advance_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
         }
 
         ASSERT(cmd_ctx.packet_header_buffer_addr != 0);
-        auto &pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
-        pkt_hdr.to_atomic_inc().
-            to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
-                    dest_bank_addr, static_cast<uint16_t>(increment_value), 32, static_cast<uint8_t>(dest_noc0_x), static_cast<uint8_t>(dest_noc0_y)
-                });
+        auto *pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
+        if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
+            pkt_hdr->to_atomic_inc();
+        } else {
+            pkt_hdr->to_write();
+        }
+        pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
+                dest_bank_addr, static_cast<uint16_t>(value), 32, static_cast<uint8_t>(dest_noc0_x), static_cast<uint8_t>(dest_noc0_y)
+            });
 
-        cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         switch (cmd_ctx.current_cmd_header.dest_type) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
-                pkt_hdr.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops});
+                pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops});
 
                 auto& fabric_connection = cmd_ctx.current_cmd_header.get_unicast_dest_args().is_forward_direction ? cmd_ctx.fabric_connection.get_forward_connection() : cmd_ctx.fabric_connection.get_backward_connection();
                 // DPRINT << "fbrc sminc to x,y,addr,hops: " << (uint32_t)dest_noc0_x << ", " << (uint32_t)dest_noc0_y << ", " << (uint32_t)dest_bank_addr << ", " << (uint32_t)cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops << "\n";
+                fabric_connection.wait_for_empty_write_slot();
                 fabric_connection.send_payload_flush_blocking_from_address(cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
             } break;
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
                 const auto &mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
                 if (cmd_ctx.fabric_connection.has_forward_connection()) {
-                    pkt_hdr.to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                    cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                    pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
 
                     cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
@@ -599,14 +614,19 @@ FORCE_INLINE void try_advance_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
 
                 // Write the mcast packet (backward)
                 if (cmd_ctx.fabric_connection.has_backward_connection()) {
-                    pkt_hdr.to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                    pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                     cmd_ctx.fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                     cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
                 }
 
                 uint64_t dest_noc_addr = get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
-                noc_semaphore_inc(dest_noc_addr, increment_value);
+
+                if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
+                    noc_semaphore_inc(dest_noc_addr, value);
+                } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES){
+                    noc_inline_dw_write(dest_noc_addr, value);
+                }
 
             } break;
 
@@ -619,7 +639,12 @@ FORCE_INLINE void try_advance_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
         // TODO: implement local atomic inc
         const uint64_t dest_noc_addr = get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
         // DPRINT << "lcl atinc: " << (uint64_t)dest_noc_addr << "\n";
-        noc_semaphore_inc(dest_noc_addr, increment_value);
+        if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
+            noc_semaphore_inc(dest_noc_addr, value);
+        } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES){
+            noc_inline_dw_write(dest_noc_addr, value);
+        }
+
     }
 }
 
@@ -640,6 +665,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen> &cmd_
     //
 
     if (!cb_pages_reservable_at_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages)) {
+        // DPRINT << "CB !rsrvbl\n";
         return;
     }
     // Hack for now - we will eventually move to
@@ -669,7 +695,10 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen> &cmd_
         {
             contig_pages_advanced = std::min<uint16_t>(max_pages_readable, contig_pages_);
             contig_pages_advanced = std::min<uint16_t>(cmd_ctx.packet_size_in_pages - i, contig_pages_);
-            // DPRINT << "\tnoc_read( " << (uint64_t)noc_addr << ", " << (uint32_t)l1_write_addr << ", " << (uint32_t)(cmd_ctx.page_size * contig_pages_advanced) << " )\n";
+            ASSERT(contig_pages_advanced > 0);
+            ASSERT(contig_pages_advanced <= cmd_ctx.packet_size_in_pages);
+            ASSERT(cmd_ctx.page_size != 0xD3AD);
+            // DPRINT << "\tnoc_read( " << (uint64_t)noc_addr << ", " << (uint32_t)l1_write_addr << ", " << (uint32_t)(cmd_ctx.page_size) << "*" << (uint32_t)contig_pages_advanced << " )\n";
             // DPRINT << "nar to " << (uint32_t)l1_write_addr << "\n";
             noc_async_read(noc_addr, l1_write_addr, cmd_ctx.page_size * contig_pages_advanced);
         }
@@ -710,15 +739,15 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr + sizeof(tt::fabric::PacketHeader);
     // Note that `noc0_dest_noc_addr` is 0 based, so we need to regenerate the address for this kernel's `noc_index`
-    DPRINT << "naw1 " << (uint64_t)payload_l1_address << ", " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr) << ", " << (uint32_t)payload_size_bytes << "\n";
+    // DPRINT << "naw1 " << (uint64_t)payload_l1_address << ", " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr) << ", " << (uint32_t)payload_size_bytes << "\n";
     noc_async_write(payload_l1_address, get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
     //
     // TODO: MAKE SURE `dest_noc_xy` is noc0 based
     size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
 
-    auto &pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(l1_read_addr);
-    pkt_hdr.to_write()
-        .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
+    auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(l1_read_addr);
+    pkt_hdr->to_write()
+        ->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
             dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)
         });
     switch (cmd_ctx.current_cmd_header.dest_type) {
@@ -726,7 +755,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
             const auto &unicast_args = cmd_ctx.current_cmd_header.get_unicast_dest_args();
             auto &fabric_connection = unicast_args.is_forward_direction ? cmd_ctx.fabric_connection.get_forward_connection() : cmd_ctx.fabric_connection.get_backward_connection();
 
-            pkt_hdr.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{unicast_args.distance_in_hops});
+            pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{unicast_args.distance_in_hops});
             fabric_connection.wait_for_empty_write_slot();
             fabric_connection.send_payload_flush_blocking_from_address(l1_read_addr, packet_send_size_bytes);
 
@@ -734,14 +763,14 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
             const auto &mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
             if (cmd_ctx.fabric_connection.has_forward_connection()) {
-                pkt_hdr.to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
+                pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
                 cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                 cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(l1_read_addr, packet_send_size_bytes);
             }
 
             // Write the mcast packet (backward)
             if (cmd_ctx.fabric_connection.has_backward_connection()) {
-                pkt_hdr.to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
+                pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                 cmd_ctx.fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                 cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(l1_read_addr, packet_send_size_bytes);
             }
@@ -786,7 +815,7 @@ FORCE_INLINE void write_payload_then_advance_read_address(
             // Conver to our local noc_index based address
             auto dest_noc_addr = get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr);
             // DPRINT << "\tlcl noc_write( " << (uint64_t)dest_noc_addr << ", " << (uint32_t)l1_read_addr << ", " << (uint32_t)(cmd_ctx.page_size * contig_pages_advanced) << " )\n";
-            DPRINT << "naw " << (uint64_t)l1_read_addr + header_padding << ", " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr) << ", " << (uint32_t)cmd_ctx.page_size * contig_pages_advanced << "\n";
+            // DPRINT << "naw " << (uint64_t)l1_read_addr + header_padding << ", " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr) << ", " << (uint32_t)cmd_ctx.page_size * contig_pages_advanced << "\n";
             noc_async_write(l1_read_addr + header_padding, dest_noc_addr, cmd_ctx.page_size * contig_pages_advanced);
             l1_read_addr += cmd_ctx.page_size * contig_pages_advanced;
         } break;
@@ -894,8 +923,11 @@ FORCE_INLINE void try_advance(command_context_t<Addrgen> &cmd_ctx) {
             #endif
             break;
 
+
         case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
-            try_advance_atomic_inc(cmd_ctx);
+            [[fallthrough]];
+        case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
+            try_advance_inline_write_or_atomic_inc(cmd_ctx);
             break;
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
             // Nothing to actively do to advance - just needs to wait for completion
@@ -910,19 +942,21 @@ FORCE_INLINE void try_advance(command_context_t<Addrgen> &cmd_ctx) {
         case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM: // STREAM TENSOR TO CB
         case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
             if (cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx.offset_into_worker_slice >= cmd_ctx.command_tensor.worker_pages_per_slice) {
-                DPRINT << "Completing tensor_stream command\n";
+                DPRINT << "t_stream cmd cmpl\n";
                 // DPRINT << "Completing tensor_stream command\n";
                 cmd_ctx.complete_current_command();
             }
             break;
 
         case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
-                DPRINT << "Completing atomic_inc command\n";
+            [[fallthrough]];
+        case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
+            DPRINT << "at_inc cmd cmpl\n";
                 cmd_ctx.complete_current_command();
             break;
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
-            if (*reinterpret_cast<volatile uint32_t *>(cmd_ctx.src_addr_info.address) == cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
-                // DPRINT << "Completing waitval command\n";
+            if (*reinterpret_cast<volatile uint32_t *>(cmd_ctx.src_addr_info.address) >= cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
+                DPRINT << "Completing waitval command\n";
                 cmd_ctx.complete_current_command();
             }
         break;
@@ -941,6 +975,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+    DPRINT << "START my_y " << (uint32_t)my_y[0] << ", my_x " << (uint32_t)my_x[0] << "\n";
     size_t arg_idx = 0;
     #ifndef NO_TENSOR_MODE
     // Load the input tensor spec
@@ -956,6 +991,7 @@ void kernel_main() {
     uint8_t num_commands1 = get_arg_val<address_t>(arg_idx++);
     arg_idx_t command1_start_offset = get_arg_val<address_t>(arg_idx++);
     #endif
+
 
     // Assuming whole page transmissions (which is the only mode we support at the moment)
     // -> however, wanted to call it out here to make it clear that we need to pull this
@@ -1032,7 +1068,6 @@ void kernel_main() {
         tensor1_page_size,
         packet_size_in_pages,
         packet_header_buffer_addr1);
-
     #else
     const uint8_t finish_value = 0x1;
     #endif
@@ -1045,7 +1080,7 @@ void kernel_main() {
     while (stream_done_mask != finish_value) {
         if ((stream_done_mask & 0x1) == 0) {
             if (!operand_0_cmd_ctx.current_command_active()) {
-                DPRINT << "fetch_command0\n";
+                DPRINT << "get_cmd0\n";
                 operand_0_cmd_ctx.fetch_next_command();
             };
             try_advance<tensor0_layout, tensor0_page_layout>(operand_0_cmd_ctx);
@@ -1054,7 +1089,7 @@ void kernel_main() {
         #ifndef SINGLE_INPUT_MODE
         if ((stream_done_mask & 0x2) == 0) {
             if (!operand_1_cmd_ctx.current_command_active()) {
-                DPRINT << "fetch_command1\n";
+                DPRINT << "get_cmd1\n";
                 operand_1_cmd_ctx.fetch_next_command();
             }
             try_advance<tensor1_layout, tensor1_page_layout>(operand_1_cmd_ctx);

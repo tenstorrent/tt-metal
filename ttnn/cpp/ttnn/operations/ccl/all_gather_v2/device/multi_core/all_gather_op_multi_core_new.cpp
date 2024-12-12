@@ -69,6 +69,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
         forward_device,
         backward_device,
         &program,
+        false,
         num_links);
 
     LineTopology line_topology(ring_size, ring_index);

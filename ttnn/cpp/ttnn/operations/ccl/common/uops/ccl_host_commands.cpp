@@ -150,7 +150,7 @@ static ttnn::ccl::cmd::CclCommandAddrArgs get_semaphore_addr_val(semaphore_id_t 
         semaphore_id);
 }
 
-[[nodiscard]] CclHostLowLevelWorkerCommand local_semaphore_wait(semaphore_id_t const& semaphore_id, size_t value) {
+CclHostLowLevelWorkerCommand local_semaphore_wait(semaphore_id_t const& semaphore_id, size_t value) {
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::WAIT_VALUE,
         ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandWaitValue{value}),
@@ -162,7 +162,21 @@ static ttnn::ccl::cmd::CclCommandAddrArgs get_semaphore_addr_val(semaphore_id_t 
         ttnn::ccl::cmd::CclCommandCoreDescriptorTypeAddrgen(),
         ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
+}
 
+CclHostLowLevelWorkerCommand local_core_semaphore_set(semaphore_id_t const& semaphore_id, size_t value) {
+    TT_FATAL(value < std::numeric_limits<uint32_t>::max(), "When invoking: local_core_inline_write. Raw inline writes currently are limited to values no larger than {} due to a command encoding limitation. Support for larger values is not yet added", std::numeric_limits<uint32_t>::max());
+    return CclHostLowLevelWorkerCommand(
+        CclCommandCode::RAW_INLINE_WRITE_BYTES,
+        ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandInlineReadWrite{value}),
+        ttnn::ccl::cmd::CclCommandAddrType::NONE,
+        ttnn::ccl::cmd::CclCommandAddrNone{},
+        get_semaphore_addr_type(semaphore_id),
+        get_semaphore_addr_val(semaphore_id),
+        ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL,
+        ttnn::ccl::cmd::CclCommandCoreDescriptorTypeLocal(),
+        ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
+        ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
 }
 
 // CclHostLowLevelWorkerCommand local_semaphore_wait(size_t semaphore_id, size_t value) {
@@ -221,25 +235,38 @@ CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
 }
 
+static std::pair<CclCommandCoreDescriptorType, CclCommandCoreDescriptorArgs> optimize_mcast_core_desc_args(CclCommandCoreDescriptorTypeMcast const& noc_mcast_args) {
+    bool is_really_a_unicast = noc_mcast_args.noc0_end_x == noc_mcast_args.noc0_start_x && noc_mcast_args.noc0_end_y == noc_mcast_args.noc0_start_y;
+    auto core_desc_type = is_really_a_unicast ? CclCommandCoreDescriptorType::NOC_XY : CclCommandCoreDescriptorType::RECTANGLE;
+    CclCommandCoreDescriptorArgs core_desc_args = is_really_a_unicast
+                                                      ? CclCommandCoreDescriptorArgs{CclCommandCoreDescriptorTypeNocXY{
+                                                            noc_mcast_args.noc0_start_x, noc_mcast_args.noc0_start_y}}
+                                                      : CclCommandCoreDescriptorArgs{noc_mcast_args};
+    return {core_desc_type, core_desc_args};
+}
+
 [[nodiscard]] CclHostLowLevelWorkerCommand fabric_unicast_semaphore_inc_mcast(
     // CclCommandAddrSemaphoreId const& semaphore_dest_args,
     semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     CclCommandCoreDescriptorTypeMcast const& mcast_spec,
     UnicastCommandDestArgs const& unicast_args) {
+
+    auto const [core_desc_type, core_desc_args] = optimize_mcast_core_desc_args(mcast_spec);
+    TT_FATAL(core_desc_type != CclCommandCoreDescriptorType::RECTANGLE, "semaphore inc commands don't support noc multicast yet");
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::ATOMIC_INC,
         increment_args,
         // src
-        ttnn::ccl::cmd::CclCommandAddrType::NONE,
-        ttnn::ccl::cmd::CclCommandAddrNone(),
+        CclCommandAddrType::NONE,
+        CclCommandAddrNone(),
         // dest
         get_semaphore_addr_type(semaphore_dest_args), // ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
         get_semaphore_addr_val(semaphore_dest_args), // semaphore_dest_args,
-        ttnn::ccl::cmd::CclCommandCoreDescriptorType::RECTANGLE,
-        mcast_spec,
-        ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST,
-        ttnn::ccl::cmd::UnicastCommandDestArgs(unicast_args));
+        core_desc_type,
+        core_desc_args,
+        CclCommandDestType::CHIP_UNICAST,
+        UnicastCommandDestArgs(unicast_args));
 }
 
 [[nodiscard]] CclHostLowLevelWorkerCommand local_chip_semaphore_inc_mcast(
@@ -247,6 +274,9 @@ CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
     semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     CclCommandCoreDescriptorTypeMcast const& mcast_spec) {
+
+    auto const [core_desc_type, core_desc_args] = optimize_mcast_core_desc_args(mcast_spec);
+    TT_FATAL(core_desc_type != CclCommandCoreDescriptorType::RECTANGLE, "semaphore inc commands don't support noc multicast yet");
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::ATOMIC_INC,
         increment_args,
@@ -256,8 +286,8 @@ CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
         // dest
         get_semaphore_addr_type(semaphore_dest_args), // ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
         get_semaphore_addr_val(semaphore_dest_args), // semaphore_dest_args,
-        ttnn::ccl::cmd::CclCommandCoreDescriptorType::RECTANGLE,
-        mcast_spec,
+        core_desc_type,
+        core_desc_args,
         ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
 }
