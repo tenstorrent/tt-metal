@@ -8,7 +8,6 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
-#include "debug/dprint.h"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
@@ -43,7 +42,6 @@ FORCE_INLINE void write_and_send_chunk_write_to_tensor_segment(
         uint64_t dst_noc_addr = get_noc_addr(output_page_idx, d);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
     #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
         ASSERT(false);  // untested && unimplemented
@@ -58,8 +56,6 @@ FORCE_INLINE void write_and_send_chunk_write_to_tensor_segment(
     #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_write_tile(output_page_idx, d, l1_read_addr);
     #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
-        // auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
         auto [noc_yx, page_offset, contig_pages_] = d.get_page_location_with_contiguous_pages_in_row_in_bank(output_page_idx);
         contig_pages = std::min<int32_t>(pages_remaining, std::min<int32_t>(contig_pages_, num_cols - col_idx));
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
@@ -177,7 +173,6 @@ FORCE_INLINE void write_chunk(
         uint64_t dst_noc_addr = get_noc_addr(output_page_idx, d);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
     #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
         ASSERT(false);  // untested && unimplemented
@@ -240,7 +235,6 @@ FORCE_INLINE void read_chunk_from_input_tensor(
     #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_read_tile(input_page_idx, s, local_l1_read_addr);
     #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset, contig_pages_] = s.get_page_location_with_contiguous_pages_in_row_in_bank(input_page_idx);
         contig_pages = std::min<int32_t>(pages_remaining, contig_pages_);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), static_cast<uint32_t>(noc_yx.noc_y), s.bank_base_address + (page_offset * s.page_size) + 0);
@@ -278,7 +272,6 @@ FORCE_INLINE void read_chunk_from_output_tensor(
         uint64_t src_noc_addr = get_noc_addr(input_page_idx, s);
         noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
     #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = s.get_page_location(input_page_idx);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, s.bank_base_address + (page_offset * s.page_size) + 0);
         ASSERT(false);  // unimplemented
@@ -294,7 +287,6 @@ FORCE_INLINE void read_chunk_from_output_tensor(
     #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_read_tile(input_page_idx, s, local_l1_read_addr);
     #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
         auto [noc_yx, page_offset, contig_pages_] = s.get_page_location_with_contiguous_pages_in_row_in_bank(input_page_idx);
         contig_pages = std::min<int32_t>(pages_remaining, std::min<int32_t>(contig_pages_, num_cols - col_idx));
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), static_cast<uint32_t>(noc_yx.noc_y), s.bank_base_address + (page_offset * s.page_size) + 0);
@@ -349,7 +341,6 @@ FORCE_INLINE void read_chunk_from_output_tensor_v2(
     #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_read_tile(curr_page_idx, s, local_l1_read_addr);
     #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = s.get_page_location(curr_page_idx);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, s.bank_base_address + (page_offset * s.page_size) + 0);
         noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
@@ -405,7 +396,6 @@ FORCE_INLINE void write_chunk_v2(
     #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_write_tile(curr_page_idx, d, l1_read_addr);
     #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = d.get_page_location(curr_page_idx);
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
@@ -467,7 +457,6 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor_to_address(
         noc_async_read_tile(curr_page_idx, s, local_l1_read_addr);
         // common with `write_chunk_v2`
     #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset, contig_pages_] = s.get_page_location_with_contiguous_pages_in_row_in_bank(curr_page_idx);
         /*
          * num_pages - i: check if we are outside the number of pages remaining
@@ -559,12 +548,10 @@ FORCE_INLINE std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
             return {0, 1};
         } else {
             static_assert(MEM_LAYOUT == tt::tt_metal::Layout::TILE);
-            // TODO: Make d.get_noc_addr work on host + device
             auto const&[noc_yx, page_offset, contig_pages_] = address_generator.get_page_location_with_contiguous_pages_in_row_in_bank(curr_page_idx);
             /*
             * Shared with `read_wrapped_chunk_from_output_tensor`
             */
-            // uint32_t flattened_offset_worker_slice = offset_worker_slice.x + (offset_worker_slice.y * tensor_slice_shape.x);
             uint32_t flattened_offset_worker_slice = ttnn::ccl::v2::flattened_index(tensor_slice_shape, offset_worker_slice);
             uint32_t contig_until_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
 
@@ -603,7 +590,6 @@ FORCE_INLINE void write_wrapped_chunk(
     const uint32_t page_size,
     bool& last_page_of_worker) {
 
-    // cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
 
     int32_t contig_pages = 1;
@@ -612,7 +598,6 @@ FORCE_INLINE void write_wrapped_chunk(
         if constexpr (MEM_LAYOUT == tt::tt_metal::Layout::ROW_MAJOR) {
             if constexpr (TENSOR_LAYOUT == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
                 uint64_t dst_noc_addr = get_noc_addr(curr_page_idx, d);
-                DPRINT << "\tnoc_async_write_row_major_interleaved @ page " << curr_page_idx << " noc_addr: " << dst_noc_addr << "\n";
                 noc_async_write(l1_read_addr, dst_noc_addr, page_size);
                 ASSERT(false);  // unimplemented
             } else {
@@ -622,7 +607,6 @@ FORCE_INLINE void write_wrapped_chunk(
             if constexpr (TENSOR_LAYOUT == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
                 noc_async_write_tile(curr_page_idx, d, l1_read_addr);
             } else {
-                // TODO: Make d.get_noc_addr work on host + device
                 auto const&[noc_yx, page_offset, contig_pages_] = d.get_page_location_with_contiguous_pages_in_row_in_bank(curr_page_idx);
                 /*
                 * Shared with `read_wrapped_chunk_from_output_tensor`
@@ -632,7 +616,6 @@ FORCE_INLINE void write_wrapped_chunk(
 
                 contig_pages = std::min<int32_t>(num_pages - i, std::min<int32_t>(contig_pages_, contig_edge_of_tensor_slice));
                 uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
-                DPRINT << "\tnoc_async_write @ src_addr " << (uint32_t)l1_read_addr << " noc_addr: " << (uint64_t)dst_noc_addr << "\n";
                 noc_async_write(l1_read_addr, dst_noc_addr, page_size * contig_pages);
             }
         }
@@ -649,8 +632,6 @@ FORCE_INLINE void write_wrapped_chunk(
 
         l1_read_addr += page_size * contig_pages;
     }
-    // noc_async_write_barrier();
-    // cb_pop_front(cb_id, num_pages);
 }
 }
 
@@ -690,7 +671,6 @@ FORCE_INLINE void write_wrapped_chunk(
         noc_async_write_tile(curr_page_idx, d, l1_read_addr);
         // Common with `read_chunk_from_output_tensor_v2`
     #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset, contig_pages_] = d.get_page_location_with_contiguous_pages_in_row_in_bank(curr_page_idx);
         /*
          * Shared with `read_wrapped_chunk_from_output_tensor`

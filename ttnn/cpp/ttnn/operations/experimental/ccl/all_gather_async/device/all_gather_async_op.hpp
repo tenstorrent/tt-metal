@@ -16,7 +16,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
 
-
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
@@ -26,7 +25,7 @@ namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
 
-struct AllGatherV2 {
+struct AllGatherAsync {
     std::optional<Device*> forward_device;
     std::optional<Device*> backward_device;
     const uint32_t dim;
@@ -35,9 +34,11 @@ struct AllGatherV2 {
     const uint32_t ring_index;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
-    const GlobalSemaphore semaphore_handle;
+    std::optional<GlobalSemaphore> semaphore_handle;
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle;
+    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map;
 
-    AllGatherV2(
+    AllGatherAsync(
         std::optional<Device*> forward_device,
         std::optional<Device*> backward_device,
         uint32_t dim,
@@ -46,7 +47,9 @@ struct AllGatherV2 {
         uint32_t ring_index,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        GlobalSemaphore semaphore_handle) :
+        std::optional<GlobalSemaphore> semaphore_handle,
+        std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+        std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) :
         forward_device(forward_device),
         backward_device(backward_device),
         dim(dim),
@@ -55,7 +58,9 @@ struct AllGatherV2 {
         ring_index(ring_index),
         output_mem_config(output_mem_config),
         topology(topology),
-        semaphore_handle(semaphore_handle) {}
+        semaphore_handle(semaphore_handle),
+        fabric_handle(fabric_handle),
+        sub_device_id_map(sub_device_id_map) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -68,33 +73,36 @@ struct AllGatherV2 {
         attrs.emplace_back("ring_index", ring_index);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
+        attrs.emplace_back("semaphore_handle", semaphore_handle);
 
         return attrs;
     }
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-namespace ccl{
-namespace all_gather_v2_detail{
-AllGatherV2 create_all_gather_struct(
+namespace ccl {
+namespace all_gather_async_detail {
+AllGatherAsync create_all_gather_async_struct(
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<Device*>& devices,
     const ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore_handles
-);
-} // namespace all_gather_detail
-} // namespace ccl
+    const std::vector<GlobalSemaphore>& semaphore_handles,
+    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
+}  // namespace all_gather_async_detail
+}  // namespace ccl
 
 // All Gather Variants
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
+operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
     std::optional<Device*> forward_device,
     std::optional<Device*> backward_device,
@@ -104,34 +112,24 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore semaphore_handle);
-
-
+    std::optional<GlobalSemaphore> semaphore_handle,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 
 namespace operations {
+namespace experimental {
 namespace ccl {
 
-Tensor all_gather_v2(
+Tensor all_gather_async(
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    std::unordered_map<chip_id_t, SubDeviceId> sub_device_id_map = {},                 // TODO make reference
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
 
-Tensor all_gather_v2(
-    const Tensor& input_tensor,
-    const uint32_t dim,
-    const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    const uint32_t num_links = 1,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
-
-} // namespace ccl
-} // namespace operations
+}  // namespace ccl
+}  // namespace experimental
+}  // namespace operations
 
 }  // namespace ttnn

@@ -12,22 +12,20 @@
 
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 
-
-#include "dataflow_api.h" // for interleaved addrgen
+#include "dataflow_api.h"  // for interleaved addrgen
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
 using shape_t = ttnn::ccl::Shape4D<uint32_t>;
 using ttnn::ccl::coord_t;
 using address_t = uint32_t;
 
-using ttnn::ccl::Shape4D;
-using tt::tt_metal::TensorMemoryLayout;
 using tt::tt_metal::BufferType;
 using tt::tt_metal::Layout;
+using tt::tt_metal::TensorMemoryLayout;
+using ttnn::ccl::Shape4D;
 
 #ifdef DEBUG_PRINT_ENABLED
 #include "debug/dprint.h"
-
 
 void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
     DPRINT << "\ttensor_shape.w: " << (uint32_t)command_tensor.tensor_shape.w << "\n";
@@ -61,13 +59,14 @@ void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTens
  * Convert a flattened worker offset coord value (assumed 0,0,0, worker offset in pages into tensor slice)
  * into a 4D coordinate value
  */
-FORCE_INLINE  shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
-    static_assert(sizeof(coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
+FORCE_INLINE shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
+    static_assert(
+        sizeof(coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
     auto const y = worker_slice_offset.x / slice_shape.x;
     return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
 }
 
-FORCE_INLINE std::size_t get_flat_index_from_shape(const Shape4D<uint32_t> &shape, const Shape4D<uint32_t> &index) {
+FORCE_INLINE std::size_t get_flat_index_from_shape(const Shape4D<uint32_t>& shape, const Shape4D<uint32_t>& index) {
     std::size_t offset = index.x;
     std::size_t inner_volume = shape.x;
     offset += index.y * inner_volume;
@@ -79,19 +78,18 @@ FORCE_INLINE std::size_t get_flat_index_from_shape(const Shape4D<uint32_t> &shap
 }
 
 namespace v2 {
-    /*
-    * Convert a flattened worker offset coord value (assumed 0,0,0, worker offset in pages into tensor slice)
-    * into a 4D coordinate value
-    */
-    FORCE_INLINE  shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
-        static_assert(sizeof(coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
-        auto const y = worker_slice_offset.x / slice_shape.x;
-        return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
-    }
-
-
+/*
+ * Convert a flattened worker offset coord value (assumed 0,0,0, worker offset in pages into tensor slice)
+ * into a 4D coordinate value
+ */
+FORCE_INLINE shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
+    static_assert(
+        sizeof(coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
+    auto const y = worker_slice_offset.x / slice_shape.x;
+    return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
 }
 
+}  // namespace v2
 
 template <TensorMemoryLayout tensor_layout, tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen {
@@ -112,27 +110,24 @@ struct source_tensor_addrgen<TensorMemoryLayout::INTERLEAVED, buffer_type, tt::t
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen<TensorMemoryLayout::WIDTH_SHARDED, buffer_type, page_layout> {
     static constexpr char name[] = "WidthSharded";
-    using type = tt::tt_metal::address_generators::DefaultWidthShardedAddressGenerator;
+    using type = tt::tt_metal::address_generators::DefaultVirtualCoordWidthShardedAddressGenerator;
 };
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen<TensorMemoryLayout::HEIGHT_SHARDED, buffer_type, page_layout> {
     static constexpr char name[] = "HeightSharded";
-    using type = tt::tt_metal::address_generators::DefaultHeightShardedAddressGenerator;
+    using type = tt::tt_metal::address_generators::DefaultVirtualCoordHeightShardedAddressGenerator;
 };
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen<TensorMemoryLayout::BLOCK_SHARDED, buffer_type, page_layout> {
     static constexpr char name[] = "BlockSharded";
-    using type = tt::tt_metal::address_generators::DefaultBlockShardedAddressGenerator;
+    using type = tt::tt_metal::address_generators::DefaultVirtualCoordBlockShardedAddressGenerator;
 };
-
 
 constexpr bool is_sharded_tensor_layout(tt::tt_metal::TensorMemoryLayout tensor_layout) {
     return tensor_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED ||
            tensor_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
            tensor_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
 }
-
-
 
 // reader code
 template <typename T>

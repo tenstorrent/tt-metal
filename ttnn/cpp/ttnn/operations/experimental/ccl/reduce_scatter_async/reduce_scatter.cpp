@@ -19,18 +19,5 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     return ttnn::operations::experimental::ccl::reduce_scatter(input_tensor, dim, math_op, out_memory_config, topology, num_preferred_links);
 }
-ttnn::Tensor ExecuteReduceScatter::invoke(
-    const Tensor &input_tensor,
-    const int32_t dim,
-    const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    ttnn::operations::reduction::ReduceType reduce_op,
-    const std::optional<ttnn::MemoryConfig>& output_mem_config,
-    ttnn::ccl::Topology topology,
-    const std::optional<size_t> num_preferred_links) {
-
-    MemoryConfig out_memory_config = output_mem_config.value_or(input_tensor.memory_config());
-    return ttnn::operations::experimental::ccl::reduce_scatter(input_tensor, dim, cluster_axis, mesh_device, reduce_op, out_memory_config, topology, num_preferred_links);
-}
 
 }  // namespace ttnn::operations::ccl

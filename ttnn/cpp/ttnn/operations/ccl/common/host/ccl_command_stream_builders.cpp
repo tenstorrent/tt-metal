@@ -11,6 +11,7 @@
 
 #include <ranges>
 #include <vector>
+#include <cstdint>
 
 namespace ttnn::ccl::cmd::builder {
 
@@ -43,16 +44,17 @@ std::vector<std::pair<size_t, size_t>> compute_evenly_split_sizes(size_t size, s
         return num_larger_slices * larger_slice_size + (slice_index - num_larger_slices) * smaller_slice_size;
     };
 
-    auto compute_slice_size_and_offset = [compute_slice_dim_size,compute_slice_offset](size_t slice_index) -> std::pair<size_t, size_t> {
+    auto compute_slice_size_and_offset = [compute_slice_dim_size,
+                                          compute_slice_offset](size_t slice_index) -> std::pair<size_t, size_t> {
         return {compute_slice_dim_size(slice_index), compute_slice_offset(slice_index)};
     };
-    auto result =  std::views::iota(0ul, num_slices) | std::views::transform([compute_slice_size_and_offset](size_t slice_index) {
-            return compute_slice_size_and_offset(slice_index);
-        });
+    auto result = std::vector<std::pair<size_t, size_t>>{};
+    result.reserve(num_slices);
+    for (size_t i = 0; i < num_slices; i++) {
+        result.push_back(compute_slice_size_and_offset(i));
+    }
     return std::vector<std::pair<size_t, size_t>>(result.begin(), result.end());
 }
-
-
 
 // // Outer vector = per worker command stream, inner vector = commands
 std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> split_tensor_slices_across_workers_page_aligned(
@@ -66,13 +68,21 @@ std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> split_tensor_slices_across_
 
     for (auto const& tensor_slice : tensor_slices) {
         auto const worker_slices = split_tensor_slice_across_workers_wrapped_page_aligned(tensor_slice, num_workers);
-        TT_FATAL(worker_slices.size() == num_workers, "Expected {} worker slices for tensor slice but got {}", num_workers, worker_slices.size());
+        TT_FATAL(
+            worker_slices.size() == num_workers,
+            "Expected {} worker slices for tensor slice but got {}",
+            num_workers,
+            worker_slices.size());
         for (size_t i = 0; i < num_workers; i++) {
             worker_slices_streams[i].push_back(worker_slices[i]);
         }
     }
     for (size_t i = 0; i < num_workers; i++) {
-        TT_FATAL(worker_slices_streams[i].size() == tensor_slices.size(), "Mismatch in tensor slices. Expected {} but got {}", tensor_slices.size(), worker_slices_streams[i].size());
+        TT_FATAL(
+            worker_slices_streams[i].size() == tensor_slices.size(),
+            "Mismatch in tensor slices. Expected {} but got {}",
+            tensor_slices.size(),
+            worker_slices_streams[i].size());
     }
 
     return worker_slices_streams;
@@ -80,9 +90,13 @@ std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> split_tensor_slices_across_
 
 Shape4D<uint32_t> from_tensor_shape(ttnn::Shape const& shape) {
     constexpr size_t max_rank = 4;
-    TT_FATAL(shape.size() <= max_rank, "Reduce scatter device code only supports tensors up to rank 4. Current tensor rank is {}. The host code calling the program factory must reduce the dimensionality", shape.size());
+    TT_FATAL(
+        shape.size() <= max_rank,
+        "Reduce scatter device code only supports tensors up to rank 4. Current tensor rank is {}. The host code "
+        "calling the program factory must reduce the dimensionality",
+        shape.size());
 
-    Shape4D<uint32_t> shape4d = {1,1,1,1};
+    Shape4D<uint32_t> shape4d = {1, 1, 1, 1};
     size_t output_index = max_rank - 1;
     for (int i = shape.size() - 1; i >= 0; --i) {
         shape4d[output_index] = shape[i];
@@ -96,11 +110,13 @@ static ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(ttnn::Shape const& s
     logical_shape[-2] /= tt::constants::TILE_HEIGHT;
     logical_shape[-1] /= tt::constants::TILE_WIDTH;
     TT_FATAL(logical_shape.size() == 4, "Expected 4D shape but got {}", logical_shape.size());
-    ttnn::ccl::Shape4D<uint32_t> shape_in_tiles = {logical_shape[0], logical_shape[1], logical_shape[2], logical_shape[3]};
+    ttnn::ccl::Shape4D<uint32_t> shape_in_tiles = {
+        logical_shape[0], logical_shape[1], logical_shape[2], logical_shape[3]};
     return shape_in_tiles;
 }
 
-std::vector<ttnn::ccl::v2::TensorSlice> split_tensor_slice_across_workers_wrapped_page_aligned(ttnn::ccl::v2::TensorSlice const& tensor_slice, size_t num_workers) {
+std::vector<ttnn::ccl::v2::TensorSlice> split_tensor_slice_across_workers_wrapped_page_aligned(
+    ttnn::ccl::v2::TensorSlice const& tensor_slice, size_t num_workers) {
     const size_t num_pages = tensor_slice.tensor_slice_shape.volume();
 
     auto to_cmd_tensor = [&tensor_slice](std::pair<size_t, size_t> size_offset) {
@@ -117,10 +133,10 @@ std::vector<ttnn::ccl::v2::TensorSlice> split_tensor_slice_across_workers_wrappe
     std::vector<ttnn::ccl::v2::TensorSlice> worker_slices;
     worker_slices.reserve(num_workers);
     std::ranges::copy(worker_slices_view, std::back_inserter(worker_slices));
-    TT_FATAL(worker_slices.size() == num_workers, "Expected {} worker slices but got {}", num_workers, worker_slices.size());
+    TT_FATAL(
+        worker_slices.size() == num_workers, "Expected {} worker slices but got {}", num_workers, worker_slices.size());
     return worker_slices;
 }
-
 
 // Assumed that the tensor_slice shape is in terms of pages, not elements
 std::vector<ttnn::ccl::v2::TensorSlice> compute_page_aligned_slices(
@@ -145,11 +161,13 @@ std::vector<ttnn::ccl::v2::TensorSlice> compute_page_aligned_slices(
         return cmd_tensor;
     };
 
-    const auto tensor_slices_view = compute_evenly_split_sizes(input_tensor_shape_in_tiles[split_dim], num_slices) |
+    const auto tensor_slices_view =
+        compute_evenly_split_sizes(input_tensor_shape_in_tiles[split_dim], num_slices) |
         std::views::transform([to_cmd_tensor](auto size_offset) { return to_cmd_tensor(size_offset); });
 
     std::ranges::copy(tensor_slices_view, std::back_inserter(tensor_slices));
-    TT_FATAL(tensor_slices.size() == num_slices, "Expected {} tensor slices but got {}", num_slices, tensor_slices.size());
+    TT_FATAL(
+        tensor_slices.size() == num_slices, "Expected {} tensor slices but got {}", num_slices, tensor_slices.size());
 
     return tensor_slices;
 }
@@ -160,6 +178,4 @@ std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> generate_worker_tensor_slic
     return split_tensor_slices_across_workers_page_aligned(num_workers, tensor_slices);
 }
 
-
-
-};
+};  // namespace ttnn::ccl::cmd::builder
