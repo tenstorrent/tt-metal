@@ -258,7 +258,7 @@ enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_LOCAL_AND_REMOTE = 0x3
 };
 
-static constexpr uint32_t SWITCH_INTERVAL = 4000;
+static constexpr uint32_t SWITCH_INTERVAL = 40000;
 static constexpr size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
 static constexpr size_t NUM_SENDER_CHANNELS = 2;
 static constexpr size_t num_workers_ctor = 1;
@@ -731,6 +731,7 @@ void run_fabric_edm_main_loop(
             got_graceful_termination,
             &(sender_states[sender_channel_index]),
             sender_channel_index);
+        bool did_something_sender = old_send_state != sender_states[sender_channel_index];
         if (incr_sender_channel_index) {
             // TODO: this can probably be optimized
             sender_channel_index = 1 - sender_channel_index;
@@ -739,7 +740,7 @@ void run_fabric_edm_main_loop(
         run_receiver_channel_state_machine_step<RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, NUM_SENDER_CHANNELS>(
             local_receiver_channel, remote_sender_channels, downstream_edm_noc_interface, &receiver_state);
 
-        bool did_something = old_send_state != sender_states[sender_channel_index] || old_recv_state != receiver_state;
+        bool did_something = did_something_sender || old_recv_state != receiver_state;
 
         if (did_something) {
             did_nothing_count = 0;

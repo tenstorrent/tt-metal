@@ -203,6 +203,64 @@ struct PacketHeader {
         this->command_fields.mcast_seminc = noc_multicast_atomic_inc_command_header;
         return *this;
     }
+    inline volatile PacketHeader* to_write() volatile { this->command_type = WRITE; return this; }
+    inline volatile PacketHeader* to_atomic_inc() volatile { this->command_type = ATOMIC_INC; return this; }
+
+    inline volatile PacketHeader *to_chip_unicast(UnicastRoutingCommandHeader const &chip_unicast_command_header) volatile {
+        this->chip_send_type = CHIP_UNICAST;
+        this->routing_fields.chip_unicast.distance_in_hops = chip_unicast_command_header.distance_in_hops;
+        return this;
+    }
+    inline volatile PacketHeader *to_chip_multicast(MulticastRoutingCommandHeader const &chip_multicast_command_header) volatile {
+        this->chip_send_type = CHIP_MULTICAST;
+        this->routing_fields.chip_mcast.range_hops = chip_multicast_command_header.range_hops;
+        this->routing_fields.chip_mcast.start_distance_in_hops = chip_multicast_command_header.start_distance_in_hops;
+        return this;
+    }
+    inline volatile PacketHeader *to_noc_unicast(NocUnicastCommandHeader const &noc_unicast_command_header) volatile {
+        this->noc_send_type = NOC_UNICAST;
+        this->command_fields.unicast_write.address = noc_unicast_command_header.address;
+        this->command_fields.unicast_write.size = noc_unicast_command_header.size;
+        this->command_fields.unicast_write.noc_x = noc_unicast_command_header.noc_x;
+        this->command_fields.unicast_write.noc_y = noc_unicast_command_header.noc_y;
+
+        return this;
+    }
+    inline volatile PacketHeader *to_noc_multicast(NocMulticastCommandHeader const &noc_multicast_command_header) volatile {
+        this->noc_send_type = NOC_MULTICAST;
+        this->command_fields.mcast_write.mcast_rect_size_x = noc_multicast_command_header.mcast_rect_size_x;
+        this->command_fields.mcast_write.mcast_rect_size_y = noc_multicast_command_header.mcast_rect_size_y;
+        this->command_fields.mcast_write.noc_x_start = noc_multicast_command_header.noc_x_start;
+        this->command_fields.mcast_write.noc_y_start = noc_multicast_command_header.noc_y_start;
+        this->command_fields.mcast_write.size = noc_multicast_command_header.size;
+        this->command_fields.mcast_write.address = noc_multicast_command_header.address;
+
+        return this;
+    }
+    inline volatile PacketHeader *to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader const &noc_unicast_atomic_inc_command_header) volatile {
+        this->noc_send_type = NOC_UNICAST;
+        this->command_fields.unicast_seminc.address = noc_unicast_atomic_inc_command_header.address;
+        this->command_fields.unicast_seminc.noc_x = noc_unicast_atomic_inc_command_header.noc_x;
+        this->command_fields.unicast_seminc.noc_y = noc_unicast_atomic_inc_command_header.noc_y;
+        this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;
+        this->command_fields.unicast_seminc.wrap = noc_unicast_atomic_inc_command_header.wrap;
+
+        return this;
+    }
+    inline volatile PacketHeader *to_noc_multicast_atomic_inc(
+        NocMulticastAtomicIncCommandHeader const &noc_multicast_atomic_inc_command_header) volatile {
+        this->noc_send_type = NOC_MULTICAST;
+        this->command_fields.mcast_seminc.address = noc_multicast_atomic_inc_command_header.address;
+        this->command_fields.mcast_seminc.noc_x_start = noc_multicast_atomic_inc_command_header.noc_x_start;
+        this->command_fields.mcast_seminc.noc_y_start = noc_multicast_atomic_inc_command_header.noc_y_start;
+        this->command_fields.mcast_seminc.size_x = noc_multicast_atomic_inc_command_header.size_x;
+        this->command_fields.mcast_seminc.size_y = noc_multicast_atomic_inc_command_header.size_y;
+        this->command_fields.mcast_seminc.val = noc_multicast_atomic_inc_command_header.val;
+        this->command_fields.mcast_seminc.wrap = noc_multicast_atomic_inc_command_header.wrap;
+
+        return this;
+    }
 };
 
 
