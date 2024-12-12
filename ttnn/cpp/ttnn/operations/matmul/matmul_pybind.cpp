@@ -119,22 +119,43 @@ void py_module(py::module& module) {
 
     matmul_multi_core_reuse_multicast_1d_program_config
         .def(
-            py::init<
-                CoreCoord,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                bool,
-                std::optional<UnaryWithParam>,
-                bool,
-                bool>(),
+            py::init([](CoreCoord compute_with_storage_grid_size,
+                        std::size_t in0_block_w,
+                        std::size_t out_subblock_h,
+                        std::size_t out_subblock_w,
+                        std::optional<std::size_t> out_block_h,
+                        std::optional<std::size_t> out_block_w,
+                        std::size_t per_core_M,
+                        std::size_t per_core_N,
+                        bool fuse_batch,
+                        std::optional<UnaryWithParam> fused_activation,
+                        bool mcast_in0,
+                        bool gather_in0) {
+                // Set out_block_h and out_block_w to defaults if they are not provided
+                std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
+                std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
+
+                return MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size,
+                    in0_block_w,
+                    out_subblock_h,
+                    out_subblock_w,
+                    actual_out_block_h,
+                    actual_out_block_w,
+                    per_core_M,
+                    per_core_N,
+                    fuse_batch,
+                    std::move(fused_activation),
+                    mcast_in0,
+                    gather_in0);
+            }),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
             py::arg("out_subblock_h").noconvert(),
             py::arg("out_subblock_w").noconvert(),
+            py::arg("out_block_h") = py::none(),
+            py::arg("out_block_w") = py::none(),
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
             py::arg("fuse_batch").noconvert(),
@@ -147,6 +168,8 @@ void py_module(py::module& module) {
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_w)
+        .def_readwrite("out_block_h", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_block_h)
+        .def_readwrite("out_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_block_w)
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseMultiCast1DProgramConfig::per_core_M)
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCast1DProgramConfig::per_core_N)
         .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fuse_batch)
