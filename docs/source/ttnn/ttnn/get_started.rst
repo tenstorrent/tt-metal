@@ -26,7 +26,7 @@ Get started with the Falcon 7B demo. Navigate to the `Falcon 7B demo folder
 for details.
 
 You can also check our demos for
-`ResNet <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/resnet>`_,
+`ResNet <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/ttnn_resnet>`_,
 `BERT <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
 `Mistral 7B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mistral7b>`_,
 and
