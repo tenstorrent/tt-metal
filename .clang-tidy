@@ -195,3 +195,5 @@ Checks: >
 CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
+
+FormatStyle: 'file'
