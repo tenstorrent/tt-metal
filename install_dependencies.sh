@@ -22,6 +22,7 @@ FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 MAJOR=${VERSION%.*}
 ARCH=`uname -m`
+DEBIAN_FRONTEND="noninteractive"
 
 usage()
 {
@@ -121,7 +122,7 @@ install()
         prep_ubuntu
 
         echo "Installing packages..."
-        apt-get install -y "${UB_LIST[@]}"
+        DEBIAN_FRONTEND=$DEBIAN_FRONTEND apt-get install -y --no-install-recommends "${UB_LIST[@]}"
     fi
 }
 
