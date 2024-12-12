@@ -12,19 +12,21 @@ void kernel_main() {
     constexpr uint32_t num_rows = get_compile_time_arg_val(3);
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    const uint32_t start_row = get_arg_val<uint32_t>(1);
+    const uint32_t end_row = get_arg_val<uint32_t>(2);
 
     const InterleavedAddrGen<dst_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = page_size};
 
     uint32_t input_shape[N], perm[N], dest_strides[N];
-    for (uint32_t i = 1; i <= N; i++) {
-        input_shape[i - 1] = get_arg_val<uint32_t>(i);
-        perm[i - 1] = get_arg_val<uint32_t>(i + N);
-        dest_strides[i - 1] = get_arg_val<uint32_t>(i + 2 * N);
+    for (uint32_t i = 3; i < N + 3; i++) {
+        input_shape[i - 3] = get_arg_val<uint32_t>(i);
+        perm[i - 3] = get_arg_val<uint32_t>(i + N);
+        dest_strides[i - 3] = get_arg_val<uint32_t>(i + 2 * N);
     }
 
     uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
     uint32_t curr_addr = dst_addr;
-    for (uint32_t row = 0; row < num_rows; ++row) {
+    for (uint32_t row = start_row; row < end_row; ++row) {
         // Compute multi-dimensional index for the source row
         uint32_t src_multi_idx[N];
         size_t remaining = row;
