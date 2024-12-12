@@ -35,10 +35,7 @@ def test_unet_output_layer(batch, groups, device, reset_seeds):
     ttnn_output = ttnn_model.output_layer(ttnn_input)
     ttnn_output = ttnn_model.postprocess_output_tensor(ttnn_output)
 
-    print("OUTPUT SHAPE: ", ttnn_output.shape)
-    breakpoint()
-
     B, C, H, W = torch_output.shape
     ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output.reshape(B, C, H, W)  # .permute(0, 3, 1, 2)
+    ttnn_output = ttnn_output.reshape(B, C, H, W)
     verify_with_pcc(torch_output, ttnn_output, 0.9998)
