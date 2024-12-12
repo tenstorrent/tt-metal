@@ -226,8 +226,9 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         this->router_port_directions_to_physical_eth_chan_map_[mesh_id].resize(intra_mesh_connectivity[mesh_id].size());
         for (chip_id_t chip_id = 0; chip_id < intra_mesh_connectivity[mesh_id].size(); chip_id++) {
             for (const auto& [logical_connected_chip_id, edge] : intra_mesh_connectivity[mesh_id][chip_id]) {
+                /*
                 std::cout << " mesh_id " << mesh_id << " chip_id " << chip_id << " logical_connected_chip_id "
-                          << logical_connected_chip_id << std::endl;
+                          << logical_connected_chip_id << std::endl;*/
                 const auto& physical_chip_id =
                     this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
                 const auto& physical_connected_chip_id =
@@ -245,8 +246,8 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
                 for (const auto& eth_chan : connected_eth_channels) {
                     // There could be an optimization here to create entry for both chips here, assuming links are
                     // bidirectional
-                    std::cout << " adding an entry to direction " << magic_enum::enum_name(edge.port_direction)
-                              << std::endl;
+                    // std::cout << " adding an entry to direction " << magic_enum::enum_name(edge.port_direction)
+                    //         << std::endl;
                     this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][edge.port_direction]
                         .push_back(std::get<0>(eth_chan));
                 }
