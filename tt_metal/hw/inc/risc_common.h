@@ -166,10 +166,10 @@ inline void riscv_wait(uint32_t cycles) {
 }
 
 // Invalidates Blackhole's entire L1 cache
-// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). If cache is enabled, the entire L1 is cached (no
-// MMU).
-//  Writing an address on one core and reading it from another core only requires the reader to invalidate.
-//  Need to invalidate any address written by noc that may have been previously read
+// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). The cache covers all of L1 (no
+// MMU or range registers).
+//  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
+//  Need to invalidate any address written by noc that may have been previously read by riscv
 inline __attribute__((always_inline)) void invalidate_l1_cache() {
 #if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
     asm("fence");
@@ -185,11 +185,8 @@ inline __attribute__((always_inline)) void conditionally_disable_l1_cache() {
     //         csrrsi zero, 0x7c0, 0x8
     //       )ASM");
     asm(R"ASM(
-        .option push
-        li   t1, 0x1
-        slli t1, t1, 3
+        slli t1, t1, 8
         csrrs zero, 0x7c0, t1
-        .option pop
          )ASM" ::
             : "t1");
 #endif
