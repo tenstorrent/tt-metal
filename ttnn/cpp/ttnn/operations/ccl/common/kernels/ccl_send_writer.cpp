@@ -186,8 +186,8 @@ void kernel_main() {
             // const shape_t tensor_slice_start_offset = ttnn::ccl::build_from_args<shape_t>(arg_idx); // Should be RT
             shape_t valid_worker_slice_shape = build_wrapped_row_tensor_slice(command_tensor.worker_pages_per_slice); // Parametrizable by ct arg
 
-            shape_t const& worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
-            shape_t const& global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
+            shape_t const worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
+            shape_t const global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
 
             uint32_t curr_page_idx = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
 
@@ -231,7 +231,7 @@ void kernel_main() {
                 size_t contig_pages_advanced = 1;
                 for (size_t i = 0; i < n_pages; i += contig_pages_advanced) {
                     // DPRINT << "Contig loop\n";
-                    auto const [noc_addr, contig_pages] = get_noc_addr_and_contiguous_pages<tensor_layout, page_layout>(
+                    auto const [noc_addr, contig_pages] = get_noc_addr_and_contiguous_pages_for_fabric_write<tensor_layout, page_layout>(
                         curr_page_idx,
                         offset_into_worker_slice,
                         worker_slice_offset,
@@ -298,8 +298,8 @@ void kernel_main() {
                         worker_slice_shape,
                         command_tensor.tensor_slice_shape,
                         command_tensor.tensor_shape,
-                        contig_pages,
-                        last_page_of_worker
+                        contig_pages//,
+                        // last_page_of_worker
                     );
 
 
