@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 
 using namespace tt::tt_metal;
 
@@ -160,9 +161,7 @@ std::vector<Device*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_d
 
         return std::visit(
             tt::stl::overloaded{
-                [&](const ShardTensor2D& s) {
-                    return mesh_device.get_view()->get_devices(MeshShape{s.shard_mesh.y, s.shard_mesh.x});
-                },
+                [&](const ShardTensor2D& s) { return mesh_device.get_view()->get_devices(s.shard_mesh); },
                 [&](const auto&) { return get_workers_for_tensor(); }},
             host_storage.strategy);
     } else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {

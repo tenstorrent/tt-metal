@@ -17,7 +17,10 @@ DistributedTensorConfig create_shard_distributed_tensor_config(
 }
 DistributedTensorConfig create_shard_2d_distributed_tensor_config(
     const std::unordered_map<std::string, std::string>& metadata) {
-    return ShardTensor2D(ShardMesh(std::stoi(metadata.at("mesh_shape_y")), std::stoi(metadata.at("mesh_shape_x"))));
+    return ShardTensor2D(distributed::MeshShape{
+        .num_rows = std::stoi(metadata.at("mesh_shape_y")),
+        .num_cols = std::stoi(metadata.at("mesh_shape_x")),
+    });
 }
 DistributedTensorConfig create_replicate_distributed_tensor_config(
     const std::unordered_map<std::string, std::string>& metadata) {
@@ -51,7 +54,8 @@ bool operator==(const AllGatherTensor&, const AllGatherTensor&) {
 }
 bool operator==(const ShardTensor& lhs, const ShardTensor& rhs) { return lhs.shard_dimension == rhs.shard_dimension; }
 bool operator==(const ShardTensor2D& lhs, const ShardTensor2D& rhs) {
-    return lhs.shard_mesh.x == rhs.shard_mesh.x && lhs.shard_mesh.y == rhs.shard_mesh.y;
+    return lhs.shard_mesh.num_rows == rhs.shard_mesh.num_rows &&  //
+           lhs.shard_mesh.num_cols == rhs.shard_mesh.num_cols;
 }
 
 }  // namespace tt::tt_metal

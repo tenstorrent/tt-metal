@@ -38,7 +38,9 @@ template <class VectorType = float, DataType TensorType = DataType::BFLOAT16>
     const std::vector<xt::xarray<VectorType>>& buffers, const std::unordered_map<std::string, std::string>& config);
 
 template <class T = float>
-[[nodiscard]] std::vector<T> to_vector(const tt::tt_metal::Tensor& tensor);
+[[nodiscard]] std::vector<T> to_vector(const tt::tt_metal::Tensor& tensor) {
+    return ttnn::experimental::xtensor::to_vector<T>(tensor);
+}
 
 [[nodiscard]] bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor);
 
@@ -47,7 +49,7 @@ template <class T = float>
 template <class T = float, DataType TensorType = DataType::BFLOAT16>
 [[nodiscard]] tt::tt_metal::Tensor from_xtensor(
     const xt::xarray<T>& buffer, ttnn::distributed::MeshDevice* device, Layout layout = Layout::TILE) {
-    auto shape = create_shape(get_shape_4d(buffer));
+    auto shape = ttnn::experimental::xtensor::get_shape_from_xarray(buffer);
     auto buffer_view = xtensor_to_span(buffer);
     return from_vector<T, TensorType>(std::vector<T>(buffer_view.begin(), buffer_view.end()), shape, device, layout);
 }

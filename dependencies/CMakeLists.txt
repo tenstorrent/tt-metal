@@ -91,3 +91,17 @@ CPMAddPackage(NAME range-v3 GITHUB_REPOSITORY ericniebler/range-v3 GIT_TAG 0.12.
 ############################################################################################################################
 
 CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84)
+
+############################################################################################################################
+# xtensor : https://github.com/xtensor-stack/xtensor
+############################################################################################################################
+
+CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.7.7 OPTIONS "XTL_ENABLE_TESTS OFF")
+CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.25.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
+CPMAddPackage(
+    NAME xtensor-blas
+    GITHUB_REPOSITORY xtensor-stack/xtensor-blas
+    GIT_TAG 0.21.0
+    OPTIONS
+        "XTENSOR_ENABLE_TESTS OFF"
+)

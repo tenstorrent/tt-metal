@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include <cstdint>
 #include <unordered_map>
 #include <variant>
+
+#include <ttnn/distributed/types.hpp>
 
 namespace tt::tt_metal {
 
@@ -22,14 +23,9 @@ struct ShardTensor {
 };
 bool operator==(const ShardTensor& lhs, const ShardTensor& rhs);
 
-struct ShardMesh {
-    std::uint16_t y = 0;
-    std::uint16_t x = 0;
-};
-
 struct ShardTensor2D {
-    ShardMesh shard_mesh;  // logic 2D grid that defines the mapping of shards to devices
-    ShardTensor2D(ShardMesh mesh) : shard_mesh(std::move(mesh)) {}
+    distributed::MeshShape shard_mesh;
+    ShardTensor2D(distributed::MeshShape mesh) : shard_mesh(std::move(mesh)) {}
 };
 bool operator==(const ShardTensor2D& lhs, const ShardTensor2D& rhs);
 
