@@ -294,16 +294,16 @@ inline CircularBufferConfig fromFlatBuffer(const tt::target::CircularBufferConfi
     config.globally_allocated_address_ = config_fb->globally_allocated_address() == 0 ? std::nullopt : std::optional<uint32_t>(config_fb->globally_allocated_address());
 
     if (config_fb->data_formats()) {
-        for (size_t i = 0; i < config_fb->data_formats()->size(); ++i) {
-            // Big Hack for now until FBS supports DataFormat.
-            // config.data_formats_[i] = config_fb->data_formats()->Get(i);
-            config.data_formats_[i] = static_cast<tt::DataFormat>(config_fb->data_formats()->Get(i));
+        for (auto entry : *config_fb->data_formats()) {
+            log_info(tt::LogMetalTrace, "KCM DF index: {}, Format: {}", entry->index(), entry->format());
+            config.data_formats_[entry->index()] = static_cast<tt::DataFormat>(entry->format());
         }
     }
 
     if (config_fb->page_sizes()) {
-        for (size_t i = 0; i < config_fb->page_sizes()->size(); ++i) {
-            config.page_sizes_[i] = config_fb->page_sizes()->Get(i);
+        for (auto entry : *config_fb->page_sizes()) {
+            log_info(tt::LogMetalTrace, "KCM Buffer index: {}, Page size: {}", entry->index(), entry->size());
+            config.page_sizes_[entry->index()] = entry->size();
         }
     }
 

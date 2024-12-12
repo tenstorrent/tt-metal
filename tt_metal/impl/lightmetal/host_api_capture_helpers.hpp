@@ -338,19 +338,30 @@ inline flatbuffers::Offset<tt::target::CircularBufferConfig> toFlatBuffer(
     // Note: std::optional is not supported by FlatBuffers, so we need to serialize it as a uint32_t with a default value of 0
     auto global_address = config.globally_allocated_address_ ? *config.globally_allocated_address_ : 0;
 
-    std::vector<uint8_t> data_formats_vector;
-    for (const auto& format : config.data_formats_) {
-        data_formats_vector.push_back(format ? static_cast<uint8_t>(*format) : 0);
-    }
-    auto data_formats_fb = builder.CreateVector(data_formats_vector);
 
-    std::vector<uint32_t> page_sizes_vector;
-    for (const auto& size : config.page_sizes_) {
-        page_sizes_vector.push_back(size ? *size : 0);
+    // Note: std::optional data_formats array represented as vec of k (idx) v (format) pairs
+    std::vector<tt::target::CBConfigDataFormat> data_formats_vec;
+    for (size_t i = 0; i < config.data_formats_.size(); i++) {
+        if (config.data_formats_[i]) {
+            data_formats_vec.push_back({i, static_cast<uint32_t>(*config.data_formats_[i])});
+        }
     }
-    auto page_sizes_fb = builder.CreateVector(page_sizes_vector);
-    auto tiles_fb = toFlatBuffer(config.tiles_, builder);
+    auto data_formats_fb = builder.CreateVectorOfStructs(data_formats_vec);
+
+    // Note: std::optional page_sizes array represented as vec of k (idx) v (size) pairs
+    std::vector<tt::target::CBConfigPageSize> page_sizes_vec;
+    for (size_t i = 0; i < config.page_sizes_.size(); i++) {
+        if (config.page_sizes_[i]) {
+            page_sizes_vec.push_back({i, *config.page_sizes_[i]});
+        }
+    }
+    auto page_sizes_fb = builder.CreateVectorOfStructs(page_sizes_vec);
+
+    // FIXME - Use ToFlatbuffer() for data formats.
+    // FIXME - Do the same with other optionals (tiles array, globally_allocated_address)
     // FIXME - Handle const Buffer* shadow_global_buffer; too
+
+    auto tiles_fb = toFlatBuffer(config.tiles_, builder);
 
     // Serialize buffer_indices_ as a FlatBuffer vector
     std::vector<uint8_t> buffer_indices_vector(config.buffer_indices_.begin(), config.buffer_indices_.end());

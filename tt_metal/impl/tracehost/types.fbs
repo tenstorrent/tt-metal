@@ -142,11 +142,21 @@ table Tile {
   transpose_of_faces: bool;    // Transpose face order
 }
 
+struct CBConfigPageSize {
+  index: uint32;  // The index in the array
+  size: uint32;   // The page-size value for this index
+}
+
+struct CBConfigDataFormat {
+  index: uint32;  // The index in the array
+  format: uint32; // The data format for this index
+}
+
 table CircularBufferConfig {
   total_size: uint32;
   globally_allocated_address: uint32; // Optional behavior can be handled with a default value (or union)
-  data_formats: [uint8]; // Optional arrays are naturally nullable in FlatBuffers
-  page_sizes: [uint32];
+  data_formats: [CBConfigDataFormat]; // Optional arrays are naturally nullable in FlatBuffers
+  page_sizes: [CBConfigPageSize]; // Mimic optional array in C++ by using KV map.
   tiles: [Tile];
   // FIXME - buffer pointer
   buffer_indices: [uint8];
