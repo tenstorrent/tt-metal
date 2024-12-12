@@ -12,7 +12,7 @@ import ttnn
 import math
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
 from tests.sweep_framework.sweep_utils.sharding_utils import (
-    gen_sharded_spec_unary,
+    gen_sharded_spec_unary_2,
     parse_sharding_spec,
     invalidate_vector_sharding,
     roundup,
@@ -35,7 +35,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(16),
+        "input_spec": gen_sharded_spec_unary_2(16),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
@@ -49,19 +49,19 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     (
         input_shape,
         core_grid_size,
-        shard_orientation,
+        x,
+        y,
         sharding_strategy,
         tensor_hw_as_shard_shape,
-        shard_height_mul_of_32,
         input_layout,
+        shard_height_mul_of_32,
     ) = input_spec
     invlidated, output_str = invalidate_vector_sharding(*input_spec)
-    if invlidated:
-        return invlidated, output_str
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Input to eltwise binary must be tilized"
-
+    if invlidated:
+        return invlidated, output_str
     return False, None
 
 
@@ -80,14 +80,14 @@ def run(
 
     (
         input_shape,
-        core_grid_size,
-        shard_orientation,
+        x,
+        y,
         sharding_strategy,
+        shard_orientation,
         tensor_hw_as_shard_shape,
-        shard_height_mul_of_32,
         input_layout,
+        shard_height_mul_of_32,
     ) = parse_sharding_spec(input_spec)
-    y, x = core_grid_size
     device_grid_size = ttnn.CoreGrid(y=y, x=x)
 
     sharded_config = ttnn.create_sharded_memory_config_(
@@ -96,7 +96,7 @@ def run(
         strategy=sharding_strategy,
         orientation=shard_orientation,
         use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
-        tile_layout=True,
+        tile_layout=shard_height_mul_of_32,
     )
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:

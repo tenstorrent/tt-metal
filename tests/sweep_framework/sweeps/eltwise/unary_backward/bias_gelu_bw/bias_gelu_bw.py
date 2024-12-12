@@ -17,57 +17,6 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.utility_functions import torch_random
 
 
-def gen_sharded_spec(num_shapes, sharding_strategy, y, x, sanitize_args=True):
-    assert sharding_strategy in ["block", "width", "height"]
-
-    shard_orientation_list = ["col_major", "row_major"]
-    tensor_hw_as_shard_shape_list = [True, False]
-
-    if sharding_strategy == "block":
-        if not sanitize_args:
-            interval_1 = 1
-            interval_2 = 2
-        else:
-            interval_1 = 32 * y
-            interval_2 = 32 * x
-
-        input_shape_list = (
-            gen_shapes([1, 1, 32 * y, 32 * x], [6, 12, 512, 512], [1, 1, interval_1, interval_2], num_shapes)
-            + gen_shapes([1, 32 * y, 32 * x], [12, 512, 512], [1, interval_1, interval_2], num_shapes)
-            + gen_shapes([32 * y, 32 * x], [512, 512], [interval_1, interval_2], num_shapes)
-        )
-    elif sharding_strategy == "width":
-        if not sanitize_args:
-            interval = 1
-        else:
-            interval = 32 * x * y
-        input_shape_list = (
-            gen_shapes([1, 1, 32, 32 * x * y], [4, 6, 64, 32 * x * y], [1, 1, 32, interval], num_shapes)
-            + gen_shapes([1, 32, 32 * x * y], [6, 64, 32 * x * y], [1, 32, interval], num_shapes)
-            + gen_shapes([32, 32 * x * y], [64, 32 * x * y], [32, interval], num_shapes)
-        )
-    else:
-        if not sanitize_args:
-            interval = 1
-        else:
-            interval = 32 * x * y
-        input_shape_list = (
-            gen_shapes([1, 1, 32 * x * y, 32], [4, 6, 32 * x * y, 64], [1, 1, interval, 32], num_shapes)
-            + gen_shapes([1, 32 * x * y, 32], [6, 32 * x * y, 64], [1, interval, 32], num_shapes)
-            + gen_shapes([32 * x * y, 32], [32 * x * y, 64], [interval, 32], num_shapes)
-        )
-
-    for input_shape, shard_orientation, tensor_hw_as_shard_shape in itertools.product(
-        input_shape_list, shard_orientation_list, tensor_hw_as_shard_shape_list
-    ):
-        yield {
-            "input_shape": input_shape,
-            "sharding_strategy": sharding_strategy,
-            "shard_orientation": shard_orientation,
-            "tensor_hw_as_shard_shape": tensor_hw_as_shard_shape,
-        }
-
-
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
