@@ -34,10 +34,10 @@ struct WorkerToFabricEdmSender{
         auto const edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
         uint8_t const num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
         uint8_t const edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
-        auto const edm_connection_handshake_l1_addr = get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
+        auto const edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
         auto const edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
         uint16_t const buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
-        auto const edm_buffer_index_addr = get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
+        auto const edm_buffer_index_addr = get_arg_val<uint32_t>(arg_idx++);
         auto writer_send_sem_addr = reinterpret_cast<volatile uint32_t* const >(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
         auto const worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
         // DPRINT << "w->E Conn. y|x " << (uint32_t)((edm_worker_xy.y << 16) | edm_worker_xy.x) << "\n";
@@ -49,6 +49,7 @@ struct WorkerToFabricEdmSender{
             (my_core_type == ProgrammableCoreType::ACTIVE_ETH && (uint32_t)writer_send_sem_addr < 262144));
         ASSERT(edm_buffer_index_addr < 262144);
         return WorkerToFabricEdmSender(
+            is_persistent_fabric,
             edm_worker_xy.x,
             edm_worker_xy.y,
             edm_buffer_base_addr,
@@ -92,9 +93,9 @@ struct WorkerToFabricEdmSender{
         edm_noc_x(edm_worker_x),
         edm_noc_y(edm_worker_y)
     {
-        DPRINT << "edm_semaphore_addr: " << (uint32_t)edm_semaphore_addr << "\n";
-        DPRINT << "edm_buffer_index_addr: " << (uint32_t)edm_buffer_index_addr << "\n";
-        DPRINT << "edm_l1_sem_addr: " << (uint32_t)edm_l1_sem_addr << "\n";
+        // DPRINT << "edm_semaphore_addr: " << (uint32_t)edm_semaphore_addr << "\n";
+        // DPRINT << "edm_buffer_index_addr: " << (uint32_t)edm_buffer_index_addr << "\n";
+        // DPRINT << "edm_l1_sem_addr: " << (uint32_t)edm_l1_sem_addr << "\n";
 
         ASSERT(buffer_size_bytes > 0);
     }
@@ -171,7 +172,6 @@ struct WorkerToFabricEdmSender{
         ASSERT(*this->buffer_index_ptr < 20);
         DPRINT << "Connecting to EDM fabric @ " << (uint64_t)edm_connection_handshake_noc_addr << "\n";
         DPRINT << "\t&sem_addr: " << (uint32_t)&(this->worker_sem_addr) << "\n";
-        DPRINT << "\tbuffer_index: " << (uint32_t)*this->buffer_index_ptr << "\n";
         // DPRINT << "remote buffer index @: " << (uint64_t)remote_buffer_index_addr << "\n";
         // DPRINT << "Buffer index: " << (uint32_t)*this->buffer_index_ptr << "\n";
         // DPRINT << "edm_buffer_base_addr: " << (uint64_t)edm_buffer_base_addr << "\n";
@@ -185,7 +185,6 @@ struct WorkerToFabricEdmSender{
 
         // buffer index stored at location after handshake addr
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
-        DPRINT << "Buffer index at time of close: " << (uint32_t)*this->buffer_index_ptr << "\n";
         noc_inline_dw_write(remote_buffer_index_addr, *this->buffer_index_ptr);
 
         noc_async_write_barrier();
@@ -238,7 +237,7 @@ struct WorkerToFabricEdmSender{
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         auto const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_semaphore_addr);
         DPRINT << "\tSEMINC TO @ " << (uint64_t)noc_sem_addr << "\n";
-        DPRINT << "\tbuff_idx: " << (uint32_t)*this->buffer_index_ptr << "\n";
+        // DPRINT << "\tbuff_idx: " << (uint32_t)*this->buffer_index_ptr << "\n";
         noc_semaphore_inc(noc_sem_addr, 1);
 
         *this->buffer_index_ptr = (*this->buffer_index_ptr == this->last_buffer_index) ? 0 : *this->buffer_index_ptr + 1;
