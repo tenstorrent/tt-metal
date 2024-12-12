@@ -321,11 +321,21 @@ def run_test_sdpa_decode_single_iter(
     sharded_out=False,
     start_indices=None,
     causal=True,
+    start_core=ttnn.CoreCoord(0, 0),
+    sub_core_grids=None,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
-    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
-        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
-
+    if sub_core_grids is None:
+        if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+            pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+    else:
+        unharvested_grid_size = (7, 10)
+        if compute_grid_size.x > unharvested_grid_size[0] or compute_grid_size.y > unharvested_grid_size[1]:
+            pytest.skip(f"Need {unharvested_grid_size} grid size to run this test but core grid is {compute_grid_size}")
+        if grid_size[0] * grid_size[1] > sub_core_grids.num_cores():
+            pytest.skip(
+                f"Need {grid_size[0]*grid_size[1]} grid size to run this test but core grid is {sub_core_grids.num_cores()}"
+            )
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
 
@@ -346,7 +356,14 @@ def run_test_sdpa_decode_single_iter(
     )
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
-    shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
+    if sub_core_grids is None:
+        shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
+        compute_sub_core_grids = None
+    else:
+        shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, b, sub_core_grids, row_wise=True)
+        compute_sub_core_grids = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            start_core, grid_size[0] * grid_size[1], sub_core_grids, row_wise=True
+        )
     shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
@@ -364,6 +381,7 @@ def run_test_sdpa_decode_single_iter(
     k_chunk_size = get_chunk_size(max_start_idx + 1, s)
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
+        sub_core_grids=compute_sub_core_grids,
         q_chunk_size=padded_num_heads,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -902,6 +920,75 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     run_test_sdpa_decode_single_iter(
         device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=False, sharded_out=True
     )
+
+
+@skip_for_blackhole("Unsupported on BH, see #12349")
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "dtype, q_dtype",
+    [
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=[
+        "bfp8_cache_bf16_act",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size",
+    (
+        [8, 8, 1, 2048, 128, (8, 4)],
+        [8, 8, 1, 256, 128, (8, 4)],
+    ),  # Llama2-70B
+)
+@pytest.mark.parametrize(
+    "start_core, sub_core_grids",
+    [
+        (
+            ttnn.CoreCoord(1, 0),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ]
+            ),
+        ),
+    ],
+)
+def test_sdpa_decode_sharded_on_subcoregrids(
+    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids
+):
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        sharded_in=True,
+        sharded_out=True,
+        start_core=start_core,
+        sub_core_grids=sub_core_grids,
+    )
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        sharded_in=True,
+        sharded_out=True,
+        start_core=start_core,
+        sub_core_grids=sub_core_grids,
+    )
+    assert device.num_program_cache_entries() == 1
 
 
 @skip_for_blackhole("Unsupported on BH, see #12349")

@@ -122,8 +122,19 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
 
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores_available = grid_size.x * grid_size.y;
+
+    CoreRangeSet core_grid;
+    bool on_subcoregrid = false;
+    if (program_config.has_value() && program_config->sub_core_grids.has_value()) {
+        core_grid = program_config->sub_core_grids.value();
+        TT_FATAL(
+            core_grid.num_cores() == num_cores_available,
+            "Number of cores in sub_core_grids must match the number of cores available");
+        on_subcoregrid = true;
+    } else {
+        core_grid = CoreRangeSet(std::vector{CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1})});
+    }
 
     uint32_t num_cores_in_grid = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
     TT_FATAL(num_cores_available <= num_cores_in_grid, "Expected number of cores available to be less than or equal to the number of cores in the grid, got {} and {}", num_cores_available, num_cores_in_grid);
@@ -154,32 +165,53 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // h_worker2) head_reducer2 to head_reducerk then send the result to head_reducer1, which is also the batch_output1
     std::vector<CoreCoord> core_group;
     std::vector<CoreCoord> core_group_idle;
-    if (is_q_sharded || is_output_sharded) {
-        int reducer_idx = 0;
-        int worker_idx = num_output_cores;
-
-        for (int i = 0; i < num_cores_available; ++i) {
-            CoreCoord core;
-            if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
-                core = {reducer_idx % grid_size.x, reducer_idx / grid_size.x};
-                reducer_idx++;
-            } else {
-                core = {worker_idx % grid_size.x, worker_idx / grid_size.x};
-                worker_idx++;
+    if (on_subcoregrid) {
+        if (is_q_sharded || is_output_sharded) {
+            auto cores_vec = corerange_to_cores(core_grid, num_cores_available, true);
+            int reducer_idx = 0;
+            int worker_idx = num_output_cores;
+            for (int i = 0; i < num_cores_available; ++i) {
+                if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
+                    i < num_active_cores ? core_group.push_back(cores_vec[reducer_idx])
+                                         : core_group_idle.push_back(cores_vec[reducer_idx]);
+                    reducer_idx++;
+                } else {
+                    i < num_active_cores ? core_group.push_back(cores_vec[worker_idx])
+                                         : core_group_idle.push_back(cores_vec[worker_idx]);
+                    worker_idx++;
+                }
             }
-            if (i < num_active_cores) {
-                core_group.push_back(core);
-            } else {
-                core_group_idle.push_back(core);
-            }
+        } else {
+            TT_FATAL(false, "We only support SDPA on subcoregrids with sharded Q and sharded output");
         }
     } else {
-        for (int i = 0; i < num_cores_available; ++i) {
-            CoreCoord core = {i % grid_size.x, i / grid_size.x};
-            if (i < num_active_cores) {
-                core_group.push_back(core);
-            } else {
-                core_group_idle.push_back(core);
+        if (is_q_sharded || is_output_sharded) {
+            int reducer_idx = 0;
+            int worker_idx = num_output_cores;
+
+            for (int i = 0; i < num_cores_available; ++i) {
+                CoreCoord core;
+                if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
+                    core = {reducer_idx % grid_size.x, reducer_idx / grid_size.x};
+                    reducer_idx++;
+                } else {
+                    core = {worker_idx % grid_size.x, worker_idx / grid_size.x};
+                    worker_idx++;
+                }
+                if (i < num_active_cores) {
+                    core_group.push_back(core);
+                } else {
+                    core_group_idle.push_back(core);
+                }
+            }
+        } else {
+            for (int i = 0; i < num_cores_available; ++i) {
+                CoreCoord core = {i % grid_size.x, i / grid_size.x};
+                if (i < num_active_cores) {
+                    core_group.push_back(core);
+                } else {
+                    core_group_idle.push_back(core);
+                }
             }
         }
     }
