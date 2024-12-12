@@ -42,7 +42,6 @@ std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
             /*
             * Shared with `read_wrapped_chunk_from_output_tensor`
             */
-            // uint32_t flattened_offset_worker_slice = offset_worker_slice.x + (offset_worker_slice.y * tensor_slice_shape.x);
             uint32_t flattened_offset_worker_slice = ttnn::ccl::v2::flattened_index(tensor_slice_shape, offset_worker_slice);
             uint32_t contig_until_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
 
@@ -93,13 +92,11 @@ void mcast_contig_pages_to_noc_address(
     // Local chip write
     noc_async_write(
         payload_l1_address,
-        get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr, noc_index), // use noc_id = noc_index for local writes on writer
+        get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr, noc_index),
         payload_size_bytes
     );
-
     size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
 
-    // tt::fabric::nop(); // no hang here
 
     // Forward fabric connection
     if (has_forward_fabric_connection) {
@@ -112,7 +109,6 @@ void mcast_contig_pages_to_noc_address(
             .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
                 dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)
             });
-        // tt::fabric::nop(); // no hang here
         forward_fabric_sender.wait_for_empty_write_slot();
         forward_fabric_sender.send_payload_flush_blocking_from_address(l1_read_addr, packet_send_size_bytes);
     }
@@ -125,7 +121,6 @@ void mcast_contig_pages_to_noc_address(
             .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
                 dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)
             });
-        // tt::fabric::nop(); // no hang here
         backward_fabric_sender.wait_for_empty_write_slot();
         backward_fabric_sender.send_payload_non_blocking_from_address(l1_read_addr, packet_send_size_bytes);
     }
@@ -276,7 +271,6 @@ void mcast_sync_signal_to_addr(
     size_t backward_direction_num_hops,
     size_t num_sync_signals) {
 
-    // tt::fabric::nop(); // no hang here
 
     auto send_sync_signal = [](
         size_t pkt_addr,
@@ -287,39 +281,23 @@ void mcast_sync_signal_to_addr(
         static_assert(((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0, "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
         ASSERT((pkt_addr & (sizeof(tt::fabric::PacketHeader) - 1)) == 0);
 
-        // tt::fabric::nop(); // hang here
-
         auto &pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(pkt_addr);
         pkt_hdr.to_atomic_inc()
             .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(directional_num_hops)})
             .to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
                 remote_sem_l1_addr, 1, 32, static_cast<uint8_t>(remote_sem_noc_x), static_cast<uint8_t>(remote_sem_noc_y)
             });
-        // print_pkt_header(&pkt_hdr);
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_flush_blocking_from_address(pkt_addr, pkt_hdr.get_payload_size_including_header());
     };
 
-    DPRINT << "num_sync_signals: " << (uint32_t)num_sync_signals << "\n";
-
     for (size_t i = 0; i < num_sync_signals; ++i) {
-        // uint32_t semaphore_id = get_arg_val<uint32_t>(sync_details_arg_idx++);
-        // auto dest_sem_addr = get_semaphore(semaphore_id);
         auto dest_sem_addr = get_arg_val<uint32_t>(sync_details_arg_idx++); // hack, we pass in the address instead of the semaphore id
         auto dest_noc_x = get_arg_val<uint32_t>(sync_details_arg_idx++);
         auto dest_noc_y = get_arg_val<uint32_t>(sync_details_arg_idx++);
 
-        // tt::fabric::nop(); // (1) no hang here
-        // DPRINT << "semaphore_id: " << (uint32_t)semaphore_id << "\n";
-        DPRINT << "dest_sem_addr: " << (uint32_t)dest_sem_addr << "\n";
-        DPRINT << "dest_noc_x: " << (uint32_t)dest_noc_x << "\n";
-        DPRINT << "dest_noc_y: " << (uint32_t)dest_noc_y << "\n";
-
-        // tt::fabric::nop(); // (2) nd hang here
-
         if (has_forward_fabric_connection) {
             const size_t pkt_addr = some_buffering_addr;
-            // tt::fabric::nop(); // (3) hang here
             send_sync_signal(
                 pkt_addr,
                 forward_fabric_sender,
@@ -330,7 +308,6 @@ void mcast_sync_signal_to_addr(
         }
         if (has_backward_fabric_connection) {
             const size_t pkt_addr = some_buffering_addr;
-            // tt::fabric::nop(); // (4) hang here
             send_sync_signal(
                 pkt_addr,
                 backward_fabric_sender,

@@ -4,15 +4,10 @@
 
 #pragma once
 
-#include <memory>
 #include "sub_device/sub_device_types.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
 
 namespace ttnn {
 struct ReduceScatterAsync {
@@ -80,8 +75,6 @@ struct ReduceScatterAsync {
         attrs.emplace_back("num_links_preferred", num_links_preferred);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
-        // attrs.emplace_back("from_remote_sem", from_remote_sem);
-        // attrs.emplace_back("to_remote_sem", to_remote_sem);
 
         return attrs;
     }

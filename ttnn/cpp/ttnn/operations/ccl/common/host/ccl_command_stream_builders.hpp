@@ -8,7 +8,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 
 #include <vector>
-#include <cstdint>
+// #include <cstdint>
 
 namespace tt::tt_metal {
     class Tensor;

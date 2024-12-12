@@ -119,8 +119,6 @@ struct CclCommandTensor {
     Shape4D<uint32_t> tensor_slice_offset;
     Shape4D<uint32_t> worker_start_offset_in_slice;
     uint32_t worker_pages_per_slice;
-
-    // CclCommandTensor(CclCommandTensor const& rhs) = default;
 };
 
 template <CclCommandArgCode code>  struct command_arg_field                                         {  using type = std::nullptr_t; };
@@ -282,7 +280,6 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
         CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::pack_to(args, this->value);
     }
 
-    // TODO: when kernels get c++20, use std::span
     static void unpack(volatile args_elem_t const* args, CclCommandTensor& out) {
         std::size_t i = 0;
         CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::unpack(&args[i], out.tensor_shape);
@@ -374,27 +371,17 @@ enum class CclCommandAddrType : uint8_t {
 };
 struct CclCommandAddrSemaphoreId {
     uint32_t semaphore_id;
-    // bool operator==(CclCommandAddrSemaphoreId const& other) const = default;
-    // bool operator!=(CclCommandAddrSemaphoreId const& other) const = default
 };
 struct CclCommandAddrCircularBufferId {
     uint32_t circular_buffer_id;
-    // bool operator==(CclCommandAddrCircularBufferId const& other) const = default;
-    // bool operator!=(CclCommandAddrCircularBufferId const& other) const = default;
 };
 struct CclCommandAddrAbsoluteAddress {
     uint32_t absolute_address;
-    // bool operator==(CclCommandAddrAbsoluteAddress const& other) const = default;
-    // bool operator!=(CclCommandAddrAbsoluteAddress const& other) const = default;
 };
 struct CclCommandAddrRelativeAddress {
     uint32_t relative_address;
-    // bool operator==(CclCommandAddrRelativeAddress const& other) const = default;
-    // bool operator!=(CclCommandAddrRelativeAddress const& other) const = default;
 };
 struct CclCommandAddrNone {
-    // bool operator==(CclCommandAddrNone const& other) const = default;
-    // bool operator!=(CclCommandAddrNone const& other) const = default;
 };
 
 using CclCommandAddrArgs = std::variant<
