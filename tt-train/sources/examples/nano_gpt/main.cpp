@@ -20,6 +20,7 @@
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/sgd.hpp"
+#include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
@@ -142,6 +143,7 @@ struct TrainingConfig {
     uint32_t gradient_accumulation_steps = 1;
     std::string model_path;
     std::string data_path;
+    std::string tokenizer_type = "char";
     std::string scheduler_type = "identity";
 
     ttml::models::gpt2::TransformerConfig transformer_config;
@@ -163,6 +165,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_path = training_config["model_path"].as<std::string>("");
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
+    config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
 
     config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
@@ -208,6 +211,7 @@ int main(int argc, char **argv) {
         {"sequence_length", static_cast<int>(config.transformer_config.max_sequence_length)},
         {"max_steps", static_cast<int>(config.max_steps)},
         {"seed", static_cast<int>(config.seed)},
+        {"tokenizer_type", config.tokenizer_type},
         {"use_kahan_summation", config.use_kahan_summation},
         {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
         {"positional_embedding_type",
@@ -236,10 +240,22 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = config.transformer_config.max_sequence_length;
 
-    auto [dataset, tokenizer] =
-        ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(text, sequence_length);
+    auto create_dataset_and_tokenizer = [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
+        if (tokenizer_type == "char") {
+            return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                text, sequence_length);
+        } else if (tokenizer_type == "bpe") {
+            return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
+                text, sequence_length);
+        } else {
+            throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+        }
+    };
+
+    auto [dataset, tokenizer] = create_dataset_and_tokenizer(text, sequence_length, config.tokenizer_type);
     fmt::print("Dataset size: {}\n", dataset.get_size());
-    fmt::print("Vocab size: {}\n", tokenizer.get_vocab_size());
+    fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
+    fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
@@ -269,8 +285,7 @@ int main(int argc, char **argv) {
         mask, ttml::core::create_shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, vocab_size = tokenizer.get_vocab_size(), device, &cached_data](
-            std::vector<DatasetSample> &&samples) {
+        [sequence_length, num_heads, device, &cached_data](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -302,7 +317,7 @@ int main(int argc, char **argv) {
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
-    config.transformer_config.vocab_size = round_up_to_tile(tokenizer.get_vocab_size());
+    config.transformer_config.vocab_size = round_up_to_tile(tokenizer->get_vocab_size());
     auto model = ttml::models::gpt2::create(config.transformer_config);
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
@@ -324,7 +339,7 @@ int main(int argc, char **argv) {
     if (is_eval) {
         fmt::print("\nEvaluation started\n");
         for (;;) {
-            generate(model, tokenizer, config.transformer_config.max_sequence_length, num_heads);
+            generate(model, *tokenizer, config.transformer_config.max_sequence_length, num_heads);
         }
         fmt::print("\nEvaluation finished\n");
         return 0;
