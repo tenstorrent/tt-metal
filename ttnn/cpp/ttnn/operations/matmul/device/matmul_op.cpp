@@ -186,7 +186,7 @@ inline uint32_t get_estimated_size_of_cbs(
     // out CB:  per_core_M * per_core_N
     // Ignore optional intermediate CB because not needed when need to create a program config.
     uint32_t in0_size = per_core_M * in0_block_w * 2 * in0_single_tile_size;
-    uint32_t in1_size = per_core_M * in0_block_w * 2 * in1_single_tile_size;
+    uint32_t in1_size = per_core_N * in0_block_w * 2 * in1_single_tile_size;
     uint32_t out_size = per_core_M * per_core_N * output_single_tile_size;
     uint32_t interm_size = per_core_M * per_core_N * interm_single_tile_size;
     return in0_size + in1_size + out_size + interm_size;
@@ -277,8 +277,8 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
         return {per_core_M, per_core_N, in0_block_w};
     }
 
-    std::vector<uint32_t> m_factors;
-    std::vector<uint32_t> n_factors;
+    std::vector<uint32_t> m_factors = {per_core_M, 1};
+    std::vector<uint32_t> n_factors = {per_core_N, 1};
     for (uint32_t per_core_factor_m = per_core_M / 2; per_core_factor_m > 1; per_core_factor_m--) {
         if (per_core_M % per_core_factor_m == 0) {
             m_factors.push_back(per_core_factor_m);
@@ -286,7 +286,7 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
     }
     for (uint32_t per_core_factor_n = per_core_N / 2; per_core_factor_n > 1; per_core_factor_n--) {
         if (per_core_N % per_core_factor_n == 0) {
-            m_factors.push_back(per_core_factor_n);
+            n_factors.push_back(per_core_factor_n);
         }
     }
     // Insert into ordered map, over write entry if new one is closer to a square (smallest ratio closest to 1).
@@ -323,7 +323,7 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
             uint32_t per_core_factor_m = std::get<0>(it->second);
             uint32_t per_core_factor_n = std::get<1>(it->second);
 
-            uint32_t size = get_estimated_size_of_cbs(
+            size = get_estimated_size_of_cbs(
                 per_core_factor_m,
                 per_core_factor_n,
                 per_core_factor_k,
