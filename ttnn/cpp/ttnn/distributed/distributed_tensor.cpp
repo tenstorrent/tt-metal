@@ -175,6 +175,7 @@ std::unique_ptr<MeshToTensor> concat_mesh_2d_to_tensor_composer(MeshDevice& mesh
 }
 
 Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, TensorToMesh& mapper) {
+    // TODO: test and optimize for the borrowed storage type.
     TT_FATAL(
         tensor.storage_type() == StorageType::OWNED,
         "TensorToMesh only supports owned tensors; got storage type: {}",
@@ -185,11 +186,8 @@ Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, TensorTo
 }
 
 Tensor aggregate_tensor(const Tensor& tensor, MeshToTensor& composer) {
-    TT_FATAL(
-        tensor.storage_type() == StorageType::MULTI_DEVICE || tensor.storage_type() == StorageType::DEVICE,
-        "MeshToTensor only supports multi device or device tensors; got storage type: {}",
-        tensor.storage_type());
-    return composer.compose(get_tensors_from_multi_device_storage(tensor));
+    return is_multi_device_tensor(tensor) ? composer.compose(get_tensors_from_multi_device_storage(tensor))
+                                          : composer.compose({tensor});
 }
 
 }  // namespace ttnn::distributed::api

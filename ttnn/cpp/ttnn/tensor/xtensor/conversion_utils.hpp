@@ -10,6 +10,7 @@
 
 namespace ttnn::experimental::xtensor {
 
+// Returns the shape of the xtensor as `ttnn::SimpleShape`.
 template <typename E>
 ttnn::SimpleShape get_shape_from_xarray(const E& xarr) {
     ttnn::SmallVector<uint32_t> shape_dims;
@@ -19,18 +20,20 @@ ttnn::SimpleShape get_shape_from_xarray(const E& xarr) {
     return ttnn::SimpleShape(shape_dims);
 }
 
+// Converts a buffer of elements of type `T` to a Tensor.
+// Elements are assumed to be stored in row-major order. The size of the span and the type have to match Tensor spec.
 template <typename T>
-tt::tt_metal::Tensor from_span(
-    tt::stl::Span<const T> buffer, const ttnn::SimpleShape& shape, tt::tt_metal::DataType dtype);
+tt::tt_metal::Tensor from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec);
 
-template <typename T>
-tt::tt_metal::Tensor from_vector(
-    const std::vector<T>& buffer, const ttnn::SimpleShape& shape, tt::tt_metal::DataType dtype) {
-    return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), shape, dtype);
-}
-
+// Converts a Tensor to a buffer of elements of type `T`.
+// Elements in the buffer will be stored in row-major order. The type of the elements has to match that of the Tensor.
 template <typename T>
 std::vector<T> to_vector(const tt::tt_metal::Tensor& tensor);
+
+template <typename T>
+tt::tt_metal::Tensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec) {
+    return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), spec);
+}
 
 template <typename T>
 xt::xarray<T> tt_span_to_xtensor(tt::stl::Span<const T> vec, const ttnn::SimpleShape& shape) {
@@ -59,10 +62,11 @@ auto xtensor_to_span(const xt::xarray<T>& xtensor) {
 }
 
 template <typename T>
-tt::tt_metal::Tensor from_xtensor(const xt::xarray<T>& buffer, tt::tt_metal::DataType dtype) {
+tt::tt_metal::Tensor from_xtensor(const xt::xarray<T>& buffer, const TensorSpec& spec) {
     auto shape = get_shape_from_xarray(buffer);
+    TT_FATAL(shape == spec.logical_shape(), "xtensor has a different shape than the supplied TensorSpec");
     auto buffer_view = xtensor_to_tt_span(buffer);
-    return from_span<T>(buffer_view, shape, dtype);
+    return from_span<T>(buffer_view, spec);
 }
 
 template <typename T>

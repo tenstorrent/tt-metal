@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/assert.hpp"
-#include "ttnn/cpp/ttnn/operations/copy.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
@@ -16,11 +15,12 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Tensor;
 
 template <typename T>
-Tensor create_owned_tensor(
-    tt::stl::Span<const T> data, const ttnn::SimpleShape& shape, DataType data_type, tt::tt_metal::Layout layout) {
+Tensor create_owned_tensor(tt::stl::Span<const T> data, const TensorSpec& spec) {
+    // TODO: support tilized layouts.
+    TT_FATAL(spec.layout() == Layout::ROW_MAJOR, "Unsupported layout: {}", spec.layout());
     auto buffer = tt::tt_metal::owned_buffer::create(std::vector<T>(data.begin(), data.end()));
     auto storage = OwnedStorage{std::move(buffer)};
-    return Tensor{std::move(storage), shape, data_type, layout};
+    return Tensor{std::move(storage), spec};
 }
 
 // TODO: optimize precomputing multipliers
@@ -70,51 +70,52 @@ std::vector<T> untile_tensor_to_vec(const Tensor& cpu_tensor) {
 }  // namespace
 
 template <>
-Tensor from_span<float>(tt::stl::Span<const float> buffer, const ttnn::SimpleShape& shape, DataType dtype) {
-    size_t volume = shape.volume();
+Tensor from_span<float>(tt::stl::Span<const float> buffer, const TensorSpec& spec) {
+    size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (dtype == DataType::FLOAT32) {
-        return create_owned_tensor(buffer, shape, dtype, Layout::ROW_MAJOR);
-    } else if (dtype == DataType::BFLOAT16) {
+    if (spec.data_type() == DataType::FLOAT32) {
+        return create_owned_tensor(buffer, spec);
+    } else if (spec.data_type() == DataType::BFLOAT16) {
         std::vector<bfloat16> bfloat16_data;
         bfloat16_data.reserve(buffer.size());
         std::transform(std::begin(buffer), std::end(buffer), std::back_inserter(bfloat16_data), [](float value) {
             return bfloat16(value);
         });
-        return create_owned_tensor(
-            tt::stl::Span<const bfloat16>(bfloat16_data.data(), bfloat16_data.size()), shape, dtype, Layout::ROW_MAJOR);
+        return create_owned_tensor(tt::stl::Span<const bfloat16>(bfloat16_data.data(), bfloat16_data.size()), spec);
     } else {
         // TODO: support bf8 and bf4
-        TT_THROW("Unsupported data type for from_span<float>: {}", dtype);
+        TT_THROW("Unsupported data type for from_span<float>: {}", spec.data_type());
     }
 }
 
 template <>
-Tensor from_span<bfloat16>(tt::stl::Span<const bfloat16> buffer, const ttnn::SimpleShape& shape, DataType dtype) {
-    size_t volume = shape.volume();
+Tensor from_span<bfloat16>(tt::stl::Span<const bfloat16> buffer, const TensorSpec& spec) {
+    size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    TT_FATAL(dtype == DataType::BFLOAT16, "Unsupported data type for from_span<bfloat16>: {}", dtype);
-    return create_owned_tensor(buffer, shape, dtype, Layout::ROW_MAJOR);
+    TT_FATAL(
+        spec.data_type() == DataType::BFLOAT16, "Unsupported data type for from_span<bfloat16>: {}", spec.data_type());
+    return create_owned_tensor(buffer, spec);
 }
 
 template <>
-Tensor from_span<uint32_t>(tt::stl::Span<const uint32_t> buffer, const ttnn::SimpleShape& shape, DataType dtype) {
-    size_t volume = shape.volume();
+Tensor from_span<uint32_t>(tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec) {
+    size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    TT_FATAL(dtype == DataType::UINT32, "Unsupported data type for from_span<uint32_t>: {}", dtype);
-    return create_owned_tensor(buffer, shape, DataType::UINT32, Layout::ROW_MAJOR);
+    TT_FATAL(
+        spec.data_type() == DataType::UINT32, "Unsupported data type for from_span<uint32_t>: {}", spec.data_type());
+    return create_owned_tensor(buffer, spec);
 }
 
 template <>
-Tensor from_span<int32_t>(tt::stl::Span<const int32_t> buffer, const ttnn::SimpleShape& shape, DataType dtype) {
-    size_t volume = shape.volume();
+Tensor from_span<int32_t>(tt::stl::Span<const int32_t> buffer, const TensorSpec& spec) {
+    size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    TT_FATAL(dtype == DataType::INT32, "Unsupported data type for from_span<int32_t>: {}", dtype);
-    return create_owned_tensor(buffer, shape, DataType::INT32, Layout::ROW_MAJOR);
+    TT_FATAL(spec.data_type() == DataType::INT32, "Unsupported data type for from_span<int32_t>: {}", spec.data_type());
+    return create_owned_tensor(buffer, spec);
 }
 
 template <>

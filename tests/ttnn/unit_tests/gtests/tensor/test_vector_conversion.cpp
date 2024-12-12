@@ -15,7 +15,6 @@ namespace {
 
 using ::testing::Eq;
 using ::testing::Pointwise;
-using ::tt::tt_metal::Tensor;
 using ::ttnn::experimental::xtensor::from_vector;
 using ::ttnn::experimental::xtensor::to_vector;
 
@@ -29,6 +28,10 @@ const std::vector<ttnn::SimpleShape>& GetShapesForTest() {
         ttnn::SimpleShape{1, 1, 1, 1, 10},
     };
     return *shapes;
+}
+
+TensorSpec GetTensorSpec(const ttnn::SimpleShape& shape, DataType dtype, Layout layout = Layout::ROW_MAJOR) {
+    return TensorSpec(shape, TensorLayout(dtype, layout, MemoryConfig{}));
 }
 
 template <typename T>
@@ -53,7 +56,7 @@ TYPED_TEST_SUITE(VectorConversionTest, TestTypes);
 TYPED_TEST(VectorConversionTest, Basic) {
     for (const auto& shape : GetShapesForTest()) {
         auto input = Arange<TypeParam>(0, static_cast<int64_t>(shape.volume()), 1);
-        auto output = to_vector<TypeParam>(from_vector(input, shape, convert_to_data_type<TypeParam>()));
+        auto output = to_vector<TypeParam>(from_vector(input, GetTensorSpec(shape, convert_to_data_type<TypeParam>())));
         EXPECT_THAT(output, Pointwise(Eq(), input)) << "for shape: " << shape;
     }
 }
@@ -63,7 +66,19 @@ TYPED_TEST(VectorConversionTest, InvalidSize) {
     auto input = Arange<TypeParam>(0, 42, 1);
 
     ASSERT_NE(input.size(), shape.volume());
-    EXPECT_ANY_THROW(from_vector(input, shape, convert_to_data_type<TypeParam>()));
+    EXPECT_ANY_THROW(from_vector(input, GetTensorSpec(shape, convert_to_data_type<TypeParam>())));
+}
+
+TYPED_TEST(VectorConversionTest, TilezedLayout) {
+    ttnn::SimpleShape shape{128, 128};
+
+    auto input = Arange<TypeParam>(0, shape.volume(), 1);
+    // TODO: Support this.
+    EXPECT_ANY_THROW(from_vector(input, GetTensorSpec(shape, convert_to_data_type<TypeParam>(), Layout::TILE)));
+
+    auto output = to_vector<TypeParam>(
+        from_vector(input, GetTensorSpec(shape, convert_to_data_type<TypeParam>())).to(Layout::TILE));
+    EXPECT_THAT(output, Pointwise(Eq(), input));
 }
 
 TYPED_TEST(VectorConversionTest, InvalidDtype) {
@@ -73,9 +88,10 @@ TYPED_TEST(VectorConversionTest, InvalidDtype) {
     ASSERT_NE(input.size(), shape.volume());
     EXPECT_ANY_THROW(from_vector(
         input,
-        shape,
-        // Use INT32 for verification, except for when the actual type is int32_t.
-        (std::is_same_v<TypeParam, int32_t> ? DataType::FLOAT32 : DataType::INT32)));
+        GetTensorSpec(
+            shape,
+            // Use INT32 for verification, except for when the actual type is int32_t.
+            (std::is_same_v<TypeParam, int32_t> ? DataType::FLOAT32 : DataType::INT32))));
 }
 
 TEST(FloatVectorConversionTest, Bfloat16Representation) {
@@ -87,10 +103,10 @@ TEST(FloatVectorConversionTest, Bfloat16Representation) {
             return bf.to_float();
         });
 
-        auto output_bf16 = to_vector<bfloat16>(from_vector(input_ft, shape, DataType::BFLOAT16));
+        auto output_bf16 = to_vector<bfloat16>(from_vector(input_ft, GetTensorSpec(shape, DataType::BFLOAT16)));
         EXPECT_THAT(output_bf16, Pointwise(Eq(), input_bf16)) << "for shape: " << shape;
 
-        auto output_ft = to_vector<float>(from_vector(input_bf16, shape, DataType::BFLOAT16));
+        auto output_ft = to_vector<float>(from_vector(input_bf16, GetTensorSpec(shape, DataType::BFLOAT16)));
         EXPECT_THAT(output_ft, Pointwise(Eq(), input_ft)) << "for shape: " << shape;
     }
 }
