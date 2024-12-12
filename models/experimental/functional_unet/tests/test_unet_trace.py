@@ -26,10 +26,15 @@ from models.experimental.functional_unet.tests.common import (
 
 from models.utility_functions import skip_for_grayskull, divup
 
+L1_SMALL_SIZE = 79104
+TRACE_REGION_SIZE = 444416
+
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 68864, "trace_region_size": 444416}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": L1_SMALL_SIZE, "trace_region_size": TRACE_REGION_SIZE}], indirect=True
+)
 @pytest.mark.parametrize(
     "batch, groups, iterations",
     ((1, 2, 128),),
@@ -92,34 +97,31 @@ def test_unet_trace(
     l1_input_tensor = ttnn.allocate_tensor_on_device(
         shape, dtype, layout, device, ttnn_model.input_sharded_memory_config
     )
-    # assert input_trace_addr == l1_input_tensor.buffer_address()
     ttnn.end_trace_capture(device, tid, cq_id=0)
+    assert input_trace_addr == l1_input_tensor.buffer_address()
 
     logger.info(f"Running trace for {iterations} iterations...")
     outputs = []
     start = time.time()
     for _ in range(iterations):
-        a = time.time()
         ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
-        b = time.time()
         l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config, l1_input_tensor)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        c = time.time()
         outputs.append(output_tensor.cpu(blocking=True))
-        d = time.time()
     ttnn.synchronize_device(device)
     end = time.time()
     logger.info(f"Average model performance={iterations * batch / (end-start) : .2f} fps")
-    logger.info(f"in={b - a}, op={c-b}, out={d - c}")
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, outputs[-1], UNET_FULL_MODEL_PCC)
+
+    B, C, H, W = torch_output_tensor.shape
+    verify_with_pcc(torch_output_tensor, ttnn.to_torch(outputs[-1]).reshape(B, C, H, W), pcc=UNET_FULL_MODEL_PCC)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 444416, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": L1_SMALL_SIZE, "trace_region_size": TRACE_REGION_SIZE}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
@@ -328,8 +330,8 @@ def test_unet_trace_2cq_multi_device(
     l1_input_tensor = ttnn.allocate_tensor_on_device(
         shape, dtype, layout, mesh_device, ttnn_model.input_sharded_memory_config
     )
-    # assert input_trace_addr == buffer_address(l1_input_tensor)
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    assert input_trace_addr == buffer_address(l1_input_tensor)
 
     outputs = []
     start = time.time()

@@ -14,7 +14,7 @@ from models.experimental.functional_unet.tt.model_preprocessing import (
 from models.experimental.functional_unet.tt import unet_shallow_torch
 from models.experimental.functional_unet.tt import unet_shallow_ttnn
 from models.experimental.functional_unet.tests.common import (
-    check_pcc_conv,
+    verify_with_pcc,
     is_n300_with_eth_dispatch_cores,
     is_t3k_with_eth_dispatch_cores,
     UNET_FULL_MODEL_PCC,
@@ -32,7 +32,7 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, channel_order="first", pad=False)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups)
@@ -42,7 +42,10 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     logger.info(f"Using {num_devices} devices for this test")
 
     torch_input, ttnn_input = create_unet_input_tensors(
-        num_devices * batch, groups, channel_order="first", pad=True, mesh_mapper=inputs_mesh_mapper
+        num_devices * batch,
+        groups,
+        channel_order="first",
+        mesh_mapper=inputs_mesh_mapper,
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(
@@ -52,4 +55,9 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     torch_output_tensor = model(torch_input)
     output_tensor = ttnn_model(ttnn_input)
 
-    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=UNET_FULL_MODEL_PCC)
+    B, C, H, W = torch_output_tensor.shape
+    verify_with_pcc(
+        torch_output_tensor,
+        ttnn.to_torch(output_tensor, mesh_composer=output_mesh_composer).reshape(B, C, H, W),
+        pcc=UNET_FULL_MODEL_PCC,
+    )
