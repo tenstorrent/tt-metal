@@ -60,7 +60,6 @@ def run_all_gather_impl(
     num_links,
     input_dtype,
     layout,
-    mem_config,
     use_program_cache,
     function_level_defaults,
     all_gather_topology,
@@ -68,6 +67,10 @@ def run_all_gather_impl(
     enable_async=False,
     trace_mode=False,
     rand_tensor=True,
+    mem_config=None,
+    input_shard_shape=None,
+    shard_grid=None,
+    tensor_mem_layout=None,
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -79,6 +82,43 @@ def run_all_gather_impl(
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
+    logger.info(f"input_shard_shape: {input_shard_shape}")
+    logger.info(f"shard_grid: {shard_grid}")
+
+    ### For sharded all gather only
+    if bool(input_shard_shape) != bool(shard_grid) and bool(tensor_mem_layout) != bool(shard_grid):
+        pytest.fail(
+            "Both input_shard_shape, shard_grid, and tensor_mem_layout must be provided together or all must be None"
+        )
+    if input_shard_shape and shard_grid:
+        input_shard_spec = ttnn.ShardSpec(
+            shard_grid,
+            input_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        input_mem_config = ttnn.MemoryConfig(
+            tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
+        )
+        output_shard_shape = list(input_shard_shape)
+        if dim == 3:
+            output_shard_shape[1] *= num_devices
+        else:
+            output_shard_shape[0] *= num_devices
+        output_shard_spec = ttnn.ShardSpec(
+            shard_grid,
+            output_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        output_mem_config = ttnn.MemoryConfig(
+            tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+        )
+    else:
+        assert mem_config is not None
+        input_mem_config = mem_config
+        output_mem_config = mem_config
+    ###
 
     if rand_tensor:
         output_tensor = torch.rand(output_shape).bfloat16()
@@ -95,7 +135,9 @@ def run_all_gather_impl(
     input_tensors = torch.chunk(output_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
+        tt_input_tensors.append(
+            ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
+        )
         logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
@@ -106,12 +148,16 @@ def run_all_gather_impl(
             input_tensor_mesh,
             dim,
             num_links,
-            mem_config,
+            output_mem_config,
         )
     else:
         for i in range(num_iters):
             tt_out_tensor = ttnn.all_gather(
-                input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
+                input_tensor_mesh,
+                dim,
+                num_links=num_links,
+                memory_config=output_mem_config,
+                topology=all_gather_topology,
             )
 
             for d in mesh_device.get_devices():
@@ -147,13 +193,17 @@ def run_all_gather_impl(
         # - double/tripple buffers in cb not working
         # (4, 2, [4, 1, 256, 32], 0, ttnn.TILE_LAYOUT),  # failed: device not connected      # https://github.com/tenstorrent/tt-metal/issues/9686
         (2, 1, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 640, 8192], 2, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
         # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),  # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [1, 8, 256, 32], 1, ttnn.TILE_LAYOUT),
-        # (2, 2, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
-        # (2, 2, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
-        # (2, 2, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
+        (2, 2, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
+        (2, 2, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
+        (2, 2, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
+        (2, 2, [1, 1, 640, 8192], 2, ttnn.TILE_LAYOUT),
+        (2, 2, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
         # # (4, 3, [1, 1, 32, 16384 * 4], 3, ttnn.TILE_LAYOUT),  # failed: device not connected
         # (8, 4, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
         # (8, 3, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
@@ -205,13 +255,13 @@ def test_all_gather(
         num_links,
         input_dtype,
         layout,
-        mem_config,
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
         enable_async=enable_async,
         rand_tensor=True,
+        mem_config=mem_config,
     )
 
     run_all_gather_impl(
@@ -222,11 +272,128 @@ def test_all_gather(
         num_links,
         input_dtype,
         layout,
-        mem_config,
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
         enable_async=enable_async,
         rand_tensor=False,
+        mem_config=mem_config,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, shard_grid, tensor_mem_layout",
+    [
+        (
+            2,
+            [1, 1, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            2,
+            [1, 1, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            2,
+            [1, 1, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            2,
+            [1, 1, 64, 256],
+            2,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            2,
+            [1, 4, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1, 2])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,        # https://github.com/tenstorrent/tt-metal/issues/9686
+    ],
+)
+@pytest.mark.parametrize("num_iters", [1])  # restore to 500: https://github.com/tenstorrent/tt-metal/issues/9686
+@pytest.mark.parametrize("enable_async", [True])
+def test_all_gather_sharded(
+    t3k_mesh_device,
+    # pcie_mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    input_shard_shape,
+    shard_grid,
+    tensor_mem_layout,
+):
+    run_all_gather_impl(
+        t3k_mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_topology=ttnn.Topology.Ring,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        rand_tensor=True,
+        input_shard_shape=input_shard_shape,
+        shard_grid=shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+    )
+    run_all_gather_impl(
+        t3k_mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_topology=ttnn.Topology.Ring,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        rand_tensor=False,
+        input_shard_shape=input_shard_shape,
+        shard_grid=shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
     )
