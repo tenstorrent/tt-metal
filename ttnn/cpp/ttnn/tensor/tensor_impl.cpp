@@ -744,6 +744,13 @@ DeviceBuffer to_device_buffer(
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, BorrowedStorage>) {
                 auto data_to_write = host_buffer::get_as<T>(storage.buffer);
+                auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+                auto input_size_bytes = data_to_write.size() * sizeof(T);
+                TT_FATAL(
+                    input_size_bytes == expected_packed_buffer_size_bytes,
+                    "Host data with total size {}B does not match expected size {}B of device buffer!",
+                    input_size_bytes,
+                    expected_packed_buffer_size_bytes);
                 return initialize_data_on_device<T>(data_to_write, device, tensor_spec, cq_id, sub_device_ids);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");
@@ -839,6 +846,47 @@ Tensor to_device<bfloat8_b>(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id, sub_device_ids);
 }
+
+// ======================================================================================
+//     Helpers for converting between logical <-> physical data with full tensor spec
+// ======================================================================================
+template <typename T>
+std::vector<T> convert_logical_data_to_physical_data(
+    const std::vector<T>& logical_data, const TensorSpec& tensor_spec) {
+    return logical_data;
+}
+
+template std::vector<bfloat16> convert_logical_data_to_physical_data<bfloat16>(
+    const std::vector<bfloat16>& logical_data, const TensorSpec& tensor_spec);
+template std::vector<float> convert_logical_data_to_physical_data<float>(
+    const std::vector<float>& logical_data, const TensorSpec& tensor_spec);
+template std::vector<int32_t> convert_logical_data_to_physical_data<int32_t>(
+    const std::vector<int32_t>& logical_data, const TensorSpec& tensor_spec);
+template std::vector<uint32_t> convert_logical_data_to_physical_data<uint32_t>(
+    const std::vector<uint32_t>& logical_data, const TensorSpec& tensor_spec);
+template std::vector<uint16_t> convert_logical_data_to_physical_data<uint16_t>(
+    const std::vector<uint16_t>& logical_data, const TensorSpec& tensor_spec);
+template std::vector<uint8_t> convert_logical_data_to_physical_data<uint8_t>(
+    const std::vector<uint8_t>& logical_data, const TensorSpec& tensor_spec);
+
+template <typename T>
+std::vector<T> convert_physical_data_to_logical_data(
+    const std::vector<T>& physical_data, const TensorSpec& tensor_spec) {
+    return physical_data;
+}
+
+template std::vector<bfloat16> convert_physical_data_to_logical_data<bfloat16>(
+    const std::vector<bfloat16>& physical_data, const TensorSpec& tensor_spec);
+template std::vector<float> convert_physical_data_to_logical_data<float>(
+    const std::vector<float>& physical_data, const TensorSpec& tensor_spec);
+template std::vector<int32_t> convert_physical_data_to_logical_data<int32_t>(
+    const std::vector<int32_t>& physical_data, const TensorSpec& tensor_spec);
+template std::vector<uint32_t> convert_physical_data_to_logical_data<uint32_t>(
+    const std::vector<uint32_t>& physical_data, const TensorSpec& tensor_spec);
+template std::vector<uint16_t> convert_physical_data_to_logical_data<uint16_t>(
+    const std::vector<uint16_t>& physical_data, const TensorSpec& tensor_spec);
+template std::vector<uint8_t> convert_physical_data_to_logical_data<uint8_t>(
+    const std::vector<uint8_t>& physical_data, const TensorSpec& tensor_spec);
 
 // ======================================================================================
 //                                  .to_layout()

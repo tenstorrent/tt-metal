@@ -142,6 +142,13 @@ inline std::vector<T> convert_layout_tile_to_row_major(
         transpose_of_faces);
 }
 
+template <typename T>
+std::vector<T> convert_logical_data_to_physical_data(const std::vector<T>& logical_data, const TensorSpec& tensor_spec);
+
+template <typename T>
+std::vector<T> convert_physical_data_to_logical_data(
+    const std::vector<T>& physical_data, const TensorSpec& tensor_spec);
+
 // ======================================================================================
 //                                      Validators
 // ======================================================================================

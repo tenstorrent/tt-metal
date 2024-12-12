@@ -579,15 +579,13 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor) {
         },
         buffer);
 
-    auto shape = tt_tensor.get_legacy_shape();
-    auto torch_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
+    auto logical_shape = tt_tensor.get_logical_shape();
+    auto view = logical_shape.view();
+    std::vector<uint32_t> torch_shape(view.begin(), view.end());
     auto tensor = [&]() {
         if (tt_tensor.volume() == 0) {
             auto pytorch_empty = torch.attr("empty");
-            auto logical_shape = tt_tensor.get_logical_shape();
-            auto view = logical_shape.view();
-            std::vector<uint32_t> shape_vector(view.begin(), view.end());
-            return pytorch_empty(shape_vector, py::arg("dtype") = torch_dtype);
+            return pytorch_empty(torch_shape, py::arg("dtype") = torch_dtype);
         }
         return frombuffer(buffer, py::arg("dtype") = torch_dtype);
     }();
@@ -636,8 +634,9 @@ py::object convert_tt_tensor_to_numpy_tensor(const Tensor& tt_tensor) {
         },
         buffer);
 
-    auto shape = tt_tensor.get_legacy_shape();
-    auto np_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
+    auto logical_shape = tt_tensor.get_logical_shape();
+    auto view = logical_shape.view();
+    std::vector<uint32_t> np_shape(view.begin(), view.end());
     auto tensor = frombuffer(buffer, py::arg("dtype") = np_dtype);
     tensor = tensor.attr("reshape")(np_shape);
     tensor = np.attr("ascontiguousarray")(tensor);
