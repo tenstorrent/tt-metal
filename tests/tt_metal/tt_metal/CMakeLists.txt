@@ -92,4 +92,5 @@ add_custom_target(
         unit_tests_llk
         unit_tests_stl
         unit_tests_noc
+        unit_tests_builder
 )
