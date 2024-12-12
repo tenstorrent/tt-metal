@@ -474,14 +474,21 @@ class TtLlamaAttention_optimized:
             values = self.layer_past[1]
 
         if page_table:
+            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
+            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
+            block_size = keys.shape[2]
             # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
             fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+            page_len = fill_page_table.shape[1] * block_size
+
+            k_fill_sliced = key_layer[:, :, :page_len, :] if page_len < key_layer.shape[2] else key_layer
+            v_fill_sliced = value_layer[:, :, :page_len, :] if page_len < value_layer.shape[2] else value_layer
 
             ttnn.experimental.paged_fill_cache(
-                keys, ttnn.experimental.typecast(key_layer, self.kv_dtype), fill_page_table, batch_idx=user_id
+                keys, ttnn.experimental.typecast(k_fill_sliced, self.kv_dtype), fill_page_table, batch_idx=user_id
             )
             ttnn.experimental.paged_fill_cache(
-                values, ttnn.experimental.typecast(value_layer, self.kv_dtype), fill_page_table, batch_idx=user_id
+                values, ttnn.experimental.typecast(v_fill_sliced, self.kv_dtype), fill_page_table, batch_idx=user_id
             )
         else:
             ttnn.fill_cache(keys, ttnn.experimental.typecast(key_layer, self.kv_dtype), user_id)
