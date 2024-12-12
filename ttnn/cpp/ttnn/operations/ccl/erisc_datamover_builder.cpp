@@ -486,7 +486,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         if (!device_pairs[i].second.has_value()) {
             continue;
         }
-        log_info(tt::LogOp, "Device {} is connected to {} at index {}", local_device->id(), device_pairs[i].second.value()->id(), i);
+        log_trace(tt::LogOp, "Device {} is connected to {} at index {}", local_device->id(), device_pairs[i].second.value()->id(), i);
         auto &edm_builders = *edm_builders_maps[i];
 
         Device *remote_device = device_pairs[i].second.value();
@@ -500,7 +500,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             if (edm_builders[local_device->id()].size() >= max_num_links) {
                 break;
             }
-            log_info(tt::LogOp, "DEBUG: build EDM: device: {}, &program: {}: core-logi(x={},y={})", local_device->id(), (void*)program, core.x, core.y);
+            log_trace(tt::LogOp, "DEBUG: build EDM: device: {}, &program: {}: core-logi(x={},y={})", local_device->id(), (void*)program, core.x, core.y);
             edm_builders[local_device->id()].push_back(
                 FabricEriscDatamoverBuilder::build(
                     local_device, *program, core,
@@ -539,7 +539,7 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(Device
     auto& edm_builders = (direction == FORWARD) ? edm_builders_forward_direction.at(device->id())
                                                 : edm_builders_backward_direction.at(device->id());
     auto &link_count_map = (direction == FORWARD) ? next_forward_direction_edm_available : next_backward_direction_edm_available;
-    log_info(tt::LogOp, "EDM conecting in {} direction", direction == FORWARD ? "FORWARD" : "BACKWARD");
+    log_trace(tt::LogOp, "EDM conecting in {} direction", direction == FORWARD ? "FORWARD" : "BACKWARD");
     const auto next_link = link_count_map[device->id()];
     link_count_map[device->id()] = (next_link + 1) %  edm_builders.size();
 

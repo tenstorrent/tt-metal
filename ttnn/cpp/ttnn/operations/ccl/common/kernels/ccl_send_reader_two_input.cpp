@@ -130,6 +130,26 @@ constexpr sharded_addrgen_fields in1_sharded_addrgen_fields = {0, 0, 0, 0, 0, 0,
 #endif
 #endif
 
+
+// NOTE: This will eventually be updated with an official API
+static constexpr size_t VIRTUAL_COORDS_START_X = 16;
+static constexpr size_t VIRTUAL_COORDS_START_Y = 16;
+FORCE_INLINE bool is_using_noc_coords(uint16_t noc_x, uint16_t noc_y) {
+    return noc_x < VIRTUAL_COORDS_START_X && noc_y < VIRTUAL_COORDS_START_Y;
+}
+
+FORCE_INLINE uint64_t safe_get_noc_addr(uint8_t dest_noc_x, uint8_t dest_noc_y, uint32_t dest_bank_addr) {
+    bool using_noc_coords = is_using_noc_coords(dest_noc_x, dest_noc_y);
+    uint8_t noc_x = dest_noc_x;
+    uint8_t noc_y = dest_noc_y;
+    if (using_noc_coords) {
+        noc_x = NOC_X_PHYS_COORD(dest_noc_x);
+        noc_y = NOC_Y_PHYS_COORD(dest_noc_y);
+    }
+    return get_noc_addr(noc_x, noc_y, dest_bank_addr);
+}
+
+
 template <
     tt::tt_metal::TensorMemoryLayout tensor_layout,
     tt::tt_metal::BufferType buffer_type,
@@ -561,8 +581,7 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
                         cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
                 }
 
-                uint64_t dest_noc_addr = get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
-
+                uint64_t dest_noc_addr = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
                 if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
                     noc_semaphore_inc(dest_noc_addr, value);
                 } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES) {
@@ -655,7 +674,6 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     const size_t payload_size_bytes = static_cast<size_t>(contig_pages_advanced) * cmd_ctx.page_size;
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr + sizeof(tt::fabric::PacketHeader);
-    noc_async_write(payload_l1_address, get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
     size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
 
     auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(l1_read_addr);
@@ -674,6 +692,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
 
         } break;
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
+            noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
             const auto& mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
             if (cmd_ctx.fabric_connection.has_forward_connection()) {
                 pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
@@ -722,8 +741,7 @@ FORCE_INLINE void write_payload_then_advance_read_address(
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY: {
             auto const [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
             // Conver to our local noc_index based address
-            auto dest_noc_addr = get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr);
-            noc_async_write(l1_read_addr + header_padding, dest_noc_addr, cmd_ctx.page_size * contig_pages_advanced);
+            noc_async_write(l1_read_addr, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), cmd_ctx.page_size * contig_pages_advanced);
             l1_read_addr += cmd_ctx.page_size * contig_pages_advanced;
         } break;
     }
@@ -741,6 +759,7 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& c
     if (!cb_pages_available_at_front(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages)) {
         return;
     }
+    DPRINT << "CB -> tensor: " << (uint32_t)cmd_ctx.cb_id << "\n";
     size_t header_padding = cmd_ctx.command_requires_fabric() ? sizeof(tt::fabric::PacketHeader) : 0;
 
     wrapped_worker_slice_read_context& cmd_specific_ctx = cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx;

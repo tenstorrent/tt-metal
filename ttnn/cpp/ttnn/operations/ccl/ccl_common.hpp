@@ -316,13 +316,13 @@ struct InterleavedTensorWorkerSlice {
     }
 
     void print() const {
-        tt::log_info("----- printing worker slice -----");
-        tt::log_info("tensor_shape: ({},{})", tensor_shape.x, tensor_shape.y);
-        tt::log_info("tensor_slice_shape: ({},{})", tensor_slice_shape.x, tensor_slice_shape.y);
-        tt::log_info("worker_slice_shape: ({},{})", worker_slice_shape.x, worker_slice_shape.y);
-        tt::log_info("worker_slice_offset: ({},{})", worker_slice_offset.x, worker_slice_offset.y);
-        tt::log_info("worker_slice_is_wrapped: {}", worker_slice_is_wrapped);
-        tt::log_info("worker_slice_num_pages: {}", get_worker_slice_num_pages());
+        tt::log_trace(tt::LogOp, "----- printing worker slice -----");
+        tt::log_trace(tt::LogOp, "tensor_shape: ({},{})", tensor_shape.x, tensor_shape.y);
+        tt::log_trace(tt::LogOp, "tensor_slice_shape: ({},{})", tensor_slice_shape.x, tensor_slice_shape.y);
+        tt::log_trace(tt::LogOp, "worker_slice_shape: ({},{})", worker_slice_shape.x, worker_slice_shape.y);
+        tt::log_trace(tt::LogOp, "worker_slice_offset: ({},{})", worker_slice_offset.x, worker_slice_offset.y);
+        tt::log_trace(tt::LogOp, "worker_slice_is_wrapped: {}", worker_slice_is_wrapped);
+        tt::log_trace(tt::LogOp, "worker_slice_num_pages: {}", get_worker_slice_num_pages());
     }
 
     tt_xy_pair tensor_shape;

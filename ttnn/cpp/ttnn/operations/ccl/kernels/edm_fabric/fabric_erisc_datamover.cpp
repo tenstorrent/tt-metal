@@ -410,7 +410,7 @@ void receiver_send_received_ack(
         reinterpret_cast<volatile eth_channel_sync_t *>(local_receiver_buffer_channel.get_current_bytes_sent_address())
             ->receiver_ack == 0);
 
-    DPRINT << "EDMR rsc to " << (uint32_t)sender_buffer_channel.get_current_bytes_sent_address() << "\n";
+    DPRINT << "EDMR rsa to " << (uint32_t)sender_buffer_channel.get_current_bytes_sent_address() << "\n";
 
     ASSERT(!eth_txq_is_busy());
     internal_::eth_send_packet_unsafe(
@@ -433,7 +433,7 @@ FORCE_INLINE void receiver_send_completion_ack(
     *(local_receiver_buffer_channel.get_current_bytes_acked_address()) = 0;
     ASSERT(src_sender_channel < NUM_SENDER_CHANNELS);
 
-    DPRINT << "EDMR rsc to " << (uint32_t)remote_sender_channels[src_sender_channel].get_current_bytes_sent_address() << "\n";
+    DPRINT << "EDMR rsc to " << (uint32_t)remote_sender_channels[src_sender_channel].get_current_bytes_sent_address() << ", buf_idx: " << (uint32_t)local_receiver_buffer_channel.buffer_index() << "\n";
 
     ASSERT(!eth_txq_is_busy());
     internal_::eth_send_packet_unsafe(
@@ -521,7 +521,7 @@ bool run_sender_channel_state_machine_step(
                 DPRINT << "EDMS " << (uint32_t)sender_channel_index << " send from buffer index: " << (uint32_t)local_sender_channel.buffer_index() << "\n";
                 DPRINT << "\taddress: " << (uint32_t)local_sender_channel.get_current_buffer_address() << "\n";
                 DPRINT << "\t1st 8B: " << (uint64_t)*reinterpret_cast<volatile uint64_t*>(local_sender_channel.get_current_buffer_address()) << "\n";
-                DPRINT << "\tsend to " << (uint32_t)remote_receiver_channel.get_current_buffer_address() << "\n";
+                DPRINT << "\tsend to " << (uint32_t)remote_receiver_channel.get_current_buffer_address() << ", buffer_index: " << (uint32_t)remote_receiver_channel.buffer_index() << "\n";
                 auto send_status = send_next_data(local_sender_channel, remote_receiver_channel);
                 // TODO: align the enums and state values so I can just do
                 // sender_states[sender_channel_index] += send_status :)
@@ -536,7 +536,7 @@ bool run_sender_channel_state_machine_step(
                 // impact latency
                 incr_sender_channel_index = send_status != tt::fabric::SendStatus::SENT_PAYLOAD_ONLY;
             } else if (!graceful_termination_mode) {
-                if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
+                if (!local_sender_channel_worker_interface.has_payload() && local_sender_channel_worker_interface.has_worker_teardown_request()) {
                     local_sender_channel_worker_interface.teardown_connection();
                     *sender_state_out = SenderState::SENDER_WAIT_WORKER_HANDSHAKE;
                 }
@@ -696,6 +696,7 @@ void run_fabric_edm_main_loop(
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
             DPRINT << "EDM Graceful termination\n";
+            DPRINT << "EDMS0 ST: " << (uint32_t)sender_states[0] << "\n";
             bool all_drained = all_channels_drained<RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, NUM_SENDER_CHANNELS>(
                 local_receiver_channel, local_sender_channels, local_sender_channel_worker_interfaces);
 
