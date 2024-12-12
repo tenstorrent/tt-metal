@@ -8,7 +8,7 @@
 
 namespace ttml::optimizers {
 
-OptimizerBase::OptimizerBase(autograd::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
+OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 
 void OptimizerBase::print_stats() const {
