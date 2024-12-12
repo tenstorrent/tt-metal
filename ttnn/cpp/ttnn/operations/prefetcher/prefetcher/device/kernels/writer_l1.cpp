@@ -57,11 +57,11 @@ void kernel_main() {
                 cb_wait_front(local_cb_id, curr_block_num_tiles);
 
                 uint32_t local_cb_addr = get_read_ptr(local_cb_id);
-                experimental::remote_cb_reserve_back(remote_cb_id, 1);
+                experimental::remote_cb_reserve_back(remote_cb_id, 1);  // Reserve back 1 curr_block_size
                 experimental::remote_cb_push_back_and_write_pages(
                     remote_cb_id,
                     local_cb_addr,
-                    1,  // wrt to the size of the packet
+                    1,  // wrt to the size of the packet (curr_block_size)
                     curr_block_height_in_tiles,
                     curr_coalesced_num_pages,
                     curr_coalesced_page_size,
