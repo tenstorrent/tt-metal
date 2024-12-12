@@ -59,6 +59,9 @@ run_common_func_tests() {
   # SqueezeBERT
   pytest --disable-warnings models/demos/squeezebert/demo/demo.py --timeout 600; fail+=$?
 
+  # Distilbert
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/distilbert/demo/demo.py --timeout 600; fail+=$?
+
   return $fail
 }
 
