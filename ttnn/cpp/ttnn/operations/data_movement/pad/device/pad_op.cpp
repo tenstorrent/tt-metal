@@ -77,8 +77,44 @@ operation::ProgramWithCallbacks Pad::create_program(
     auto& output_tensor = output_tensors.at(0);
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         if (input_tensor.is_sharded()) {
-            return detail::pad_rm_sharded_stickwise(
-                input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+            uint32_t input_tot_h = std::accumulate(
+                input_tensor.get_logical_shape().view().begin(),
+                input_tensor.get_logical_shape().view().end() - 1,
+                1,
+                std::multiplies<uint32_t>());
+            uint32_t input_w = input_tensor.get_logical_shape()[3];
+
+            uint32_t output_tot_h = std::accumulate(
+                output_tensor.get_logical_shape().view().begin(),
+                output_tensor.get_logical_shape().view().end() - 1,
+                1,
+                std::multiplies<uint32_t>());
+            uint32_t output_w = output_tensor.get_logical_shape()[3];
+
+            if (input_w != output_w) {
+                // we will decompose the padding into two parts and run two
+                // separate programs: one for width padding and one for height
+                // padding. this is an assert to catch any errors in the
+                // decomposition.
+                TT_ASSERT(
+                    input_tot_h == output_tot_h,
+                    "For sharded row-major padding with width mismatch, dimensions 0-2 must match between input and "
+                    "output");
+                return detail::pad_rm_sharded_width_only(
+                    input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+            } else if (input_tot_h != output_tot_h) {
+                // we will decompose the padding into two parts and run two
+                // separate programs: one for width padding and one for height
+                // padding. this is an assert to catch any errors in the
+                // decomposition.
+                TT_ASSERT(
+                    input_w == output_w,
+                    "For sharded row-major padding with height mismatch, the width dimension must match.");
+                return detail::pad_rm_sharded_height_only(
+                    input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+            } else {
+                TT_THROW("ttnn.pad: Unsupported sharded row-major padding configuration");
+            }
         } else {
             if (use_multicore) {
                 return detail::pad_rm_reader_writer_multi_core_v2(
