@@ -32,7 +32,6 @@ void kernel_main() {
                 continue;
             }
 
-            // ASSERT(noc_x == my_x[0] && noc_y == my_y[0]);// "semaphore address is not a local semaphore. Only local semaphore address is support at this time"
             if (current_sem_counts[i] != *sem_addrs[i]) {
                 DPRINT << "DRAIN GOT SEMINC @ " << (uint32_t)sem_addrs[i] << ". NOW= " << (uint32_t)*sem_addrs[i] << "\n";
                 current_sem_counts[i] = *sem_addrs[i];

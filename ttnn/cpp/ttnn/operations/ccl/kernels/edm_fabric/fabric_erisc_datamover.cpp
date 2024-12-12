@@ -460,7 +460,7 @@ PacketLocalForwardType get_packet_local_forward_type(const volatile tt::fabric::
 FORCE_INLINE bool can_forward_packet_completely(
     const volatile tt::fabric::PacketHeader &packet_header, tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface) {
     auto forward_status = get_packet_local_forward_type(packet_header);
-    bool can_send = true;
+
     switch (forward_status) {
         case PACKET_FORWARD_INVALID: return false;
         case PACKET_FORWARD_LOCAL_ONLY: return true;
@@ -652,11 +652,17 @@ FORCE_INLINE bool got_termination_signal(volatile tt::fabric::TerminationSignal 
 
 template <size_t RECEIVER_NUM_BUFFERS, size_t SENDER_NUM_BUFFERS, size_t NUM_SENDER_CHANNELS>
 bool all_channels_drained(tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &local_receiver_channel,
-                          std::array<tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &local_sender_channels) {
+                          std::array<tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &local_sender_channels,
+                          std::array<SenderState, NUM_SENDER_CHANNELS> sender_states,
+                          std::array<tt::fabric::EdmChannelWorkerInterface, NUM_SENDER_CHANNELS> &local_sender_channel_worker_interfaces) {
     // Unfortunately have to do this for now instead of only conditionally checking
     // each undrained channel due to code size issues...
-    return local_sender_channels[0].all_buffers_drained() && local_sender_channels[1].all_buffers_drained() &&
+    bool eth_buffers_drained = local_sender_channels[0].all_buffers_drained() && local_sender_channels[1].all_buffers_drained() &&
            local_receiver_channel.all_buffers_drained();
+
+    return eth_buffers_drained &&
+            (sender_states[0] == SenderState::SENDER_WAITING_FOR_WORKER && !local_sender_channel_worker_interfaces[0].has_payload() &&
+           sender_states[1] == SenderState::SENDER_WAITING_FOR_WORKER && !local_sender_channel_worker_interfaces[1].has_payload());
 }
 
 /*
@@ -685,7 +691,7 @@ void run_fabric_edm_main_loop(
         if (got_graceful_termination_signal(termination_signal_ptr)) {
             DPRINT << "EDM Graceful termination\n";
             bool all_drained = all_channels_drained<RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, NUM_SENDER_CHANNELS>(
-                local_receiver_channel, local_sender_channels);
+                local_receiver_channel, local_sender_channels, sender_states, local_sender_channel_worker_interfaces);
 
             if (all_drained) {
                 return;
@@ -719,6 +725,7 @@ void run_fabric_edm_main_loop(
 }
 
 void kernel_main() {
+    // return;
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //

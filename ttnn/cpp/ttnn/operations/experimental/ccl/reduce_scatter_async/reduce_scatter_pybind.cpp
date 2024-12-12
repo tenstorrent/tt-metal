@@ -8,12 +8,13 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
+// #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/types.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
 
@@ -28,30 +29,18 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
                ttnn::operations::reduction::ReduceType math_op,
-               const uint32_t num_links,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
-               const std::optional<size_t> num_workers,
-               const std::optional<size_t> num_buffers_per_channel) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    dim,
-                    math_op,
-                    num_links,
-                    memory_config,
-                    topology,
-                    num_workers,
-                    num_buffers_per_channel);
+               const std::optional<size_t> num_links) -> ttnn::Tensor {
+                return self(input_tensor, dim, math_op, memory_config, topology, num_links);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
             py::arg("math_op"),
             py::kw_only(),
-            py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Ring,
-            py::arg("num_workers") = std::nullopt,
-            py::arg("num_buffers_per_channel") = std::nullopt},
+            py::arg("topology") = ttnn::ccl::Topology::Linear,
+            py::arg("num_links") = std::nullopt},
 
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
@@ -60,22 +49,10 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                ttnn::operations::reduction::ReduceType math_op,
-               const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& output_mem_config,
-               const std::optional<size_t> num_workers,
-               const std::optional<size_t> num_buffers_per_channel,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    dim,
-                    cluster_axis,
-                    mesh_device,
-                    math_op,
-                    num_links,
-                    output_mem_config,
-                    topology,
-                    num_workers,
-                    num_buffers_per_channel);
+               const ttnn::ccl::Topology topology,
+               const std::optional<size_t> num_links) -> ttnn::Tensor {
+                return self(input_tensor, dim, cluster_axis, mesh_device, math_op, output_mem_config, topology, num_links);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -83,19 +60,19 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             py::arg("mesh_device"),
             py::arg("math_op"),
             py::kw_only(),
-            py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
-            py::arg("num_workers") = std::nullopt,
-            py::arg("num_buffers_per_channel") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Ring});
+            py::arg("topology") = ttnn::ccl::Topology::Linear,
+            py::arg("num_links") = std::nullopt});
 }
 
 }  // namespace detail
 
-void py_bind_reduce_scatter(pybind11::module& module) {
+
+void py_bind_reduce_scatter_async(pybind11::module& module) {
+
     detail::bind_reduce_scatter(
         module,
-        ttnn::reduce_scatter,
+        ttnn::reduce_scatter_async,
         R"doc(
 
         Performs an reduce_scatter operation on multi-device :attr:`input_tensor` across all devices.
@@ -110,10 +87,10 @@ void py_bind_reduce_scatter(pybind11::module& module) {
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
 
         Keyword Args:
-            num_links (int, optional): Number of links to use for the reduce0scatter operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             num_workers (int, optional): Number of workers to use for the operation. Defaults to `None`.
             num_buffers_per_channel (int, optional): Number of buffers per channel to use for the operation. Defaults to `None`.
+            desired_num_links (int, optional): Number of links to use for the reduce_scatter operation. Defaults to `None`. Note that this value will be ignored if there are fewer links available than requested.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
 
         Returns:
@@ -137,4 +114,4 @@ void py_bind_reduce_scatter(pybind11::module& module) {
         )doc");
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::experimental::ccl

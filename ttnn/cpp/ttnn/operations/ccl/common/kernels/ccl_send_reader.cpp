@@ -152,8 +152,8 @@ void kernel_main() {
             // const shape_t tensor_slice_start_offset = ttnn::ccl::build_from_args<shape_t>(arg_idx); // Should be RT
             shape_t valid_worker_slice_shape = build_wrapped_row_tensor_slice(command_tensor.worker_pages_per_slice); // Parametrizable by ct arg
 
-            shape_t const& worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
-            shape_t const& global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
+            shape_t const worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
+            shape_t const global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
 
             uint32_t curr_tile_id = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
 

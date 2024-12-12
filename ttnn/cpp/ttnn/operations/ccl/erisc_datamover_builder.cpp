@@ -78,6 +78,24 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         eth_l1_mem::address_map::MAX_L1_LOADING_SIZE, "Internal error - channel buffers spilled past the end of usable L1 region.");
 }
 
+void get_runtime_args_for_edm_termination_infos(std::vector<edm_termination_info_t> const& edm_termination_infos, std::vector<uint32_t>& args_out) {
+    args_out.reserve(args_out.size() + edm_termination_infos.size() * 4 + 1);
+        args_out.push_back(edm_termination_infos.size());
+    for (auto const& info : edm_termination_infos) {
+        args_out.push_back(info.edm_noc_x);
+        args_out.push_back(info.edm_noc_y);
+        args_out.push_back(info.distance);
+        args_out.push_back(info.termination_addr);
+        log_trace(
+            tt::LogTest,
+            "EDM termination info: x={}, y={}, distance={}, termination_addr={}",
+            info.edm_noc_x,
+            info.edm_noc_y,
+            info.distance,
+            info.termination_addr);
+    }
+}
+
 void append_worker_to_fabric_edm_sender_rt_args(
     SenderWorkerAdapterSpec const& connection,
     size_t sender_worker_flow_control_semaphore_id,
