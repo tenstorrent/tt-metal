@@ -106,7 +106,7 @@ class TtTransformer(LightweightModule):
 
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
-        dims = (None, -1) if self.args.is_galaxy else (None, None) if force_replicated else (None, -1)
+        dims = (None, -1) if self.args.is_galaxy else (None, None)
         mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
         tokens = ttnn.from_torch(
@@ -157,7 +157,7 @@ class TtTransformer(LightweightModule):
         assert current_pos.shape[0] == B, "Batch size mismatch"
         assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
 
-        dims = (None, -1) if self.args.is_galaxy else (None, None) if force_replicated else (None, -1)
+        dims = (None, -1) if self.args.is_galaxy else (None, None)
         mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
         tokens = ttnn.from_torch(
