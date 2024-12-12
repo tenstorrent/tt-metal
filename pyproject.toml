@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 # To change to eager, or something similar
-name = "metal_libs"
+name = "ttnn"
 authors = [
     {name = "Tenstorrent"},
     {email = "info@tenstorrent.com"},
