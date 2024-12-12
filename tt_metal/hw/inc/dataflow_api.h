@@ -473,7 +473,6 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
     uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
 
-    invalidate_l1_cache();
     // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
     // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
     uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
@@ -512,7 +511,6 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
     int32_t free_space_pages;
     WAYPOINT("CRBW");
     do {
-        invalidate_l1_cache();
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
         uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
@@ -557,7 +555,6 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
     uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
 
-    invalidate_l1_cache();
     uint16_t pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     return num_pages <= pages_received;
 }
@@ -594,7 +591,6 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 
     WAYPOINT("CWFW");
     do {
-        invalidate_l1_cache();
         pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     } while (pages_received < num_pages);
     WAYPOINT("CWFD");
@@ -1728,7 +1724,6 @@ inline void noc_async_write_multicast_exclude_region(
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
     WAYPOINT("NRBW");
-    // BH cache is write-through so reader must invalidate if reading any address that was previously read
     do {
         invalidate_l1_cache();
     } while (!ncrisc_noc_reads_flushed(noc));
