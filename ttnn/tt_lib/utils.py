@@ -8,6 +8,8 @@ import struct
 import torch
 import numpy as np
 
+from typing_extensions import deprecated
+
 
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
@@ -134,108 +136,22 @@ def convert_act_2d_matrix(activation, kernel_y, kernel_x, stride_y, stride_x, pa
     return ret.reshape(ret_shape)
 
 
+@deprecated("PyTorch data is handled automatically in tensor infra. This function does nothing now:")
 def tilize(x):
-    """
-    This function tilizes a tensor. The last two tensor dims must be divisible by 32, after which this function
-    produces row major tiles and creates faces. The output of this function is a flattened list that
-    we can send to the device.
-
-    :param x: Input PyTorch Tensor
-    :type x: class:`torch.Tensor`
-
-    WARNING: This function should eventually be retired in favour of fully tilizing on device.
-    """
-    nearest_32 = _nearest_32
-
-    assert isinstance(
-        x, (torch.Tensor, np.ndarray)
-    ), "Input to this function must be an instance of torch.Tensor or np.array"
-    assert len(x.shape) == 4, "Only 4D tensors suppported"
-    assert (x.shape[-2] % 32) == 0 and (
-        x.shape[-1] % 32
-    ) == 0, "The last two dimensions of the tensor must be divisible by 32"
-
-    if isinstance(x, torch.Tensor):
-        ret = torch.zeros(np.prod(x.shape))
-    else:
-        ret = np.zeros(np.prod(x.shape))
-
-    idx = 0
-    for B in range(x.shape[0]):
-        for C in range(x.shape[1]):
-            for H in range(0, x.shape[2], 32):
-                for W in range(0, x.shape[3], 32):
-                    unfaced_tile = x[B, C, H : H + 32, W : W + 32]
-
-                    face0 = unfaced_tile[:16, :16]
-                    face1 = unfaced_tile[:16, 16:]
-                    face2 = unfaced_tile[16:, :16]
-                    face3 = unfaced_tile[16:, 16:]
-
-                    for face in (face0, face1, face2, face3):
-                        ret[idx : idx + 256] = face.reshape(-1)
-                        idx += 256
-
-    return ret.reshape(x.shape)
+    return x
 
 
+@deprecated("PyTorch data is handled automatically in tensor infra. This function does nothing now:")
 def tilize_to_list(x):
     """
-    Tilize a PyTorch and then return the values as a flat list. The last two
-    tensor dims must be divisible by 32, after which this function produces row
-    major tiles and creates faces.
-
-    :param x: Input PyTorch Tensor
-    :type x: class:`torch.Tensor`
-
-    WARNING: This function should eventually be retired in favour of fully tilizing on device.
+    Returns a flattened list of the tensor
     """
-
     return tilize(x).reshape(-1).tolist()
 
 
+@deprecated("PyTorch data is handled automatically in tensor infra. This function does nothing now:")
 def untilize(x):
-    """
-    This function untilizes a tensor to row major format.
-
-    :param x: Input PyTorch Tensor
-    :type x: class:`torch.Tensor`
-
-    WARNING: This function should eventually be retired in favour of fully tilizing on device.
-    """
-    nearest_32 = _nearest_32
-
-    assert isinstance(x, (torch.Tensor, np.ndarray)), "Input to this function must be an instance of torch.Tensor"
-    assert len(x.shape) == 4, "Only 4D tensors suppported"
-    assert (x.shape[-2] % 32) == 0 and (
-        x.shape[-1] % 32
-    ) == 0, "The last two dimensions of the tensor must be divisible by 32"
-
-    if isinstance(x, torch.Tensor):
-        ret = torch.zeros(x.shape)
-    else:
-        ret = np.zeros(x.shape)
-
-    for B in range(x.shape[0]):
-        for C in range(x.shape[1]):
-            x_hw = x[B, C, :].reshape(-1)
-            hw = 0
-            for h in range(0, x.shape[2], 32):
-                for w in range(0, x.shape[3], 32):
-                    f_tile = x_hw[hw : hw + 256].reshape(16, 16)
-                    ret[B, C, h : h + 16, w : w + 16] = f_tile
-
-                    f_tile = x_hw[hw + 256 : hw + 512].reshape(16, 16)
-                    ret[B, C, h : h + 16, w + 16 : w + 32] = f_tile
-
-                    f_tile = x_hw[hw + 512 : hw + 768].reshape(16, 16)
-                    ret[B, C, h + 16 : h + 32, w : w + 16] = f_tile
-
-                    f_tile = x_hw[hw + 768 : hw + 1024].reshape(16, 16)
-                    ret[B, C, h + 16 : h + 32, w + 16 : w + 32] = f_tile
-                    hw += 1024  # traverse tiles in RM-order
-
-    return ret
+    return x
 
 
 def print_diff_argmax(a, b, annotation=""):
