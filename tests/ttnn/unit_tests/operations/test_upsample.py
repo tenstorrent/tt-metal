@@ -10,7 +10,7 @@ from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import ttnn
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, is_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 
@@ -119,11 +119,14 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
         [1, 64, 132, 19],
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("scale_h", [2, 3])
 @pytest.mark.parametrize("scale_w", [2, 3])
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
-def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strategy):
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strategy, shard_orientation):
+    if is_grayskull() and (scale_h > 2 or scale_w > 2):
+        pytest.skip("Skipping test because it won't fit in L1!")
+
     ## input shape is N C H W
     batch_size, num_channels, height, width = input_shape
     torch.manual_seed(0)
@@ -191,7 +194,6 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     # )
 
     shard_grid = get_shard_grid_from_num_cores(device, ncores)
-    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
 
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
         tensor_memory_layout = ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
