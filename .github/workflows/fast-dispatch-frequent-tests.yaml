@@ -5,6 +5,9 @@ on:
   workflow_call:
   schedule:
     - cron: "0 */4 * * *"
+  push:
+    branches:
+      - "rkim/0-new-fd-frequent"
 
 jobs:
   build-artifact:
