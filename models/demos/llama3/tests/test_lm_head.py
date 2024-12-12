@@ -45,9 +45,10 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
-        "weight": state_dict["output.weight"],
+        "weight": state_dict[f"{state_dict_prefix}output.weight"],
     }
 
     model_args.WEIGHTS_DTYPE = dtype
@@ -59,7 +60,7 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
-        state_dict_prefix="",
+        state_dict_prefix=state_dict_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
     )
 

@@ -148,6 +148,7 @@ class TtModelArgs:
         elif "3.1-70B" in LLAMA_DIR:
             local_params = "LLAMA3_1_70B_PARAMS"
             self.model_name = "3.1-70B"
+            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         else:
             raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
 
@@ -162,7 +163,6 @@ class TtModelArgs:
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self._set_llama_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
-        self.is_70b = self.dim == 8192 and self.n_layers == 80
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
         self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
