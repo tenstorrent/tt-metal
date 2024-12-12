@@ -89,6 +89,7 @@ def move_to_device(object, device):
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_encoder(batch_size, num_channels, height, width, device, reset_seeds, is_ci_env):
+    torch.manual_seed(0)
     if is_ci_env:
         pytest.skip("Skip in CI, model is WIP, issue# 13357")
 
