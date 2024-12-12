@@ -173,9 +173,14 @@ struct Matmul {
 
     void validate(
         const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -217,7 +222,8 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    const uint8_t queue_id = 0);
+    const uint8_t queue_id = 0,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace matmul
 

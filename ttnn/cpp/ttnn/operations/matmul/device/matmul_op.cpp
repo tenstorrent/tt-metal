@@ -1041,9 +1041,11 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t queue_id) {
+    const uint8_t queue_id,
+    const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
+
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias.value());
         output_tensors = {
@@ -1065,18 +1067,20 @@ Tensor matmul(
                 create_matmul_struct(input_tensor_a, input_tensor_b, parameters),
                 {input_tensor_a, input_tensor_b},
                 optional_input_tensors,
-                {},
+                optional_output_tensors,
                 queue_id);
         },
         {input_tensor_a, input_tensor_b},
         output_tensors,
-        optional_input_tensors);
+        optional_input_tensors,
+        {optional_output_tensor});
     return output_tensors.at(0);
 }
 
 void Matmul::validate(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error");
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
@@ -1106,6 +1110,16 @@ void Matmul::validate(
         "The width of the first tensor must be equal to the height of the second tensor. Mismatch: width={} height={}",
         a_shape[-1],
         b_shape[-2]);
+
+    const bool is_optional_output_tensor = !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
+    if (is_optional_output_tensor) {
+        const auto& optional_output_tensor_c = optional_output_tensors.at(0);
+        const auto& optional_output_tensor_shape = optional_output_tensor_c->get_logical_shape();
+        const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}).at(0);
+        TT_FATAL(
+            optional_output_tensor_shape == output_tensor_spec.logical_shape(),
+            "Shape of Optional Output Tensor should match Output Tensor");
+    }
 
     TT_FATAL(this->bcast_batch.has_value(), "Error: bcast_batch field should have been automatically populated");
     TT_FATAL(this->output_tile.has_value(), "Error: output_tile field should have been automatically populated");
@@ -1536,27 +1550,18 @@ void Matmul::validate(
         chosen_program_config);
 }
 
-std::vector<ttnn::SimpleShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const ttnn::SimpleShape input_shape_a = input_tensors.at(0).get_logical_shape();
-    const ttnn::SimpleShape input_shape_b = input_tensors.at(1).get_logical_shape();
-    const uint32_t a_rank = input_shape_a.rank();
-    const uint32_t b_rank = input_shape_b.rank();
-    const uint32_t out_rank = std::max(a_rank, b_rank);
-    const uint32_t rank_difference = out_rank - a_rank;
-    ttnn::SimpleShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
+std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    TT_FATAL(
+        optional_output_tensors.size() <= 1,
+        "None or One Optional output tensor can be passed when accessing it for computing Matmul's output specs");
 
-    for (auto index = 0; index < rank_difference; index++) {
-        TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
-        output_shape[index] = input_shape_b[index];
-    }
-    for (auto index = 0; index < a_rank - 1; index++) {
-        output_shape[rank_difference + index] = input_shape_a[index];
-    }
-    output_shape[-1] = input_shape_b[-1];
-    return {std::move(output_shape)};
-}
+    const bool is_optional_output_tensor = !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
 
-std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    if (is_optional_output_tensor) {
+        return {optional_output_tensors.at(0)->get_tensor_spec()};
+    }
+
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto in0_tile_shape = input_tensor_a.get_tensor_spec().tile().get_tile_shape();
@@ -1564,11 +1569,34 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
     auto output_tile = this->output_tile.value();
     auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
+
+    auto compute_output_shape = [&](const std::vector<Tensor>& input_tensors) -> ttnn::SimpleShape {
+        const ttnn::SimpleShape input_shape_a = input_tensors.at(0).get_logical_shape();
+        const ttnn::SimpleShape input_shape_b = input_tensors.at(1).get_logical_shape();
+        const uint32_t a_rank = input_shape_a.rank();
+        const uint32_t b_rank = input_shape_b.rank();
+        const uint32_t out_rank = std::max(a_rank, b_rank);
+        const uint32_t rank_difference = out_rank - a_rank;
+        ttnn::SimpleShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
+
+        for (auto index = 0; index < rank_difference; index++) {
+            TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
+            output_shape[index] = input_shape_b[index];
+        }
+        for (auto index = 0; index < a_rank - 1; index++) {
+            output_shape[rank_difference + index] = input_shape_a[index];
+        }
+        output_shape[-1] = input_shape_b[-1];
+        return std::move(output_shape);
+    };
+
+    const auto output_shape = compute_output_shape(input_tensors);
+
     TT_FATAL(this->output_dtype.has_value(), "Error");
     if (this->output_mem_config.is_sharded()) {
         MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
         return std::visit(
-            [&](const auto& program_config) -> std::vector<Tensor> {
+            [&](const auto& program_config) -> std::vector<ttnn::TensorSpec> {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                     uint32_t M =
@@ -1596,13 +1624,9 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                             ShardOrientation::ROW_MAJOR};
                         mem_config.shard_spec = shard_spec;
                     }
-                    return {create_device_tensor(
-                        this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype.value(),
-                        output_layout,
-                        input_tensor_a.device(),
-                        mem_config,
-                        output_tile)};
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(this->output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
@@ -1630,13 +1654,9 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         ShardOrientation::ROW_MAJOR};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_device_tensor(
-                        this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype.value(),
-                        output_layout,
-                        input_tensor_a.device(),
-                        mem_config,
-                        output_tile)};
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(this->output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
                     uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.get_legacy_shape()[-1] / in1_tile_shape[1];
@@ -1664,13 +1684,9 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, shard_orientation};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_device_tensor(
-                        this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype.value(),
-                        output_layout,
-                        input_tensor_a.device(),
-                        mem_config,
-                        output_tile)};
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(this->output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                     uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.get_legacy_shape()[-1] / in1_tile_shape[1];
@@ -1700,13 +1716,9 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, shard_orientation};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_device_tensor(
-                        this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype.value(),
-                        output_layout,
-                        input_tensor_a.device(),
-                        mem_config,
-                        output_tile)};
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(this->output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else {
                     TT_FATAL(
                         in0_tile_shape[0] == TILE_HEIGHT and in0_tile_shape[1] == TILE_WIDTH,
@@ -1727,8 +1739,22 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
             chosen_program_config);
     }
 
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, this->output_dtype.value(), Layout::TILE, this->output_mem_config, output_tile);
+    return {TensorSpec(
+        output_shape,
+        TensorLayout(this->output_dtype.value(), PageConfig(Layout::TILE, output_tile), this->output_mem_config))};
+}
+
+std::vector<Tensor> Matmul::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    if (this->output_mem_config.is_sharded()) {
+        auto output_tensor_specs = this->compute_output_specs(input_tensors, optional_output_tensors);
+        if (output_tensor_specs.empty()) {
+            return {};
+        }
+        return {create_device_tensor(output_tensor_specs.at(0), input_tensors.at(0).device())};
+    }
+
+    return operation::detail::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
 }
 
 operation::ProgramWithCallbacks Matmul::create_program(
