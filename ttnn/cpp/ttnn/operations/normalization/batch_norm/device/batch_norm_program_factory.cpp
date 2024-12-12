@@ -59,9 +59,6 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     const auto origin_h = origin_input_shape[2];
     const auto origin_w = origin_input_shape[3];
 
-    const bool is_lastdim_layernorm = false;
-    const bool is_group_norm = true;
-
     const bool do_mask_h = (origin_h % TILE_HEIGHT) != 0;
     const auto mask_h = do_mask_h ? origin_h % TILE_HEIGHT : TILE_HEIGHT;
 
@@ -112,34 +109,28 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     uint32_t in0_t = num_inner_tiles;                         // input
-    // const uint32_t in1_t = 1;                                 // scaler
+    uint32_t in1_t = block_size_batch;                        // batch_mean
     const uint32_t in2_t = 1;                                 // epsilon
     const uint32_t in3_t = gamma_has_value ? block_size : 0;  // gamma
     const uint32_t in4_t = beta_has_value ? block_size : 0;   // beta
     const uint32_t in5_t = do_mask_h ? 1 : 0;                 // mask_h
     const uint32_t in6_t = do_mask_w ? 1 : 0;                 // mask_w
-    uint32_t in1_t = block_size_batch;                        // batch_mean
     uint32_t in7_t = block_size_batch;                        // batch_var
 
     const uint32_t out0_t = block_size;              // output
     const uint32_t out1_t = mean_has_value ? 1 : 0;  // mean
     const uint32_t out2_t = rstd_has_value ? 1 : 0;  // rstd
 
-    // const uint32_t im0_t = 1;                                                         // E[x]
     uint32_t im1_t = num_inner_tiles;                                                 // x - E[x]
-    // uint32_t im2_t = 1;                                                               // (x - E[x])^2
-    // const uint32_t im3_t = 1;                                                         // Sum[(x - E[x])^2]
-    // const uint32_t im4_t = 1;                                                         // E[(x - E[x])^2] = Var[x]
     const uint32_t im0_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
     const uint32_t im2_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
-    const uint32_t im3_t = 2;                                                         // Sum[x]
 
     const auto cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out1_t + out2_t + im1_t +
-                           im0_t + im2_t + im3_t) *
-                          single_tile_size;
+    const auto cb_usage =
+        (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out1_t + out2_t + im1_t + im0_t + im2_t) *
+        single_tile_size;
     const auto available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
 
     CreateCircularBuffer(
@@ -147,8 +138,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         all_cores,
         cb_data_format,
         {
-            {CBIndex::c_0, in0_t},  // input
-            // {CBIndex::c_1, in1_t},    // scaler
+            {CBIndex::c_0, in0_t},    // input
             {CBIndex::c_1, in1_t},    // batch_mean
             {CBIndex::c_2, in2_t},    // eps
             {CBIndex::c_3, in3_t},    // gamma
@@ -159,14 +149,9 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
             {CBIndex::c_16, out0_t},  // output
             {CBIndex::c_17, out1_t},  // mean
             {CBIndex::c_18, out2_t},  // rstd
-            // {CBIndex::c_24, im0_t},   // E[x]
-            {CBIndex::c_24, im0_t},  // 1.0/(sqrt(Var[x] + eps))
-            {CBIndex::c_25, im1_t},  // x - E[x]
-            {CBIndex::c_26, im2_t},  // y * gamm + beta
-            // {CBIndex::c_26, im2_t},   // (x - E[x])^2
-            // {CBIndex::c_27, im3_t},   // Sum[(x - E[x])^2]
-            // {CBIndex::c_28, im4_t},   // E[(x - E[x])^2] = Var[x]
-            {CBIndex::c_27, im3_t},  // Sum[x]
+            {CBIndex::c_24, im0_t},   // 1.0/(sqrt(Var[x] + eps))
+            {CBIndex::c_25, im1_t},   // x - E[x]
+            {CBIndex::c_26, im2_t},   // y * gamm + beta
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -189,7 +174,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_small_kernel.cpp";
+        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp";
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,
@@ -201,9 +186,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         static_cast<uint32_t>(gamma_has_value),
         static_cast<uint32_t>(beta_has_value),
         static_cast<uint32_t>(mean_has_value),
-        static_cast<uint32_t>(rstd_has_value),
-        static_cast<uint32_t>(is_lastdim_layernorm),
-        static_cast<uint32_t>(is_group_norm)};
+        static_cast<uint32_t>(rstd_has_value)};
 
     CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_rows_per_core_group_1, compute_args_group_1}, compute_defines);
@@ -219,9 +202,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
             static_cast<uint32_t>(gamma_has_value),
             static_cast<uint32_t>(beta_has_value),
             static_cast<uint32_t>(mean_has_value),
-            static_cast<uint32_t>(rstd_has_value),
-            static_cast<uint32_t>(is_lastdim_layernorm),
-            static_cast<uint32_t>(is_group_norm)};
+            static_cast<uint32_t>(rstd_has_value)};
 
         CreateComputeKernel(
             program,
@@ -270,7 +251,6 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
             beta_addr,
             static_cast<uint32_t>(is_dram(beta)),
             static_cast<uint32_t>(beta_has_value),
-            // *reinterpret_cast<uint32_t*>(&scaler),
             *reinterpret_cast<uint32_t*>(&eps),
             tile_offset,
             num_rows_per_core,

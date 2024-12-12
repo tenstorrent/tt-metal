@@ -20,42 +20,34 @@ void MAIN {
     constexpr bool beta_has_value = get_compile_time_arg_val(7) == 1;
     constexpr bool mean_has_value = get_compile_time_arg_val(8) == 1;
     constexpr bool rstd_has_value = get_compile_time_arg_val(9) == 1;
-    constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(10) == 1;
-    constexpr bool is_groupnorm = get_compile_time_arg_val(11) == 1;
 
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0);
 
-    constexpr auto cb_x = tt::CBIndex::c_0;       // input
-    // constexpr auto cb_scaler = tt::CBIndex::c_1;  // scaler
+    constexpr auto cb_x = tt::CBIndex::c_0;           // input
     constexpr auto cb_batch_mean = tt::CBIndex::c_1;  // batch_mean
-    constexpr auto cb_eps = tt::CBIndex::c_2;     // epsilon
-    constexpr auto cb_gamma = tt::CBIndex::c_3;   // gamma
-    constexpr auto cb_beta = tt::CBIndex::c_4;    // beta
-    constexpr auto cb_mask_h = tt::CBIndex::c_5;  // mask_h
-    constexpr auto cb_mask_w = tt::CBIndex::c_6;  // mask_w
-    constexpr auto cb_batch_var = tt::CBIndex::c_7;  // batch_var
+    constexpr auto cb_eps = tt::CBIndex::c_2;         // epsilon
+    constexpr auto cb_gamma = tt::CBIndex::c_3;       // gamma
+    constexpr auto cb_beta = tt::CBIndex::c_4;        // beta
+    constexpr auto cb_mask_h = tt::CBIndex::c_5;      // mask_h
+    constexpr auto cb_mask_w = tt::CBIndex::c_6;      // mask_w
+    constexpr auto cb_batch_var = tt::CBIndex::c_7;   // batch_var
 
     constexpr auto cb_out = tt::CBIndex::c_16;   // output
     constexpr auto cb_mean = tt::CBIndex::c_17;  // mean
     constexpr auto cb_rstd = tt::CBIndex::c_18;  // rstd
 
-    // constexpr auto cb_ex = tt::CBIndex::c_24;          // E[x]
-    constexpr auto cb_xmm = tt::CBIndex::c_25;         // x - E[x]
-    // constexpr auto cb_xmm2 = tt::CBIndex::c_26;        // (x - E[x])^2
-    // constexpr auto cb_xmm2sum = tt::CBIndex::c_27;     // Sum[(x - E[x])^2]
-    // constexpr auto cb_var = tt::CBIndex::c_28;         // E[(x - E[x])^2] = Var[x]
     constexpr auto cb_recip_std = tt::CBIndex::c_24;   // 1.0/(sqrt(Var[x] + eps))
+    constexpr auto cb_xmm = tt::CBIndex::c_25;         // x - E[x]
     constexpr auto cb_gamma_beta = tt::CBIndex::c_26;  // p * gamm + beta
-    // constexpr auto cb_xsum = tt::CBIndex::c_31;        // Sum[x]
 
     constexpr uint32_t onetile = 1;
 
-    cb_wait_front(cb_eps, onetile);     // comes from the reader
+    cb_wait_front(cb_eps, onetile);  // comes from the reader
 
     constexpr uint32_t TILE_H = 32;
     constexpr uint32_t TILE_W = 32;
 
-    constexpr bool do_mask_h = (origin_H % TILE_H) != 0 && !is_lastdim_layernorm;
+    constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
 
     if (do_mask_h) {
@@ -79,7 +71,7 @@ void MAIN {
             tile_regs_acquire();
             cb_reserve_back(cb_mean, num_inner / (origin_H * origin_W));
 
-            copy_tile_init_with_dt(cb_batch_mean, is_lastdim_layernorm);
+            copy_tile_init_with_dt(cb_batch_mean, false);
             copy_tile(cb_batch_mean, first_tile, dst0);
             tile_regs_commit();
 
@@ -101,13 +93,8 @@ void MAIN {
             for (uint32_t j = 0; j < block_size; j++) {
                 const uint32_t w_idx = inner_idx + j;
                 tile_regs_acquire();
-                if (is_lastdim_layernorm) {
-                    sub_bcast_cols_init_short_with_dt(cb_x, cb_batch_mean);
-                    sub_tiles_bcast_cols(cb_x, cb_batch_mean, w_idx, first_tile, j);
-                } else {
-                    sub_tiles_bcast_scalar_init_short_with_dt(cb_x, cb_batch_mean);
-                    sub_tiles_bcast_scalar(cb_x, cb_batch_mean, w_idx, first_tile, j);
-                }
+                sub_tiles_bcast_scalar_init_short_with_dt(cb_x, cb_batch_mean);
+                sub_tiles_bcast_scalar(cb_x, cb_batch_mean, w_idx, first_tile, j);
                 // mask xmm
                 if (do_mask_h || do_mask_w) {
                     const uint32_t mask_dst = j < 15 ? j + 1 : 0;
@@ -165,7 +152,7 @@ void MAIN {
             tile_regs_acquire();
             cb_reserve_back(cb_rstd, onetile);
 
-            copy_tile_init_with_dt(cb_recip_std, is_lastdim_layernorm);
+            copy_tile_init_with_dt(cb_recip_std, false);
             copy_tile(cb_recip_std, first_tile, dst0);
             tile_regs_commit();
 
@@ -186,13 +173,8 @@ void MAIN {
             cb_reserve_back(cb_gamma_beta_or_out, block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 tile_regs_acquire();
-                if (is_lastdim_layernorm) {
-                    mul_bcast_cols_init_short_with_dt(cb_xmm, cb_recip_std);
-                    mul_tiles_bcast_cols(cb_xmm, cb_recip_std, inner_idx + j, first_tile, j);
-                } else {
-                    mul_tiles_bcast_scalar_init_short_with_dt(cb_xmm, cb_recip_std);
-                    mul_tiles_bcast_scalar(cb_xmm, cb_recip_std, inner_idx + j, first_tile, j);
-                }
+                mul_tiles_bcast_scalar_init_short_with_dt(cb_xmm, cb_recip_std);
+                mul_tiles_bcast_scalar(cb_xmm, cb_recip_std, inner_idx + j, first_tile, j);
                 tile_regs_commit();
 
                 tile_regs_wait();
@@ -209,18 +191,8 @@ void MAIN {
                 cb_reserve_back(cb_outg, block_size);
                 for (uint32_t j = 0; j < block_size; j++) {
                     tile_regs_acquire();
-                    if (is_groupnorm) {
-                        mul_tiles_bcast_scalar_init_short_with_dt(cb_gamma_beta_or_out, cb_gamma);
-                        mul_tiles_bcast_scalar(cb_gamma_beta_or_out, cb_gamma, j, j, j);
-                    } else {
-                        if (is_lastdim_layernorm) {
-                            mul_bcast_rows_init_short_with_dt(cb_gamma_beta_or_out, cb_gamma);
-                            mul_tiles_bcast_rows(cb_gamma_beta_or_out, cb_gamma, j, j, j);
-                        } else {
-                            mul_tiles_init_with_dt(cb_gamma_beta_or_out, cb_gamma);
-                            mul_tiles(cb_gamma_beta_or_out, cb_gamma, j, j, j);
-                        }
-                    }
+                    mul_tiles_bcast_scalar_init_short_with_dt(cb_gamma_beta_or_out, cb_gamma);
+                    mul_tiles_bcast_scalar(cb_gamma_beta_or_out, cb_gamma, j, j, j);
                     tile_regs_commit();
 
                     tile_regs_wait();
@@ -239,18 +211,8 @@ void MAIN {
                 cb_reserve_back(cb_out, block_size);
                 for (uint32_t j = 0; j < block_size; j++) {
                     tile_regs_acquire();
-                    if (is_groupnorm) {
-                        add_bcast_scalar_init_short_with_dt(cb_gamma_beta, cb_beta);
-                        add_tiles_bcast_scalar(cb_gamma_beta, cb_beta, j, j, j);
-                    } else {
-                        if (is_lastdim_layernorm) {
-                            add_bcast_rows_init_short_with_dt(cb_gamma_beta, cb_beta);
-                            add_tiles_bcast_rows(cb_gamma_beta, cb_beta, j, j, j);
-                        } else {
-                            add_tiles_init_with_dt(cb_gamma_beta, cb_beta);
-                            add_tiles(cb_gamma_beta, cb_beta, j, j, j);
-                        }
-                    }
+                    add_bcast_scalar_init_short_with_dt(cb_gamma_beta, cb_beta);
+                    add_tiles_bcast_scalar(cb_gamma_beta, cb_beta, j, j, j);
                     tile_regs_commit();
 
                     tile_regs_wait();
