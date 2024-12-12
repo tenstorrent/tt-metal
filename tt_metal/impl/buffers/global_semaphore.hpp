@@ -20,15 +20,19 @@ class Buffer;
 class Device;
 
 class GlobalSemaphore {
+    struct Private {
+        explicit Private() = default;
+    };
+
 public:
-    GlobalSemaphore(
+    static std::shared_ptr<GlobalSemaphore> create(
         Device* device,
         const CoreRangeSet& cores,
         uint32_t initial_value,
         BufferType buffer_type = BufferType::L1,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-    GlobalSemaphore(
+    static std::shared_ptr<GlobalSemaphore> create(
         Device* device,
         CoreRangeSet&& cores,
         uint32_t initial_value,
@@ -41,39 +45,41 @@ public:
     GlobalSemaphore(GlobalSemaphore&&) noexcept = default;
     GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = default;
 
-    static std::shared_ptr<GlobalSemaphore> create(
-        Device* device,
-        const CoreRangeSet& cores,
-        uint32_t initial_value,
-        BufferType buffer_type = BufferType::L1,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
-    static std::shared_ptr<GlobalSemaphore> create(
-        Device* device,
-        CoreRangeSet&& cores,
-        uint32_t initial_value,
-        BufferType buffer_type = BufferType::L1,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
     Device* device() const;
 
     DeviceAddr address() const;
 
-    void reset_semaphore_value(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void reset_semaphore_value(uint32_t reset_value, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-    static constexpr auto attribute_names = std::forward_as_tuple("cores", "initial_value");
-    const auto attribute_values() const { return std::make_tuple(this->cores_, this->initial_value_); }
+    static constexpr auto attribute_names = std::forward_as_tuple("cores");
+    const auto attribute_values() const { return std::make_tuple(this->cores_); }
+
+    // "Private" constructor to prevent direct instantiation
+    // Use GlobalSemaphore::create instead
+    GlobalSemaphore(
+        Device* device,
+        const CoreRangeSet& cores,
+        uint32_t initial_value,
+        BufferType buffer_type,
+        tt::stl::Span<const SubDeviceId> sub_device_ids,
+        Private);
+
+    GlobalSemaphore(
+        Device* device,
+        CoreRangeSet&& cores,
+        uint32_t initial_value,
+        BufferType buffer_type,
+        tt::stl::Span<const SubDeviceId> sub_device_ids,
+        Private);
 
 private:
-    void setup_buffer(BufferType buffer_type, tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void setup_buffer(uint32_t initial_value, BufferType buffer_type, tt::stl::Span<const SubDeviceId> sub_device_ids);
 
     // GlobalSemaphore is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
     std::shared_ptr<Buffer> buffer_;
-    std::vector<uint32_t> host_buffer_;
     Device* device_;
     CoreRangeSet cores_;
-    uint32_t initial_value_ = 0;
 };
 
 }  // namespace v0

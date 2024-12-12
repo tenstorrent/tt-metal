@@ -156,6 +156,16 @@ bool SubDeviceManager::has_allocations() const {
 
 DeviceAddr SubDeviceManager::local_l1_size() const { return this->local_l1_size_; }
 
+void SubDeviceManager::set_fabric_sub_device_id(SubDeviceId fabric_sub_device_id) {
+    const auto& fabric_sub_device = this->sub_device(fabric_sub_device_id);
+    TT_FATAL(
+        fabric_sub_device.cores(HalProgrammableCoreType::TENSIX).num_cores() == 0,
+        "Fabric sub device must not have Tensix cores");
+    this->fabric_sub_device_id_ = fabric_sub_device_id;
+}
+
+std::optional<SubDeviceId> SubDeviceManager::fabric_sub_device_id() const { return this->fabric_sub_device_id_; }
+
 uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const {
     auto sub_device_index = sub_device_id.to_index();
     TT_FATAL(

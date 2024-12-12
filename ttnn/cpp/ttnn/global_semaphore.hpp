@@ -24,7 +24,9 @@ std::shared_ptr<GlobalSemaphore> create_global_semaphore(
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 DeviceAddr get_global_semaphore_address(const std::shared_ptr<GlobalSemaphore>& global_semaphore);
 void reset_global_semaphore_value(
-    const std::shared_ptr<GlobalSemaphore>& global_semaphore, const std::vector<SubDeviceId>& sub_device_ids = {});
+    const std::shared_ptr<GlobalSemaphore>& global_semaphore,
+    uint32_t reset_value,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 // Multi Device APIs
 MultiDeviceGlobalSemaphore create_global_semaphore(
@@ -35,6 +37,8 @@ MultiDeviceGlobalSemaphore create_global_semaphore(
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 std::vector<DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSemaphore& global_semaphore);
 void reset_global_semaphore_value(
-    const MultiDeviceGlobalSemaphore& global_semaphore, const std::vector<SubDeviceId>& sub_device_ids = {});
+    const MultiDeviceGlobalSemaphore& global_semaphore,
+    uint32_t reset_value,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 }  // namespace ttnn::global_semaphore
