@@ -7,6 +7,10 @@ on:
         description: "Use precompiled assets for wheel build"
         default: True
         type: boolean
+      profiler-build:
+        description: "Build with the profiler tools and libraries"
+        default: False
+        type: boolean
 
 # Since pre-compiled assets are only built on ubuntu-20.04, we force tests
 # to only be run on ubuntu-20.04.
@@ -37,7 +41,7 @@ jobs:
           os: ${{ matrix.os }}
       - uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ matrix.runner-hw-info.arch }}
+          name: eager-dist-${{ matrix.os }}-${{ matrix.runner-hw-info.arch }}${{ '-profiler' && inputs.profiler-build || '' }}
       - name: Set up end-to-end tests environment
         run: ./tests/scripts/set_up_end_to_end_tests_env.sh
       - name: Activate env and run release tests - host
