@@ -36,7 +36,7 @@
 
 namespace ttnn::operations::experimental::reshape {
 
-ttnn::Tensor MultiDeviceHostStorage_visit(
+ttnn::Tensor MultiDeviceHostStorageVisit(
     auto&& storage, const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
     using T = std::decay_t<decltype(storage)>;
     auto updated_storage = std::get<T>(input_tensor.get_storage());
@@ -51,7 +51,7 @@ ttnn::Tensor MultiDeviceHostStorage_visit(
     }
 }
 
-ttnn::Tensor MultiDeviceStorage_visit(auto&& storage, const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
+ttnn::Tensor MultiDeviceStorageVisit(auto&& storage, const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
     using T = std::decay_t<decltype(storage)>;
     MultiDeviceStorage updated_storage = std::get<T>(input_tensor.get_storage());
     std::unordered_map<int, ttnn::Shape> new_shapes;
@@ -68,7 +68,7 @@ ttnn::Tensor MultiDeviceStorage_visit(auto&& storage, const ttnn::Tensor& input_
     }
 }
 
-ttnn::Tensor DeviceStorage_visit(auto&& storage, const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
+ttnn::Tensor DeviceStorageVisit(auto&& storage, const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
     using T = std::decay_t<decltype(storage)>;
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -127,13 +127,13 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
             using T = std::decay_t<decltype(storage)>;
             const auto& tensor = input_tensor;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                return MultiDeviceHostStorage_visit(storage, input_tensor, new_shape);
+                return MultiDeviceHostStorageVisit(storage, input_tensor, new_shape);
             }
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                return MultiDeviceStorage_visit(storage, input_tensor, new_shape);
+                return MultiDeviceStorageVisit(storage, input_tensor, new_shape);
             }
             if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return DeviceStorage_visit(storage, input_tensor, new_shape);
+                return DeviceStorageVisit(storage, input_tensor, new_shape);
             } else {
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
                     return Tensor(

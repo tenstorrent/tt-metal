@@ -25,9 +25,9 @@ void py_bind_unsafe_view(py::module& module) {
         Note:
         - It is recommended to use ttnn.reshape if you are not sure which operation to use
         - If this is the functionality required for your application, it will be called by ttnn.reshape
-        - The following conditions must be met for the function not corrupt your data:
+        - The following conditions must be met for the function not to corrupt your data:
             * the last dimension must not change
-            * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
+            * In Layout::TILE the second last two dimensions must not change OR there is no padding on the second last dimension
 
 
         Args:

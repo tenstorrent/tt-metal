@@ -1688,11 +1688,10 @@ void pytensor_module(py::module& m_tensor) {
                 dtype = tt_tensor.get_dtype()
         )doc")
 
-
         .def(
             "reshape",
-            [](Tensor &self, int N, int C, int H, int W) {
-                return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W})); //self.reshape(infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
+            [](Tensor& self, int N, int C, int H, int W) {
+                return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
             },
             R"doc(
                 Reshapes TT tensor
@@ -1703,7 +1702,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor &self, const ttnn::Shape &shape) -> Tensor { return ttnn::reshape(self, shape);},//self.reshape(shape); },
+            [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return ttnn::reshape(self, shape); },
             R"doc(
                 Reshapes TT tensor
 
@@ -1713,8 +1712,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor &self, const ttnn::SmallVector<int32_t> &shape) -> Tensor {
-                //return self.reshape(infer_dims_for_reshape(self, shape));
+            [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, shape));
             },
             R"doc(
