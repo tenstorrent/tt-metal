@@ -976,125 +976,6 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
-void bind_power(py::module& module, const unary_operation_t& operation, const std::string& note = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Perform element-wise {0} operation on :attr:`input_tensor` with :attr:`exponent`.
-
-        .. math::
-            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i ** \mathrm{{exponent}}_i)
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            exponent (float, int): the exponent value.
-
-        Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes, layouts, and ranks:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
-                 - 2, 3, 4
-
-            {2}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> exponent = 2
-            >>> output = {1}(tensor, exponent)
-        )doc",
-        ttnn::pow.base_name(),
-        ttnn::pow.python_fully_qualified_name(),
-        note);
-
-    bind_registered_operation(
-        module,
-        ttnn::pow,
-        doc,
-        // integer exponent
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               uint32_t exponent,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor,
-               const uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
-            },
-            py::arg("input_tensor"),
-            py::arg("exponent"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
-
-            // float exponent
-            ttnn::pybind_overload_t{
-                [](const unary_operation_t& self,
-                const Tensor& input_tensor,
-                float exponent,
-                const std::optional<MemoryConfig>& memory_config,
-                std::optional<Tensor> output_tensor,
-                const uint8_t queue_id) -> ttnn::Tensor {
-                    return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
-                },
-                py::arg("input_tensor"),
-                py::arg("exponent"),
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt,
-                py::arg("queue_id") = ttnn::DefaultQueueId},
-
-            // tensor exponent
-            ttnn::pybind_overload_t{
-                [](const unary_operation_t& self,
-                const Tensor& input_tensor,
-                const Tensor& exponent,
-                const std::optional<MemoryConfig>& memory_config,
-                std::optional<Tensor> output_tensor,
-                const uint8_t queue_id) -> ttnn::Tensor {
-                    return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
-                },
-                py::arg("input_tensor"),
-                py::arg("exponent"),
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt,
-                py::arg("queue_id") = ttnn::DefaultQueueId},
-
-            // scalar input - tensor exponent
-            ttnn::pybind_overload_t{
-                [](const unary_operation_t& self,
-                float input,
-                const Tensor& exponent,
-                const std::optional<MemoryConfig>& memory_config,
-                std::optional<Tensor> output_tensor,
-                const uint8_t queue_id) -> ttnn::Tensor {
-                    return self(queue_id, input, exponent, memory_config, output_tensor);
-                },
-                py::arg("input"),
-                py::arg("exponent"),
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt,
-                py::arg("queue_id") = ttnn::DefaultQueueId}
-            );
-}
-
-template <typename unary_operation_t>
 void bind_unary_composite(
     py::module& module,
     const unary_operation_t& operation,
@@ -1923,7 +1804,6 @@ void py_module(py::module& module) {
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     detail::bind_unary_chain(module, ttnn::unary_chain);
     detail::bind_identity(module, ttnn::identity);
-    detail::bind_power(module, ttnn::pow, R"doc(When :attr:`exponent` is a Tensor, supported dtypes are: BFLOAT16, FLOAT32)doc");
 
     // unary composite imported into ttnn
     detail::bind_unary_composite(module, ttnn::deg2rad, R"doc(Performs deg2rad function on :attr:`input_tensor`.)doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
