@@ -91,29 +91,21 @@ operation::ProgramWithCallbacks Pad::create_program(
                 std::multiplies<uint32_t>());
             uint32_t output_w = output_tensor.get_logical_shape()[3];
 
-            if (input_w != output_w) {
-                // we will decompose the padding into two parts and run two
-                // separate programs: one for width padding and one for height
-                // padding. this is an assert to catch any errors in the
-                // decomposition.
-                TT_ASSERT(
-                    input_tot_h == output_tot_h,
-                    "For sharded row-major padding with width mismatch, dimensions 0-2 must match between input and "
-                    "output");
+            if (input_w != output_w and input_tot_h != output_tot_h) {
+                TT_THROW(
+                    "ttnn.pad: Unsupported sharded row-major padding configuration: pad_impl did not decompose padding "
+                    "correctly.");
+                return {};
+            } else if (input_w != output_w) {
                 return detail::pad_rm_sharded_width_only(
                     input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
             } else if (input_tot_h != output_tot_h) {
-                // we will decompose the padding into two parts and run two
-                // separate programs: one for width padding and one for height
-                // padding. this is an assert to catch any errors in the
-                // decomposition.
-                TT_ASSERT(
-                    input_w == output_w,
-                    "For sharded row-major padding with height mismatch, the width dimension must match.");
                 return detail::pad_rm_sharded_height_only(
                     input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
             } else {
-                TT_THROW("ttnn.pad: Unsupported sharded row-major padding configuration");
+                // for no padding, we just use the height-only padding program
+                return detail::pad_rm_sharded_height_only(
+                    input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
             }
         } else {
             if (use_multicore) {

@@ -148,16 +148,9 @@ static ttnn::Tensor pad_impl(
             }
         }
 
-        std::cout << "[pad_impl] memory_config: " << output_memory_config << std::endl;
-        if (memory_config_arg.has_value()) {
-            std::cout << "[pad_impl] memory_config_arg: " << memory_config_arg.value() << std::endl;
-        } else {
-            std::cout << "[pad_impl] memory_config_arg: nullopt" << std::endl;
-        }
-
         auto output_w = output_padded_shape[3];
         TT_ASSERT(
-            output_w == output_memory_config.shard_spec->shape[1],
+            !input_tensor.is_sharded() || output_w == output_memory_config.shard_spec->shape[1],
             "output_w != output_memory_config.shard_spec().shape[1]");
 
         tt::tt_metal::LegacyShape output_padded_legacy_shape{output_padded_shape};
