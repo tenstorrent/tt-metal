@@ -27,13 +27,14 @@ void MAIN {
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         tile_regs_acquire();
         cb_wait_front(cb_x, onetile);  // comes from the reader
+        cb_reserve_back(cb_y, onetile);
+
         mul_tiles_bcast_scalar_init_short();
         mul_tiles_bcast_scalar(cb_x, cb_clip_coef_clamped, 0, 0, dst0);
         cb_pop_front(cb_x, onetile);
         tile_regs_commit();
 
         tile_regs_wait();
-        cb_reserve_back(cb_y, onetile);
         pack_tile(dst0, cb_y);
         cb_push_back(cb_y, onetile);
         tile_regs_release();

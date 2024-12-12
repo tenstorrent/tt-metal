@@ -60,6 +60,7 @@ void MAIN {
         // |x|
         tile_regs_acquire();
         cb_wait_front(cb_x, onetile);  // comes from the reader
+        cb_reserve_back(cb_xabs, onetile);
 
         copy_tile_init();
         copy_tile(cb_x, 0, dst0);
@@ -86,9 +87,7 @@ void MAIN {
         tile_regs_commit();
 
         tile_regs_wait();
-        cb_reserve_back(cb_xabs, onetile);
         pack_tile(dst0, cb_xabs);
-
         cb_push_back(cb_xabs, onetile);
         tile_regs_release();
 

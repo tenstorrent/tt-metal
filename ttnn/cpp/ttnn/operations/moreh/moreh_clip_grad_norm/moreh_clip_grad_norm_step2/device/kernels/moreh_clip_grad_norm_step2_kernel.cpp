@@ -42,6 +42,7 @@ void MAIN {
         if (tile_idx == 0) {
             tile_regs_acquire();
             cb_wait_front(cb_input, onetile);  // comes from the reader
+            cb_reserve_back(cb_x, onetile);
 
             copy_tile_init();
             copy_tile(cb_input, 0, dst0);
@@ -49,7 +50,6 @@ void MAIN {
             tile_regs_commit();
 
             tile_regs_wait();
-            cb_reserve_back(cb_x, onetile);
             pack_tile(dst0, cb_x);
             cb_push_back(cb_x, onetile);
             tile_regs_release();
@@ -57,6 +57,8 @@ void MAIN {
             tile_regs_acquire();
             cb_wait_front(cb_input, onetile);  // comes from the reader
             cb_wait_front(cb_x, onetile);
+            cb_reserve_back(cb_x, onetile);
+
             add_tiles_init();
             add_tiles(cb_input, cb_x, 0, 0, dst0);
             cb_pop_front(cb_x, onetile);
@@ -64,7 +66,6 @@ void MAIN {
             tile_regs_commit();
 
             tile_regs_wait();
-            cb_reserve_back(cb_x, onetile);
             pack_tile(dst0, cb_x);
             cb_push_back(cb_x, onetile);
             tile_regs_release();

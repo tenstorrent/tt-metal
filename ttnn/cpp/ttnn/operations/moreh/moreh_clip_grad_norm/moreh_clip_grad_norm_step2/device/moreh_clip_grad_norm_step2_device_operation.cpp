@@ -37,6 +37,7 @@ void MorehClipGradNormStep2Operation::validate_on_program_cache_hit(
 
 MorehClipGradNormStep2Operation::shape_return_value_t MorehClipGradNormStep2Operation::compute_output_shapes(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // output total_norm 1 element
     return SimpleShape{1, 1};
 };
 

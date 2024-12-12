@@ -41,7 +41,7 @@ Tensor MorehClipGradNorm::invoke(
     const auto max_num_inputs = get_num_device_cores(device);
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
-
+    // Store intermediate reduction of Sum[|e|^p]
     auto tmp_pow_sum = create_device_tensor(
         SimpleShape{static_cast<uint32_t>(inputs.size()), 1, 1},
         inputs.at(0).get_dtype(),
