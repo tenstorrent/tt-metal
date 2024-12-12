@@ -6,12 +6,11 @@
 
 #include <fmt/format.h>
 
-#include <exception>
+#include <cstdint>
 #include <fstream>
 #define MSGPACK_NO_BOOST
 #include <fstream>
 #include <msgpack.hpp>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -122,6 +121,10 @@ public:
     }
 
     // Overloads for std::span
+    void put(std::string_view key, std::span<const uint8_t> value) {
+        m_data[std::string(key)] = std::vector<uint8_t>(value.begin(), value.end());
+    }
+
     void put(std::string_view key, std::span<const int> value) {
         m_data[std::string(key)] = std::vector<int>(value.begin(), value.end());
     }
@@ -140,6 +143,10 @@ public:
 
     void put(std::string_view key, std::span<const std::string> value) {
         m_data[std::string(key)] = std::vector<std::string>(value.begin(), value.end());
+    }
+
+    void put(std::string_view key, const ValueType& value) {
+        m_data[std::string(key)] = value;
     }
 
     // Serialization method
@@ -216,6 +223,10 @@ public:
         return get_value(key, value);
     }
 
+    bool get(std::string_view key, std::vector<uint8_t>& value) const {
+        return get_value(key, value);
+    }
+
     bool get(std::string_view key, std::vector<int>& value) const {
         return get_value(key, value);
     }
@@ -236,23 +247,11 @@ public:
         return get_value(key, value);
     }
 
-private:
-    using ValueType = std::variant<
-        bool,
-        char,
-        int,
-        float,
-        double,
-        uint32_t,
-        size_t,
-        std::string,
-        std::vector<char>,
-        std::vector<int>,
-        std::vector<float>,
-        std::vector<double>,
-        std::vector<uint32_t>,
-        std::vector<std::string>>;
+    bool get(std::string_view key, ValueType& value) const {
+        return get_value(key, value);
+    }
 
+private:
     std::unordered_map<std::string, ValueType> m_data;
 
     // Helper function to get value from m_data
@@ -266,6 +265,17 @@ private:
             } else {
                 throw std::runtime_error(fmt::format("Type mismatch for key: {}", key));
             }
+        } else {
+            // Key not found
+            throw std::runtime_error(fmt::format("Key not found: {}", key));
+        }
+    }
+    template <>
+    bool get_value<ValueType>(std::string_view key, ValueType& value) const {
+        auto it = m_data.find(std::string(key));
+        if (it != m_data.end()) {
+            value = it->second;
+            return true;
         } else {
             // Key not found
             throw std::runtime_error(fmt::format("Key not found: {}", key));
@@ -312,6 +322,10 @@ void MsgPackFile::put(std::string_view key, std::string_view value) {
     m_impl->put(key, value);
 }
 
+void MsgPackFile::put(std::string_view key, std::span<const uint8_t> value) {
+    m_impl->put(key, value);
+}
+
 void MsgPackFile::put(std::string_view key, std::span<const int> value) {
     m_impl->put(key, value);
 }
@@ -329,6 +343,14 @@ void MsgPackFile::put(std::string_view key, std::span<const uint32_t> value) {
 }
 
 void MsgPackFile::put(std::string_view key, std::span<const std::string> value) {
+    m_impl->put(key, value);
+}
+
+void MsgPackFile::put(std::string_view key, const char* value) {
+    put(key, std::string_view(value));
+}
+
+void MsgPackFile::put(std::string_view key, const ValueType& value) {
     m_impl->put(key, value);
 }
 
@@ -372,6 +394,10 @@ void MsgPackFile::get(std::string_view key, std::string& value) const {
     m_impl->get(key, value);
 }
 
+void MsgPackFile::get(std::string_view key, std::vector<uint8_t>& value) const {
+    m_impl->get(key, value);
+}
+
 void MsgPackFile::get(std::string_view key, std::vector<int>& value) const {
     m_impl->get(key, value);
 }
@@ -392,7 +418,8 @@ void MsgPackFile::get(std::string_view key, std::vector<std::string>& value) con
     m_impl->get(key, value);
 }
 
-void MsgPackFile::put(std::string_view key, const char* value) {
-    put(key, std::string_view(value));
+void MsgPackFile::get(std::string_view key, ValueType& value) const {
+    m_impl->get(key, value);
 }
+
 }  // namespace ttml::serialization

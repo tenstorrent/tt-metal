@@ -4,7 +4,6 @@
 
 #pragma once
 #include <core/ttnn_all_includes.hpp>
-#include <ttnn/tensor/tensor.hpp>
 
 namespace ttml::ttnn_fixed {
 

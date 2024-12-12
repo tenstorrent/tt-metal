@@ -21,24 +21,23 @@ namespace ttml::serialization {
 
 // trivial type to the std::string
 template <typename T>
-std::string to_bytes(const T& value) {
-    static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
-    std::string bytes(sizeof(T), '\0');
-    std::memcpy(bytes.data(), &value, sizeof(T));
-    return bytes;
+std::span<const uint8_t> to_bytes(T& value) {
+    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+    auto ptr = reinterpret_cast<uint8_t*>(&value);
+    return std::span<const uint8_t>(ptr, sizeof(T));
 }
 
 template <typename T>
-void from_bytes(const std::string& bytes, T& value) {
-    static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+void from_bytes(std::span<const uint8_t> bytes, T& value) {
+    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
 
     if (bytes.size() != sizeof(T)) {
-        throw std::invalid_argument(fmt::format(
-            "Invalid byte size for conversion to type T. Expected: {} Actual: {}, type: {} ",
-            sizeof(T),
-            bytes.size(),
-            core::demangle(typeid(T).name())));
+        std::ostringstream oss;
+        oss << "Invalid byte size for conversion to type T. Expected: " << sizeof(T) << " Actual: " << bytes.size()
+            << ", type: " << typeid(T).name();
+        throw std::invalid_argument(oss.str());
     }
+
     std::memcpy(&value, bytes.data(), sizeof(T));
 }
 
@@ -77,7 +76,7 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
     tt::tt_metal::StorageType storage_type{};
 
     auto shape = core::create_shape({1, 1, 1, 1});
-    std::string bytes;
+    std::vector<uint8_t> bytes;
     file.get(std::string(name) + "/shape", bytes);
     from_bytes<ttnn::Shape>(bytes, shape);
 
@@ -127,12 +126,13 @@ void read_autograd_tensor(MsgPackFile& file, std::string_view name, ttml::autogr
     }
 }
 
-void write_named_parameters(MsgPackFile& file, std::string_view name, const ttml::autograd::NamedParameters& params) {
+void write_named_parameters(
+    MsgPackFile& file, std::string_view name, const ttml::serialization::NamedParameters& params) {
     for (const auto& [key, value] : params) {
         write_autograd_tensor(file, std::string(name) + "/" + key, value);
     }
 }
-void read_named_parameters(MsgPackFile& file, std::string_view name, ttml::autograd::NamedParameters& params) {
+void read_named_parameters(MsgPackFile& file, std::string_view name, ttml::serialization::NamedParameters& params) {
     for (auto& [key, value] : params) {
         read_autograd_tensor(file, std::string(name) + "/" + key, value);
     }
@@ -141,22 +141,15 @@ void read_named_parameters(MsgPackFile& file, std::string_view name, ttml::autog
 void write_optimizer(MsgPackFile& file, std::string_view name, const optimizers::OptimizerBase* optimizer) {
     assert(optimizer);
     auto state_dict = optimizer->get_state_dict();
-    for (const auto& [key, value] : state_dict) {
-        ttml::serialization::write_autograd_tensor(file, std::string(name) + "/" + key, value);
-    }
-    file.put(std::string(name) + "/steps", optimizer->get_steps());
+    write_state_dict(file, std::string(name), state_dict);
 }
 
 void read_optimizer(MsgPackFile& file, std::string_view name, optimizers::OptimizerBase* optimizer) {
     assert(optimizer);
     size_t steps = 0;
     auto state_dict = optimizer->get_state_dict();
-    for (auto& [key, value] : state_dict) {
-        ttml::serialization::read_autograd_tensor(file, std::string(name) + "/" + key, value);
-    }
+    read_state_dict(file, name, state_dict);
     optimizer->set_state_dict(state_dict);
-    file.get(std::string(name) + "/steps", steps);
-    optimizer->set_steps(steps);
 }
 
 void write_module(MsgPackFile& file, std::string_view name, const autograd::ModuleBase* module) {
@@ -169,6 +162,37 @@ void read_module(MsgPackFile& file, std::string_view name, autograd::ModuleBase*
     assert(module);
     auto named_parameters = module->parameters();
     read_named_parameters(file, name, named_parameters);
+}
+
+void write_state_dict(MsgPackFile& file, std::string_view name, const serialization::StateDict& state_dict) {
+    for (const auto& [key, value] : state_dict) {
+        if (std::holds_alternative<ValueType>(value)) {
+            file.put(std::string(name) + "/" + key, std::get<ValueType>(value));
+        } else if (std::holds_alternative<ttnn::Tensor>(value)) {
+            write_ttnn_tensor(file, std::string(name) + "/" + key, std::get<ttnn::Tensor>(value));
+        } else if (std::holds_alternative<ttml::autograd::TensorPtr>(value)) {
+            write_autograd_tensor(file, std::string(name) + "/" + key, std::get<ttml::autograd::TensorPtr>(value));
+        } else if (std::holds_alternative<NamedParameters>(value)) {
+            write_named_parameters(file, std::string(name) + "/" + key, std::get<NamedParameters>(value));
+        } else {
+            throw std::runtime_error("Unsupported type in state dict");
+        }
+    }
+}
+void read_state_dict(MsgPackFile& file, std::string_view name, serialization::StateDict& state_dict) {
+    for (auto& [key, value] : state_dict) {
+        if (std::holds_alternative<ValueType>(value)) {
+            file.get(std::string(name) + "/" + key, std::get<ValueType>(value));
+        } else if (std::holds_alternative<ttnn::Tensor>(value)) {
+            read_ttnn_tensor(file, std::string(name) + "/" + key, std::get<ttnn::Tensor>(value));
+        } else if (std::holds_alternative<ttml::autograd::TensorPtr>(value)) {
+            read_autograd_tensor(file, std::string(name) + "/" + key, std::get<ttml::autograd::TensorPtr>(value));
+        } else if (std::holds_alternative<NamedParameters>(value)) {
+            read_named_parameters(file, std::string(name) + "/" + key, std::get<NamedParameters>(value));
+        } else {
+            throw std::runtime_error("Unsupported type in state dict");
+        }
+    }
 }
 
 }  // namespace ttml::serialization
