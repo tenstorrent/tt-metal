@@ -64,12 +64,12 @@ void JitBuildEnv::init(
 
     std::filesystem::path git_hash_path(this->out_root_ + git_hash);
     std::filesystem::path root_path(this->out_root_);
-    if((not tt::llrt::OptionsG.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
+    if ((not llrt::RunTimeOptions::get_instance().get_skip_deleting_built_cache()) &&
+        std::filesystem::exists(root_path)) {
         std::ranges::for_each(
             std::filesystem::directory_iterator{root_path},
             [&git_hash_path](const auto& dir_entry) { check_built_dir(dir_entry.path(), git_hash_path); });
-    }
-    else {
+    } else {
         log_info(tt::LogBuildKernels, "Skipping deleting built cache");
     }
 

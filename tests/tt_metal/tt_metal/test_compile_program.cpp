@@ -59,7 +59,6 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(const 
 // TODO: Replace this when we have debug/test hooks (GH: #964) to inspect inside CompileProgram
 KernelCacheStatus CompileProgramTestWrapper(Device* device, Program& program, bool profile_kernel = false) {
     // Check
-    auto root_dir = device->build_env().get_out_kernel_root_path();
     std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str =
         get_last_program_binary_path(program, device->build_env().get_out_kernel_root_path());
 
