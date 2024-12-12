@@ -279,7 +279,7 @@ def test_line_reduce_scatter_post_commit(
 @pytest.mark.parametrize(
     "per_chip_output_shape, dim, layout",
     [
-        ([1, 1, 32, 128], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
         # ([1, 1, 32, 1280], 1, ttnn.TILE_LAYOUT),
         # ([1, 1, 32, 1024], 1, ttnn.TILE_LAYOUT),
     ],
