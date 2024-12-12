@@ -46,72 +46,54 @@ sudo ./install_dependencies.sh
 | Enterprise Linux Based | ```dnf install epel-release && dnf install dkms``` |
 
 - Install the driver TT-KMD:
-```
-git clone https://github.com/tenstorrent/tt-kmd.git
-cd tt-kmd
-git checkout -b ttkmd-1.29 ttkmd-1.29
-sudo dkms add .
-sudo dkms install tenstorrent/1.29
-sudo modprobe tenstorrent
-cd ..
-```
+  ```
+  git clone https://github.com/tenstorrent/tt-kmd.git
+  cd tt-kmd
+  git checkout -b ttkmd-1.29 ttkmd-1.29
+  sudo dkms add .
+  sudo dkms install tenstorrent/1.29
+  sudo modprobe tenstorrent
+  cd ..
+  ```
 
 - For more information visit Tenstorrents [TT-KMD GitHub repository](https://github.com/tenstorrent/tt-kmd).
 
 ---
 
-#### Install TT-Flash
+#### Use TT-Flash to Update Device TT-Firmware
 - Install Cargo (Rust package manager):
   | OS | Command |
   |---|---|
   | Ubuntu / Debian | ```sudo apt install cargo``` |
   | Fedora / EL9 | ```sudo dnf install cargo``` |
-  
+
 - Install TT-Flash:
+  ```
+  pip install git+https://github.com/tenstorrent/tt-flash.git
+  ```
 
-```
-pip install git+https://github.com/tenstorrent/tt-flash.git
-```
-
-- For more information visit Tenstorrent's [TT-Flash repository](https://github.com/tenstorrent/tt-flash).
-
----
-
-#### Setup Hugepages
-
-- Download and install HugePages:
-```sh
-wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
-sudo -E python3 setup_hugepages.py first_pass
-```
-
-- Reboot to load changes:
-```
-sudo reboot
-```
-
-- Enable/check HugePages setup:
-  - Ensure you are in the same directory where setup_hugepages.py was downloaded.
-```sh
-sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
-```
-
----
-
-#### Update Device TT-Firmware with TT-Flash
+- To load changes, either reboot or add to PATH the directory where TT-Flash was installed:
+  - To add to PATH, run the following (replace <Directory> with the actual path to where TT-Flash was installed):
+    ```
+    export PATH="<Directory>:$PATH"
+    ```
+  - To reboot:
+    ```
+    sudo reboot
+    ```
 
 - Check if TT-Flash is installed:
-```
-tt-flash --version
-```
+  ```
+  tt-flash --version
+  ```
 
 - Download and install the latest TT-Firmware version:
-```
-file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
-full_url="https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
-curl -L -o "$file_name" "$full_url"
-tt-flash flash --fw-tar $file_name
-```
+  ```
+  file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
+  full_url="https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
+  curl -L -o "$file_name" "$full_url"
+  tt-flash flash --fw-tar $file_name
+  ```
 
 - For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash Github Repository](https://github.com/tenstorrent/tt-flash).
 
@@ -119,18 +101,18 @@ tt-flash flash --fw-tar $file_name
 
 #### Install System Management Interface (TT-SMI)
 - Install Tenstorrent Software Management Interface (TT-SMI):
-```
-pip install git+https://github.com/tenstorrent/tt-smi
-```
+  ```
+  pip install git+https://github.com/tenstorrent/tt-smi
+  ```
 
 - Verify System Configuration
 
 Once hardware and system software are installed, verify that the system has been configured correctly.
 
   - Run the TT-SMI utility:
-  ```
-  tt-smi
-  ```
+    ```
+    tt-smi
+    ```
   A display with device information, telemetry, and firmware will appear:<br>
 
 ![image](https://docs.tenstorrent.com/_images/tt_smi.png)
@@ -159,7 +141,7 @@ Once hardware and system software are installed, verify that the system has been
 - [Option 3: From Wheel](#option-3-from-wheel)
   Install from wheel as an alternative method to get quick access to our APIs and to running AI models.
 
---- 
+---
 
 ## Option 1: From Source
 Install from source if you are a developer who wants to be close to the metal or the source code.
@@ -190,7 +172,7 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
 | Blackhole        | ```export ARCH_NAME=blackhole```     |
 
-- Then run: 
+- Then run:
   ```
   export TT_METAL_HOME=$(pwd)
   export PYTHONPATH=$(pwd)
@@ -198,10 +180,10 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
   ```
 
 - (recomended) For an out-of-the-box virtual environment to use, execute:
-```
-./create_venv.sh
-source python_env/bin/activate
-```
+  ```
+  ./create_venv.sh
+  source python_env/bin/activate
+  ```
 
 - Continue to [You Are All Set!](#you-are-all-set)
 
@@ -234,7 +216,7 @@ Instal from wheel for quick access to our APIs and to get an AI model running
 
 ### Step 1. Download and Install the Latest Wheel:
 
-- Navigate to our [releases page](https://github.com/tenstorrent/tt-metal/releases/latest) and download the latest wheel file for the Tenstorrent card architecture you have installed. 
+- Navigate to our [releases page](https://github.com/tenstorrent/tt-metal/releases/latest) and download the latest wheel file for the Tenstorrent card architecture you have installed.
 
 - Install the wheel using your Python environment manager of choice. For example, to install with `pip`:
 
