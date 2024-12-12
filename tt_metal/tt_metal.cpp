@@ -651,11 +651,11 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done)
 
         std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
         std::unordered_set<CoreCoord> not_done_cores;
-        for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size(); programmable_core_type_index++) {
-            CoreType core_type = hal.get_core_type(programmable_core_type_index);
-            for (const auto &logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                launch_msg_t *msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-                go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
+        for (uint32_t programmable_core_type_index = logical_cores_used_in_program.size(); programmable_core_type_index > 0; programmable_core_type_index--) {
+            CoreType core_type = hal.get_core_type(programmable_core_type_index-1);
+            for (const auto &logical_core : logical_cores_used_in_program[programmable_core_type_index-1]) {
+                launch_msg_t *msg = &program.kernels_on_core(logical_core, programmable_core_type_index-1)->launch_msg;
+                go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index-1)->go_msg;
                 msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);

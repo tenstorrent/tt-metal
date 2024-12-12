@@ -189,16 +189,9 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Test cannot run on specified device.");
         }
 
-        log_info(LogTest, "Device {} conneted to ...", test_device_id_l);
-        // int32_t peer_device = -1;
         bool peer_device_found = false;
         for (auto active_eth_core : device_active_eth_cores) {
             auto [receiver_device, eth_receiver_core] = device->get_connected_ethernet_core(active_eth_core);
-            // log_info(LogTest, "Device {}:Core{}", receiver_device, eth_receiver_core.str());
-            // auto sockets = device->get_ethernet_sockets(peer_device);
-            // for (auto socket : sockets) {
-            //     log_info(LogTest, "Device {}:LogicalCore{}", peer_device, socket.str());
-            // }
             if (test_device_id_r == -1) {
                 test_device_id_r = receiver_device;
                 peer_device_found = true;

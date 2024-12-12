@@ -881,17 +881,18 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
 // we can process other fvcs and come back to check status of this pull request later.
 inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
     uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, wrptr);
-    noc_fast_atomic_increment(
+    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,
         noc_addr,
         NOC_UNICAST_WRITE_VC,
         1,
-        CHAN_REQ_BUF_LOG_SIZE /*wrap*/,
-        false /*linked*/);
+        CHAN_REQ_BUF_LOG_SIZE,
+        false,
+        false,
+        (uint32_t)&local_pull_request->wrptr.ptr);
     while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
-    uint32_t wrptr = *(volatile uint32_t*)MEM_NOC_ATOMIC_RET_VAL_ADDR;
-    local_pull_request->wrptr.ptr = wrptr;
+    uint32_t wrptr = local_pull_request->wrptr.ptr;
     noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
     while (1) {
         noc_async_read_one_packet(noc_addr, (uint32_t)(&local_pull_request->rdptr.ptr), 4);
