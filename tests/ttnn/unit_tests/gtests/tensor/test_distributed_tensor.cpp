@@ -4,12 +4,10 @@
 
 #include <gtest/gtest.h>
 
-#include "common/bfloat16.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include <exception>
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
 
@@ -20,7 +18,8 @@ using ::ttnn::experimental::xtensor::from_vector;
 using TensorDistributionTest = T3kMultiDeviceFixture;
 
 TEST_F(TensorDistributionTest, Replication) {
-    Tensor input_tensor = from_vector(std::vector<float>{42.F, 13.F, -99.F}, ttnn::Shape{1, 1, 1, 3});
+    Tensor input_tensor =
+        from_vector(std::vector<float>{42.F, 13.F, -99.F}, ttnn::SimpleShape{1, 1, 1, 3}, DataType::FLOAT32);
 
     auto mapper = api::replicate_tensor_to_mesh_mapper(*mesh_device_);
     Tensor replicated_tensor = api::distribute_tensor(input_tensor, *mesh_device_, *mapper);
@@ -28,13 +27,14 @@ TEST_F(TensorDistributionTest, Replication) {
     std::vector<Tensor> device_tensors = api::get_device_tensors(replicated_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (const auto& device_tensor : device_tensors) {
-        EXPECT_TRUE(ttnn::allclose<bfloat16>(device_tensor.cpu(), input_tensor));
+        EXPECT_TRUE(ttnn::allclose<float>(device_tensor.cpu(), input_tensor));
     }
 }
 
 TEST_F(TensorDistributionTest, Shard1DInvalidDim) {
     const int num_devices = mesh_device_->num_devices();
-    Tensor input_tensor = from_vector(std::vector<float>(num_devices, 0), ttnn::Shape{1, 1, 1, num_devices});
+    Tensor input_tensor =
+        from_vector(std::vector<float>(num_devices, 0), ttnn::SimpleShape{1, 1, 1, num_devices}, DataType::FLOAT32);
 
     EXPECT_ANY_THROW({
         auto mapper = api::shard_tensor_to_mesh_mapper(*mesh_device_, -1);
@@ -50,7 +50,8 @@ TEST_F(TensorDistributionTest, Shard1DInvalidDim) {
 TEST_F(TensorDistributionTest, Shard1DTooFewShards) {
     const int num_devices = mesh_device_->num_devices();
     ASSERT_LT(3, num_devices);
-    Tensor input_tensor = from_vector(std::vector<float>{42.F, 13.F, -99.F}, ttnn::Shape{1, 1, 1, 3});
+    Tensor input_tensor =
+        from_vector(std::vector<float>{42.F, 13.F, -99.F}, ttnn::SimpleShape{1, 1, 1, 3}, DataType::FLOAT32);
 
     EXPECT_ANY_THROW({
         auto mapper = api::shard_tensor_to_mesh_mapper(*mesh_device_, 3);
@@ -64,7 +65,7 @@ TEST_F(TensorDistributionTest, Shard1D) {
     for (int i = 0; i < num_devices; i++) {
         test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
     }
-    Tensor input_tensor = from_vector(test_data, ttnn::Shape{1, num_devices, 3, 1});
+    Tensor input_tensor = from_vector(test_data, ttnn::SimpleShape{1, num_devices, 3, 1}, DataType::FLOAT32);
 
     auto mapper = api::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
     Tensor sharded_tensor = api::distribute_tensor(input_tensor, *mesh_device_, *mapper);
@@ -72,15 +73,16 @@ TEST_F(TensorDistributionTest, Shard1D) {
     std::vector<Tensor> device_tensors = api::get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (int i = 0; i < device_tensors.size(); i++) {
-        auto expected = from_vector(std::vector<float>{i * 1.F, i * 2.F, i * 3.F}, ttnn::Shape{1, 1, 3, 1});
-        EXPECT_TRUE(ttnn::allclose<bfloat16>(device_tensors[i].cpu(), expected));
+        auto expected = from_vector(
+            std::vector<float>{i * 1.F, i * 2.F, i * 3.F}, ttnn::SimpleShape{1, 1, 3, 1}, DataType::FLOAT32);
+        EXPECT_TRUE(ttnn::allclose<float>(device_tensors[i].cpu(), expected));
     }
 
     auto composer = api::concat_mesh_to_tensor_composer(/*dim=*/0);
     Tensor concatenated_tensor = api::aggregate_tensor(sharded_tensor, *composer);
 
-    Tensor expected_tensor = from_vector(test_data, ttnn::Shape{num_devices, 1, 3, 1});
-    EXPECT_TRUE(ttnn::allclose<bfloat16>(concatenated_tensor, expected_tensor));
+    Tensor expected_tensor = from_vector(test_data, ttnn::SimpleShape{num_devices, 1, 3, 1}, DataType::FLOAT32);
+    EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
 }
 
 TEST_F(TensorDistributionTest, Shard2DInvalidMeshShape) {
@@ -110,7 +112,7 @@ TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
     const int num_devices = num_rows * num_cols;
 
     std::vector<float> test_data = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0};
-    Tensor input_tensor = from_vector(test_data, ttnn::Shape{1, num_rows, num_cols, 1});
+    Tensor input_tensor = from_vector(test_data, ttnn::SimpleShape{1, num_rows, num_cols, 1}, DataType::FLOAT32);
     input_tensor.print();
 
     auto mapper = api::shard_tensor_2d_to_mesh_mapper(
@@ -127,12 +129,14 @@ TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
 
     int i = 0;
     for (; i < 4; i++) {
-        auto expected = from_vector(std::vector<float>{0.0, 1.0, 2.0, 3.0}, ttnn::Shape{1, 1, 4, 1});
-        EXPECT_TRUE(ttnn::allclose<bfloat16>(device_tensors[i].cpu(), expected));
+        auto expected =
+            from_vector(std::vector<float>{0.0, 1.0, 2.0, 3.0}, ttnn::SimpleShape{1, 1, 4, 1}, DataType::FLOAT32);
+        EXPECT_TRUE(ttnn::allclose<float>(device_tensors[i].cpu(), expected));
     }
     for (; i < device_tensors.size(); i++) {
-        auto expected = from_vector(std::vector<float>{4.0, 5.0, 6.0, 7.0}, ttnn::Shape{1, 1, 4, 1});
-        EXPECT_TRUE(ttnn::allclose<bfloat16>(device_tensors[i].cpu(), expected));
+        auto expected =
+            from_vector(std::vector<float>{4.0, 5.0, 6.0, 7.0}, ttnn::SimpleShape{1, 1, 4, 1}, DataType::FLOAT32);
+        EXPECT_TRUE(ttnn::allclose<float>(device_tensors[i].cpu(), expected));
     }
 }
 
@@ -146,7 +150,7 @@ TEST_F(TensorDistributionTest, Shard2D) {
     for (int i = 0; i < num_devices; i++) {
         test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
     }
-    Tensor input_tensor = from_vector(test_data, ttnn::Shape{1, num_rows, num_cols, 3});
+    Tensor input_tensor = from_vector(test_data, ttnn::SimpleShape{1, num_rows, num_cols, 3}, DataType::FLOAT32);
 
     auto mapper = api::shard_tensor_2d_to_mesh_mapper(
         *mesh_device_,
@@ -160,8 +164,9 @@ TEST_F(TensorDistributionTest, Shard2D) {
     std::vector<Tensor> device_tensors = api::get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (int i = 0; i < device_tensors.size(); i++) {
-        auto expected = from_vector(std::vector<float>{i * 1.F, i * 2.F, i * 3.F}, ttnn::Shape{1, 1, 1, 3});
-        EXPECT_TRUE(ttnn::allclose<bfloat16>(device_tensors[i].cpu(), expected));
+        auto expected = from_vector(
+            std::vector<float>{i * 1.F, i * 2.F, i * 3.F}, ttnn::SimpleShape{1, 1, 1, 3}, DataType::FLOAT32);
+        EXPECT_TRUE(ttnn::allclose<float>(device_tensors[i].cpu(), expected));
     }
 
     auto composer = api::concat_mesh_2d_to_tensor_composer(
@@ -172,8 +177,8 @@ TEST_F(TensorDistributionTest, Shard2D) {
         });
     Tensor concatenated_tensor = api::aggregate_tensor(sharded_tensor, *composer);
 
-    Tensor expected_tensor = from_vector(test_data, ttnn::Shape{num_rows, 1, num_cols, 3});
-    EXPECT_TRUE(ttnn::allclose<bfloat16>(concatenated_tensor, expected_tensor));
+    Tensor expected_tensor = from_vector(test_data, ttnn::SimpleShape{num_rows, 1, num_cols, 3}, DataType::FLOAT32);
+    EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
 }
 
 }  // namespace ttnn::distributed::test

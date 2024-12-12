@@ -12,50 +12,21 @@
 namespace ttnn::experimental::xtensor {
 namespace {
 
+using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Tensor;
-
-// copypaste from deprecated tensor pybinds ttnn
-tt::tt_metal::OwnedBuffer create_owned_buffer(const std::vector<float>& data, DataType data_type) {
-    using ::tt::tt_metal::owned_buffer::create;
-
-    switch (data_type) {
-        case DataType::BFLOAT8_B: {
-            auto uint32_vector = pack_fp32_vec_as_bfp8_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            return create<uint32_t>(std::move(uint32_vector));
-        }
-        case DataType::BFLOAT4_B: {
-            auto uint32_vector = pack_fp32_vec_as_bfp4_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            return create<uint32_t>(std::move(uint32_vector));
-        }
-        case DataType::FLOAT32: {
-            auto data_copy = data;
-            return create<float>(std::move(data_copy));
-        }
-        case DataType::BFLOAT16: {
-            std::vector<bfloat16> bfloat16_data(data.size());
-            std::transform(std::begin(data), std::end(data), std::begin(bfloat16_data), [](float value) {
-                return bfloat16(value);
-            });
-            return create<bfloat16>(std::move(bfloat16_data));
-        }
-        default: {
-            TT_THROW("Cannot create a host buffer for data type: {}", data_type);
-        }
-    }
-}
 
 template <typename T>
 Tensor create_owned_tensor(
-    std::vector<T> data, const ttnn::Shape& shape, tt::tt_metal::DataType data_type, tt::tt_metal::Layout layout) {
-    auto buffer = tt::tt_metal::owned_buffer::create(std::move(data));
+    tt::stl::Span<const T> data, const ttnn::SimpleShape& shape, DataType data_type, tt::tt_metal::Layout layout) {
+    auto buffer = tt::tt_metal::owned_buffer::create(std::vector<T>(data.begin(), data.end()));
     auto storage = OwnedStorage{std::move(buffer)};
     return Tensor{std::move(storage), shape, data_type, layout};
 }
 
 // TODO: optimize precomputing multipliers
-template <class T = float, class InternalT = bfloat16>
+template <typename T, typename InternalType>
 std::vector<T> untile_tensor_to_vec(const Tensor& cpu_tensor) {
-    auto tiled_buffer = tt::tt_metal::host_buffer::get_as<InternalT>(cpu_tensor);
+    auto tiled_buffer = tt::tt_metal::host_buffer::get_as<InternalType>(cpu_tensor);
     auto untiled_shape = cpu_tensor.get_logical_shape();
     auto tiled_shape = cpu_tensor.get_padded_shape();
 
@@ -79,7 +50,7 @@ std::vector<T> untile_tensor_to_vec(const Tensor& cpu_tensor) {
     for (size_t idx = 0; idx < total_size; ++idx) {
         uint32_t untiled_index = compute_flat_index(indices, untiled_shape);
         uint32_t tiled_index = compute_flat_index(indices, tiled_shape);
-        if constexpr (std::is_same_v<InternalT, bfloat16>) {
+        if constexpr (std::is_same_v<InternalType, bfloat16>) {
             untiled_data[untiled_index] = tiled_buffer[tiled_index].to_float();
         } else {
             untiled_data[untiled_index] = tiled_buffer[tiled_index];
@@ -99,41 +70,51 @@ std::vector<T> untile_tensor_to_vec(const Tensor& cpu_tensor) {
 }  // namespace
 
 template <>
-Tensor from_vector<float, DataType::BFLOAT16>(const std::vector<float>& buffer, const ttnn::Shape& shape) {
-    const DataType data_type = DataType::BFLOAT16;
-    auto logical_shape = shape.logical_shape();
-    size_t volume = logical_shape.volume();
+Tensor from_span<float>(tt::stl::Span<const float> buffer, const ttnn::SimpleShape& shape, DataType dtype) {
+    size_t volume = shape.volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    auto owned_buffer = create_owned_buffer(buffer, data_type);
-    return Tensor(OwnedStorage{owned_buffer}, logical_shape, data_type, Layout::ROW_MAJOR);
-}
-
-// Workaround implementation due to issue with tilize for float32
-// it is expected that tilize will be fixed in the after next tt-metal main update
-template <>
-Tensor from_vector<float, DataType::FLOAT32>(const std::vector<float>& buffer, const ttnn::Shape& shape) {
-    auto tensor = from_vector<float, DataType::BFLOAT16>(buffer, shape);
-    return ttnn::typecast(tensor, DataType::FLOAT32);
-}
-
-template <>
-Tensor from_vector<uint32_t, DataType::UINT32>(const std::vector<uint32_t>& buffer, const ttnn::Shape& shape) {
-    MemoryConfig output_mem_config{};
-    auto logical_shape = shape.logical_shape();
-    auto volume = logical_shape.volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    return create_owned_tensor(buffer, logical_shape, DataType::UINT32, Layout::ROW_MAJOR);
+    if (dtype == DataType::FLOAT32) {
+        return create_owned_tensor(buffer, shape, dtype, Layout::ROW_MAJOR);
+    } else if (dtype == DataType::BFLOAT16) {
+        std::vector<bfloat16> bfloat16_data;
+        bfloat16_data.reserve(buffer.size());
+        std::transform(std::begin(buffer), std::end(buffer), std::back_inserter(bfloat16_data), [](float value) {
+            return bfloat16(value);
+        });
+        return create_owned_tensor(
+            tt::stl::Span<const bfloat16>(bfloat16_data.data(), bfloat16_data.size()), shape, dtype, Layout::ROW_MAJOR);
+    } else {
+        // TODO: support bf8 and bf4
+        TT_THROW("Unsupported data type for from_span<float>: {}", dtype);
+    }
 }
 
 template <>
-Tensor from_vector<int32_t, DataType::INT32>(const std::vector<int32_t>& buffer, const ttnn::Shape& shape) {
-    auto logical_shape = shape.logical_shape();
-    auto volume = logical_shape.volume();
+Tensor from_span<bfloat16>(tt::stl::Span<const bfloat16> buffer, const ttnn::SimpleShape& shape, DataType dtype) {
+    size_t volume = shape.volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    return create_owned_tensor(buffer, logical_shape, DataType::INT32, Layout::ROW_MAJOR);
+    TT_FATAL(dtype == DataType::BFLOAT16, "Unsupported data type for from_span<bfloat16>: {}", dtype);
+    return create_owned_tensor(buffer, shape, dtype, Layout::ROW_MAJOR);
+}
+
+template <>
+Tensor from_span<uint32_t>(tt::stl::Span<const uint32_t> buffer, const ttnn::SimpleShape& shape, DataType dtype) {
+    size_t volume = shape.volume();
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    TT_FATAL(dtype == DataType::UINT32, "Unsupported data type for from_span<uint32_t>: {}", dtype);
+    return create_owned_tensor(buffer, shape, DataType::UINT32, Layout::ROW_MAJOR);
+}
+
+template <>
+Tensor from_span<int32_t>(tt::stl::Span<const int32_t> buffer, const ttnn::SimpleShape& shape, DataType dtype) {
+    size_t volume = shape.volume();
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    TT_FATAL(dtype == DataType::INT32, "Unsupported data type for from_span<int32_t>: {}", dtype);
+    return create_owned_tensor(buffer, shape, DataType::INT32, Layout::ROW_MAJOR);
 }
 
 template <>
@@ -144,19 +125,38 @@ std::vector<float> to_vector<float>(const Tensor& tensor) {
     } else if (cpu_tensor.get_dtype() == DataType::FLOAT32) {
         return untile_tensor_to_vec<float, float>(cpu_tensor);
     } else {
+        // TODO: support bf4, bf8.
         TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.get_dtype());
     }
 }
 
 template <>
+std::vector<bfloat16> to_vector<bfloat16>(const Tensor& tensor) {
+    auto cpu_tensor = tensor.cpu().to(Layout::ROW_MAJOR);
+    TT_FATAL(
+        cpu_tensor.get_dtype() == DataType::BFLOAT16,
+        "Unsupported data type for to_vector<bfloat16>: {}",
+        cpu_tensor.get_dtype());
+    return untile_tensor_to_vec<bfloat16, bfloat16>(cpu_tensor);
+}
+
+template <>
 std::vector<uint32_t> to_vector<uint32_t>(const Tensor& tensor) {
     auto cpu_tensor = tensor.cpu().to(Layout::ROW_MAJOR);
+    TT_FATAL(
+        cpu_tensor.get_dtype() == DataType::UINT32,
+        "Unsupported data type for to_vector<uint32_t>: {}",
+        cpu_tensor.get_dtype());
     return untile_tensor_to_vec<uint32_t, uint32_t>(cpu_tensor);
 }
 
 template <>
 std::vector<int32_t> to_vector<int32_t>(const Tensor& tensor) {
     auto cpu_tensor = tensor.cpu().to(Layout::ROW_MAJOR);
+    TT_FATAL(
+        cpu_tensor.get_dtype() == DataType::INT32,
+        "Unsupported data type for to_vector<int32_t>: {}",
+        cpu_tensor.get_dtype());
     return untile_tensor_to_vec<int32_t, int32_t>(cpu_tensor);
 }
 

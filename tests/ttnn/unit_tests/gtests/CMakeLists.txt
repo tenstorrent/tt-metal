@@ -26,8 +26,10 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_with_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_distributed_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_partition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_shape_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_sharding_with_alignment.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_vector_conversion.cpp
 )
 
 add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})

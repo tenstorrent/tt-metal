@@ -16,35 +16,33 @@ namespace {
 
 class ReplicateTensorToMesh : public TensorToMesh {
 public:
-    ReplicateTensorToMesh(MeshDevice& mesh_device) : mesh_device_(mesh_device) {}
+    ReplicateTensorToMesh(int num_devices) : num_devices_(num_devices) {}
 
     std::vector<Tensor> map(const Tensor& tensor) override {
         std::vector<Tensor> tensors;
-        tensors.reserve(mesh_device_.num_devices());
-        std::fill_n(std::back_inserter(tensors), mesh_device_.num_devices(), tensor);
+        tensors.reserve(num_devices_);
+        std::fill_n(std::back_inserter(tensors), num_devices_, tensor);
         return tensors;
     }
 
-    DistributedTensorConfig config() const override {
-        return DistributedTensorConfig{ReplicateTensor{mesh_device_.num_devices()}};
-    }
+    DistributedTensorConfig config() const override { return DistributedTensorConfig{ReplicateTensor{num_devices_}}; }
 
 private:
-    MeshDevice& mesh_device_;
+    int num_devices_ = -1;
 };
 
 class ShardTensorToMesh : public TensorToMesh {
 public:
-    ShardTensorToMesh(MeshDevice& mesh_device, int dim) : mesh_device_(mesh_device), shard_dim_(dim) {}
+    ShardTensorToMesh(int num_devices, int dim) : num_devices_(num_devices), shard_dim_(dim) {}
 
     std::vector<Tensor> map(const Tensor& tensor) override {
-        return experimental::xtensor::chunk(tensor, mesh_device_.num_devices(), shard_dim_);
+        return experimental::xtensor::chunk(tensor, num_devices_, shard_dim_);
     }
 
     DistributedTensorConfig config() const override { return DistributedTensorConfig{ShardTensor{shard_dim_}}; }
 
 private:
-    MeshDevice& mesh_device_;
+    int num_devices_ = -1;
     int shard_dim_ = -1;
 };
 
@@ -144,11 +142,11 @@ private:
 }  // namespace
 
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
-    return std::make_unique<ReplicateTensorToMesh>(mesh_device);
+    return std::make_unique<ReplicateTensorToMesh>(mesh_device.num_devices());
 }
 
 std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim) {
-    return std::make_unique<ShardTensorToMesh>(mesh_device, dim);
+    return std::make_unique<ShardTensorToMesh>(mesh_device.num_devices(), dim);
 }
 
 std::unique_ptr<TensorToMesh> shard_tensor_2d_to_mesh_mapper(
