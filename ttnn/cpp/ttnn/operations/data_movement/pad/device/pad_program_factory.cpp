@@ -1585,11 +1585,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     float pad_value) {
     Program program{};
 
-    std::cout << "input_tensor.memory_config(): " << input_tensor.memory_config() << std::endl;
-    std::cout << "output.memory_config(): " << output.memory_config() << std::endl;
-    std::cout << "output_tensor_shape: " << output_tensor_shape << std::endl;
-    std::cout << "output.shape: " << output.shape() << std::endl;
-
     TT_ASSERT(
         output.shard_spec().has_value() and output.shard_spec()->shape[1] == output_tensor_shape[-1],
         "output must be sharded with shard width equal to output width");
@@ -1629,8 +1624,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
 
     auto& all_cores_padded = shard_spec_padded.grid;
 
-    std::cout << "all_cores_padded: " << all_cores_padded.str() << std::endl;
-
     uint32_t num_cores_padded = shard_spec_padded.num_cores();
     auto bbox_padded = shard_spec_padded.grid.bounding_box();
     CoreCoord grid_size_padded = {bbox_padded.end_coord.x + 1, bbox_padded.end_coord.y+1};
@@ -1651,9 +1644,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
             .set_globally_allocated_address(*input_tensor.buffer());
     auto input_shard_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, input_shard_cb_config);
 
-    std::cout << "input_shard_cb address: " << input_tensor.buffer()->address() << std::endl;
-    std::cout << "input_shard_cb size: " << input_tensor.buffer()->size() << std::endl;
-
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_shard_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig output_shard_cb_config =
@@ -1662,9 +1652,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
             .set_page_size(output_shard_cb_index, padded_stick_bytes)
             .set_globally_allocated_address(*output.buffer());
     auto output_shard_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, output_shard_cb_config);
-
-    std::cout << "output_shard_cb address: " << output.buffer()->address() << std::endl;
-    std::cout << "output_shard_cb size: " << output.buffer()->size() << std::endl;
 
     // construct const buffer with the pad_value
     tt::DataFormat pad_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
@@ -1677,21 +1664,14 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
 
     uint32_t padding_value_as_u32;
-    std::cout << "pad_value: " << pad_value << std::endl;
     if (input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16) {
         uint16_t bfloat_pad_value_bits = bfloat16(pad_value).to_uint16();
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
     } else if (input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
     } else {
-        // FIXME: what to do for other dtypes?
-        // for int types we need to convert the padding value to the nearest uint{sz}_t first -> probably should be a
-        // pad api change for bf8 I have no idea.n
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
-        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
     }
-
-    std::cout << "padding_value_as_u32: " << padding_value_as_u32 << std::endl;
 
     // FIXME: assumes that this was sharded using DRAM alignment so that gaps are left in the tensor.
     // if this changes, we should change the stick step to be 16B (L1 alignment).

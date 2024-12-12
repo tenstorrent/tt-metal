@@ -76,10 +76,6 @@ static ttnn::Tensor pad_impl(
 
             uint32_t output_w = output_padded_shape[3];
 
-            std::cout << "input_w: " << input_w << ", output_w: " << output_w << std::endl;
-            std::cout << "input_h: " << total_height(input_logical_shape)
-                      << ", output_h: " << total_height(output_padded_shape) << std::endl;
-
             if (width_distinct(input_logical_shape, output_padded_shape)) {
                 ttnn::SmallVector<uint32_t> output_shape_width_padded{
                     input_logical_shape.begin(), input_logical_shape.end() - 1};
@@ -106,8 +102,6 @@ static ttnn::Tensor pad_impl(
                         not(height_distinct(input_logical_shape, output_shape_width_padded) and
                             width_distinct(input_logical_shape, output_shape_width_padded)),
                         "infinite recursion");
-
-                    std::cout << "[pad_impl] width_pad_memory_config: " << width_pad_memory_config << std::endl;
 
                     // pad width
                     auto output_tensor_width_padded = pad_impl(
