@@ -124,8 +124,6 @@ int main(int argc, char** argv) {
                 uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
                 auto dst_dram_buffer = CreateBuffer(buff_config);
                 uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-                auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-                auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
                 uint32_t src0_cb_index = 0;
                 uint32_t num_buffer_tiles = 2;
@@ -238,7 +236,6 @@ int main(int argc, char** argv) {
 
                 auto src1_dram_buffer = CreateBuffer(src1_config);
                 uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
-                auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
                 tt_metal::detail::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
 
                 bool src0_is_dram = true;
@@ -268,28 +265,20 @@ int main(int argc, char** argv) {
                     program,
                     binary_reader_kernel,
                     core,
-                    {dram_buffer_src0_addr,              // 0
-                     (std::uint32_t)dram_src0_noc_xy.x,  // 1
-                     (std::uint32_t)dram_src0_noc_xy.y,  // 2
-                     num_tensor_tiles,                   // 3
-                     dram_buffer_src1_addr,              // 4
-                     (std::uint32_t)dram_src1_noc_xy.x,  // 5
-                     (std::uint32_t)dram_src1_noc_xy.y,  // 6
+                    {dram_buffer_src0_addr,  // 0
+                     (std::uint32_t)0,       // 1
+                     num_tensor_tiles,       // 2
+                     dram_buffer_src1_addr,  // 3
+                     (std::uint32_t)0,       // 4
                      num_bcast_tiles,
                      NC * Ht * Wt,
                      NC,
                      Ht,
                      Wt,
-                     nc1});  // 7 8 9 10 11 12
+                     nc1});  // 5 6 7 8 9 10
 
                 tt_metal::SetRuntimeArgs(
-                    program,
-                    unary_writer_kernel,
-                    core,
-                    {dram_buffer_dst_addr,
-                     (std::uint32_t)dram_dst_noc_xy.x,
-                     (std::uint32_t)dram_dst_noc_xy.y,
-                     num_tensor_tiles});
+                    program, unary_writer_kernel, core, {dram_buffer_dst_addr, (std::uint32_t)0, num_tensor_tiles});
 
                 std::map<string, string> compute_defines = {
                     {"BCAST_DIM", bdim_to_llkdim_define[bcast_dim]},
