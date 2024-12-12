@@ -222,9 +222,10 @@ std::vector<tt::tt_metal::GlobalSemaphore> create_global_semaphores(
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
     auto worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(6, 6)));
     for (Device* d : devices) {
-        auto worker_subdevice_id = worker_subdevice_by_device.has_value()
-                                       ? worker_subdevice_by_device.value().at(d->id())
-                                       : std::optional<SubDeviceId>{std::nullopt};
+        auto worker_subdevice_id =
+            worker_subdevice_by_device.has_value()
+                ? tt::stl::Span<const SubDeviceId>{worker_subdevice_by_device.value().at(d->id())}
+                : tt::stl::Span<const SubDeviceId>{};
         auto sem = CreateGlobalSemaphore(d, worker_cores, 0, BufferType::L1, worker_subdevice_id);
         semaphores.push_back(*sem);
     }
@@ -245,9 +246,10 @@ std::vector<tt::tt_metal::GlobalSemaphore> create_global_semaphores(
             size_t attempt = 0;
             std::vector<std::shared_ptr<tt::tt_metal::GlobalSemaphore>> garbage;
             while (semaphores[i].address() != highest_addr) {
-                auto worker_subdevice_id = worker_subdevice_by_device.has_value()
-                                               ? worker_subdevice_by_device.value().at(devices[i]->id())
-                                               : std::optional<SubDeviceId>{std::nullopt};
+                auto worker_subdevice_id =
+                    worker_subdevice_by_device.has_value()
+                        ? tt::stl::Span<const SubDeviceId>{worker_subdevice_by_device.value().at(devices[i]->id())}
+                        : tt::stl::Span<const SubDeviceId>{};
                 auto sem = CreateGlobalSemaphore(devices[i], worker_cores, 0, BufferType::L1, worker_subdevice_id);
                 if (sem->address() == highest_addr) {
                     semaphores[i] = *sem;
