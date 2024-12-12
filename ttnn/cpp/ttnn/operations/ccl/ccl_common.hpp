@@ -14,9 +14,19 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
 
 namespace ttnn {
 namespace ccl {
+
+struct SyncModeSpec {
+    uint32_t num_signals = 0;
+    CoreCoord core;
+    std::vector<uint32_t> sem_ids;
+    std::vector<uint32_t> wait_counts;
+
+    void add_signal(uint32_t sem_id, uint32_t wait_count);
+};
 
 class FabricEriscDatamoverBuilder;
 class EriscDatamoverBuilder;
@@ -25,6 +35,32 @@ std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_dev
     const Tensor& input_tensor,
     const std::vector<Device*>& devices,
     const ttnn::ccl::Topology& topology);
+
+
+class LineTopology {
+   public:
+    LineTopology(
+        size_t line_size,
+        size_t line_index);
+
+    bool is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
+    bool is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
+
+    bool is_at_end_of_line() const;
+
+    size_t line_size() const;
+
+    size_t line_index() const;
+
+    size_t get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
+
+    ttnn::ccl::Topology topology() const;
+
+   private:
+    size_t _line_size;
+    size_t _line_index;
+};
+
 
 // Eventual home: ccl_topology_descriptors
 struct RingTopology {
@@ -49,6 +85,17 @@ struct RingTopology {
     uint32_t ring_size;
     uint32_t ring_index;
     bool is_linear;
+};
+
+struct TensorPartition {
+    TensorPartition(
+        uint32_t partition_size,
+        uint32_t partition_index)
+        : partition_size(partition_size),
+          partition_index(partition_index) {}
+
+    uint32_t partition_size;
+    uint32_t partition_index;
 };
 
 class CclOpTensorConfig {
@@ -262,6 +309,16 @@ struct InterleavedTensorWorkerSlice {
 
     std::size_t get_worker_slice_num_pages() const {
         return worker_slice_shape.x * worker_slice_shape.y;
+    }
+
+    void print() const {
+        tt::log_info("----- printing worker slice -----");
+        tt::log_info("tensor_shape: ({},{})", tensor_shape.x, tensor_shape.y);
+        tt::log_info("tensor_slice_shape: ({},{})", tensor_slice_shape.x, tensor_slice_shape.y);
+        tt::log_info("worker_slice_shape: ({},{})", worker_slice_shape.x, worker_slice_shape.y);
+        tt::log_info("worker_slice_offset: ({},{})", worker_slice_offset.x, worker_slice_offset.y);
+        tt::log_info("worker_slice_is_wrapped: {}", worker_slice_is_wrapped);
+        tt::log_info("worker_slice_num_pages: {}", get_worker_slice_num_pages());
     }
 
     tt_xy_pair tensor_shape;
@@ -501,6 +558,71 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_buffers_per_channel,
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     EriscDataMoverTerminationMode termination_mode);
+
+
+// Add this declaration after the existing generate_slice_sequence_on_dim declaration (around line 235)
+std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
+    TensorSlice::ords_t tensor_shape,
+    TensorSlice::ords_t worker_slice_shape,
+    TensorSlice::ords_t worker_slice_offset,
+    std::size_t fracture_dim,
+    std::size_t num_slices,
+    std::int64_t start_slice_index,
+    std::int64_t end_slice_index_exclusive,
+    std::size_t worker_index
+);
+
+class GenericWrappedTensorSlicer {
+public:
+    GenericWrappedTensorSlicer(
+        const Tensor& input_tensor,
+        const Tensor& output_tensor,
+        int slice_dim,
+        uint32_t partition_index,
+        uint32_t partition_size,
+        uint32_t total_num_workers,
+        uint32_t max_slice_size_in_bytes,
+        uint32_t half_cb_n_pages);
+
+    ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index);
+
+    // method to compute offsets in a wrapped layout
+    std::vector<tt_xy_pair> compute_worker_slice_offsets(
+        const std::vector<tt_xy_pair>& worker_slice_shapes,
+        tt_xy_pair const& tensor_slice_shape);
+
+    // method to create worker slice shapes in a tile layout
+    std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
+        const tt::tt_metal::LegacyShape& tensor_shape,
+        tt_xy_pair const& tensor_slice_shape_in_tiles,
+        uint32_t num_workers,
+        uint32_t max_slice_size_in_pages,
+        uint32_t half_cb_n_pages);
+
+private:
+    void initialize(
+        const Tensor& input_tensor,
+        const Tensor& output_tensor,
+        int slice_dim,
+        uint32_t partition_index,
+        uint32_t partition_size,
+        uint32_t total_num_workers,
+        uint32_t max_slice_size_in_bytes,
+        uint32_t half_cb_n_pages);
+
+    tt_xy_pair calculate_tensor_slice_shape(const Tensor& input_tensor, int slice_dim, uint32_t partition_size);
+
+    // Class member variables
+    tt_xy_pair flattened_tensor_shape;
+    tt_xy_pair tensor_slice_shape;
+    std::vector<tt_xy_pair> worker_slice_shapes;
+    std::vector<tt_xy_pair> worker_slice_offsets;
+    uint32_t input_page_size;
+    bool row_major;
+    uint32_t partition_index;
+    uint32_t partition_size;
+};
+
 
 }  // namespace ccl
 }  // namespace ttnn
