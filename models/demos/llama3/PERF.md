@@ -1,8 +1,8 @@
 # Llama 3 model performance and accuracy
 
-Performance collected from [demo/demo.py](demo/demo.py) and accuracy collected from [tests/test_llama_accuracy.py](tests/test_llama_accuracy.py). You can generate this table by running these tests with the `lt` tool (tell it to run `accuracy,demo`) and pressing `m` whilst in the results section to export to markdown.
+Performance collected from [demo/demo.py](demo/demo.py) and accuracy collected from [tests/test_llama_accuracy.py](tests/test_llama_accuracy.py). You can generate this table by running these tests with the `lt` tool (tell it to run `table`) and pressing `m` whilst in the results section to export to markdown.
 
-Note that `test_llama_accuracy.py` parses the below to determine expected values.
+Note that `test_llama_accuracy.py` parses the below to determine expected values +- 0.5.
 
 ## LlamaOptimizations.performance
 
@@ -10,18 +10,18 @@ This configuration uses bfp4 MLP FF1+FF3 for all models.
 
 | Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
 |-------|--------|-----------|-----------|---------------|
-| 1b | N150 | 79 | 98 | 90.5 |
-| 1b | N300 | 81 | 98 | 101.7 |
-| 1b | T3K | 81 | 98 | 96.8 |
-| 3b | N150 | 85 | 96 | 49.0 |
-| 3b | N300 | 88 | 97 | 56.9 |
-| 3b | T3K | 88 | 97 | 54.5 |
-| 8b | N150 | 86 | 98 | 28.4 |
-| 8b | N300 | 84 | 98 | 38.6 |
-| 8b | T3K | 84 | 97 | 52.6 |
-| 11b | N300 | 86 | 97 | 38.6 |
-| 11b | T3K | 84 | 98 | 52.6 |
-| 70b | T3K | 94 | 100 | 14.3 |
+| 1b | N150 | 88 | 98 | 85.6 |
+| 1b | N300 | 88 | 98 | 93.6 |
+| 1b | T3K | 88 | 98 | 90.5 |
+| 3b | N150 | 89 | 98 | 46.3 |
+| 3b | N300 | 91 | 98 | 52.8 |
+| 3b | T3K | 89 | 98 | 52.0 |
+| 8b | N150 | 87 | 98 | 27.5 |
+| 8b | N300 | 86 | 98 | 36.5 |
+| 8b | T3K | 84 | 97 | 46.7 |
+| 11b | N300 | 88 | 98 | 36.4 |
+| 11b | T3K | 87 | 98 | 46.8 |
+| 70b | T3K | 94 | 100 | 13.9 |
 
 ## LlamaOptimizations.accuracy
 
@@ -29,15 +29,15 @@ This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model.
 
 | Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
 |-------|--------|-----------|-----------|---------------|
-| 1b | N150 | 77 | 96 | 85.8 |
-| 1b | N300 | 80 | 98 | 98.6 |
-| 1b | T3K | 78 | 98 | 97.2 |
-| 3b | N150 | 88 | 98 | 44.1 |
-| 3b | N300 | 88 | 98 | 53.9 |
-| 3b | T3K | 88 | 98 | 54.8 |
-| 8b | N150 | 89 | 98 | 23.5 |
-| 8b | N300 | 90 | 98 | 34.1 |
-| 8b | T3K | 88 | 97 | 49.9 |
-| 11b | N300 | 90 | 97 | 33.8 |
-| 11b | T3K | 88 | 97 | 52.6 |
-| 70b | T3K | 94 | 100 | 14.5 |
+| 1b | N150 | 88 | 98 | 81.7 |
+| 1b | N300 | 88 | 98 | 91.5 |
+| 1b | T3K | 88 | 98 | 87.8 |
+| 3b | N150 | 89 | 98 | 41.9 |
+| 3b | N300 | 91 | 98 | 50.4 |
+| 3b | T3K | 89 | 98 | 51.4 |
+| 8b | N150 | 87 | 98 | 22.9 |
+| 8b | N300 | 86 | 98 | 32.8 |
+| 8b | T3K | 84 | 97 | 46.0 |
+| 11b | N300 | 88 | 98 | 32.4 |
+| 11b | T3K | 87 | 98 | 44.1 |
+| 70b | T3K | 94 | 100 | 13.9 |
