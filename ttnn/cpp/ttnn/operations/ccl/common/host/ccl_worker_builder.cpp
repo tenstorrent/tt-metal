@@ -367,7 +367,24 @@ size_t generate_ccl_wait_value_command_args(
     return 1;
 }
 
-size_t generate_ccl_atomic_inc_command_args(
+size_t generate_ccl_raw_inline_write_command_args(
+    ttnn::ccl::cmd::CclCommandInlineReadWrite const& inline_rw_args, std::vector<uint32_t>& args_out) {
+    auto const arg_code = ttnn::ccl::cmd::CclCommandArgCode::SET_TARGET_VALUE;
+    ttnn::ccl::cmd::CclCommandArgHeader hdr;
+    hdr.code = arg_code;
+    hdr.inline_value0 = static_cast<uint8_t>(true);
+    hdr.inline_value1 = inline_rw_args.value;
+    args_out.push_back(hdr.to_uint32());
+    log_trace(
+        tt::LogOp,
+        "Emitting header only for for inline write field. header.code={}, .inline_val0={}, .inline_val1={}",
+        static_cast<int>(hdr.code),
+        hdr.inline_value0,
+        hdr.inline_value1);
+    return 1;
+}
+
+static size_t generate_ccl_atomic_inc_command_args(
     ttnn::ccl::cmd::CclCommandAtomicInc const& atomic_inc_args,
     std::vector<uint32_t>& args_out) {
     auto const arg_code = ttnn::ccl::cmd::CclCommandArgCode::SET_ATOMIC_INC_VALUE;
@@ -391,7 +408,7 @@ size_t generate_ccl_atomic_inc_command_args(
 /*
  * Returns the number of ccl command args added
  */
-size_t generate_ccl_address_info_command_args(
+static size_t generate_ccl_address_info_command_args(
     std::optional<std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs>> const& last_addr_type,
     std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs> const& current_addr_type_args,
     ttnn::ccl::cmd::SRC_DEST_TYPE src_dest_type,
@@ -585,6 +602,12 @@ void generate_ccl_command_stream_to_kernel_args(std::vector<ttnn::ccl::cmd::CclH
                     rt_args_out);
                 last_tensor_slice = current_tensor_slice;
             } break;
+
+            case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
+                num_ccl_command_args_added += generate_ccl_raw_inline_write_command_args(
+                    std::get<ttnn::ccl::cmd::CclCommandInlineReadWrite>(command.command_args),
+                    rt_args_out);
+                break;
 
             case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
                 num_ccl_command_args_added += generate_ccl_atomic_inc_command_args(
