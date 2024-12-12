@@ -162,13 +162,13 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range) {
+std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange& core_range, CoreType core_type) {
     std::optional<uint32_t> semaphore_id = std::nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             CoreCoord logical_core(x, y);
-            auto semaphores = program.semaphores_on_core(logical_core);
+            auto semaphores = program.semaphores_on_core(logical_core, core_type);
             if (semaphores.size() == NUM_SEMAPHORES) {
                 TT_THROW(
                     "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
@@ -1158,7 +1158,7 @@ uint32_t CreateSemaphore(
             for (const auto& core_range : crs.ranges()) {
                 CoreCoord start_core = core_range.start_coord;
                 CoreCoord end_core = core_range.end_coord;
-                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range);
+                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
                 if (!semaphore_id.has_value()) {
                     semaphore_id = semaphore_id_candidate;
                 } else {
@@ -1175,13 +1175,21 @@ uint32_t CreateSemaphore(
 }
 
 std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore::create(device, cores, initial_value, buffer_type);
+    Device* device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    return GlobalSemaphore::create(device, cores, initial_value, buffer_type, sub_device_ids);
 }
 
 std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type);
+    Device* device,
+    CoreRangeSet&& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type, sub_device_ids);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
@@ -1384,8 +1392,9 @@ std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
     Device* device,
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer::create(device, sender_receiver_core_mapping, size, buffer_type);
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    return GlobalCircularBuffer::create(device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
 }
 
 CBHandle CreateCircularBuffer(
