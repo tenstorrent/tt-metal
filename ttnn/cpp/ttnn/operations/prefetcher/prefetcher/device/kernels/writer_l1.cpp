@@ -71,16 +71,16 @@ FORCE_INLINE void print_remote_fifo(uint32_t cb_id) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.aligned_pages_sent_ptr);
     volatile tt_l1_ptr uint32_t* pages_acked_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.aligned_pages_sent_ptr + L1_ALIGNMENT);
-    DPRINT << "fifo_wr_ptr " << cb.fifo_wr_ptr << ENDL();
-    DPRINT << "pages_sent " << *pages_sent_ptr << ENDL();
-    DPRINT << "pages_ack " << *pages_acked_ptr << ENDL();
+    // DPRINT << "fifo_wr_ptr " << cb.fifo_wr_ptr << ENDL();
+    // DPRINT << "pages_sent " << *pages_sent_ptr << ENDL();
+    // DPRINT << "pages_ack " << *pages_acked_ptr << ENDL();
 
     uint32_t fifo_aligned_num_pages = cb.fifo_limit_page_aligned / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
     uint32_t free_pages = fifo_aligned_num_pages - (*pages_sent_ptr - *pages_acked_ptr);
-    DPRINT << "fifo_aligned_num_pages " << fifo_aligned_num_pages << ENDL();
-    DPRINT << "free_pages " << free_pages << ENDL();
+    // DPRINT << "fifo_aligned_num_pages " << fifo_aligned_num_pages << ENDL();
+    // DPRINT << "free_pages " << free_pages << ENDL();
 
-    DPRINT << "fifo_page_size " << cb.fifo_page_size << ENDL();
+    // DPRINT << "fifo_page_size " << cb.fifo_page_size << ENDL();
 }
 
 /*
@@ -119,6 +119,9 @@ void kernel_main() {
     // const uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t noc = noc_index;
 
+    // DPRINT << "num_tensors " << num_tensors <<ENDL();
+    // DPRINT << "num_blocks " << num_blocks <<ENDL();
+
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         for (uint32_t t = 0; t < num_tensors; t++) {
             uint32_t curr_coalesced_page_size = coalesced_page_sizes[t];
@@ -129,9 +132,7 @@ void kernel_main() {
             uint32_t curr_block_size = curr_block_num_tiles / num_receivers * curr_single_tile_sizes;
 
             resize_local_cb_interface(local_cb_id, curr_block_size, fifo_start_address, fifo_start_size);
-            experimental::resize_remote_sender_cb_interface(remote_cb_id, curr_block_size, noc);
-
-            // DPRINT << "curr_block_size " << curr_block_size<< ENDL();
+            experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size, noc);
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 cb_wait_front(local_cb_id, 1);
@@ -141,9 +142,8 @@ void kernel_main() {
                 uint32_t local_cb_addr = get_read_ptr(local_cb_id);
                 experimental::remote_cb_reserve_back(remote_cb_id, 1);  // Reserve back 1 curr_block_size
 
-                DPRINT << "remote_cb_reserve_back " << ENDL();
                 // print_remote_fifo(remote_cb_id);
-                // if (t==0 or t==1)
+                // if (t==0 or t==1 or t==2 or t==3)
                 experimental::remote_cb_push_back_and_write_pages(
                     remote_cb_id,
                     local_cb_addr,
@@ -152,6 +152,8 @@ void kernel_main() {
                     curr_coalesced_num_pages,
                     curr_coalesced_page_size,
                     noc);
+
+                // DPRINT << "block " << block <<ENDL();
 
                 cb_pop_front(local_cb_id, 1);
             }

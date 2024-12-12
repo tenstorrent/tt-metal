@@ -70,4 +70,5 @@ void kernel_main() {
             }
         }
     }
+    DPRINT << "in0  DONE" << ENDL();
 }

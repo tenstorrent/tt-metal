@@ -52,7 +52,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     bool mcast_in0,
     bool gather_in0,
     bool untilize_out,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    uint32_t num_global_cb_receivers
     // std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb
 );
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
@@ -143,6 +144,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::optional<UnaryWithParam> fused_activation;
     bool mcast_in0;
     bool gather_in0;
+    std::size_t num_global_cb_receivers;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {

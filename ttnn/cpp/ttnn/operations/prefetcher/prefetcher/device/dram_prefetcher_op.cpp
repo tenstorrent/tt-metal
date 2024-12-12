@@ -66,20 +66,23 @@ std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::
         ttnn::SimpleShape{input_shape[0] * input_tensors.size(), input_shape[1]}};
 }
 std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return {
-        create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            input_tensors.at(0).get_dtype(),
-            Layout::TILE,
-            input_tensors.at(0).device(),
-            this->reader_output_mem_config),
-        // create_device_tensor(
-        // this->compute_output_shapes(input_tensors).at(1),
-        // input_tensors.at(0).get_dtype(),
-        // Layout::TILE,
-        // input_tensors.at(0).device(),
-        // this->writer_output_mem_config)
+    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+    auto input_tensor = input_tensors.at(0);
+    auto tensor_layout = TensorLayout(
+        input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), this->reader_output_mem_config);
+    auto tensor_spec = TensorSpec(output_shape, tensor_layout);
+    ShardedBufferConfig output_buffer_config = {
+        input_tensor.device(),
+        tensor_spec.compute_packed_buffer_size_bytes(),
+        tensor_spec.compute_page_size_bytes(),
+        this->reader_output_mem_config.buffer_type,
+        this->reader_output_mem_config.memory_layout,
+        *(tensor_spec.compute_shard_spec_buffer()),
     };
+    std::shared_ptr<Buffer> output_buffer = CreateBuffer(output_buffer_config, global_cb->buffer_address());
+    DeviceStorage device_storage = DeviceStorage{output_buffer};
+    auto output_tensor = Tensor(device_storage, tensor_spec);
+    return {output_tensor};
 }
 operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
