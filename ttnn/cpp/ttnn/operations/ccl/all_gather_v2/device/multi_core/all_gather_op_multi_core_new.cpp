@@ -18,6 +18,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <sstream>
 #include <type_traits>
@@ -33,6 +34,21 @@ namespace ttnn {
 
 
 using namespace ccl;
+
+static void print_tensor_slice(ttnn::ccl::v2::TensorSlice const& slice_v2) {
+    tt::log_info("TensorSlice:");
+    tt::log_info("  tensor_shape:        [w={}, z={}, y={}, x={}]",
+        slice_v2.tensor_shape.w, slice_v2.tensor_shape.z, slice_v2.tensor_shape.y, slice_v2.tensor_shape.x);
+    tt::log_info("  tensor_slice_shape:  [w={}, z={}, y={}, x={}]",
+        slice_v2.tensor_slice_shape.w, slice_v2.tensor_slice_shape.z, slice_v2.tensor_slice_shape.y, slice_v2.tensor_slice_shape.x);
+    tt::log_info("  tensor_slice_offset: [w={}, z={}, y={}, x={}]",
+        slice_v2.tensor_slice_offset.w, slice_v2.tensor_slice_offset.z, slice_v2.tensor_slice_offset.y, slice_v2.tensor_slice_offset.x);
+    tt::log_info("  worker_slice_shape:  [w={}, z={}, y={}, x={}]",
+        slice_v2.worker_slice_shape.w, slice_v2.worker_slice_shape.z, slice_v2.worker_slice_shape.y, slice_v2.worker_slice_shape.x);
+    tt::log_info("  worker_slice_offset: [w={}, z={}, y={}, x={}]",
+        slice_v2.worker_slice_offset.w, slice_v2.worker_slice_offset.z, slice_v2.worker_slice_offset.y, slice_v2.worker_slice_offset.x);
+}
+
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
@@ -45,25 +61,18 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    ccl::Topology topology)//,
-    // std::optional<ccl::SyncModeSpec> sync_details)
-     {
+    ccl::Topology topology,
+    const GlobalSemaphore semaphore_handle) {
     tt::tt_metal::Program program{};
 
     // Sleep for ring_index * 5 seconds to stagger startup
     std::this_thread::sleep_for(std::chrono::seconds(ring_index * 5));
 
-    auto drain_sync_core = CoreCoord(4,4);
-    std::optional<ccl::SyncModeSpec> sync_details = ttnn::ccl::SyncModeSpec {
-        1, // num_device
-        drain_sync_core,
-        {CreateSemaphore(program, {drain_sync_core}, 0)},
-        // {CreateGlobalSemaphore(input_tensor.device(), {drain_sync_core}, 0)},
-        {ring_size * num_links}
-    };
-    log_info(tt::LogOp, "DEBUG: device: {}", input_tensor.device()->id());
-
     Device *device = input_tensor.device();
+    bool is_first_chip = ring_index == 0;
+    bool is_last_chip = ring_index == ring_size - 1;
+    log_info(tt::LogOp, "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}", input_tensor.device()->id(), is_first_chip, is_last_chip);
+
     auto local_device_fabric_interface = ccl::EdmLineFabricOpInterface (
         device,
         forward_device,
@@ -94,24 +103,26 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     auto const& sender_worker_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_workers_per_link-1, num_links - 1)));
     auto const& sender_worker_cores = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
 
-    // CB Creation
+    // L1 Scratch CB Creation
     uint32_t num_pages_per_packet = 1; // we assume 1 page per packet for now
-    uint32_t cb_num_pages = num_pages_per_packet; // There is a bug with double/tripple buffering. Still debugging.
+    uint32_t cb_num_pages = 3*num_pages_per_packet; // tripple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
-    uint32_t page_size_bytes = op_config.get_page_size();
+    uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size() + sizeof(tt::fabric::PacketHeader);
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size_bytes, {{src0_cb_index, df}})
-            .set_page_size(src0_cb_index, page_size_bytes);
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
+            .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
     CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
     // Create Tensor slicer
-    auto input_tensor_slicer = ttnn::ccl::GenericWrappedTensorSlicer ( // can be used for all gather as well if we set ring_size to 1, which means read the entire input tensor in reduce scatter sense.
+    // read the entire input tensor (partition size = 1, partition index = 0)
+    // write to the output tensor on its corresponding partition (partition size = ring_size, partition index = ring_index)
+    auto input_tensor_slicer = ttnn::ccl::GenericWrappedTensorSlicer (
         input_tensor,
         input_tensor,
         dim,
-        0, // ring_index, set as 0 to "trick" the reduce scatter tensor slicer to read the entire input tensor
-        1, // ring_size, set as 1 to "trick" the reduce scatter tensor slicer to read the entire input tensor
+        0, // partition index
+        1, // partition size
         num_links, // num_workers_per_slicer, set 1 per link for now
         UINT32_MAX, // max_worker_slice_in_bytes, set as infinite for now
         cb_num_pages / 2);
@@ -119,8 +130,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
         output_tensor,
         output_tensor,
         dim,
-        ring_index,
-        ring_size,
+        ring_index, // partition index
+        ring_size, // partition size
         num_links, // num_workers_per_slicer, set 1 per link for now
         UINT32_MAX, // max_worker_slice_in_bytes, set as infinite for now
         cb_num_pages / 2);
@@ -137,32 +148,42 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     static std::string const& sender_kernel_reader_path = "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_reader.cpp";
     static std::string const& sender_kernel_writer_path = "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_writer.cpp";
 
-    KernelHandle worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
+    KernelHandle worker_sender_reader_kernel_id = ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
         program,
-        sender_kernel_reader_path,
+        {src0_cb_index},
+        {&input_tensor},
         sender_worker_core_range,
-        tt::tt_metal::ReaderDataMovementConfig(worker_arg_builder.generate_sender_reader_kernel_ct_args(), worker_defines));
+        tt::tt_metal::ReaderDataMovementConfig{},
+        1 // num_command_streams
+    );
 
-    KernelHandle worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+    KernelHandle worker_sender_writer_kernel_id = ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
         program,
-        sender_kernel_writer_path,
+        {src0_cb_index},
+        {&output_tensor},
         sender_worker_core_range,
-        tt::tt_metal::WriterDataMovementConfig(worker_arg_builder.generate_sender_writer_kernel_ct_args(), worker_defines));
+        tt::tt_metal::WriterDataMovementConfig{},
+        1 // num_command_streams
+    );
 
     const size_t forward_direction_distance_to_end_of_line = line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
     const size_t backward_direction_distance_to_end_of_line = line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
-    // RT Args
-    log_info(tt::LogOp, "DEBUG: CreateSemaphore: {}, &program: {}", input_tensor.device()->id(), (void*)&program);
-    size_t sender_worker_forward_flow_control_semaphore_id = CreateSemaphore(program, sender_worker_core_range,0);
-    log_info(tt::LogOp, "DEBUG: CreateSemaphore: {}, &program: {}", input_tensor.device()->id(), (void*)&program);
-    size_t sender_worker_forward_buffer_index_semaphore_id = CreateSemaphore(program, sender_worker_core_range,0);
-    log_info(tt::LogOp, "DEBUG: CreateSemaphore: {}, &program: {}", input_tensor.device()->id(), (void*)&program);
-    size_t sender_worker_backward_flow_control_semaphore_id = CreateSemaphore(program, sender_worker_core_range,0);
-    log_info(tt::LogOp, "DEBUG: CreateSemaphore: {}, &program: {}", input_tensor.device()->id(), (void*)&program);
-    size_t sender_worker_backward_buffer_index_semaphore_id = CreateSemaphore(program, sender_worker_core_range,0);
 
+    ttnn::ccl::cmd::MulticastCommandDestArgs mcast_dest_args = {forward_direction_distance_to_end_of_line, backward_direction_distance_to_end_of_line};
+    log_info(tt::LogOp, "[mcast_dest_args] num target forward: {}, num target backward: {}", mcast_dest_args.num_targets_forward_direction, mcast_dest_args.num_targets_backward_direction);
+
+    auto reader_tensor_slices = ttnn::ccl::cmd::builder::generate_worker_tensor_slices(
+        1, input_tensor, num_workers_per_link*num_links, dim);
+    log_info(tt::LogOp, "reader_tensor_slices size: {}", reader_tensor_slices.size());
+    log_info(tt::LogOp, "reader_tensor_slices[0] size: {}", reader_tensor_slices[0].size());
+
+    CoreCoord drain_sync_core;
     for (std::size_t link = 0; link < num_links; link++) {
         CoreCoord core = {num_workers_per_link-1, link};
+        if (link == 0) {
+            // drain sync core is the first worker core
+            drain_sync_core = device->worker_core_from_logical_core(core);
+        }
         std::size_t worker_tensor_slice_index = link;
         auto const& input_worker_slice = input_tensor_slicer.get_worker_slice(worker_tensor_slice_index);
         auto const& output_worker_slice = output_tensor_slicer.get_worker_slice(worker_tensor_slice_index);
@@ -174,15 +195,18 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
             dim);
 
         // tt::log_info("Creating RT Args for worker core ({},{})", core.x, core.y);
-        // input_worker_slice.print();
-        // output_worker_slice.print();
+        log_info(tt::LogOp, "reference input worker slice");
+        input_worker_slice.print();
+        log_info(tt::LogOp, "reference output worker slice");
+        output_worker_slice.print();
 
-        auto const sender_reader_rt_args = worker_arg_builder.generate_sender_reader_kernel_rt_args(input_worker_slice, worker_arg_builder.operating_dim, num_pages_per_packet, worker_tensor_slice_index);
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            worker_sender_reader_kernel_id,
-            core,
-            sender_reader_rt_args);
+        auto const& input_worker_slice_v2 = input_tensor_slicer.get_worker_slice_v2(worker_tensor_slice_index);
+        auto const& output_worker_slice_v2 = output_tensor_slicer.get_worker_slice_v2(worker_tensor_slice_index);
+
+        log_info(tt::LogOp, "DEBUG: input tensor slice v2:");
+        print_tensor_slice(input_worker_slice_v2);
+        log_info(tt::LogOp, "DEBUG: output tensor slice v2:");
+        print_tensor_slice(output_worker_slice_v2);
 
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
             line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD) ?
@@ -196,29 +220,100 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
         log_info(tt::LogOp, "DEBUG: line_index: {}, line_size: {}, forward_fabric_connection: {}", line_topology.line_index(), line_topology.line_size(), forward_fabric_connection.has_value());
         log_info(tt::LogOp, "DEBUG: line_index: {}, line_size: {}, backward_fabric_connection: {}", line_topology.line_index(), line_topology.line_size(), backward_fabric_connection.has_value());
 
-        auto const sender_writer_rt_args = worker_arg_builder.generate_sender_writer_kernel_rt_args(
-            forward_fabric_connection,
-            sender_worker_forward_flow_control_semaphore_id,
-            sender_worker_forward_buffer_index_semaphore_id,
-            backward_fabric_connection,
-            sender_worker_backward_flow_control_semaphore_id,
-            sender_worker_backward_buffer_index_semaphore_id,
-            forward_direction_distance_to_end_of_line,
-            backward_direction_distance_to_end_of_line,
-            output_worker_slice,
-            worker_arg_builder.operating_dim,
-            num_pages_per_packet,
-            worker_tensor_slice_index,
-            sync_details);
-        tt::tt_metal::SetRuntimeArgs(
+
+        // READER COMMAND STREAM and RT ARGS
+        std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> reader_cmd_stream;
+        // reader_cmd_stream.push_back(
+        // ttnn::ccl::cmd::uops::read_tensor_slice_to_cb_for_eventual_fabric_write(reader_tensor_slices[link][0], src0_cb_index));
+        reader_cmd_stream.push_back( // use the reader_tensor_slices after the bug is fixed
+        ttnn::ccl::cmd::uops::read_tensor_slice_to_cb_for_eventual_fabric_write(input_worker_slice_v2, src0_cb_index));
+
+        ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
+            program,
+            worker_sender_reader_kernel_id,
+            {&input_tensor},
+            {op_config.get_page_size()},
+            input_tensor.device(),
+            num_pages_per_packet, // num_pages_per_edm_buffer
+            {core},
+            reader_cmd_stream,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt
+        );
+
+        // WRITER COMMAND STREAM and RT ARGS
+        std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> writer_cmd_stream;
+        // 1, do mcast of the tensor slice to all the destinations
+        writer_cmd_stream.push_back(
+        ttnn::ccl::cmd::uops::fabric_write_cb_to_tensor_slice(
+            output_worker_slice_v2,
+            src0_cb_index,
+            mcast_dest_args
+        ));
+        // 2, mcast the semaphore to all dest for teardown
+        writer_cmd_stream.push_back(
+        ttnn::ccl::cmd::uops::fabric_multicast_semaphore_inc(
+            semaphore_handle,
+            ttnn::ccl::cmd::CclCommandAtomicInc{1},
+            drain_sync_core.x,
+            drain_sync_core.y,
+            mcast_dest_args
+        ));
+        if (link == 0) {
+            // 3, wait for n_chip*num_links number of semaphore at teardown semaphore address for first chip, and n_chip*num_links+1 for other chips
+            writer_cmd_stream.push_back(
+            ttnn::ccl::cmd::uops::local_semaphore_wait(
+                semaphore_handle,
+                is_first_chip ? ring_size * num_links : ring_size * num_links + 1
+            ));
+            // 4, send semaphore unicast to forward device except for the last chip
+            if (!is_last_chip) {
+                writer_cmd_stream.push_back(
+                ttnn::ccl::cmd::uops::fabric_unicast_semaphore_inc(
+                    semaphore_handle,
+                    ttnn::ccl::cmd::CclCommandAtomicInc{1},
+                    drain_sync_core.x,
+                    drain_sync_core.y,
+                    ttnn::ccl::cmd::UnicastCommandDestArgs {1, true}
+                ));
+            }
+            // 5, increment the termination semaphore for local device for local teardown only for the drain sync core
+            auto termination_infos = local_device_fabric_interface.generate_local_chip_fabric_termination_infos(device);
+            for (auto& info : termination_infos) {
+                if (info.distance != 0) {
+                    continue;
+                }
+                writer_cmd_stream.push_back(
+                ttnn::ccl::cmd::uops::local_chip_noc_absolute_address_semaphore_inc(
+                    info.edm_noc_x,
+                    info.edm_noc_y,
+                    info.termination_addr,
+                    1
+                ));
+            }
+            // 6. (drain sync core) reset semaphore to 0
+            writer_cmd_stream.push_back(
+            ttnn::ccl::cmd::uops::local_core_semaphore_set(
+                semaphore_handle,
+                0
+            ));
+        }
+
+        // set the rt args
+        ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
             program,
             worker_sender_writer_kernel_id,
-            core,
-            sender_writer_rt_args);
-    }
-
-    if (sync_details.has_value()) {
-        ttnn:L:ccl::worker_detail::build_sync_kernels(device, program, sync_details.value(), true, local_device_fabric_interface);
+            {&output_tensor},
+            {op_config.get_page_size()},
+            output_tensor.device(),
+            num_pages_per_packet, // num_pages_per_edm_buffer
+            {core},
+            writer_cmd_stream,
+            std::nullopt,
+            {forward_fabric_connection},
+            {backward_fabric_connection}
+        );
     }
 
     local_device_fabric_interface.build_kernels();
@@ -226,6 +321,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id,
          worker_sender_writer_kernel_id,
+         semaphore_handle,
          sender_worker_cores] (
         const void* operation,
         Program& program,

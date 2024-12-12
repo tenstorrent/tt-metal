@@ -350,6 +350,7 @@ tt::fabric::SendStatus send_next_data(
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
     if (status == tt::fabric::SendStatus::SENT_PAYLOAD_AND_SYNC) {
+        DPRINT << "EDM advance buffer index\n";
         sender_buffer_channel.advance_buffer_index();
         receiver_buffer_channel.advance_buffer_index();
         DPRINT << "EDM advance buffer index to " << (uint32_t)sender_buffer_channel.buffer_index() << "\n";
