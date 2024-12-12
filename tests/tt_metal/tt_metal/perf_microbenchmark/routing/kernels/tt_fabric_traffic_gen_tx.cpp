@@ -44,7 +44,13 @@ constexpr pkt_dest_size_choices_t pkt_dest_size_choice =
 constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
 constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
 constexpr uint32_t test_command = get_compile_time_arg_val(18);
-constexpr uint32_t dest_device = get_compile_time_arg_val(19);
+
+constexpr uint32_t base_target_address = get_compile_time_arg_val(19);
+uint32_t target_address = base_target_address;
+
+// atomic increment for the ATOMIC_INC command
+constexpr uint32_t atomic_increment = get_compile_time_arg_val(20);
+constexpr uint32_t dest_device = get_compile_time_arg_val(21);
 
 uint32_t max_packet_size_mask;
 
@@ -54,8 +60,6 @@ tt_l1_ptr volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(routing_table_start_addr);
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
-uint32_t target_address;
-
 
 uint64_t xy_local_addr;
 
@@ -184,7 +188,7 @@ inline bool test_buffer_handler_atomic_inc() {
             packet_header.session.target_offset_l = target_address;
             packet_header.session.target_offset_h = 0x410;
             packet_header.packet_parameters.atomic_parameters.wrap_boundary = 31;
-            packet_header.packet_parameters.atomic_parameters.increment = 4;
+            packet_header.packet_parameters.atomic_parameters.increment = atomic_increment;
             tt_fabric_add_header_checksum(&packet_header);
             uint32_t words_left = words_to_init - words_initialized;
             bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
@@ -229,9 +233,7 @@ bool test_buffer_handler() {
 }
 
 void kernel_main() {
-
     tt_fabric_init();
-    target_address = 0x100000;
 
     uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
     noc_async_read_one_packet(
