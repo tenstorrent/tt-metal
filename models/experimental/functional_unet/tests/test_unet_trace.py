@@ -83,7 +83,6 @@ def test_unet_trace(
     logger.info(f"Capturing trace")
     ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
     l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
-
     input_trace_addr = l1_input_tensor.buffer_address()
     shape = l1_input_tensor.shape
     dtype = l1_input_tensor.dtype
@@ -424,19 +423,16 @@ def test_unet_trace_2cq_same_io(
     l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
     ttnn.record_event(0, op_event)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
-    dram_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
-        ),
-        [
-            output_tensor.volume() // output_tensor.shape[-1],
-            divup(output_tensor.shape[-1], dram_grid_size.x),
-        ],
+    output_dram_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+        [32, 169984 // 8],
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
     )
-    dram_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec)
-    dram_output_tensor = ttnn.reshard(output_tensor, dram_memory_config)
+    output_dram_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_dram_shard_spec
+    )
+    dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config)
     logger.info(f"Done compile run")
 
     logger.info(f"Capturing trace")
@@ -462,7 +458,7 @@ def test_unet_trace_2cq_same_io(
     )
     # assert input_trace_addr == l1_input_tensor.buffer_address()
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    dram_output_tensor = ttnn.reshard(output_tensor, dram_memory_config, dram_output_tensor)
+    dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     ttnn.synchronize_device(device)
 
     outputs = []
@@ -476,7 +472,7 @@ def test_unet_trace_2cq_same_io(
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         ttnn.wait_for_event(0, read_event)
-        dram_output_tensor = ttnn.reshard(output_tensor, dram_memory_config, dram_output_tensor)
+        dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
         ttnn.record_event(0, model_event)
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
@@ -489,7 +485,7 @@ def test_unet_trace_2cq_same_io(
     ttnn.record_event(0, op_event)
     ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
     ttnn.wait_for_event(0, read_event)
-    dram_output_tensor = ttnn.reshard(output_tensor, dram_memory_config, dram_output_tensor)
+    dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     ttnn.record_event(0, model_event)
     ttnn.wait_for_event(1, model_event)
     outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
