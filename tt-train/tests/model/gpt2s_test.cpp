@@ -52,6 +52,9 @@ TEST(GPT2SBatch64Test, Matmul) {
         {{{768, 65536}, {1, 1, 768, 768}, true, false}, ExpectedResult::ERROR},
         {{{768, 65536}, {65536, 2304}, false, false}, ExpectedResult::OK},
         {{{65536, 768}, {65536, 2304}, true, false}, ExpectedResult::OK},
+        {{{65536, 768}, {768, 50257}, false, false}, ExpectedResult::ERROR},
+        {{{65536, 768}, {50257, 768}, false, true}, ExpectedResult::ERROR},
+        {{{65536, 50257}, {50257, 768}, false, false}, ExpectedResult::ERROR},
     };
 
     auto run_matmul = [](auto& a, auto& b, bool transpose_a, bool transpose_b) {
