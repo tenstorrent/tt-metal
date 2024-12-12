@@ -10,6 +10,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -88,6 +89,22 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     bool fp32_accum,
     bool split_reader_enabled);
 
+std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
+    const Conv2dConfig& conv_config,
+    const DeviceComputeKernelConfig& compute_config,
+    const sliding_window::ParallelConfig& input_parallel_config,
+    const sliding_window::ParallelConfig& output_parallel_config,
+    TensorMemoryLayout shard_layout,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t output_height,
+    uint32_t output_width,
+    std::array<uint32_t, 2> kernel_size,
+    uint32_t num_cores_c);
+
 template<typename T>
 std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
     T * device,
@@ -102,7 +119,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
     bool is_non_tile_mul_width=false);
 
 
-void adjust_conv_op_config_for_auto_shard_if_necessary(
+Conv2dConfig adjust_conv_op_config_for_auto_shard_if_necessary(
+    const Conv2dConfig& conv_config_,
     bool is_mm_conv,
     uint32_t batch_size,
     uint32_t in_channels,
@@ -110,10 +128,12 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t weights_width,
+    uint32_t input_height,
     uint32_t input_width,
+    uint32_t groups,
+    std::array<uint32_t, 2> kernel_size,
     const CoreCoord& compute_grid_size,
-    Conv2dConfig& conv_config,
-    Layout input_tensor_layout,
+    const DeviceComputeKernelConfig& compute_config,
     std::optional<const MemoryConfig> input_memory_config);
 
 template <typename T>

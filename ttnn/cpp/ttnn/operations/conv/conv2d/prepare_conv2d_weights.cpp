@@ -4,6 +4,7 @@
 
 #include "prepare_conv2d_weights.hpp"
 #include "conv2d_utils.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <sys/types.h>
 #include <cstdint>
@@ -62,7 +63,9 @@ OptimizedConvBlockConfig get_opt_block_config(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t batch_size,
+    uint32_t input_height,
     uint32_t input_width,
+    uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     T *device,
@@ -72,7 +75,8 @@ OptimizedConvBlockConfig get_opt_block_config(
     const MemoryConfig& input_memory_config) {
     auto compute_grid_size = device->compute_with_storage_grid_size();
 
-    adjust_conv_op_config_for_auto_shard_if_necessary(
+    conv_config = adjust_conv_op_config_for_auto_shard_if_necessary(
+        conv_config,
         mm_conv,
         batch_size,
         in_channels,
@@ -80,10 +84,12 @@ OptimizedConvBlockConfig get_opt_block_config(
         output_height,
         output_width,
         kernel_size[1],
+        input_height,
         input_width,
+        groups,
+        kernel_size,
         device->compute_with_storage_grid_size(),
-        conv_config,
-        input_tensor_layout,
+        compute_config,
         input_memory_config);
 
     ShardOrientation shard_orientation =
@@ -314,7 +320,9 @@ ttnn::Tensor prepare_conv_weights(
         output_height,
         output_width,
         batch_size,
+        input_height,
         input_width,
+        groups,
         kernel_size,
         stride,
         device,
@@ -404,7 +412,9 @@ ttnn::Tensor prepare_conv_bias(
         output_height,
         output_width,
         batch_size,
+        input_height,
         input_width,
+        groups,
         kernel_size,
         stride,
         device,
@@ -439,14 +449,16 @@ template OptimizedConvBlockConfig get_opt_block_config<Device>(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t batch_size,
+    uint32_t input_height,
     uint32_t input_width,
+    uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     Device *device,
     Conv2dConfig& conv_config,
     Layout input_tensor_layout,
     const DeviceComputeKernelConfig& compute_config,
-    const ttnn::MemoryConfig& input_memory_config);
+    const MemoryConfig& input_memory_config);
 
 template OptimizedConvBlockConfig get_opt_block_config<MeshDevice>(
     bool mm_conv,
@@ -455,14 +467,16 @@ template OptimizedConvBlockConfig get_opt_block_config<MeshDevice>(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t batch_size,
+    uint32_t input_height,
     uint32_t input_width,
+    uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     MeshDevice *device,
     Conv2dConfig& conv_config,
     Layout input_tensor_layout,
     const DeviceComputeKernelConfig& compute_config,
-    const ttnn::MemoryConfig& input_memory_config);
+    const MemoryConfig& input_memory_config);
 
 template ttnn::Tensor prepare_conv_weights<Device>(
     const ttnn::Tensor& weight_tensor,

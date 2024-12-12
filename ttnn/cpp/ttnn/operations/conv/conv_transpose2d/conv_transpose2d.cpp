@@ -168,7 +168,8 @@ Result conv_transpose2d(
 
         if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
             // In this case we deduce the shard layout.
-            adjust_conv_op_config_for_auto_shard_if_necessary(
+            conv_config = adjust_conv_op_config_for_auto_shard_if_necessary(
+                conv_config,
                 mm_conv,
                 batch_size,
                 in_channels,
@@ -176,11 +177,14 @@ Result conv_transpose2d(
                 output_height,
                 output_width,
                 weight_tensor.get_shape()[3],
+                full_input_height,
                 full_input_width,
+                groups,
+                kernel_size,
                 compute_grid_size,
-                conv_config,
-                input_tensor.layout(),
-                ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config()) : std::nullopt);
+                compute_config,
+                input_tensor.memory_config()
+            );
         }
 
 

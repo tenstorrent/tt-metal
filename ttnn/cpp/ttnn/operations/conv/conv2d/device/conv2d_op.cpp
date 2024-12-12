@@ -258,10 +258,10 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
             auto [calc_output_size, calc_CB_size] = estimate_L1_usage(
                     arch, this->memory_config.memory_layout,
                     input_dtype, weights_dtype, output_dtype,
-                    sliding_window_config, compute_kernel_config,
+                    compute_kernel_config,
                     block_config, parallelization_config,
-                    input_tensor_shape, weights_shape,
-                    output_channels, groups,
+                    input_tensor_shape, weights_shape, sliding_window_config.get_output_shape(),
+                    output_channels, groups, std::array<uint32_t,2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
                     Conv2dConfig{
                         .enable_act_double_buffer=enable_act_double_buffer,
                         .enable_weights_double_buffer=enable_weights_double_buffer,

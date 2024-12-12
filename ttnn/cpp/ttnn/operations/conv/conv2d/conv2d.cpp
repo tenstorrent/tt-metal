@@ -58,11 +58,21 @@ Result conv2d(
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or( init_device_compute_kernel_config(
+            device->arch(),
+            std::nullopt,
+            MathFidelity::HiFi4,
+            true,
+            false,
+            false
+    ));
+
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
         // In this case we deduce the shard layout.
-        adjust_conv_op_config_for_auto_shard_if_necessary(
+        conv_config = adjust_conv_op_config_for_auto_shard_if_necessary(
+            conv_config,
             mm_conv,
             batch_size,
             in_channels,
@@ -70,11 +80,14 @@ Result conv2d(
             output_height,
             output_width,
             weight_tensor.get_shape()[3],
+            input_height,
             input_width,
+            groups,
+            kernel_size,
             compute_grid_size,
-            conv_config,
-            input_tensor.layout(),
-            ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config()) : std::nullopt);
+            compute_config,
+            input_tensor.memory_config()
+            );
     }
 
     ShardOrientation shard_orientation =
@@ -86,14 +99,6 @@ Result conv2d(
         (conv_config.weights_dtype == DataType::BFLOAT8_B || conv_config.weights_dtype == DataType::BFLOAT16) &&
         conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size * in_channels) % (16 * num_cores_c)) == 0;
 
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(init_device_compute_kernel_config(
-            device->arch(),
-            std::nullopt,
-            MathFidelity::HiFi4,
-            true,
-            false,
-            false
-    ));
     auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] = shard_or_reshard_tensor_if_required(
         device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, mm_conv, is_non_tile_mul_width);
     if (tensor_manipulated) {
@@ -105,46 +110,22 @@ Result conv2d(
         conv_config.deallocate_activation = true;
     }
 
-    uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
-    uint32_t nhw_out = batch_size * output_height * output_width;
-    uint32_t out_channels_padded = tt::round_up(
-        out_channels,
-        get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH);
-    if(is_non_tile_mul_width) {
-        out_channels_padded = tt::round_up(out_channels, 32);
-    }
-    MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape(std::array<uint32_t, 4>{1, 1, nhw_out, out_channels_padded}),
-        output_parallel_config,
-        round_up_size);
-    ParallelConfig largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores() ? output_parallel_config : parallel_config;
-
-    OptimizedConvParallelizationConfig opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
-        conv_out_memory_config,
-        get_num_cores_nhw_from_parallel_config(largest_parallel_config),
-        get_num_cores_channels_from_parallel_config(largest_parallel_config));
-
-    uint32_t in_channels_padded = tt::round_up(
-        in_channels,
-        get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment);
-    if(is_non_tile_mul_width){
-        in_channels_padded = tt::round_up(in_channels, conv_config.input_channels_alignment);
-    }
-
-    uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
-                                    conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
-
-    OptimizedConvBlockConfig opt_conv_op_block_config = determine_per_core_conv_block_config(
+    auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
+        conv_config,
+        compute_config,
         parallel_config,
-        opt_conv_op_parallel_config,
-        in_channels_padded,
-        nhw_out_padded_ntile,
-        conv_config.act_block_h_override,
-        conv_config.act_block_w_div,
-        kernel_size[0],
-        kernel_size[1],
-        get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader);
+        output_parallel_config,
+        input_tensor_post_tm.memory_config().memory_layout,
+        in_channels,
+        out_channels,
+        batch_size,
+        input_height,
+        input_width,
+        output_height,
+        output_width,
+        kernel_size,
+        conv_config.transpose_shards ? device->compute_with_storage_grid_size().y : device->compute_with_storage_grid_size().x);
+
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;

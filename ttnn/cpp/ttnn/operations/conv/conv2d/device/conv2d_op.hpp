@@ -234,10 +234,10 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
 std::pair<uint32_t,uint32_t> estimate_L1_usage(
     tt::ARCH arch, TensorMemoryLayout shard_layout,
     const DataType input_dtype, const DataType weights_dtype, const DataType output_dtype,
-    const sliding_window::SlidingWindowConfig& sliding_window_config, const DeviceComputeKernelConfig& compute_kernel_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config, const OptimizedConvParallelizationConfig& pconfig,
-    const Shape& input_shape, const Shape& weights_shape,
-    uint32_t output_channels, uint32_t groups,
+    const Shape& input_shape, const Shape& weights_shape, const Shape& output_shape,
+    uint32_t output_channels, uint32_t groups, std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config, bool enable_bias, bool use_non_tile_height
     );
 
