@@ -558,8 +558,8 @@ void update_ccl_command(
 }
 
 template <typename Addrgen>
-FORCE_INLINE void try_advance_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
-    const size_t increment_value = cmd_ctx.cmd_specific_ctx.inline_value_ctx.value;
+FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
+    const size_t value = cmd_ctx.cmd_specific_ctx.inline_value_ctx.value;
     const size_t dest_bank_addr = cmd_ctx.dest_addr_info.address;
     bool is_remote_atomic_inc_over_fabric = cmd_ctx.command_requires_fabric();
 
@@ -581,10 +581,14 @@ FORCE_INLINE void try_advance_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
 
         ASSERT(cmd_ctx.packet_header_buffer_addr != 0);
         auto &pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
-        pkt_hdr.to_atomic_inc().
-            to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
-                    dest_bank_addr, static_cast<uint16_t>(increment_value), 32, static_cast<uint8_t>(dest_noc0_x), static_cast<uint8_t>(dest_noc0_y)
-                });
+        if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
+            pkt_hdr.to_atomic_inc();
+        } else {
+            pkt_hdr.to_write();
+        }
+        pkt_hdr.to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
+                dest_bank_addr, static_cast<uint16_t>(value), 32, static_cast<uint8_t>(dest_noc0_x), static_cast<uint8_t>(dest_noc0_y)
+            });
 
         switch (cmd_ctx.current_cmd_header.dest_type) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
@@ -614,7 +618,12 @@ FORCE_INLINE void try_advance_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
                 }
 
                 uint64_t dest_noc_addr = get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
-                noc_semaphore_inc(dest_noc_addr, increment_value);
+
+                if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
+                    noc_semaphore_inc(dest_noc_addr, value);
+                } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES){
+                    noc_inline_dw_write(dest_noc_addr, value);
+                }
 
             } break;
 
@@ -627,7 +636,12 @@ FORCE_INLINE void try_advance_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
         // TODO: implement local atomic inc
         const uint64_t dest_noc_addr = get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
         // DPRINT << "lcl atinc: " << (uint64_t)dest_noc_addr << "\n";
-        noc_semaphore_inc(dest_noc_addr, increment_value);
+        if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
+            noc_semaphore_inc(dest_noc_addr, value);
+        } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES){
+            noc_inline_dw_write(dest_noc_addr, value);
+        }
+
     }
 }
 
@@ -681,7 +695,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen> &cmd_
             ASSERT(contig_pages_advanced > 0);
             ASSERT(contig_pages_advanced <= cmd_ctx.packet_size_in_pages);
             ASSERT(cmd_ctx.page_size != 0xD3AD);
-            DPRINT << "\tnoc_read( " << (uint64_t)noc_addr << ", " << (uint32_t)l1_write_addr << ", " << (uint32_t)(cmd_ctx.page_size) << "*" << (uint32_t)contig_pages_advanced << " )\n";
+            // DPRINT << "\tnoc_read( " << (uint64_t)noc_addr << ", " << (uint32_t)l1_write_addr << ", " << (uint32_t)(cmd_ctx.page_size) << "*" << (uint32_t)contig_pages_advanced << " )\n";
             // DPRINT << "nar to " << (uint32_t)l1_write_addr << "\n";
             noc_async_read(noc_addr, l1_write_addr, cmd_ctx.page_size * contig_pages_advanced);
         }
@@ -722,7 +736,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr + sizeof(tt::fabric::PacketHeader);
     // Note that `noc0_dest_noc_addr` is 0 based, so we need to regenerate the address for this kernel's `noc_index`
-    DPRINT << "naw1 " << (uint64_t)payload_l1_address << ", " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr) << ", " << (uint32_t)payload_size_bytes << "\n";
+    // DPRINT << "naw1 " << (uint64_t)payload_l1_address << ", " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr) << ", " << (uint32_t)payload_size_bytes << "\n";
     noc_async_write(payload_l1_address, get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
     //
     // TODO: MAKE SURE `dest_noc_xy` is noc0 based
@@ -798,7 +812,7 @@ FORCE_INLINE void write_payload_then_advance_read_address(
             // Conver to our local noc_index based address
             auto dest_noc_addr = get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr);
             // DPRINT << "\tlcl noc_write( " << (uint64_t)dest_noc_addr << ", " << (uint32_t)l1_read_addr << ", " << (uint32_t)(cmd_ctx.page_size * contig_pages_advanced) << " )\n";
-            DPRINT << "naw " << (uint64_t)l1_read_addr + header_padding << ", " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr) << ", " << (uint32_t)cmd_ctx.page_size * contig_pages_advanced << "\n";
+            // DPRINT << "naw " << (uint64_t)l1_read_addr + header_padding << ", " << (uint64_t)get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr) << ", " << (uint32_t)cmd_ctx.page_size * contig_pages_advanced << "\n";
             noc_async_write(l1_read_addr + header_padding, dest_noc_addr, cmd_ctx.page_size * contig_pages_advanced);
             l1_read_addr += cmd_ctx.page_size * contig_pages_advanced;
         } break;
@@ -908,9 +922,10 @@ FORCE_INLINE void try_advance(command_context_t<Addrgen> &cmd_ctx) {
 
 
         case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
-            try_advance_atomic_inc(cmd_ctx);
-            break;
+            [[fallthrough]];
         case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
+            try_advance_inline_write_or_atomic_inc(cmd_ctx);
+            break;
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
             // Nothing to actively do to advance - just needs to wait for completion
             break;
@@ -931,7 +946,9 @@ FORCE_INLINE void try_advance(command_context_t<Addrgen> &cmd_ctx) {
             break;
 
         case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
-                DPRINT << "at_inc cmd cmpl\n";
+            [[fallthrough]];
+        case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
+            DPRINT << "at_inc cmd cmpl\n";
                 cmd_ctx.complete_current_command();
             break;
         case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
@@ -939,8 +956,6 @@ FORCE_INLINE void try_advance(command_context_t<Addrgen> &cmd_ctx) {
                 // DPRINT << "Completing waitval command\n";
                 cmd_ctx.complete_current_command();
             }
-            [[fallthrough]];
-        case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
         break;
         default:
             ASSERT(false);
