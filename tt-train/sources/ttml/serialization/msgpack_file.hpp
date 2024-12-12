@@ -13,6 +13,23 @@
 
 namespace ttml::serialization {
 
+using ValueType = std::variant<
+    bool,
+    char,
+    int,
+    float,
+    double,
+    uint32_t,
+    size_t,
+    std::string,
+    std::vector<char>,
+    std::vector<int>,
+    std::vector<float>,
+    std::vector<double>,
+    std::vector<uint8_t>,
+    std::vector<uint32_t>,
+    std::vector<std::string>>;
+
 class MsgPackFile {
 public:
     MsgPackFile();
@@ -44,12 +61,14 @@ public:
     void put(std::string_view key, const char* value);
 
     // Overloads for std::span
+    void put(std::string_view key, std::span<const uint8_t> value);
     void put(std::string_view key, std::span<const int> value);
     void put(std::string_view key, std::span<const float> value);
     void put(std::string_view key, std::span<const double> value);
     void put(std::string_view key, std::span<const uint32_t> value);
     void put(std::string_view key, std::span<const std::string> value);
 
+    void put(std::string_view key, const ValueType& value);
     // Serialization method
     void serialize(const std::string& filename);
 
@@ -67,11 +86,14 @@ public:
     void get(std::string_view key, std::string& value) const;
 
     // Methods to get vectors (from spans)
+    void get(std::string_view key, std::vector<uint8_t>& value) const;
     void get(std::string_view key, std::vector<int>& value) const;
     void get(std::string_view key, std::vector<float>& value) const;
     void get(std::string_view key, std::vector<double>& value) const;
     void get(std::string_view key, std::vector<uint32_t>& value) const;
     void get(std::string_view key, std::vector<std::string>& value) const;
+
+    void get(std::string_view key, ValueType& type) const;
 
 private:
     class Impl;

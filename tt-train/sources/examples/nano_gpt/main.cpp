@@ -142,6 +142,8 @@ struct TrainingConfig {
     uint32_t gradient_accumulation_steps = 1;
     std::string model_path;
     std::string data_path;
+    std::string scheduler_type = "identity";
+
     ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
@@ -161,9 +163,16 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_path = training_config["model_path"].as<std::string>("");
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
+    config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
+
     config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
     return config;
 }
+
+const std::unordered_map<
+    std::string,
+    std::function<std::unique_ptr<ttml::schedulers::LRSchedulerBase>(ttml::optimizers::OptimizerBase *, size_t)>>
+    schedulers = {{"identity", create_idendity_scheduler}, {"warmup_linear", create_warmup_with_linear_scheduler}};
 
 int main(int argc, char **argv) {
     auto result = signal(SIGINT, signal_handler);
@@ -186,7 +195,6 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
-
     wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
     wandbcpp::update_config({
         {"model", "transformer"},
@@ -206,10 +214,12 @@ int main(int argc, char **argv) {
          config.transformer_config.positional_embedding_type == ttml::models::gpt2::PositionalEmbeddingType::Trainable
              ? "trainable"
              : "fixed"},
+        {"scheduler_type", config.scheduler_type},
     });
 
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
+    auto schedule_func = schedulers.at(config.scheduler_type);
 
     std::string text;
     try {
@@ -218,11 +228,11 @@ int main(int argc, char **argv) {
         std::cerr << e.what() << std::endl;
         return -1;
     }
-
     fmt::print("Max steps {}\n", config.max_steps);
     fmt::print("Batch size {}\n", config.batch_size);
     fmt::print("Gradient accumulation steps {}\n", config.gradient_accumulation_steps);
     fmt::print("Total batch size {}\n", config.batch_size * config.gradient_accumulation_steps);
+    fmt::print("Scheduler type {}\n", config.scheduler_type);
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = config.transformer_config.max_sequence_length;
 
@@ -304,10 +314,10 @@ int main(int argc, char **argv) {
     fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
     fmt::print("    Use Kahan summation: {}\n", adamw_params.use_kahan_summation);
     auto optimizer = ttml::optimizers::AdamW(model->parameters(), adamw_params);
-
+    auto scheduler = schedule_func(&optimizer, config.max_steps);
     if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
         fmt::print("Loading model from {}\n", config.model_path);
-        load_model_and_optimizer(config.model_path, model, optimizer, "transformer", "adamw");
+        load_training_state(config.model_path, model, scheduler, "transformer", "adamw");
         fmt::print("Model loaded after {} steps\n", optimizer.get_steps());
     }
 
@@ -345,6 +355,7 @@ int main(int argc, char **argv) {
 
             if (gradient_accumulator_helper.should_step()) {
                 optimizer.step();
+                scheduler->step();
                 auto global_step = optimizer.get_steps();
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
@@ -353,11 +364,12 @@ int main(int argc, char **argv) {
                     wandbcpp::log(
                         {{"Step", (int)global_step},
                          {"Samples", (int)get_samples_count(global_step)},
-                         {"Loss", loss_meter.average()}});
+                         {"Loss", loss_meter.average()},
+                         {"Learning rate", optimizer.get_lr()}});
                     loss_meter.reset();
                 }
                 if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
-                    save_model_and_optimizer(config.model_path, model, optimizer, "transformer", "adamw");
+                    save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
                 }
 
                 if (global_step >= config.max_steps) {
@@ -379,7 +391,7 @@ int main(int argc, char **argv) {
     }
 
     if (!config.model_path.empty()) {
-        save_model_and_optimizer(config.model_path, model, optimizer, "transformer", "adamw");
+        save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
     }
 
     auto end_timer = std::chrono::high_resolution_clock::now();

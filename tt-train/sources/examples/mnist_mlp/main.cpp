@@ -4,6 +4,8 @@
 
 #include <CLI/CLI.hpp>
 #include <core/ttnn_all_includes.hpp>
+#include <functional>
+#include <memory>
 #include <mnist/mnist_reader.hpp>
 #include <ttnn/operations/eltwise/ternary/where.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
@@ -19,7 +21,6 @@
 #include "optimizers/sgd.hpp"
 #include "utils.hpp"
 #include "yaml-cpp/node/node.h"
-
 using ttml::autograd::TensorPtr;
 
 using DatasetSample = std::pair<std::vector<uint8_t>, uint8_t>;
@@ -95,7 +96,6 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
-
     // Load MNIST data
     const size_t num_targets = 10;
     const size_t num_features = 784;
@@ -151,7 +151,7 @@ int main(int argc, char **argv) {
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
     if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
         fmt::print("Loading model from {}\n", config.model_path);
-        load_model_and_optimizer(config.model_path, model, optimizer, model_name, optimizer_name);
+        load_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
     }
 
     // evaluate model before training (sanity check to get reasonable accuracy
@@ -176,7 +176,7 @@ int main(int argc, char **argv) {
             }
             if (!config.model_path.empty() && training_step % config.model_save_interval == 0) {
                 fmt::print("Saving model to {}\n", config.model_path);
-                save_model_and_optimizer(config.model_path, model, optimizer, model_name, optimizer_name);
+                save_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
             }
 
             loss->backward();
@@ -196,7 +196,7 @@ int main(int argc, char **argv) {
 
     if (!config.model_path.empty()) {
         fmt::print("Saving model to {}\n", config.model_path);
-        save_model_and_optimizer(config.model_path, model, optimizer, model_name, optimizer_name);
+        save_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
     }
 
     return 0;
