@@ -16,8 +16,6 @@
 #include <set>
 #include <filesystem>
 #include <tuple>
-#include "common/core_descriptor.hpp"
-#include "device/device_handle.hpp"
 #include "llrt/llrt.hpp"
 #include "tt_metal/common/logger.hpp"
 
@@ -28,7 +26,6 @@
 
 #include "hostdevcommon/dprint_common.h"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
 
 using std::cout;
 using std::endl;
@@ -1220,13 +1217,10 @@ string DebugPrintServerContext::GetDataToOutput(const HartKey& hart_key, const o
         const CoreDescriptor& core_desc = get<1>(hart_key);
         const uint32_t risc_id = get<2>(hart_key);
 
-        Device* device = tt::DevicePool::instance().get_active_device(device_id);
-        const CoreCoord& phys_core_coord = device->virtual_core_from_logical_core(core_desc.coord, core_desc.type);
-
         const string& device_id_str = to_string(device_id);
-        const string& phys_core_coord_str = phys_core_coord.str();
+        const string& core_coord_str = core_desc.coord.str();
         const string& risc_name = GetRiscName(core_desc.type, risc_id, true);
-        output += fmt::format("{}:{}:{}: ", device_id_str, phys_core_coord_str, risc_name);
+        output += fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
     }
 
     if (stream->str().empty()) {
