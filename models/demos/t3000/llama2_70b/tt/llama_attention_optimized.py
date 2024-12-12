@@ -525,6 +525,7 @@ class TtLlamaAttention_optimized:
                 is_causal=True,
                 scale=self.scale,
                 program_config=pc_sdpa,
+                compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
             )
 
         # deallocate keys and values

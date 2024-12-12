@@ -298,34 +298,50 @@ def run_test_LlamaModel_inference(
     logger.info(f"Average Top-5 over {len(all_top5)} tokens: {sum(all_top5) / len(all_top5)}")
     # Check kv cache
     # PyTorch output --------------------------------------------------------------------
-    if chunk_size is None:
-        pytorch_layer_present = [
-            pytorch_model.model.layers[0]
-            .attention.cache_k.clone()
-            .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
-            pytorch_model.model.layers[0]
-            .attention.cache_v.clone()
-            .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
+    tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
+    if paged_attention:
+        tt_layer_present_all = [
+            (
+                ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1))[reverse_permutation]
+                .reshape(
+                    max_batch_size,
+                    paged_attention_config.max_num_blocks // max_batch_size,
+                    configuration.n_kv_heads,
+                    paged_attention_config.block_size,
+                    tt_model.head_dim,
+                )
+                .transpose(1, 2)
+                .reshape(max_batch_size, configuration.n_kv_heads, -1, tt_model.head_dim)[:batch, ...]
+            )
+            for lp in tt_layer_present_all
         ]
-
-        tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
+    else:
         tt_layer_present_all = [
             ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1))[:batch, ...]
             for lp in tt_layer_present_all
         ]
 
-        cache_test_pass = check_kv_cache(
-            pytorch_layer_present,
-            tt_layer_present_all,
-            generation_start_pos,
-            generation_length,
-            seq_len,
-            mode == "prefill",
-            pcc,
-        )
-        all_tests_pass = all_tests_pass and cache_test_pass
-        if all_tests_pass:
-            logger.info(f"{llama_version} output Passed!")
+    pytorch_layer_present = [
+        pytorch_model.model.layers[0]
+        .attention.cache_k.clone()
+        .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
+        pytorch_model.model.layers[0]
+        .attention.cache_v.clone()
+        .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
+    ]
+
+    cache_test_pass = check_kv_cache(
+        pytorch_layer_present,
+        tt_layer_present_all,
+        generation_start_pos,
+        generation_length,
+        seq_len,
+        mode == "prefill",
+        pcc,
+    )
+    all_tests_pass = all_tests_pass and cache_test_pass
+    if all_tests_pass:
+        logger.info(f"{llama_version} output Passed!")
 
     assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
