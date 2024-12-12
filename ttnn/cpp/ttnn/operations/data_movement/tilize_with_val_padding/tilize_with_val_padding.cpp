@@ -20,24 +20,24 @@ using BaseTilizeValType = std::function<ttnn::Tensor(const ttnn::Tensor&)>;
 using MassagedTilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
-uint TILE_WIDTH = 32;
-uint TILE_HEIGHT = 32;
 ttnn::Shape update_original_shape(ttnn::Shape& original) {
     std::vector<uint32_t> update_original(original.rank());
-    if (original[original.rank() - 2] % TILE_HEIGHT != 0) {
-        update_original[original.rank() - 2] = (original[original.rank() - 2] / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    uint32_t indx1 = original.rank() - 1;
+    uint32_t indx2 = original.rank() - 2;
+    if (original[indx2] % tt::constants::TILE_HEIGHT != 0) {
+        update_original[indx2] = (original[indx2] / tt::constants::TILE_HEIGHT + 1) * tt::constants::TILE_HEIGHT;
         for (int i = 0; i < original.rank(); i++) {
-            if (i != original.rank() - 2) {
+            if (i != indx2) {
                 update_original[i] = original[i];
             }
         }
         return ttnn::Shape(tt::tt_metal::LegacyShape(update_original));
     }
 
-    else if (original[original.rank() - 1] % TILE_WIDTH != 0) {
-        update_original[original.rank() - 1] = (original[original.rank() - 1] / TILE_WIDTH + 1) * TILE_WIDTH;
+    else if (original[indx1] % tt::constants::TILE_WIDTH != 0) {
+        update_original[indx1] = (original[indx1] / tt::constants::TILE_WIDTH + 1) * tt::constants::TILE_WIDTH;
         for (int i = 0; i < original.rank(); i++) {
-            if (i != original.rank() - 1) {
+            if (i != indx1) {
                 update_original[i] = original[i];
             }
         }
@@ -124,8 +124,8 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     using namespace tt::constants;
     auto shape = input_tensor.get_legacy_shape();
 
-    shape[2] = tt::round_up(shape[2], TILE_HEIGHT);
-    shape[3] = tt::round_up(shape[3], TILE_WIDTH);
+    shape[2] = tt::round_up(shape[2], tt::constants::TILE_HEIGHT);
+    shape[3] = tt::round_up(shape[3], tt::constants::TILE_WIDTH);
 
     PadValue pad_value;
     if (input_tensor.get_dtype() == DataType::BFLOAT16 or input_tensor.get_dtype() == DataType::FLOAT32) {
