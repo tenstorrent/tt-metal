@@ -360,6 +360,7 @@ void MAIN {
 
     constexpr uint32_t is_causal = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(24) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -368,6 +369,7 @@ void MAIN {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
+    const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -413,7 +415,10 @@ void MAIN {
 #endif
 
                 // Get Q chunk
-                const uint32_t q_low_idx =
+                if constexpr (is_chunked) {
+                    q_chunk = chunked_q_chunk_offset + q_chunk;
+                }
+                uint32_t q_low_idx =
                     q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                 uint32_t q_high_idx;
                 if constexpr (is_causal) {
@@ -510,6 +515,7 @@ void MAIN {
                         out_subblock_h,
                         out_subblock_w,
                         false /*transpose*/);
+
                     reconfig_data_format_srca(cb_out_im);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
