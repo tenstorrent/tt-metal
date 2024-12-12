@@ -1696,9 +1696,8 @@ inline void noc_async_write_multicast_exclude_region(
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
     WAYPOINT("NRBW");
-    do {
-        invalidate_l1_cache();
-    } while (!ncrisc_noc_reads_flushed(noc));
+    while (!ncrisc_noc_reads_flushed(noc));
+    invalidate_l1_cache();
     WAYPOINT("NRBD");
 }
 
@@ -1992,10 +1991,9 @@ FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
 #ifndef ARCH_GRAYSKULL
-    do {
-        invalidate_l1_cache();
-    } while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid));
+    while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid));
 #endif
+    invalidate_l1_cache();
     WAYPOINT("NBTD");
 }
 
