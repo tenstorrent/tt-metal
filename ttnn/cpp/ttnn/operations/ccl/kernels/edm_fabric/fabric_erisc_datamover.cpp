@@ -334,7 +334,7 @@ tt::fabric::SendStatus send_next_data(
         payload_size >> ETH_BYTES_TO_WORDS_SHIFT);
 
     bool sent_payload_and_channel_sync_in_one_shot =
-        payload_size == sender_buffer_channel.get_channel_buffer_max_size_in_bytes();
+        payload_size == sender_buffer_channel.get_current_max_eth_payload_size();
     if (!sent_payload_and_channel_sync_in_one_shot) {
         // We weren't able to send the channel_sync_t in one shot with the payload so we need to send a second
         // packet
@@ -350,9 +350,9 @@ tt::fabric::SendStatus send_next_data(
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
     if (status == tt::fabric::SendStatus::SENT_PAYLOAD_AND_SYNC) {
-        DPRINT << "EDM advance buffer index\n";
         sender_buffer_channel.advance_buffer_index();
         receiver_buffer_channel.advance_buffer_index();
+        DPRINT << "EDM advance buffer index to " << (uint32_t)sender_buffer_channel.buffer_index() << "\n";
     }
 
     return status;
@@ -716,7 +716,10 @@ void run_fabric_edm_main_loop(
             }
         }
 
-        //     // TODO
+        // Capture these to see if we made progress
+        auto old_send_state = sender_states[sender_channel_index];
+        auto old_recv_state = receiver_state;
+
         auto &local_sender_channel = local_sender_channels[sender_channel_index];
         auto &local_sender_channel_worker_interface = local_sender_channel_worker_interfaces[sender_channel_index];
         // There are some cases, mainly for performance, where we don't want to switch between sender channels
@@ -736,9 +739,15 @@ void run_fabric_edm_main_loop(
         run_receiver_channel_state_machine_step<RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, NUM_SENDER_CHANNELS>(
             local_receiver_channel, remote_sender_channels, downstream_edm_noc_interface, &receiver_state);
 
-        if (did_nothing_count++ > SWITCH_INTERVAL) {
+        bool did_something = old_send_state != sender_states[sender_channel_index] || old_recv_state != receiver_state;
+
+        if (did_something) {
             did_nothing_count = 0;
-            run_routing();
+        } else {
+            if (did_nothing_count++ > SWITCH_INTERVAL) {
+                did_nothing_count = 0;
+                run_routing();
+            }
         }
     }
     DPRINT << "EDM Terminating\n";
@@ -944,7 +953,6 @@ void kernel_main() {
     DPRINT << "EDM Core y|x " << (uint32_t)((my_y[0] << 16) | my_x[0]) << "\n";
     DPRINT << "EDM Connection address0 " << (uint32_t)local_sender_channel_worker_interfaces[0].connection_live_semaphore << "\n";
     DPRINT << "EDM Connection address1 " << (uint32_t)local_sender_channel_worker_interfaces[1].connection_live_semaphore << "\n";
-
 
     //////////////////////////////
     //////////////////////////////
