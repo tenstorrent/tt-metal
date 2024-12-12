@@ -559,12 +559,12 @@ void validate_final_reducer_reader_worker_slices(
     size_t num_workers) {
     TT_FATAL(in0_sync.has_value(), "Internal error. Final reducer saw that in0 had not tensor synchronization info");
     TT_FATAL(in1_sync.has_value(), "Internal error. Final reducer saw that in1 had not tensor synchronization info");
-    TT_FATAL(
-        in0_sync.value().num_semaphores() == 1,
-        "Internal error. Expected partial output tensor to only have only sync signal");
-    TT_FATAL(
-        in1_sync.value().num_semaphores() == 1,
-        "Internal error. Expected partial output tensor to only have only sync signal");
+    // TT_FATAL(
+    //     in0_sync.value().num_semaphores() == 1,
+    //     "Internal error. Expected partial output tensor to only have only sync signal");
+    // TT_FATAL(
+    //     in1_sync.value().num_semaphores() == 1,
+    //     "Internal error. Expected partial output tensor to only have only sync signal");
     TT_FATAL(
         in0_worker_slices.size() == num_workers,
         "Internal error. Expected number of worker slices to match number of workers");
@@ -889,7 +889,7 @@ void generate_partial_reducer_writer_worker_command_streams(
                     local_chip_semaphore_inc_mcast(
                         // NOTE: Per worker semaphores
                         // local_partial_output_tensor_sync_bundle.sync_spec.value().get_tensor_sync_semaphore(0)},
-                        local_partial_output_tensor_sync_bundle.sync_spec.value().get_tensor_sync_semaphore(w),
+                        local_partial_output_tensor_sync_bundle.sync_spec.value().get_tensor_sync_semaphore(w),    /// CRASHES HERE
                         CclCommandAtomicInc{1},
                         local_partial_output_tensor_sync_bundle.sync_spec.value().get_target(w))},
                 std::back_inserter(worker_command_stream1));
@@ -1794,10 +1794,12 @@ void initialize_op_internal_tensor_syncs(
             device->worker_core_from_logical_core(worker_core).x,
             device->worker_core_from_logical_core(worker_core).y,
         };
-        all_tensors.local_output_partial_sync[LineDirection::FORWARD] =
-            TensorSyncSpec{{final_reducer_partial_input_sem_ids[LineDirection::FORWARD]}, {1}, {worker_target}};
-        all_tensors.local_output_partial_sync[LineDirection::BACKWARD] =
-            TensorSyncSpec{{final_reducer_partial_input_sem_ids[LineDirection::BACKWARD]}, {1}, {worker_target}};
+        all_tensors.local_output_partial_sync[LineDirection::FORWARD].targets.push_back(worker_target);
+        all_tensors.local_output_partial_sync[LineDirection::FORWARD].completion_target_value_per_semaphore.push_back(1);
+        all_tensors.local_output_partial_sync[LineDirection::FORWARD].semaphore_ids.push_back(final_reducer_partial_input_sem_ids[LineDirection::FORWARD]);
+        all_tensors.local_output_partial_sync[LineDirection::BACKWARD].targets.push_back(worker_target);
+        all_tensors.local_output_partial_sync[LineDirection::BACKWARD].completion_target_value_per_semaphore.push_back(1);
+        all_tensors.local_output_partial_sync[LineDirection::BACKWARD].semaphore_ids.push_back(final_reducer_partial_input_sem_ids[LineDirection::BACKWARD]);
     }
 
     for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {

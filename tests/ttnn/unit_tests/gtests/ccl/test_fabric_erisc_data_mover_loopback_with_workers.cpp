@@ -1108,7 +1108,8 @@ void setup_test_with_persistent_fabric(
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
-    bool enable_persistent_fabric) {
+    bool enable_persistent_fabric,
+    std::optional<size_t> num_links = std::nullopt) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1122,7 +1123,8 @@ void setup_test_with_persistent_fabric(
             programs.begin(), programs.end(), std::back_inserter(fabric_program_ptrs), [](auto& p) { return &p; });
     }
 
-    line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, fabric_program_ptrs, enable_persistent_fabric, 1);
+    line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
+        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1));
 
     if (enable_persistent_fabric) {
         TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
@@ -2932,7 +2934,8 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         fabric_programs,
         fabric_program_ptrs,
         fabric_handle,
-        enable_persistent_fabric);
+        enable_persistent_fabric,
+        2);
 
     auto output_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
         input_mesh_tensor,
