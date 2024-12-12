@@ -713,6 +713,13 @@ DeviceBuffer to_device_buffer(
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, BorrowedStorage>) {
                 auto data_to_write = host_buffer::get_as<T>(storage.buffer);
+                auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+                auto input_size_bytes = data_to_write.size() * sizeof(T);
+                TT_FATAL(
+                    input_size_bytes == expected_packed_buffer_size_bytes,
+                    "Host data with total size {}B does not match expected size {}B of device buffer!",
+                    input_size_bytes,
+                    expected_packed_buffer_size_bytes);
                 return initialize_data_on_device<T>(data_to_write, device, tensor_spec, cq_id, sub_device_ids);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");
@@ -808,6 +815,214 @@ Tensor to_device<bfloat8_b>(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id, sub_device_ids);
 }
+
+// ======================================================================================
+//     Helpers for converting between logical <-> physical data with full tensor spec
+// ======================================================================================
+Size flatten_to_2D(const ttnn::SimpleShape& shape) {
+    const int rank = static_cast<int>(shape.rank());
+
+    size_t width = 1;
+    size_t height = 1;
+
+    // Iterate dims in reverse order
+    // Even tensor of rank 0 or 1
+    for (int i = -1; i >= -rank; --i) {
+        auto& dim = i == -1 ? width : height;
+        dim *= shape[i];
+    }
+
+    Size size{height, width};
+
+    return size;
+}
+
+std::array<size_t, 4> compute_shard_spec(const Size& shape, const Size& shard_shape) {
+    const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());
+    const auto last_shard_height =
+        shape.height() % shard_shape.height() > 0 ? shape.height() % shard_shape.height() : shard_shape.height();
+    const auto num_shards_width = tt::div_up(shape.width(), shard_shape.width());
+    const auto last_shard_width =
+        shape.width() % shard_shape.width() > 0 ? shape.width() % shard_shape.width() : shard_shape.width();
+
+    return {num_shards_height, last_shard_height, num_shards_width, last_shard_width};
+};
+
+// TODO: Remove when we generalize interleaved and sharded; when we do, directly get from TensorLayout
+std::array<Size, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tensor_spec) {
+    if (tensor_spec.memory_config().is_sharded()) {
+        return {
+            tensor_spec.tensor_layout().get_logical_shard_shape(),
+            tensor_spec.tensor_layout().get_physical_shard_shape()};
+    }
+
+    const auto& logical_shape = tensor_spec.logical_shape();
+    Size logical_shard_shape{logical_shape[-2], logical_shape[-1]};
+    auto physical_shard_shape = logical_shard_shape;
+    if (tensor_spec.layout() == Layout::TILE) {
+        const auto& tile = tensor_spec.tile();
+        auto physical_shard_height = tt::round_up(logical_shard_shape.height(), tile.get_height());
+        auto physical_shard_width = tt::round_up(logical_shard_shape.width(), tile.get_width());
+        physical_shard_shape = Size{physical_shard_height, physical_shard_width};
+    }
+    return {logical_shard_shape, physical_shard_shape};
+}
+
+using LogicalPhysicalIdxPairs = std::vector<std::array<size_t, 2>>;
+using LogicalPhysicalMapping = std::pair<LogicalPhysicalIdxPairs, size_t>;
+std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
+    const Size& logical_2D_shape,
+    const Size& logical_shard_shape,
+    const Size& physical_shard_shape,
+    const size_t physical_stride) {
+    const auto logical_stride = logical_2D_shape.width();
+
+    const auto [num_shards_height, last_shard_height, num_shards_width, last_shard_width] =
+        compute_shard_spec(logical_2D_shape, logical_shard_shape);
+
+    std::vector<LogicalPhysicalMapping> logical_physical_mapping(num_shards_height * num_shards_width);
+
+    for (size_t shard_height_idx = 0; shard_height_idx < num_shards_height; shard_height_idx++) {
+        for (size_t shard_width_idx = 0; shard_width_idx < num_shards_width; shard_width_idx++) {
+            const auto num_shard_rows =
+                shard_height_idx == num_shards_height - 1 ? last_shard_height : logical_shard_shape.height();
+            const auto num_shard_cols =
+                shard_width_idx == num_shards_width - 1 ? last_shard_width : logical_shard_shape.width();
+
+            auto indices = LogicalPhysicalIdxPairs(num_shard_rows);
+            const auto logical_start_idx = shard_height_idx * logical_shard_shape.height() * logical_stride +
+                                           shard_width_idx * logical_shard_shape.width();
+            const auto physical_start_idx = shard_height_idx * physical_shard_shape.height() * physical_stride +
+                                            shard_width_idx * physical_shard_shape.width();
+            for (size_t i = 0; i < num_shard_rows; i++) {
+                indices[i] = {i * logical_stride + logical_start_idx, i * physical_stride + physical_start_idx};
+            }
+
+            logical_physical_mapping.push_back((LogicalPhysicalMapping){indices, num_shard_cols});
+        }
+    }
+    return logical_physical_mapping;
+};
+
+template <typename T>
+std::vector<T> convert_logical_data_to_physical_data(
+    const std::vector<T>& logical_data, const TensorSpec& tensor_spec) {
+    const auto& logical_shape = tensor_spec.logical_shape();
+    TT_FATAL(
+        logical_data.size() == logical_shape.volume(),
+        "Logical data size {} should be same as volume indicated by logical shape {}",
+        logical_data.size(),
+        logical_shape);
+
+    const auto& physical_shape = tensor_spec.physical_shape();
+    auto [logical_shard_shape, physical_shard_shape] = get_logical_and_physical_shard_shapes(tensor_spec);
+
+    std::vector<T> physical_data(physical_shape.height() * physical_shape.width(), 0);
+
+    auto logical_2D_shape = flatten_to_2D(logical_shape);
+    size_t physical_stride = physical_shape.width();
+
+    const auto logical_physical_mapping = compute_logical_to_physical_shards_mapping(
+        logical_2D_shape, logical_shard_shape, physical_shard_shape, physical_stride);
+
+    for (const auto& [indices, cols] : logical_physical_mapping) {
+        for (const auto& idx_pair : indices) {
+            auto logical_idx_start = idx_pair[0];
+            auto physical_idx_start = idx_pair[1];
+
+            for (size_t col = 0; col < cols; col++) {
+                physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
+            }
+        }
+    }
+
+    TT_FATAL(
+        physical_data.size() == physical_shape.height() * physical_shape.width(),
+        "Physical data size {} should be same as volume indicated by physical shape {}",
+        physical_data.size(),
+        physical_shape);
+
+    if (tensor_spec.layout() == Layout::TILE) {
+        // TODO: Fix convert_layout_row_major_to_tile to take in vector instead of buffer?
+        return tensor_impl::convert_layout_row_major_to_tile(
+            physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
+    }
+    return physical_data;
+}
+
+template std::vector<bfloat16> convert_logical_data_to_physical_data<bfloat16>(
+    const std::vector<bfloat16>& logical_data, const TensorSpec& tensor_spec);
+template std::vector<float> convert_logical_data_to_physical_data<float>(
+    const std::vector<float>& logical_data, const TensorSpec& tensor_spec);
+template std::vector<int32_t> convert_logical_data_to_physical_data<int32_t>(
+    const std::vector<int32_t>& logical_data, const TensorSpec& tensor_spec);
+template std::vector<uint32_t> convert_logical_data_to_physical_data<uint32_t>(
+    const std::vector<uint32_t>& logical_data, const TensorSpec& tensor_spec);
+template std::vector<uint16_t> convert_logical_data_to_physical_data<uint16_t>(
+    const std::vector<uint16_t>& logical_data, const TensorSpec& tensor_spec);
+template std::vector<uint8_t> convert_logical_data_to_physical_data<uint8_t>(
+    const std::vector<uint8_t>& logical_data, const TensorSpec& tensor_spec);
+
+template <typename T>
+std::vector<T> convert_physical_data_to_logical_data(
+    const std::vector<T>& physical_data, const TensorSpec& tensor_spec) {
+    auto physical_shape = tensor_spec.physical_shape();
+    TT_FATAL(
+        physical_data.size() == physical_shape.height() * physical_shape.width(),
+        "Physical data size {} should be same as volume indicated by physical shape {}",
+        physical_data.size(),
+        physical_shape);
+
+    auto row_major_physical_data = physical_data;
+    if (tensor_spec.layout() == Layout::TILE) {
+        // TODO: Fix convert_layout_tile_to_row_major to take in vector instead of buffer?
+        row_major_physical_data = tensor_impl::convert_layout_tile_to_row_major(
+            physical_shape, tensor_spec.tile(), owned_buffer::create<T>(std::move(row_major_physical_data)));
+    }
+
+    const auto& logical_shape = tensor_spec.logical_shape();
+    auto [logical_shard_shape, physical_shard_shape] = get_logical_and_physical_shard_shapes(tensor_spec);
+
+    auto logical_2D_shape = flatten_to_2D(logical_shape);
+    std::vector<T> logical_data(logical_2D_shape.height() * logical_2D_shape.width(), 0);
+
+    size_t physical_stride = physical_shape.width();
+
+    const auto logical_physical_mapping = compute_logical_to_physical_shards_mapping(
+        logical_2D_shape, logical_shard_shape, physical_shard_shape, physical_stride);
+
+    for (const auto& [indices, cols] : logical_physical_mapping) {
+        for (const auto& idx_pair : indices) {
+            auto logical_idx_start = idx_pair[0];
+            auto physical_idx_start = idx_pair[1];
+
+            for (size_t col = 0; col < cols; col++) {
+                logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
+            }
+        }
+    }
+
+    TT_FATAL(
+        logical_data.size() == logical_shape.volume(),
+        "Logical data size {} should be same as volume indicated by logical shape {}",
+        logical_data.size(),
+        logical_shape);
+
+    return logical_data;
+}
+
+template std::vector<bfloat16> convert_physical_data_to_logical_data<bfloat16>(
+    const std::vector<bfloat16>& physical_data, const TensorSpec& tensor_spec);
+template std::vector<float> convert_physical_data_to_logical_data<float>(
+    const std::vector<float>& physical_data, const TensorSpec& tensor_spec);
+template std::vector<int32_t> convert_physical_data_to_logical_data<int32_t>(
+    const std::vector<int32_t>& physical_data, const TensorSpec& tensor_spec);
+template std::vector<uint32_t> convert_physical_data_to_logical_data<uint32_t>(
+    const std::vector<uint32_t>& physical_data, const TensorSpec& tensor_spec);
+template std::vector<uint16_t> convert_physical_data_to_logical_data<uint16_t>(
+    const std::vector<uint16_t>& physical_data, const TensorSpec& tensor_spec);
+template std::vector<uint8_t> convert_physical_data_to_logical_data<uint8_t>(
+    const std::vector<uint8_t>& physical_data, const TensorSpec& tensor_spec);
 
 // ======================================================================================
 //                                  .to_layout()
