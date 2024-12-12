@@ -1037,8 +1037,6 @@ def test_tranpose_hw_sharded_tiled_8_cores(device, n, c, h, w):
     tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
     tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
-    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
-    tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)

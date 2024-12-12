@@ -24,17 +24,12 @@ void MAIN {
     unary_op_init_common(cb_in, cb_out);
 
     for (uint32_t n = 0; n < num_blocks; n++) {
-        // have to global init here, otherwise pcc is bad
-        // if n > 0, then some register isn't cleared and the output of tilize_block is garbage
-        unary_op_init_common(cb_in, cb_out);
         // tilize input via unpack and then pack
         tilize_init_short(cb_in, 1);
 
         cb_wait_front(cb_in, x_block_size);
-        // results are correct according to unpacker here
         cb_reserve_back(cb_tilize, 1);
 
-        // removing this line causes the output of tilize_block to be garbage in the second iteration
         tilize_block(cb_in, 1, cb_tilize);  // tilize and pack into cb_tilize
 
         // tile slice according to unpacker is garbage after tilize_block in the second iteration, missing an uninit?
@@ -62,7 +57,7 @@ void MAIN {
         cb_push_back(cb_out, w_block_size);
 
         cb_wait_front(cb_out, w_block_size);
-        pack_untilize_uninit();
+        pack_untilize_uninit(cb_out);
 
         cb_pop_front(cb_tilize, 1);
     }

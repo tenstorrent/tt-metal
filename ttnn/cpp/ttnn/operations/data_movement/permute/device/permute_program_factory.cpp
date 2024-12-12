@@ -10,14 +10,14 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 uint32_t num_pages(const ttnn::Tensor& input_tensor) {
-    const auto& padded_shape = input_tensor.get_logical_shape();
-    return padded_shape.volume() / padded_shape[-1];
+    const auto& shape = input_tensor.get_logical_shape();
+    return shape.volume() / shape[-1];
 }
 
 uint32_t page_size(const ttnn::Tensor& input_tensor) {
     auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
-    const auto& padded_shape = input_tensor.get_logical_shape();  // in anticipation of RM padding
-    return tt::round_up(padded_shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
+    const auto& shape = input_tensor.get_logical_shape();  // in anticipation of RM padding
+    return tt::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
 }
 
 std::vector<uint32_t> get_row_strides(const ttnn::SimpleShape& shape) {
@@ -145,7 +145,7 @@ void PermuteDeviceOperation::MultiCoreRowInvariant::override_runtime_arguments(
 
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
-    auto& all_cores = cached_program.shared_variables.all_cores;
+    auto& all_cores = cached_program.shared_variables.core_range;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     for (const auto& core : cores) {
@@ -341,7 +341,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         {.unary_reader_kernel_id = unary_reader_kernel_id,
          .unary_writer_kernel_id = unary_writer_kernel_id,
          .compute_kernel_id = compute_kernel_id,
-         .all_cores = all_cores}};
+         .core_range = all_cores}};
 }
 
 void PermuteDeviceOperation::MultiCoreBlockedGeneric::override_runtime_arguments(
@@ -359,7 +359,7 @@ void PermuteDeviceOperation::MultiCoreBlockedGeneric::override_runtime_arguments
 
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
-    auto& all_cores = cached_program.shared_variables.all_cores;
+    auto& all_cores = cached_program.shared_variables.core_range;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     for (const auto& core : cores) {

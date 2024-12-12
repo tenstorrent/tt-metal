@@ -159,7 +159,7 @@ ttnn::Tensor permute_launch(
 }
 
 bool is_permute_nop(const ttnn::Tensor& a, tt::stl::Span<const uint32_t> dims) {
-    if (a.get_shape().rank() == 1) {
+    if (a.get_shape().rank() <= 1) {
         return true;
     }
     auto normalized_dims = ttnn::SmallVector<uint32_t>(dims.begin(), dims.end());
@@ -189,8 +189,6 @@ ttnn::Tensor ExecutePermute::invoke(
     if (detail::is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
-
-    auto padded_shape = input_tensor.get_padded_shape();
 
     const auto input_layout = input_tensor.get_layout();
     auto adjust_order = [](tt::stl::Span<const uint32_t> dims) {

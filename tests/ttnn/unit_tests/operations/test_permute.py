@@ -260,3 +260,13 @@ def test_permute_3D(shape, perm, layout, memory_config, dtype, device):
     torch_output = torch.permute(torch_tensor, perm)
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+def test_nil_volume_permute(device):
+    torch_tensor = torch.rand([1, 0, 30, 32], dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, (0, 1, 3, 2))
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
