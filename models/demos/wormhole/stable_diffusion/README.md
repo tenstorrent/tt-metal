@@ -19,22 +19,36 @@ Inputs by default are provided from `input_data.json`. If you wish to change the
 >
 > If you are using Wormhole, you must set the `WH_ARCH_YAML` environment variable.
 >
-> ```
+> ```sh
 > export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 > ```
 
 To run the demo, make sure to build the project, activate the environment, and set the appropriate environment variables.
 For more information, refer [installation and build guide](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md).
 
-Use `pytest --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo` to run the demo.
+```sh
+pytest --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo
+```
 
-If you wish to run the demo with a different input use `pytest --disable-warnings --input-path="<address_to_your_json_file.json>" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo`
+If you wish to run the demo with a different input:
+```sh
+pytest --disable-warnings --input-path="<address_to_your_json_file.json>" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo
 
-If you would like to run an interactive demo which will prompt you for the input, use `pytest models/demos/wormhole/stable_diffusion/demo/demo.py::test_interactive_demo`
+```
+If you would like to run an interactive demo which will prompt you for the input:
+```sh
+pytest models/demos/wormhole/stable_diffusion/demo/demo.py::test_interactive_demo
+```
 
-Our second demo is designed to run poloclub/diffusiondb dataset, run this with `pytest --disable-warnings models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo_diffusiondb`.
+Our second demo is designed to run poloclub/diffusiondb dataset, run this with:
+```sh
+pytest --disable-warnings models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo_diffusiondb
+```
 
-If you wish to run for `num_prompts` samples and `num_inference_steps` denoising steps, use `pytest --disable-warnings models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo_diffusiondb[<num_prompts>-<num_inference_steps>]`
+If you wish to run for `num_prompts` samples and `num_inference_steps` denoising steps:
+```sh
+pytest --disable-warnings models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo_diffusiondb[<num_prompts>-<num_inference_steps>]
+```
 
 Note: ttnn stable diffusion utilizes `PNDMScheduler` and requires `num_inference_steps to be greater than or equal to 4`. [Reference](https://arxiv.org/pdf/2202.09778)
 
