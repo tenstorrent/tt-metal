@@ -185,6 +185,8 @@ void MAIN {
 
                         tile_regs_release();
                         cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
+                        cb_wait_front(mm_out_cb_id, out_subblock_num_tiles);
+                        // UNPACK (( DPRINT  << TSLICE(mm_out_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
 
                     } else if (spill) {
                         tile_regs_commit();
