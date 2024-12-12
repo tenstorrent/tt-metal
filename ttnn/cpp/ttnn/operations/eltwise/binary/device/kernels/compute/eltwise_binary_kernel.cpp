@@ -7,7 +7,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-
+#include "debug/dprint.h"
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
 namespace NAMESPACE {
@@ -17,6 +17,9 @@ void MAIN {
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
+
+    DPRINT << "MATH: per_core_block_cnt: " << (uint32_t)per_core_block_cnt << "\n";
+    DPRINT << "MATH: per_core_block_cnt: " << (uint32_t)per_core_block_size << "\n";
 
 #ifdef SFPU_OP_INIT_PRE_IN0_0
     constexpr auto cb_inp0 = tt::CBIndex::c_3;
@@ -42,6 +45,7 @@ void MAIN {
 #endif
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
+        DPRINT << "MATH: block: " << (uint32_t)block << "\n";
 #if PRE_SCALE
         copy_tile_to_dst_init_short();  // need to copy from CB to DST to be able to run sfpu math
 #endif
@@ -138,5 +142,7 @@ void MAIN {
         cb_pop_front(cb_inp1, per_core_block_size);
         cb_push_back(cb_out0, per_core_block_size);
     }
+
+    DPRINT << "DONE\n";
 }
 }  // namespace NAMESPACE

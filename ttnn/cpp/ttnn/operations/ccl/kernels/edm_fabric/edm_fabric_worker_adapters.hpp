@@ -39,7 +39,7 @@ struct WorkerToFabricEdmSender{
         auto const edm_buffer_index_addr = get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
         auto writer_send_sem_addr = reinterpret_cast<volatile uint32_t* const >(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
         auto const worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
-        DPRINT << "w->E Conn. y|x " << (uint32_t)((edm_worker_xy.y << 16) | edm_worker_xy.x) << "\n";
+        // DPRINT << "w->E Conn. y|x " << (uint32_t)((edm_worker_xy.y << 16) | edm_worker_xy.x) << "\n";
         ASSERT(
             (my_core_type == ProgrammableCoreType::TENSIX && worker_buffer_index_semaphore_addr < 1499136) ||
             (my_core_type == ProgrammableCoreType::ACTIVE_ETH && worker_buffer_index_semaphore_addr < 262144));
@@ -164,9 +164,10 @@ struct WorkerToFabricEdmSender{
         noc_async_read_barrier();
         ASSERT(*this->buffer_index_ptr < 20);
         DPRINT << "Connecting to EDM fabric @ " << (uint64_t)edm_connection_handshake_noc_addr << "\n";
-        DPRINT << "remote buffer index @: " << (uint64_t)remote_buffer_index_addr << "\n";
-        DPRINT << "Buffer index: " << (uint32_t)*this->buffer_index_ptr << "\n";
-        DPRINT << "edm_buffer_base_addr: " << (uint64_t)edm_buffer_base_addr << "\n";
+        DPRINT << "&sem_addr: " << (uint32_t)&(this->worker_sem_addr) << "\n";
+        // DPRINT << "remote buffer index @: " << (uint64_t)remote_buffer_index_addr << "\n";
+        // DPRINT << "Buffer index: " << (uint32_t)*this->buffer_index_ptr << "\n";
+        // DPRINT << "edm_buffer_base_addr: " << (uint64_t)edm_buffer_base_addr << "\n";
     }
 
     FORCE_INLINE void close() {

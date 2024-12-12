@@ -343,6 +343,7 @@ tt::fabric::SendStatus send_next_data(
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
     if (status == tt::fabric::SendStatus::SENT_PAYLOAD_AND_SYNC) {
+        DPRINT << "EDM advance buffer index\n";
         sender_buffer_channel.advance_buffer_index();
         receiver_buffer_channel.advance_buffer_index();
     }
@@ -570,6 +571,7 @@ bool run_sender_channel_state_machine_step(
                                                    local_sender_channel.eth_is_receiver_channel_send_done();
             if (is_safe_to_receive_next_message) {
                 // This also notifies workers in the same call
+                DPRINT << "EDMS:\n";
                 sender_eth_check_receiver_ack_sequence(local_sender_channel, local_sender_channel_worker_interface);
                 *sender_state_out = SenderState::SENDER_WAITING_FOR_WORKER;
             }
