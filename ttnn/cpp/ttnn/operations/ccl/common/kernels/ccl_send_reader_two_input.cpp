@@ -37,7 +37,7 @@ using arg_idx_t = uint16_t;
 struct no_addrgen {};
 static constexpr size_t num_packet_headers_storable = 8;
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(0);
-#if defined (NO_TENSOR_MODE)
+#ifdef NO_TENSOR_MODE
 constexpr TensorMemoryLayout tensor0_layout = TensorMemoryLayout::INTERLEAVED;
 constexpr BufferType buffer0_type = BufferType::DRAM;
 constexpr Layout tensor0_page_layout = Layout::TILE;
@@ -1001,11 +1001,7 @@ void kernel_main() {
         tensor0_addrgen,
         num_commands0,// - (fabric_connection.is_logically_connected() ? 8 : 0), // count = 8
         command0_start_offset,
-        #ifndef NO_TENSOR_MODE
         cb0_id,
-        #else
-        tt::CB::c_in0,
-        #endif
         tensor0_page_size,
         packet_size_in_pages,
         packet_header_buffer_addr0);
@@ -1021,11 +1017,7 @@ void kernel_main() {
         tensor1_addrgen,
         num_commands1,// - (fabric_connection.is_logically_connected() ? 1 : 0),
         command1_start_offset,
-        #ifndef NO_TENSOR_MODE
         cb1_id,
-        #else
-        tt::CB::c_in1,
-        #endif
         tensor1_page_size,
         packet_size_in_pages,
         packet_header_buffer_addr1);
