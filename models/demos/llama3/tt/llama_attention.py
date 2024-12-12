@@ -631,17 +631,6 @@ class TtLlamaAttention(LightweightModule):
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
-            # attn_output_11SH = tt_all_gather(
-            #     attn_output_11SH,
-            #     self.mesh_device,
-            #     dim=3,
-            #     cluster_axis=1,
-            #     num_links=2,
-            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            #     sharded=False,
-            #     dtype=self.ccl_dtype,
-            #     topology=self.ccl_topology,
-            # )
             attn_output_11SH = ttnn.all_gather(
                 attn_output_11SH,
                 dim=3,
