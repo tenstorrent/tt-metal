@@ -718,13 +718,13 @@ bool RunLocalTestWithMultiInputReaders(
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
 
     Tensor& input_tensor0,
-    MemoryConfig const& input_tensor0_mem_config,
     Tensor& input_tensor1,
-    MemoryConfig const& input_tensor1_mem_config,
     Tensor& output_tensor0,
-    MemoryConfig const& output_tensor0_mem_config,
     Tensor& output_tensor1,
-    MemoryConfig const& output_tensor1_mem_config,
+    std::vector<Tensor> input0_tensors,   // Device
+    std::vector<Tensor> input1_tensors,   // Device
+    std::vector<Tensor> output0_tensors,  // Device
+    std::vector<Tensor> output1_tensors,  // Device
 
     ttnn::ccl::v2::TensorSlice const& in0_tensor_slice,
     ttnn::ccl::v2::TensorSlice const& in1_tensor_slice,
@@ -775,19 +775,6 @@ bool RunLocalTestWithMultiInputReaders(
     TT_ASSERT(input_tensor0.get_logical_shape()[-2] != 1);
 
     bool is_fabric_mcast = std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args);
-    std::vector<Tensor> input0_tensors;
-    std::vector<Tensor> input1_tensors;
-    std::vector<Tensor> output0_tensors;
-    std::vector<Tensor> output1_tensors;
-
-    // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
-    // multicast to a consistent destination address
-    for (size_t i = 0; i < devices.size(); i++) {
-        input0_tensors.push_back(input_tensor0.to(devices.at(i), input_tensor0_mem_config));
-        input1_tensors.push_back(input_tensor1.to(devices.at(i), input_tensor1_mem_config));
-        output0_tensors.push_back(output_tensor0.to(devices.at(i), output_tensor0_mem_config));
-        output1_tensors.push_back(output_tensor1.to(devices.at(i), output_tensor1_mem_config));
-    }
 
     auto input_tensor0_device = input0_tensors.at(0);
     auto input_tensor1_device = input1_tensors.at(0);
@@ -1467,6 +1454,21 @@ bool TestMultiInputReaderKernel(
     for (size_t i = 0; i < fabric_num_devices; i++) {
         devices.push_back(test_fixture.devices_.at(i));
     }
+
+    std::vector<Tensor> input0_tensors_device;
+    std::vector<Tensor> input1_tensors_device;
+    std::vector<Tensor> output0_tensors_device;
+    std::vector<Tensor> output1_tensors_device;
+
+    // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
+    // multicast to a consistent destination address
+    for (size_t i = 0; i < devices.size(); i++) {
+        input0_tensors_device.push_back(input_tensor0.to(devices.at(i), input_tensor0_mem_config));
+        input1_tensors_device.push_back(input_tensor1.to(devices.at(i), input_tensor1_mem_config));
+        output0_tensors_device.push_back(output_tensor0.to(devices.at(i), output_tensor0_mem_config));
+        output1_tensors_device.push_back(output_tensor1.to(devices.at(i), output_tensor1_mem_config));
+    }
+
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
@@ -1490,13 +1492,14 @@ bool TestMultiInputReaderKernel(
             line_fabric,
 
             input_tensor0,
-            input_tensor0_mem_config,
             input_tensor1,
-            input_tensor1_mem_config,
             output_tensor0,
-            output_tensor0_mem_config,
             output_tensor1,
-            output_tensor1_mem_config,
+
+            input0_tensors_device,
+            input1_tensors_device,
+            output0_tensors_device,
+            output1_tensors_device,
 
             in0_tensor_slice,
             in1_tensor_slice,
