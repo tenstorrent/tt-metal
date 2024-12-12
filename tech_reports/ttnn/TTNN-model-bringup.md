@@ -21,7 +21,6 @@
   - [4. End to end model performance](#4-end-to-end-model-performance)
     - [4.1 Performance sheet](#41-performance-sheet)
     - [4.2 Visualizer](#42-visualizer--)
-    - [4.3 More tools](#43-more-tools)
     - [4.4 Trace and 2cq](#44-trace-and-2cq)
   - [5. Conclusion](#5-conclusion)
 
@@ -82,7 +81,11 @@ The diagram below illustrates the corresponding Downsample1 module:
   - At the op-level, another argument is the math_fidelity. Always set the math_fidelity=ttnn.MathFidelity.LoFi unless you observe noticeable drop in PCC.
   - At the module-level, there are parameters to optimize based on your module graph. For instance, for the convolution op, you should set the deallocate_activation to True if you will not be using the input tensor to the conv anywhere else on the model graph. Please refer to the example here: [Yolo-v4 architecture](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#3-yolov4-architecture).
   - At the module-level as well as the full-model-level, there are intial oprimizations you may consider, for instance, when the module or the full model consists of cosequtive ops, idally there should be minimal changes in sharding strategy between ops. For instance, if the model starts with width-sharding op, it would be ideal to keep the same strategy for the following op as reshards can be expensive. So it is recommended to find the best sharding strategies per op. However, once you have a module implementation, you may generate the perf sheet (this will be covered on a following section of this reort) to analyze the device run-time of the full module/full model and identify where keeping the same sharding strategy could be beneficial looking at the end to end device time versus doing reshareds between ops.  
-  - STAGE 2: 
+
+## 4.  End to end model performance
+### 4.1 Performance Sheet
+
+  - STAGE 2 of optimization: 
   - at this stage, we need to utilize several tools available to us. We will start by the perf_sheet. You will need to build metal with perf-analyzer enabled fist. Then follow the instructions to generate the perf sheet per your module or full model.    
   - When you build metal use:
     ```
@@ -98,10 +101,11 @@ The diagram below illustrates the corresponding Downsample1 module:
   - You may refer to [TTNN profiler documentation](https://docs.tenstorrent.com/ttnn/latest/ttnn/profiling_ttnn_operations.html) for a more comprehensive overview of the profiler tool and the details of the generated perf sheet by it. 
   - [Perf Report Headers](https://docs.tenstorrent.com/ttnn/latest/ttnn/profiling_ttnn_operations.html#perf-report-headers) will be particularly helpful in understanding the content of the generated perf sheet. 
   - The first thing to check on the perf sheet would be to look at the device kernel duration reported in ns per op. By using excel tools, you can quickly identify the largest values in the column. Then see, which op they correspond too. Here are some examples: 
-  - include an image here: 
-  - Once you idenfify the op, it is recommended to check the number of cores used for the op, and the utilization which can be computed by: 
-  - add the formula for computing the per op utiliztion. 
-
+  - ![perf-sheet snippet](images/perf-sheet-sample1.png)  
+  - Once you idenfify the op, it is recommended to check the number of cores used for the op among other configs/parameters. For instance for the shared snnipet, you can see how the device kernel durations are high when ops are running on low number of cores. For the examples of a convolution op, you may increase the number of cores used by adjsting the sharding strategy (height, width or block sharding). See an example here in [yolov4 tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#24-use-best-shardlayout-for-convolution) 
+  - another factor to consider is per op utilization. One way to increase utilization would be to adjsut the data-type. see an example here in [yolov4 tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#data-type-optimization) 
+  - The utilization percentage is calculated by - (PM ideal/device kernel duration) * (108/core_count) 
+  - Another approach to improve utilization is by applying sharding techniques to eliminate the need for data movement inter-tensix-cores between the consecutive OPs. you may checkout the example here in [yolov4 tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#21-sharding-on-all-relevant-ops)
 
 
 
