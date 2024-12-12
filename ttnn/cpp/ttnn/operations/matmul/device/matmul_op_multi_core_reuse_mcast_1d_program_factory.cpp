@@ -1723,7 +1723,8 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    uint32_t num_global_cb_receivers) {
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
@@ -1754,7 +1755,10 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     /* in1 */
     uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
-    uint32_t in1_shard_width_in_tiles = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
+    uint32_t in1_shard_width_in_tiles =
+        in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
+    std::cout << "in1_shard_height_in_tiles " << in1_shard_height_in_tiles << std::endl;
+    std::cout << "in1_shard_width_in_tiles " << in1_shard_width_in_tiles << std::endl;
     uint32_t in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -1892,8 +1896,16 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     CBHandle cb_src1;
     if (use_global_cb) {
+        uint32_t sync_cb_index = tt::CBIndex::c_5;
+        uint32_t sync_cb_size_bytes = 16;
+        tt_metal::CircularBufferConfig sync_cb_config =
+            tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
+                .set_page_size(sync_cb_index, sync_cb_size_bytes);
+        auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
+
         uint32_t remote_cb_index = tt::CBIndex::c_31;
         tt_metal::CircularBufferConfig remote_cb_config = tt_metal::CircularBufferConfig(in1_CB_size);
+        std::cout << "in1_CB_size " << in1_CB_size << std::endl;
         remote_cb_config.remote_index(remote_cb_index)
             .set_page_size(in1_single_tile_size * in1_block_num_tiles)
             .set_data_format(in1_data_format);
@@ -2053,7 +2065,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     bool gather_in0,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    uint32_t num_global_cb_receivers) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
     auto in0_tile = a.get_tensor_spec().tile();
     auto in1_tile = b.get_tensor_spec().tile();
@@ -2184,7 +2197,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             in1_data_format,
             output_data_format,
             untilize_out,
-            global_cb);
+            global_cb,
+            num_global_cb_receivers);
     }
 
     if (mcast_in0) {
@@ -2287,7 +2301,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     bool mcast_in0,
     bool gather_in0,
     bool untilize_out,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    uint32_t num_global_cb_receivers) {
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
@@ -2313,7 +2328,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
         gather_in0,
         untilize_out,
         empty_fused_op_signaler,
-        global_cb);
+        global_cb,
+        num_global_cb_receivers);
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
@@ -2353,7 +2369,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
         config.gather_in0,
         untilize_out,
         fused_op_signaler,
-        global_cb);
+        global_cb,
+        config.num_global_cb_receivers);
 }
 
 }  // namespace matmul
