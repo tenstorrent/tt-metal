@@ -1176,32 +1176,6 @@ int TestLineFabricEntrypoint(
         fabric_program_ptrs,
         line_fabric,
         enable_persistent_fabric);
-    // if (enable_persistent_fabric) {
-    //     log_info(tt::LogTest, "Enabling persistent fabric");
-    //     fabric_programs = std::vector<Program>(devices.size());
-    //     subdevice_managers = create_subdevices(devices);
-    //     std::transform(fabric_programs->begin(), fabric_programs->end(), std::back_inserter(fabric_program_ptrs),
-    //     [](auto& p) { return &p; });
-    // } else {
-    //     std::transform(programs.begin(), programs.end(), std::back_inserter(fabric_program_ptrs), [](auto& p) {
-    //     return &p; });
-    // }
-
-    // auto line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, fabric_program_ptrs, enable_persistent_fabric,
-    // 1);
-
-    // if (enable_persistent_fabric) {
-    //     TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
-    //     TT_FATAL(devices.size() == fabric_programs->size(), "Number of devices must match number of programs");
-
-    //     line_fabric.build_kernels();
-    //     for (size_t i = 0; i < devices.size(); i++) {
-    //         tt::tt_metal::detail::CompileProgram(devices[i], fabric_programs->at(i));
-    //     }
-    //     for (size_t i = 0; i < devices.size(); i++) {
-    //         tt_metal::EnqueueProgram(devices[i]->command_queue(), fabric_programs->at(i), false);
-    //     }
-    // }
 
     auto launch_workers = [&](std::vector<Program>& _programs) -> bool {
         bool success = false;
@@ -1237,20 +1211,6 @@ int TestLineFabricEntrypoint(
         success = launch_workers(second_run_programs) && success;
         success =
             persistent_fabric_teardown_sequence(devices, subdevice_managers, line_fabric.value(), success) && success;
-        // success = launch_workers(second_run_programs) && success;
-
-        // // Wait for workers to finish
-        // auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
-        // tt_metal::Finish(devices[0]->command_queue(),
-        // {subdevice_managers->worker_subdevice_id.at(devices[0]->id())});
-
-        // // Teardown the fabric
-        // line_fabric.teardown_from_host();
-
-        // // wait for fabric teardown to finish
-        // std::ranges::for_each(devices, [&](Device *device) {
-        //     tt_metal::Finish(device->command_queue(), {subdevice_managers->fabric_subdevice_id.at(device->id())});
-        // });
     }
 
     test_fixture.TearDown();
@@ -1307,8 +1267,6 @@ int TestLoopbackEntrypoint(
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(2);
         subdevice_managers = create_subdevices({device_0, device_1});
-        // auto line_fabric = ttnn::ccl::EdmLineFabricOpInterface({device_0, device_1}, {&fabric_programs->at(0),
-        // &fabric_programs->at(1)}, 1);
     }
 
     auto& fabric_sender_program = enable_persistent_fabric ? fabric_programs->at(0) : sender_program;
