@@ -131,7 +131,7 @@ Tensor ExecuteMaximum::invoke(
 
 Tensor ExecuteMaximum::invoke(
     const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_diff = ttnn::rsub_unary(input_a, value, output_mem_config);
+    Tensor t_diff = ttnn::rsub(input_a, value, output_mem_config);
     Tensor result = ttnn::where(t_diff, value, input_a);
     return result;
 }
@@ -526,6 +526,111 @@ Tensor ExecuteLCM::invoke(
     return ttnn::abs(result);
 }
 
+// power - floating point exponent
+Tensor ExecutePower::invoke(
+    uint8_t queue_id,
+    const Tensor& input_a,
+    float exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
+    TT_FATAL(exponent >= 0.0f, "works for positive exponents only");
+    const uint32_t exponent_floor = static_cast<uint32_t>(std::floor(exponent));
+    if (static_cast<float>(exponent_floor) == exponent) {
+        if (output_tensor.has_value()) {
+            ttnn::power(queue_id, input_a, exponent_floor, output_mem_config, output_tensor);
+            return output_tensor.value();
+        }
+        return ttnn::power(queue_id, input_a, exponent_floor, output_mem_config);
+    }
+    const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
+    Tensor pow_trunc_log = ttnn::multiply(
+        queue_id, ttnn::log(queue_id, input_a, output_mem_config), exponent_trunc, std::nullopt, output_mem_config);
+    Tensor pow_frac = ttnn::exp(queue_id, pow_trunc_log, false, output_mem_config);
+    pow_trunc_log.deallocate();
+    float t_nan = std::nanf("");
+    Tensor result = ttnn::multiply(
+        queue_id,
+        ttnn::power(queue_id, input_a, exponent_floor, output_mem_config),
+        pow_frac,
+        std::nullopt,
+        output_mem_config);
+    // To handle negative inputs:
+    // in torch For -ve inputs with float exponent power returns nan
+    auto output_memory_config = output_tensor.has_value() ? output_tensor.value().memory_config()
+                                                          : output_mem_config.value_or(input_a.memory_config());
+    result = ttnn::where(
+        ttnn::ltz(queue_id, input_a, output_mem_config), t_nan, result, output_memory_config, output_tensor);
+    return result;
+}
+
+// power - floating point exponent
+Tensor ExecutePower::invoke(
+    const Tensor& input_a,
+    float exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input_a, exponent, output_mem_config, std::move(output_tensor));
+}
+
+// power - integer exponent
+Tensor ExecutePower::invoke(
+    uint8_t queue_id,
+    const Tensor& input,
+    uint32_t exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
+    return ttnn::power(queue_id, input, exponent, output_mem_config, output_tensor);
+}
+
+// power - integer exponent
+Tensor ExecutePower::invoke(
+    const Tensor& input,
+    uint32_t exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input, exponent, output_mem_config, std::move(output_tensor));
+}
+
+// power - tensor exponent
+Tensor ExecutePower::invoke(
+    uint8_t queue_id,
+    const Tensor& input,
+    const Tensor& exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::POWER>::invoke(
+        queue_id, input, exponent, std::nullopt, output_mem_config, output_tensor);
+}
+
+// power - tensor exponent
+Tensor ExecutePower::invoke(
+    const Tensor& input,
+    const Tensor& exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input, exponent, output_mem_config, std::move(output_tensor));
+}
+
+// power - scalar input
+Tensor ExecutePower::invoke(
+    uint8_t queue_id,
+    float input_a,
+    const Tensor& exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
+    Tensor input = ttnn::full_like(exponent, input_a);
+    return ExecutePower::invoke(queue_id, input, exponent, output_mem_config, std::move(output_tensor));
+}
+
+// power - scalar input
+Tensor ExecutePower::invoke(
+    float input_a,
+    const Tensor& exponent,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
+    return ExecutePower::invoke(DefaultQueueId, input_a, exponent, output_mem_config, std::move(output_tensor));
+}
+
 Tensor ExecuteRsub::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor_a,
@@ -535,8 +640,7 @@ Tensor ExecuteRsub::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<unary::FusedActivations>& activations,
     const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
-
-    return ttnn::rsub_binary(
+    return BinaryOperation<operations::binary::BinaryOpType::RSUB>::invoke(
         queue_id,
         input_tensor_a,
         input_tensor_b,
@@ -573,13 +677,8 @@ Tensor ExecuteRsub::invoke(
     const float input_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-
-    return ttnn::rsub_unary(
-        queue_id,
-        input_tensor_a,
-        input_b,
-        memory_config,
-        optional_output_tensor);
+    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::RSUB>::invoke(
+        queue_id, input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteRsub::invoke(
@@ -603,14 +702,8 @@ Tensor ExecuteBitwiseAnd::invoke(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-
-    return ttnn::bitwise_and_binary(
-        queue_id,
-        input_tensor_a,
-        input_tensor_b,
-        std::nullopt,
-        memory_config,
-        optional_output_tensor);
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
+        queue_id, input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteBitwiseAnd::invoke(
@@ -633,13 +726,9 @@ Tensor ExecuteBitwiseAnd::invoke(
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-
-    return ttnn::bitwise_and_unary(
-        queue_id,
-        input_tensor_a,
-        input_b,
-        memory_config,
-        optional_output_tensor);
+    return ttnn::operations::unary::
+        ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::BITWISE_AND, int32_t>::invoke(
+            queue_id, input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteBitwiseAnd::invoke(
@@ -663,14 +752,8 @@ Tensor ExecuteBitwiseOr::invoke(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-
-    return ttnn::bitwise_or_binary(
-        queue_id,
-        input_tensor_a,
-        input_tensor_b,
-        std::nullopt,
-        memory_config,
-        optional_output_tensor);
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_OR>::invoke(
+        queue_id, input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteBitwiseOr::invoke(
@@ -693,13 +776,9 @@ Tensor ExecuteBitwiseOr::invoke(
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-
-    return ttnn::bitwise_or_unary(
-        queue_id,
-        input_tensor_a,
-        input_b,
-        memory_config,
-        optional_output_tensor);
+    return ttnn::operations::unary::
+        ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::BITWISE_OR, int32_t>::invoke(
+            queue_id, input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteBitwiseOr::invoke(
@@ -723,14 +802,8 @@ Tensor ExecuteBitwiseXor::invoke(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-
-    return ttnn::bitwise_xor_binary(
-        queue_id,
-        input_tensor_a,
-        input_tensor_b,
-        std::nullopt,
-        memory_config,
-        optional_output_tensor);
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_XOR>::invoke(
+        queue_id, input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteBitwiseXor::invoke(
@@ -753,13 +826,9 @@ Tensor ExecuteBitwiseXor::invoke(
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-
-    return ttnn::bitwise_xor_unary(
-        queue_id,
-        input_tensor_a,
-        input_b,
-        memory_config,
-        optional_output_tensor);
+    return ttnn::operations::unary::
+        ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::BITWISE_XOR, int32_t>::invoke(
+            queue_id, input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteBitwiseXor::invoke(

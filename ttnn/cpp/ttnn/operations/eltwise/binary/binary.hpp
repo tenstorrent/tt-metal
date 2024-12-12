@@ -249,22 +249,6 @@ constexpr auto ne_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::ne_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::NE>>();
 
-constexpr auto rsub_binary = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::rsub_binary",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::RSUB>>();
-constexpr auto power_binary = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::power_binary",
-    operations::binary::BinaryOperationSfpu<operations::binary::BinaryOpType::POWER>>();
-constexpr auto bitwise_and_binary = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::bitwise_and_binary",
-    operations::binary::BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_AND>>();
-constexpr auto bitwise_or_binary = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::bitwise_or_binary",
-    operations::binary::BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_OR>>();
-constexpr auto bitwise_xor_binary = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::bitwise_xor_binary",
-    operations::binary::BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_XOR>>();
-
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor& input_tensor_a, InputBType scalar) {
     return add(input_tensor_a, scalar);
