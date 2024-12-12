@@ -259,9 +259,11 @@ class FabricConnectionManager final {
     }
 
     tt::fabric::WorkerToFabricEdmSender &get_forward_connection() {
+        ASSERT(has_forward_connection());
         return forward_fabric_sender;
     }
     tt::fabric::WorkerToFabricEdmSender &get_backward_connection() {
+        ASSERT(has_backward_connection());
         return backward_fabric_sender;
     }
 
@@ -372,7 +374,7 @@ struct command_context_t final {
         // TODO: based on command category/class, some of this setup could be shared
         #ifdef DEBUG_PRINT_ENABLED
         DPRINT << "CMD (code=" << (uint32_t)current_cmd_header.code << ", args=" << (uint32_t)current_cmd_header.arg_count << ", idx=" << (uint32_t)(arg_idx-1) <<"\n";
-        // DPRINT << (uint32_t)get_arg_val<uint32_t>(arg_idx-1) << "\n";
+        DPRINT << (uint32_t)get_arg_val<uint32_t>(arg_idx-1) << "\n";
         #endif
         update_ccl_command(
             arg_idx,
@@ -503,7 +505,7 @@ void update_ccl_command(
                 // DPRINT << "addr info tp: " << (uint32_t)addr_type << "\n";
                 switch (addr_type) {
                     case ttnn::ccl::cmd::CclCommandAddrType::CIRCULAR_BUFFER_ID:
-                        DPRINT << "\tcbid: " << (uint32_t)command_arg_header.inline_value2 << "\n";
+                        // DPRINT << "\tcbid: " << (uint32_t)command_arg_header.inline_value2 << "\n";
                         cmd_ctx.cb_id = command_arg_header.inline_value2;
                         break;
                     case ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS:
@@ -582,7 +584,6 @@ FORCE_INLINE void try_advance_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
                     dest_bank_addr, static_cast<uint16_t>(increment_value), 32, static_cast<uint8_t>(dest_noc0_x), static_cast<uint8_t>(dest_noc0_y)
                 });
 
-        cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         switch (cmd_ctx.current_cmd_header.dest_type) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
                 pkt_hdr.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops});
@@ -594,6 +595,7 @@ FORCE_INLINE void try_advance_atomic_inc(command_context_t<Addrgen> &cmd_ctx) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
                 const auto &mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
                 if (cmd_ctx.fabric_connection.has_forward_connection()) {
+                    cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     pkt_hdr.to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
 
@@ -644,7 +646,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen> &cmd_
     //
 
     if (!cb_pages_reservable_at_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages)) {
-        DPRINT << "CB !rsrvbl\n";
+        // DPRINT << "CB !rsrvbl\n";
         return;
     }
     // Hack for now - we will eventually move to
