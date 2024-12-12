@@ -27,6 +27,22 @@ TEST(TensorUtilsTest, TestFloatToFromTensorEven) {
     }
 }
 
+TEST(TensorUtilsTest, TestFloatToFromTensorGPT2Tokenizer) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const size_t N = 50304;
+    std::vector<float> test_data(N, 0.F);
+
+    auto shape = ttml::core::create_shape({1, 1, 1, N});
+    auto tensor = ttml::core::from_vector(test_data, shape, device);
+
+    auto vec_back = ttml::core::to_vector(tensor);
+
+    ASSERT_EQ(vec_back.size(), test_data.size());
+    for (size_t i = 0; i < test_data.size(); i++) {
+        EXPECT_EQ(vec_back[i], test_data[i]);
+    }
+}
+
 TEST(TensorUtilsTest, TestFloatToFromTensorOdd) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data = {30.F, 20.F, 2.F};

@@ -10,7 +10,7 @@
 
 namespace ttml::tokenizers {
 
-CharTokenizer CharTokenizerTrainer::train(const std::string& text, bool add_padding_token) {
+std::unique_ptr<CharTokenizer> CharTokenizerTrainer::train(const std::string& text, bool add_padding_token) {
     CharTokenizer::Vocabulary vocabulary;
 
     // using set instead of unordered_set to stabilize order
@@ -24,7 +24,7 @@ CharTokenizer CharTokenizerTrainer::train(const std::string& text, bool add_padd
         vocabulary[std::string(1, chr)] = static_cast<uint32_t>(vocabulary.size());
     }
 
-    return CharTokenizer(vocabulary);
+    return std::make_unique<CharTokenizer>(vocabulary);
 }
 
 }  // namespace ttml::tokenizers
