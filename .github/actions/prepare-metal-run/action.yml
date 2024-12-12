@@ -9,6 +9,10 @@ inputs:
     description: "Whether to load with profiler"
     required: false
     default: 'false'
+  python-version:
+    description: 'Which version of Python to use to run the tests.'
+    required: false
+    default: '3.8'
 
 runs:
   using: "composite"
@@ -25,6 +29,8 @@ runs:
       shell: bash
       run: tar -xvf ttm_${{ inputs.arch }}.tar
     - uses: ./.github/actions/install-python-deps
+      with:
+        python-version: ${{ inputs.python-version }}
     - name: Collect Workflow Telemetry
       if: ${{ !cancelled() }}
       uses: catchpoint/workflow-telemetry-action@v2

@@ -70,7 +70,8 @@ jobs:
             -e TT_METAL_SLOW_DISPATCH_MODE=1
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
           run_args: |
-            python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
+            pip install --force-reinstall pip==21.2.4
+            pip install -r tt_metal/python_env/requirements-dev.txt
             pip install -e .
             ./tests/scripts/run_tests.sh --tt-arch ${{ inputs.arch }} --pipeline-type post_commit --dispatch-mode slow
       - uses: ./.github/actions/slack-report

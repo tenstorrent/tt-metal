@@ -84,8 +84,9 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
           run_args: |
-            python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
-            python3 -m pip install -e .
+            pip install --force-reinstall pip==21.2.4
+            pip install -r tt_metal/python_env/requirements-dev.txt
+            pip install -e .
             ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
