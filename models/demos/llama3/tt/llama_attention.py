@@ -240,7 +240,6 @@ class TtLlamaAttention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
-        TG = self.TG
 
         ###
         # QKV matmuls
@@ -252,7 +251,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            dtype=self.ccl_dtype if TG else ttnn.bfloat16,
+            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
         )
         ttnn.deallocate(x)
         xqkv_fused = tt_all_reduce(
@@ -266,7 +265,7 @@ class TtLlamaAttention(LightweightModule):
             dtype=self.ccl_dtype,
         )
 
-        if TG:
+        if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
             xqkv_fused = ttnn.matmul(
                 self.slice_mat,
@@ -405,7 +404,7 @@ class TtLlamaAttention(LightweightModule):
                 sharded=True,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
             )
-            if TG:
+            if self.TG:
                 attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
                 # user_selection_matrix = [1, 1, 32, 128]
                 # user_selection_matrix @ activation -> [1, 1, 32, 128] * [1, 1, 128, 2048] -> [1, 1, 32, 2048]
@@ -417,14 +416,14 @@ class TtLlamaAttention(LightweightModule):
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
 
-            # TODO: Fix this once TG supports dram-sharded matmuls
+            # TODO: Fix this once self.TG supports dram-sharded matmuls
             dense_out_sharded = ttnn.matmul(
                 attn_output,
                 self.wo,
-                core_grid=ttnn.CoreGrid(y=4, x=8) if TG else None,
-                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not TG else None,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if TG else attn_output_cat.memory_config(),
-                dtype=ttnn.bfloat8_b if TG else None,
+                core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
+                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_cat.memory_config(),
+                dtype=ttnn.bfloat8_b if self.TG else None,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
             )
 
@@ -443,14 +442,14 @@ class TtLlamaAttention(LightweightModule):
                     if self.hidden_size == 8192
                     else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
                 )
-                if TG
+                if self.TG
                 else self.model_config["DECODE_RESIDUAL_MEMCFG"],
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
             )
 
-            if not TG:
+            if not self.TG:
                 dense_out_reduced = ttnn.to_memory_config(
                     dense_out_reduced, self.model_config["DECODE_RESIDUAL_MEMCFG"]
                 )
@@ -463,7 +462,6 @@ class TtLlamaAttention(LightweightModule):
         ###
         # QKV matmuls
         ###
-        TG = self.TG
 
         # reshaping long sequence to matmul fit on device
         if seq_len > 2048:
@@ -472,7 +470,7 @@ class TtLlamaAttention(LightweightModule):
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
-            dtype=self.ccl_dtype if TG else ttnn.bfloat16,
+            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
@@ -546,7 +544,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD)
 
         # sharding k_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
             k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             k_fill = k_heads_1KSD_8b
@@ -556,12 +554,12 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(v_heads_1VSD)
 
         # sharding v_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             v_fill = v_heads_1VSD_8b
 
-        if TG:
+        if self.TG:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
         if page_table:
@@ -585,7 +583,7 @@ class TtLlamaAttention(LightweightModule):
                 user_id % self.batch_size_per_device_group,
             )
 
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
@@ -671,7 +669,7 @@ class TtLlamaAttention(LightweightModule):
                 output_11SH,
                 self.mesh_device,
                 cluster_axis=0,
-                dim=0 if TG else 3,
+                dim=0 if self.TG else 3,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
