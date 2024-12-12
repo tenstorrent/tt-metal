@@ -463,7 +463,7 @@ bool RunLoopbackTest(
 
 void generate_multi_input_test_worker_reader_kernel(
     Program& program,
-    std::vector<size_t> const& cb_indices,
+    std::vector<uint32_t> const& cb_indices,
     std::vector<Tensor const*> const& tensors,
     Device* device,
     uint32_t page_size,
@@ -472,13 +472,13 @@ void generate_multi_input_test_worker_reader_kernel(
     ttnn::ccl::v2::TensorSlice const& in0_command_tensor_slice,
     ttnn::ccl::v2::TensorSlice const& in1_command_tensor_slice,
     ttnn::ccl::cmd::CclCommandCode command_type,
-    DataMovementConfig datamovement_kernel_config,
+    DataMovementConfig const& datamovement_kernel_config,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& chip0_worker_forward_fabric_connection,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& chip0_worker_backward_fabric_connection,
-    std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& optional_teardown_sequence, //std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> const& edm_termination_infos,
-    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args
-    ) {
-
+    std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const&
+        optional_teardown_sequence,  // std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> const&
+                                     // edm_termination_infos,
+    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
     bool fabric_enabled = std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args) || std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args);
     using namespace ttnn::ccl::cmd::uops;
     using namespace ttnn::ccl::cmd;
@@ -559,7 +559,6 @@ void generate_multi_input_test_worker_reader_kernel(
         chip0_worker_backward_fabric_connection
     );
 
-
     // ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_rt_args(
     //     program,
     //     sender_worker_reader_kernel,
@@ -576,7 +575,6 @@ void generate_multi_input_test_worker_reader_kernel(
     //     edm_termination_infos,
     //     {dest_args, dest_args}
     // );
-
 }
 
 void generate_multi_input_test_worker_kernels_for_local_tensor_write(
@@ -767,10 +765,10 @@ bool RunLocalTestWithMultiInputReaders(
         sync_details->add_signal(tt::tt_metal::CreateSemaphore(programs.at(0), teardown_worker_core.value(), 0), 1);
         teardown_command_stream = {ttnn::ccl::cmd::uops::local_core_semaphore_inc(sync_details->sem_ids.at(0), 1)};
         TT_FATAL(edm_termination_infos.has_value(), "EDM termination infos must be set if fabric is enabled");
-        auto teardown_commands =ttnn::ccl::worker_detail::build_ccl_cmd_proc_teardown_commands(
+        auto teardown_commands = ttnn::ccl::worker_detail::build_ccl_cmd_proc_teardown_commands(
             programs.at(0),
             device,
-            nullptr, // forward device - in this test, we have a single source doing all teardown
+            nullptr,  // forward device - in this test, we have a single source doing all teardown
             devices.size(),
             0,
             edm_termination_infos.value(),
@@ -2093,12 +2091,12 @@ bool RunPipelinedWorkersTest(
         }
     }
 
-    for (auto &ht : host_tensors) {
-        ht.deallocate();
-    }
-    for (auto &dt : device_tensors) {
-        dt.deallocate();
-    }
+    // for (auto &ht : host_tensors) {
+    //     ht.deallocate();
+    // }
+    // for (auto &dt : device_tensors) {
+    //     dt.deallocate();
+    // }
 
     return pass;
 }
@@ -2251,6 +2249,8 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
 
     ASSERT_TRUE(pass);
 }
+
+// Hits issues with input tensor copy-back
 TEST(WorkerCclCommandProcessingKernels, DISABLED_ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly_SmallSweep) {
 
     std::vector<ttnn::Shape> tensor_shapes = {

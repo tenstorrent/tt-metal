@@ -7,6 +7,9 @@
 
 #include <variant>
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "tt_metal/impl/buffers/global_semaphore.hpp"
+
+#include <variant>
 namespace ttnn::ccl::cmd {
 
 // This file defines commands that are resolved on a per worker level. This is the lowest level of
@@ -113,21 +116,65 @@ CclHostLowLevelWorkerCommand fabric_write_cb_to_tensor_slice(
         dest_args_variant);
 }
 
-CclHostLowLevelWorkerCommand local_semaphore_wait(size_t semaphore_id, size_t value) {
+static ttnn::ccl::cmd::CclCommandAddrType get_semaphore_addr_type(semaphore_id_t const& semaphore_id) {
+    return std::visit([](semaphore_id_t const& semaphore) -> ttnn::ccl::cmd::CclCommandAddrType {
+        using T = std::decay_t<decltype(semaphore)>;
+        if constexpr (std::is_same_v<T, uint32_t>) {
+            return ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID;
+        } else if constexpr (std::is_same_v<T, GlobalSemaphore>) {
+            return ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS;
+        } else {
+            TT_THROW("ttnn::ccl::cmd::uops::get_semaphore_addr_type called with unsupported semaphore types. Currently supported types are uint32_t (semaphore ID) and GlobalSemaphore");
+        }
+    }, semaphore_id);
+}
+static ttnn::ccl::cmd::CclCommandAddrArgs get_semaphore_addr_val(semaphore_id_t const& semaphore_id) {
+    return std::visit([](semaphore_id_t const& semaphore) -> ttnn::ccl::cmd::CclCommandAddrArgs {
+        using T = std::decay_t<decltype(semaphore)>;
+        if constexpr (std::is_same_v<T, uint32_t>) {
+            return ttnn::ccl::cmd::CclCommandAddrSemaphoreId{std::get<uint32_t>(semaphore_id)};
+        } else if constexpr (std::is_same_v<T, GlobalSemaphore>) {
+            return ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{std::get<GlobalSemaphore>(semaphore_id).address()};
+        } else {
+            TT_THROW("ttnn::ccl::cmd::uops::get_semaphore_addr_type called with unsupported semaphore types. Currently supported types are uint32_t (semaphore ID) and GlobalSemaphore");
+        }
+    }, semaphore_id);
+}
+
+[[nodiscard]] CclHostLowLevelWorkerCommand local_semaphore_wait(semaphore_id_t const& semaphore_id, size_t value) {
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::WAIT_VALUE,
         ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandWaitValue{value}),
-        ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
-        ttnn::ccl::cmd::CclCommandAddrSemaphoreId{semaphore_id},
+        get_semaphore_addr_type(semaphore_id),
+        get_semaphore_addr_val(semaphore_id),
         ttnn::ccl::cmd::CclCommandAddrType::NONE,
         ttnn::ccl::cmd::CclCommandAddrNone(),
         ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL,
         ttnn::ccl::cmd::CclCommandCoreDescriptorTypeAddrgen(),
         ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
+
 }
 
-CclHostLowLevelWorkerCommand local_core_semaphore_inc(size_t semaphore_id, size_t value) {
+// CclHostLowLevelWorkerCommand local_semaphore_wait(size_t semaphore_id, size_t value) {
+//     return local_semaphore_wait(semaphore_id, value);
+// }
+// CclHostLowLevelWorkerCommand local_semaphore_wait(GlobalSemaphore const& semaphore_id, size_t value) {
+//     return CclHostLowLevelWorkerCommand(
+//         CclCommandCode::WAIT_VALUE,
+//         ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandWaitValue{value}),
+//         ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS,
+//         ttnn::ccl::cmd::CclCommandAddrSemaphoreId{semaphore_id.address()},
+//         ttnn::ccl::cmd::CclCommandAddrType::NONE,
+//         ttnn::ccl::cmd::CclCommandAddrNone(),
+//         ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL,
+//         ttnn::ccl::cmd::CclCommandCoreDescriptorTypeAddrgen(),
+//         ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
+//         ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
+// }
+
+// CclHostLowLevelWorkerCommand local_core_semaphore_inc(size_t semaphore_id, size_t value) {
+CclHostLowLevelWorkerCommand local_core_semaphore_inc(semaphore_id_t const& semaphore_id, size_t value) {
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::ATOMIC_INC,
         ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::CclCommandAtomicInc{value}),
@@ -135,17 +182,20 @@ CclHostLowLevelWorkerCommand local_core_semaphore_inc(size_t semaphore_id, size_
         ttnn::ccl::cmd::CclCommandAddrType::NONE,
         ttnn::ccl::cmd::CclCommandAddrNone(),
         // dest
-        ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
-        ttnn::ccl::cmd::CclCommandAddrSemaphoreId{semaphore_id},
+        get_semaphore_addr_type(semaphore_id), // ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
+        get_semaphore_addr_val(semaphore_id), // ttnn::ccl::cmd::CclCommandAddrSemaphoreId{semaphore_id},
         ttnn::ccl::cmd::CclCommandCoreDescriptorType::LOCAL,
         ttnn::ccl::cmd::CclCommandCoreDescriptorTypeLocal(),
         ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs());
 }
+
+
 CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
     size_t dest_noc0_x,
     size_t dest_noc0_y,
-    size_t semaphore_id,
+    semaphore_id_t const& semaphore_id,
+    // size_t semaphore_id,
     size_t value) {
     return CclHostLowLevelWorkerCommand(
         CclCommandCode::ATOMIC_INC,
@@ -154,8 +204,8 @@ CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
         ttnn::ccl::cmd::CclCommandAddrType::NONE,
         ttnn::ccl::cmd::CclCommandAddrNone(),
         // dest
-        ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
-        ttnn::ccl::cmd::CclCommandAddrSemaphoreId{semaphore_id},
+        get_semaphore_addr_type(semaphore_id), // ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
+        get_semaphore_addr_val(semaphore_id), // ttnn::ccl::cmd::CclCommandAddrSemaphoreId{semaphore_id},
         ttnn::ccl::cmd::CclCommandCoreDescriptorType::NOC_XY,
         ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY{dest_noc0_x, dest_noc0_y},
         ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,
@@ -163,7 +213,8 @@ CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
 }
 
 [[nodiscard]] CclHostLowLevelWorkerCommand fabric_unicast_semaphore_inc_mcast(
-    CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    // CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     CclCommandCoreDescriptorTypeMcast const& mcast_spec,
     UnicastCommandDestArgs const& unicast_args) {
@@ -174,8 +225,8 @@ CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
         ttnn::ccl::cmd::CclCommandAddrType::NONE,
         ttnn::ccl::cmd::CclCommandAddrNone(),
         // dest
-        ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
-        semaphore_dest_args,
+        get_semaphore_addr_type(semaphore_dest_args), // ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
+        get_semaphore_addr_val(semaphore_dest_args), // semaphore_dest_args,
         ttnn::ccl::cmd::CclCommandCoreDescriptorType::RECTANGLE,
         mcast_spec,
         ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST,
@@ -183,7 +234,8 @@ CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
 }
 
 [[nodiscard]] CclHostLowLevelWorkerCommand local_chip_semaphore_inc_mcast(
-    CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    // CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    semaphore_id_t const& semaphore_dest_args,
     CclCommandAtomicInc const& increment_args,
     CclCommandCoreDescriptorTypeMcast const& mcast_spec) {
     return CclHostLowLevelWorkerCommand(
@@ -193,8 +245,8 @@ CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(
         ttnn::ccl::cmd::CclCommandAddrType::NONE,
         ttnn::ccl::cmd::CclCommandAddrNone(),
         // dest
-        ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
-        semaphore_dest_args,
+        get_semaphore_addr_type(semaphore_dest_args), // ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID,
+        get_semaphore_addr_val(semaphore_dest_args), // semaphore_dest_args,
         ttnn::ccl::cmd::CclCommandCoreDescriptorType::RECTANGLE,
         mcast_spec,
         ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY,

@@ -7,10 +7,12 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <type_traits>
 #include <vector>
 #include <array>
 #include <ranges>
 #include "common/core_coord.hpp"
+#include "common/logger.hpp"
 #include "common/math.hpp"
 #include "device/device.hpp"
 #include "kernels/kernel_types.hpp"
@@ -31,6 +33,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "tt_metal/impl/buffers/global_semaphore.hpp"
 
 
 /*
@@ -112,10 +115,14 @@ static_assert(
 // TODO: promote to header
 
 struct ReduceScatterCircularBuffers {
-    CBHandle reader_to_writer_shortcut_cb = 0;
-    CBHandle reader_to_math_operand0_cb = 0;
-    CBHandle reader_to_math_operand1_cb = 0;
-    CBHandle math_to_writer_cb = 0;
+    uint32_t reader_to_writer_shortcut_cb = -1;
+    uint32_t reader_to_math_operand0_cb = -1;
+    uint32_t reader_to_math_operand1_cb = -1;
+    uint32_t math_to_writer_cb = -1;
+    CBHandle reader_to_writer_shortcut_cb_handle = -1;
+    CBHandle reader_to_math_operand0_cb_handle = -1;
+    CBHandle reader_to_math_operand1_cb_handle = -1;
+    CBHandle math_to_writer_cb_handle = -1;
 };
 
 struct CircularBufferSpec {
@@ -142,7 +149,7 @@ struct TensorSyncSpec {
         int dest_noc0_y_end = UNINITIALIZED_DEST_NOC;
     };
     // always equal to number of slices for now
-    std::vector<uint32_t> semaphore_ids;
+    std::vector<std::variant<uint32_t, GlobalSemaphore>> semaphore_ids;
     std::vector<size_t> completion_target_value_per_semaphore;
     std::vector<target_rect> targets;
 
@@ -156,7 +163,7 @@ struct TensorSyncSpec {
 
     size_t num_semaphores() const { return semaphore_ids.size(); }
 
-    uint32_t get_tensor_sync_semaphore(size_t slice_index) const {
+    std::variant<uint32_t, GlobalSemaphore> const& get_tensor_sync_semaphore(size_t slice_index) const {
         TT_FATAL(
             slice_index < semaphore_ids.size(),
             "Internal error. Requested semaphore id for slice index that does not exist");
@@ -170,6 +177,10 @@ struct WorkerCoreBundle {
     CoreRangeSet all_worker_cores;
     CoreRangeSet final_reducers;
     std::array<CoreRangeSet, 2> partial_reducers;
+
+    std::vector<CoreCoord> all_worker_cores_vec;
+    std::vector<CoreCoord> final_reducers_vec;
+    std::array<std::vector<CoreCoord>, 2> partial_reducers_vec;
 };
 
 struct ProgramTensorsBundle {
@@ -200,13 +211,17 @@ static ReduceScatterCircularBuffers create_worker_circular_buffers(
     tt::tt_metal::Program& program,
     CoreRangeSet const& worker_core_range,
     CircularBufferSpec const& shortcut_cb_spec,
-    CircularBufferSpec const& reader_to_math_cb_spec,
+    CircularBufferSpec const& reader_to_math0_cb_spec,
+    CircularBufferSpec const& reader_to_math1_cb_spec,
     CircularBufferSpec const& math_to_writer_cb_spec) {
     TT_FATAL(
         shortcut_cb_spec.cb_size % shortcut_cb_spec.page_size == 0,
         "Shortcut circular buffer size must be a multiple of the page size");
     TT_FATAL(
-        reader_to_math_cb_spec.cb_size % reader_to_math_cb_spec.page_size == 0,
+        reader_to_math0_cb_spec.cb_size % reader_to_math0_cb_spec.page_size == 0,
+        "Reader to math circular buffer size must be a multiple of the page size");
+    TT_FATAL(
+        reader_to_math1_cb_spec.cb_size % reader_to_math1_cb_spec.page_size == 0,
         "Reader to math circular buffer size must be a multiple of the page size");
     TT_FATAL(
         math_to_writer_cb_spec.cb_size % math_to_writer_cb_spec.page_size == 0,
@@ -221,9 +236,13 @@ static ReduceScatterCircularBuffers create_worker_circular_buffers(
     };
 
     return ReduceScatterCircularBuffers{
+        shortcut_cb_spec.cb_index,
+        reader_to_math0_cb_spec.cb_index,
+        reader_to_math1_cb_spec.cb_index,
+        math_to_writer_cb_spec.cb_index,
         generate_circular_buffer(shortcut_cb_spec),
-        generate_circular_buffer(reader_to_math_cb_spec),
-        generate_circular_buffer(reader_to_math_cb_spec),
+        generate_circular_buffer(reader_to_math0_cb_spec),
+        generate_circular_buffer(reader_to_math1_cb_spec),
         generate_circular_buffer(math_to_writer_cb_spec)};
 }
 
@@ -233,13 +252,13 @@ static ReduceScatterCircularBuffers create_worker_circular_buffers(
     size_t fabric_buffer_size_pages,
     size_t page_size) {
     size_t buffer_depth_multiplier = 3;
-    return create_worker_circular_buffers(
+    auto cb_handles = create_worker_circular_buffers(
         program,
         worker_core_range,
         CircularBufferSpec{
             buffer_depth_multiplier * fabric_buffer_size_pages * page_size,
             page_size,
-            tt::CB::c_in0,
+            tt::CB::c_in2,
             tt::DataFormat::Float32},
         CircularBufferSpec{
             buffer_depth_multiplier * fabric_buffer_size_pages * page_size,
@@ -249,8 +268,19 @@ static ReduceScatterCircularBuffers create_worker_circular_buffers(
         CircularBufferSpec{
             buffer_depth_multiplier * fabric_buffer_size_pages * page_size,
             page_size,
-            tt::CB::c_in0,
+            tt::CB::c_in1,
+            tt::DataFormat::Float32},
+        CircularBufferSpec{
+            buffer_depth_multiplier * fabric_buffer_size_pages * page_size,
+            page_size,
+            tt::CB::c_out0,
             tt::DataFormat::Float32});
+
+    TT_FATAL(cb_handles.math_to_writer_cb != -1, "Math to writer circular buffer handle is invalid");
+    TT_FATAL(cb_handles.reader_to_math_operand0_cb != -1, "Reader to math0 circular buffer handle is invalid");
+    TT_FATAL(cb_handles.reader_to_math_operand1_cb != -1, "Reader to math1 circular buffer handle is invalid");
+    TT_FATAL(cb_handles.reader_to_writer_shortcut_cb != -1, "Reader to writer shortcut circular buffer handle is invalid");
+    return cb_handles;
 }
 
 template <typename T>
@@ -360,9 +390,16 @@ WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links) {
 
     // Merge them all into the global set for convenience anywhere we want to access all worker cores easily
     for (size_t d = 0; d < num_directions_per_line; d++) {
-        worker_cores.all_worker_cores.merge(worker_cores.partial_reducers[d]);
+        worker_cores.all_worker_cores = worker_cores.all_worker_cores.merge(worker_cores.partial_reducers[d]);
     }
-    worker_cores.all_worker_cores.merge(worker_cores.final_reducers);
+    worker_cores.all_worker_cores = worker_cores.all_worker_cores.merge(worker_cores.final_reducers);
+    log_info(tt::LogOp, "Worker cores: ", worker_cores.all_worker_cores);
+
+    worker_cores.all_worker_cores_vec = corerange_to_cores(worker_cores.all_worker_cores, std::nullopt, true);
+    worker_cores.final_reducers_vec = corerange_to_cores(worker_cores.final_reducers, std::nullopt, true);
+    for (size_t d = 0; d < num_directions_per_line; d++) {
+        worker_cores.partial_reducers_vec[d] = corerange_to_cores(worker_cores.partial_reducers[d], std::nullopt, true);
+    }
 
     return worker_cores;
 }
@@ -430,7 +467,6 @@ ReduceScatterKernelHandles build_line_reduce_scatter_worker_ct(
     auto reader_kernel_id = generate_multi_command_stream_kernel_ct_args(
         program,
         // the CBs don't actuall matter for CT args - they will be removed as CT args in the near future
-        //
         {cb_handles.reader_to_writer_shortcut_cb, cb_handles.reader_to_math_operand0_cb},
         input_tensor_ptrs,
         worker_core_range,
@@ -468,7 +504,6 @@ static size_t get_page_size(const Tensor& tensor) {
     if (tensor.get_layout() == Layout::TILE) {
         auto dtype = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
         return tensor.get_tensor_spec().tile().get_tile_size(dtype);
-        // this->page_size = input_tensors.at(0).buffer()->page_size();
     } else {
         return tensor.buffer()->page_size();
     }
@@ -757,7 +792,7 @@ generate_partial_reducer_writer_worker_command_streams(
                     // experimental cases we care about
                     // NOTE: per worker semaphore
                     // CclCommandAddrSemaphoreId{remote_out_tensor_sync.get_tensor_sync_semaphore(i)},
-                    CclCommandAddrSemaphoreId{remote_out_tensor_sync.get_tensor_sync_semaphore(w)},
+                    remote_out_tensor_sync.get_tensor_sync_semaphore(w),
                     CclCommandAtomicInc{1},
                     remote_out_tensor_sync.get_target(w),
                     next_chip_fabric_unicast)
@@ -784,10 +819,9 @@ generate_partial_reducer_writer_worker_command_streams(
                     local_semaphore_wait(internal_command_stream_sync_sem_id, 1),
                     local_write_cb_to_tensor_slice(local_output_tensor_slices_per_worker[w][0], writer_cbs.math_out),
                     local_chip_semaphore_inc_mcast(
-                        CclCommandAddrSemaphoreId{
-                            // NOTE: Per worker semaphores
-                            // local_partial_output_tensor_sync_bundle.sync_spec.value().get_tensor_sync_semaphore(0)},
-                            local_partial_output_tensor_sync_bundle.sync_spec.value().get_tensor_sync_semaphore(w)},
+                        // NOTE: Per worker semaphores
+                        // local_partial_output_tensor_sync_bundle.sync_spec.value().get_tensor_sync_semaphore(0)},
+                        local_partial_output_tensor_sync_bundle.sync_spec.value().get_tensor_sync_semaphore(w),
                         CclCommandAtomicInc{1},
                         local_partial_output_tensor_sync_bundle.sync_spec.value().get_target(w))},
                 std::back_inserter(worker_command_stream1));
@@ -817,6 +851,76 @@ void set_math_runtime_args(
     tt::tt_metal::SetRuntimeArgs(program, math_kernel_id, worker_logical, rt_args);
 }
 
+void append_fabric_teardown_commands(
+    Program &program,
+    Device *device,
+    Device *forward_device,
+    ttnn::ccl::EdmLineFabricOpInterface &line_fabric,
+    LineTopology const& topology_config,
+    CoreCoord const& teardown_worker_core,
+    ttnn::ccl::cmd::CclHostLowLevelCommandSequence &cmd_stream_out
+) {
+
+    std::optional<ttnn::ccl::SyncModeSpec> sync_details;
+    sync_details = ttnn::ccl::SyncModeSpec{};
+    sync_details->core = teardown_worker_core;
+    sync_details->add_signal(tt::tt_metal::CreateSemaphore(program, teardown_worker_core, 0), 1);
+
+    // auto const edm_termination_infos = line_fabric.generate_ordered_termination_info_farthest_to_nearest();
+    auto const edm_termination_infos = line_fabric.generate_local_chip_fabric_termination_infos(device);
+
+    cmd_stream_out.push_back({ttnn::ccl::cmd::uops::local_core_semaphore_inc(sync_details->sem_ids.at(0), 1)});
+    auto teardown_commands = ttnn::ccl::worker_detail::build_ccl_cmd_proc_teardown_commands(
+        program,
+        device,
+        forward_device,
+        topology_config.line_size(),
+        topology_config.line_index(),
+        edm_termination_infos,
+        sync_details.value(),
+        line_fabric);
+    std::ranges::copy(teardown_commands, std::back_inserter(cmd_stream_out));
+}
+
+
+struct FabricTeardownInfo {
+    ttnn::ccl::cmd::CclHostLowLevelCommandSequence teardown_core_commands;
+    ttnn::ccl::cmd::uops::semaphore_id_t teardown_core_sem_id;
+    CoreCoord teardown_core_logical;
+    ttnn::ccl::cmd::CclHostLowLevelCommandSequence non_teardown_core_commands;
+};
+
+FabricTeardownInfo generate_teardown_commands(
+    Program &program,
+    Device *device,
+    Device *forward_device,
+    ccl::EdmLineFabricOpInterface& fabric_interface,
+    LineTopology const& topology_config,
+    CoreCoord const& teardown_worker_core,
+    // how many local semaphore updates the teardown core expects before proceeding
+    size_t num_completion_signaling_cores,
+    GlobalSemaphore const& teardown_sems
+) {
+    FabricTeardownInfo teardown_info;
+
+    teardown_info.teardown_core_sem_id = teardown_sems;
+    append_fabric_teardown_commands(
+        program,
+        device,
+        forward_device,
+        fabric_interface,
+        topology_config,
+        teardown_worker_core,
+        teardown_info.teardown_core_commands);
+
+    teardown_info.teardown_core_logical = teardown_worker_core;
+    auto const teardown_worker_noc0 = device->worker_core_from_logical_core(teardown_worker_core);
+    teardown_info.non_teardown_core_commands.push_back(ttnn::ccl::cmd::uops::local_chip_noc_semaphore_inc(
+        teardown_worker_noc0.x, teardown_worker_noc0.y, teardown_info.teardown_core_sem_id, 1));
+
+    return teardown_info;
+}
+
 void create_final_reducer_worker_rt_args_not_end_of_line(
     Program& program,
     Device* device,
@@ -827,7 +931,10 @@ void create_final_reducer_worker_rt_args_not_end_of_line(
     size_t const num_partial_reducer_workers_per_direction,
     CoreRangeSet const& final_reducer_worker_cores,
     size_t const pages_per_cb_packet,
-    size_t const page_size) {
+    size_t const page_size,
+    fabric_lifetime_mode fabric_mode,
+    std::optional<FabricTeardownInfo> const& fabric_teardown_cmd_info
+    ) {
     using namespace ttnn::ccl::worker_detail;
 
     std::array<TensorSyncBundle, 2> const& partial_output_tensor_sync_bundles = {
@@ -843,7 +950,7 @@ void create_final_reducer_worker_rt_args_not_end_of_line(
     auto const& partial_output_tensor_from_backward_direction =
         all_program_tensors.local_output_partial[LineDirection::BACKWARD];
 
-    auto const [final_reducer_reader_commands, per_worker_math_page_counts] =
+    auto [final_reducer_reader_commands, per_worker_math_page_counts] =
         generate_final_reducer_reader_worker_command_streams(
             all_program_tensors,
             partial_output_tensor_sync_bundles[LineDirection::FORWARD],
@@ -853,7 +960,7 @@ void create_final_reducer_worker_rt_args_not_end_of_line(
             pages_per_cb_packet,
             final_reducer_worker_cores.num_cores());
 
-    auto const final_reducer_writer_commands = generate_final_reducer_writer_worker_command_streams(
+    auto final_reducer_writer_commands = generate_final_reducer_writer_worker_command_streams(
         TensorSyncBundle{all_program_tensors.local_output_tensor, all_program_tensors.local_output_sync},
         math_out_cb,
         final_reducer_worker_cores.num_cores());
@@ -862,8 +969,20 @@ void create_final_reducer_worker_rt_args_not_end_of_line(
     TT_FATAL(
         per_worker_math_page_counts.size() == final_reducer_worker_cores.size(),
         "Internal error. Expected number of math pages to match number of workers");
+    bool teardown_fabric = fabric_mode == fabric_lifetime_mode::TRANSIENT;
+    bool did_teardown = !teardown_fabric;
     for (size_t i = 0; i < final_reducer_worker_cores.size(); i++) {
         auto const& w_logical = final_reducer_worker_cores_vec[i];
+        if (teardown_fabric) {
+
+            TT_FATAL(fabric_teardown_cmd_info.has_value(), "Internal error. Expected fabric teardown info to be populated when running in transient fabric mode");
+            if (w_logical == fabric_teardown_cmd_info->teardown_core_logical) {
+                did_teardown = true;
+                std::ranges::copy(fabric_teardown_cmd_info->teardown_core_commands, std::back_inserter(final_reducer_writer_commands.at(i)));
+            } else {
+                std::ranges::copy(fabric_teardown_cmd_info->non_teardown_core_commands, std::back_inserter(final_reducer_writer_commands.at(i)));
+            }
+        }
         generate_multi_input_command_stream_kernel_rt_args(
             program,
             kernel_ids.reader,
@@ -896,6 +1015,8 @@ void create_final_reducer_worker_rt_args_not_end_of_line(
 void populate_partial_reduce_rt_args(
     Program& program,
     Device* device,
+    Device* forward_device,
+    Device* backward_device,
     ttnn::ccl::EdmLineFabricOpInterface& fabric,
     ProgramTensorsBundle const& all_tensors,
     ReduceScatterKernelHandles const& kernel_ids,
@@ -973,10 +1094,11 @@ void populate_partial_reduce_rt_args(
                 std::nullopt,
                 std::nullopt);
             set_math_runtime_args(program, kernel_ids.math, w_logical, num_math_in_cb_pages[line_direction][i]);
+            auto output_tensor_ptrs = std::vector<Tensor const*>{all_tensors.remote_output[line_direction], all_tensors.local_output_partial[line_direction]};
             generate_multi_input_command_stream_kernel_rt_args(
                 program,
                 kernel_ids.writer,
-                std::vector<Tensor const*>{all_tensors.remote_output[line_direction], all_tensors.local_output_partial[line_direction]},
+                output_tensor_ptrs,
                 {page_size, page_size},
                 device,
                 pages_per_cb_packet,  // TODO: get from fabric
@@ -984,7 +1106,10 @@ void populate_partial_reduce_rt_args(
                 partial_reducer_writer_commands.at(i).at(0),
                 partial_reducer_writer_commands.at(i).at(1),
                 fwd_fabric_connection,
-                bwd_fabric_connection);
+                bwd_fabric_connection,
+                std::unordered_map<const Tensor*, Device*>{
+                    {output_tensor_ptrs[0],
+                     line_direction == LineDirection::FORWARD ? forward_device : backward_device}});
         }
         //////////////
     }
@@ -1001,8 +1126,8 @@ void create_worker_runtime_args_for_inactive_workers(
     generate_multi_input_command_stream_kernel_rt_args(
         program,
         kernel_ids.reader,
-        {all_tensors.input_tensor},
-        {0, 0},
+        {},
+        {},
         device,
         0,  // TODO: get from fabric
         inactive_cores,
@@ -1016,8 +1141,8 @@ void create_worker_runtime_args_for_inactive_workers(
     generate_multi_input_command_stream_kernel_rt_args(
         program,
         kernel_ids.writer,
-        {all_tensors.input_tensor},
-        {0, 0},
+        {},
+        {},
         device,
         0,  // TODO: get from fabric
         inactive_cores,
@@ -1030,23 +1155,29 @@ void create_worker_runtime_args_for_inactive_workers(
 void create_worker_runtime_args_end_of_line(
     Program& program,
     Device* device,
+
     ttnn::ccl::EdmLineFabricOpInterface& fabric,
     ProgramTensorsBundle const& all_tensors,
     ReduceScatterKernelHandles const& kernel_ids,
     LineTopology line_topology,
-    CoreRangeSet const& line_start_worker_cores,
-    CoreRangeSet const& line_end_worker_cores,
+    WorkerCoreBundle const& worker_cores,
+    // CoreRangeSet const& line_start_worker_cores,
+    // CoreRangeSet const& line_end_worker_cores,
     LineStartReaderCircularBufferIds const& line_start_reader_cbs,
     LineStartWriterCircularBufferIds const& line_start_writer_cbs,
     LineEndReaderCircularBufferIds const& line_end_reader_cbs,
     LineEndWriterCircularBufferIds const& line_end_writer_cbs,
     size_t pages_per_cb_packet,
     size_t page_size,
-    size_t dim) {
+    size_t dim,
+    fabric_lifetime_mode fabric_mode,
+    std::optional<FabricTeardownInfo> const& fabric_teardown_cmd_info) {
     using namespace ttnn::ccl::worker_detail;
     using namespace ttnn::ccl::cmd;
     using namespace ttnn::ccl::cmd::uops;
     using namespace ttnn::ccl::cmd::builder;
+
+    bool teardown_fabric = fabric_mode == fabric_lifetime_mode::TRANSIENT;
 
     TT_FATAL(all_tensors.input_tensor != nullptr, "Input tensor must be populated");
     TT_FATAL(all_tensors.local_output_tensor != nullptr, "Output tensor must be populated");
@@ -1076,9 +1207,9 @@ void create_worker_runtime_args_end_of_line(
     size_t nchips = line_topology.line_size();
     size_t curr_chip = line_topology.line_index();
 
-    auto num_workers = line_start_worker_cores.num_cores();
+    auto num_workers = worker_cores.partial_reducers_vec[LineDirection::FORWARD].size();
     TT_FATAL(
-        line_start_worker_cores.num_cores() == line_end_worker_cores.num_cores(),
+        worker_cores.partial_reducers_vec[LineDirection::BACKWARD].size() == num_workers,
         "Internal error. Expected number of workers to match");
     // out_slices = partial_out_tensor.chunk(n=line_size,dim=dim)
     // out_slices_fwd = reverse(out_slices[line_topology.line_index() + 1:])
@@ -1087,13 +1218,13 @@ void create_worker_runtime_args_end_of_line(
     // worker_out_slices_bwd = distribute_across_workers(out_slices_bwd, n_workers)
     auto const reader_in_slices = generate_tensor_slices(nchips, *all_tensors.input_tensor, dim);
 
-    auto reader_slices_fwd = vslice(reader_in_slices, reader_in_slices.size() - 1, curr_chip + 1);
-    auto reader_slices_bwd = vslice(reader_in_slices, 0, curr_chip + 1);
-    auto remote_writer_slices_fwd = vslice(reader_in_slices, reader_in_slices.size() - 1, curr_chip + 1);
-    auto remote_writer_slices_bwd = vslice(reader_in_slices, 0, curr_chip + 1);
-    TT_FATAL(
-        reader_slices_fwd.size() + reader_slices_bwd.size() == nchips + 1,
-        "Internal calculation error. Expected number of slices to match line size + 1");
+    auto reader_slices_fwd = vslice(reader_in_slices, reader_in_slices.size() - 1, std::min(curr_chip + 1, reader_in_slices.size() - 1));
+    auto reader_slices_bwd = vslice(reader_in_slices, 0, curr_chip);
+    auto remote_writer_slices_fwd = vslice(reader_in_slices, reader_in_slices.size() - 1, std::min(curr_chip + 1, reader_in_slices.size() - 1));
+    auto remote_writer_slices_bwd = vslice(reader_in_slices, 0, curr_chip);
+    // TT_FATAL(
+    //     reader_slices_fwd.size() + reader_slices_bwd.size() == nchips + 1,
+    //     "Internal calculation error. Expected number of slices to match line size + 1");
 
     auto reader_worker_sliced_fwd = split_tensor_slices_across_workers_page_aligned(num_workers, reader_slices_fwd);
     auto reader_worker_sliced_bwd = split_tensor_slices_across_workers_page_aligned(num_workers, reader_slices_bwd);
@@ -1107,9 +1238,10 @@ void create_worker_runtime_args_end_of_line(
     std::array<decltype(remote_writer_worker_sliced_fwd), 2> remote_writer_worker_slices = {
         remote_writer_worker_sliced_fwd, remote_writer_worker_sliced_bwd};
 
-    std::array<std::vector<CoreCoord>, 2> const reader_worker_cores_per_direction = {
-        corerange_to_cores(line_start_worker_cores, std::nullopt, true),
-        corerange_to_cores(line_end_worker_cores, std::nullopt, true)};
+    std::array<std::vector<CoreCoord>, 2> const reader_worker_cores_per_direction = worker_cores.partial_reducers_vec;
+    // {
+    //     corerange_to_cores(line_start_worker_cores, std::nullopt, true),
+    //     corerange_to_cores(line_end_worker_cores, std::nullopt, true)};
     std::array<std::vector<CoreCoord>, 2> const& writer_worker_cores_per_direction = reader_worker_cores_per_direction;
 
     auto const local_partial_output_tensor_slice = convert_to_whole_tensor_slice(*all_tensors.local_output_tensor);
@@ -1117,30 +1249,31 @@ void create_worker_runtime_args_end_of_line(
         split_tensor_slices_across_workers_page_aligned(num_workers, {local_partial_output_tensor_slice});
     TT_FATAL(
         writer_end_of_line_output_worker_slices.size() == num_workers,
-        "Internal error. Expected number of worker slices to match number of workers");
+        "Internal error. Expected number of end of line worker slices to match number of workers. Got {} but expected {}", writer_end_of_line_output_worker_slices.size(), num_workers);
 
+    bool did_teardown = !teardown_fabric;
     for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
         bool is_forward_direction = direction == LineDirection::FORWARD;
+        bool is_start_of_line = line_topology.is_first_device_in_line(direction);
         auto fwd_fabric_connection =
-            is_forward_direction
+            is_forward_direction && is_start_of_line
                 ? std::make_optional<ttnn::ccl::SenderWorkerAdapterSpec>(
                       fabric.uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD))
                 : std::nullopt;
         auto bwd_fabric_connection =
-            is_forward_direction
-                ? std::nullopt
-                : std::make_optional<ttnn::ccl::SenderWorkerAdapterSpec>(
-                      fabric.uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
+            !is_forward_direction && is_start_of_line
+                ? std::make_optional<ttnn::ccl::SenderWorkerAdapterSpec>(
+                      fabric.uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD))
+                : std::nullopt;
 
-        bool is_start_of_line = line_topology.is_first_device_in_line(direction);
         auto const& reader_worker_cores = reader_worker_cores_per_direction[direction];
         auto const& writer_worker_cores = writer_worker_cores_per_direction[direction];
         TT_FATAL(
             reader_worker_cores.size() == num_workers,
-            "Internal error. Expected number of worker slices to match number of workers");
+            "Internal error. Expected number of reader worker cores to match number of workers. Got {} but expected {}", reader_worker_cores.size(), num_workers);
         TT_FATAL(
             writer_worker_cores.size() == num_workers,
-            "Internal error. Expected number of worker slices to match number of workers");
+            "Internal error. Expected number of writer worker cores to match number of workers. Got {} but expected {}", writer_worker_cores.size(), num_workers);
 
         std::vector<std::vector<CclHostLowLevelWorkerCommand>> worker_in0_cmd_stream(num_workers);
         std::optional<std::vector<std::vector<CclHostLowLevelWorkerCommand>>> worker_in1_cmd_stream;
@@ -1149,10 +1282,10 @@ void create_worker_runtime_args_end_of_line(
         // of worker slices to match number of workers");
         TT_FATAL(
             reader_worker_slices[direction].size() == num_workers,
-            "Internal error. Expected number of worker slices to match number of workers");
+            "Internal error. Expected number of reader worker slices to match number of workers. Got {} but expected {}", reader_worker_slices[direction].size(), num_workers);
         TT_FATAL(
             reader_worker_slices[direction].size() == num_workers,
-            "Internal error. Expected number of worker slices to match number of workers");
+            "Internal error. Expected number of writer worker slices to match number of workers. Got {} but expected {}", reader_worker_slices[direction].size(), num_workers);
         if (!is_start_of_line) {
             worker_in1_cmd_stream = std::vector<std::vector<CclHostLowLevelWorkerCommand>>(num_workers);
         }
@@ -1161,17 +1294,12 @@ void create_worker_runtime_args_end_of_line(
             auto& out0_cmd_stream = worker_out0_cmd_stream[i];
 
             Tensor *output_tensor_ptr = nullptr;
-            auto input_tensor_ptrs = std::vector<Tensor const*>{nullptr, nullptr};
+            auto input_tensor_ptrs = std::vector<Tensor const*>{nullptr};
             auto const& w_logical = reader_worker_cores[i];
             size_t num_math_pages = 0;
             if (is_start_of_line) {
                 output_tensor_ptr = all_tensors.remote_output[direction];
                 input_tensor_ptrs[0] = all_tensors.input_tensor;
-                input_tensor_ptrs[1] = all_tensors.input_tensor_from_remote[direction];
-                TT_FATAL(input_tensor_ptrs[1] != nullptr, "Internal error. Expected input tensor to be populated");
-                TT_FATAL(
-                    reader_worker_slices[direction][i].size() == 1,
-                    "Internal error. Expected number of worker slices to match number of workers");
                 for (auto const& slice : reader_worker_slices[direction][i]) {
                     in0_cmd_stream.push_back(
                         read_tensor_slice_to_cb_for_eventual_fabric_write(slice, line_start_reader_cbs.pass_through));
@@ -1184,36 +1312,37 @@ void create_worker_runtime_args_end_of_line(
                         line_start_writer_cbs.pass_through,
                         UnicastCommandDestArgs{1, direction == LineDirection::FORWARD}));
                     out0_cmd_stream.push_back(fabric_unicast_semaphore_inc_mcast(
-                        CclCommandAddrSemaphoreId{
                             // NOTE: per worker semaphores
                             // all_tensors.remote_output_sync[direction].get_tensor_sync_semaphore(s)},
-                            all_tensors.remote_output_sync[direction].get_tensor_sync_semaphore(i)},
+                            all_tensors.remote_output_sync.at(direction).get_tensor_sync_semaphore(i),
                         CclCommandAtomicInc{1},
-                        all_tensors.remote_output_sync[direction].get_target(i),
+                        all_tensors.remote_output_sync.at(direction).get_target(i),
                         UnicastCommandDestArgs{1, direction == LineDirection::FORWARD}));
                 }
             } else {
                 output_tensor_ptr = all_tensors.local_output_tensor;
-                input_tensor_ptrs[0] = all_tensors.input_tensor_from_remote[direction];
+                input_tensor_ptrs[0] = all_tensors.input_tensor_from_remote.at(direction);
                 TT_FATAL(input_tensor_ptrs[0] != nullptr, "Internal error. Expected input tensor to be populated");
-                auto& in1_cmd_stream = worker_in1_cmd_stream.value()[i];
                 TT_FATAL(
                     worker_in1_cmd_stream.has_value(), "Internal error. Expected in1 command stream to be populated");
-                worker_in1_cmd_stream.value().push_back({});
+                TT_FATAL(
+                    i < worker_in1_cmd_stream.value().size(), "Internal error. Expected in1 command stream to be populated");
+                auto& in1_cmd_stream = worker_in1_cmd_stream.value().at(i);
+
                 TT_FATAL(
                     writer_end_of_line_output_worker_slices[i].size() == 1,
                     "Internal error. Expected only one slice per worker");
                 auto const& from_remote_sync = direction == LineDirection::FORWARD
                                                    ? all_tensors.input_tensor_from_remote_sync[LineDirection::FORWARD]
                                                    : all_tensors.input_tensor_from_remote_sync[LineDirection::BACKWARD];
-                auto const& worker_in_slices = reader_worker_slices[direction][i];
+                auto const& worker_in_slices = reader_worker_slices.at(direction).at(i);
                 TT_FATAL(worker_in_slices.size() == 1, "Internal error. Expected only one slice per worker");
                 in0_cmd_stream.push_back(read_tensor_slice_to_cb(worker_in_slices[0], line_end_reader_cbs.math_in0));
 
                 // NOTE: per worker semaphore
                 // in1_cmd_stream.push_back(local_semaphore_wait(from_remote_sync.get_tensor_sync_semaphore(0), num_workers));
                 in1_cmd_stream.push_back(local_semaphore_wait(from_remote_sync.get_tensor_sync_semaphore(0), 1));
-                in1_cmd_stream.push_back(read_tensor_slice_to_cb(worker_in_slices[0], line_end_reader_cbs.math_in1));
+                in1_cmd_stream.push_back(read_tensor_slice_to_cb(worker_in_slices.at(0), line_end_reader_cbs.math_in1));
 
                 num_math_pages = compute_math_pages_from_tensor_slices(worker_in_slices, pages_per_cb_packet);
 
@@ -1223,11 +1352,21 @@ void create_worker_runtime_args_end_of_line(
             TT_FATAL(output_tensor_ptr != nullptr, "Internal error. Expected output tensor to be populated");
             TT_FATAL(input_tensor_ptrs[0] != nullptr, "Internal error. Expected input tensor to be populated");
 
+            if (teardown_fabric) {
+                TT_FATAL(fabric_teardown_cmd_info.has_value(), "Internal error. Expected fabric teardown info to be populated when running in transient fabric mode");
+                if (w_logical == fabric_teardown_cmd_info->teardown_core_logical) {
+                    did_teardown = true;
+                    std::ranges::copy(fabric_teardown_cmd_info->teardown_core_commands, std::back_inserter(out0_cmd_stream));
+                } else {
+                    std::ranges::copy(fabric_teardown_cmd_info->non_teardown_core_commands, std::back_inserter(out0_cmd_stream));
+                }
+            }
+
             generate_multi_input_command_stream_kernel_rt_args(
                 program,
                 kernel_ids.reader,
                 input_tensor_ptrs,
-                {page_size, page_size},
+                {page_size},
                 device,
                 pages_per_cb_packet,  // TODO: get from fabric
                 {w_logical},
@@ -1240,7 +1379,7 @@ void create_worker_runtime_args_end_of_line(
                 program,
                 kernel_ids.writer,
                 {output_tensor_ptr},
-                {page_size, page_size},
+                {page_size},
                 device,
                 pages_per_cb_packet,  // TODO: get from fabric
                 {w_logical},
@@ -1250,12 +1389,16 @@ void create_worker_runtime_args_end_of_line(
                 bwd_fabric_connection);
         }
     }
+
+    TT_FATAL(did_teardown, "Internal error. Expected to have performed fabric teardown");
 }
 
 void create_worker_runtime_args_not_end_of_line(
     Program &program,
     ProgramTensorsBundle const& all_program_tensors,
     Device* device,
+    Device* forward_device,
+    Device* backward_device,
     size_t dim,
     ttnn::ccl::EdmLineFabricOpInterface& fabric,
     std::array<CoreRangeSet, 2> const& partial_reducer_worker_cores_per_direction,
@@ -1268,7 +1411,9 @@ void create_worker_runtime_args_not_end_of_line(
     size_t pages_per_cb_packet,
     uint32_t math_out_cb,
     LineTopology topology_config,
-    size_t page_size) {
+    size_t page_size,
+    fabric_lifetime_mode fabric_mode,
+    std::optional<FabricTeardownInfo> const& fabric_teardown_cmd_info) {
 
     using namespace ttnn::ccl::worker_detail;
     using namespace ttnn::ccl::cmd;
@@ -1314,10 +1459,11 @@ void create_worker_runtime_args_not_end_of_line(
         split_tensor_slices_across_workers_page_aligned(num_workers, out_remote_slices_bwd)
     };
 
-
     populate_partial_reduce_rt_args(
         program,
         device,
+        forward_device,
+        backward_device,
         fabric,
         all_program_tensors,
         kernel_ids,
@@ -1341,7 +1487,9 @@ void create_worker_runtime_args_not_end_of_line(
         num_workers,
         final_reducer_worker_cores,
         pages_per_cb_packet,
-        page_size);
+        page_size,
+        fabric_mode,
+        fabric_teardown_cmd_info);
 }
 
 void add_final_output_sync_for_safe_fabric_teardown(
@@ -1413,7 +1561,9 @@ void initialize_op_internal_tensor_syncs(
     Device *device,
     std::array<Device*, 2> const& neighbour_devices,
     ProgramTensorsBundle &all_tensors,
-    WorkerCoreBundle const& worker_cores) {
+    WorkerCoreBundle const& worker_cores,
+    GlobalSemaphore const& from_remote_sem,
+    GlobalSemaphore const& teardown_sem) {
     auto core_coord_lt = [](CoreCoord const& a, CoreCoord const& b) {
         return a.y < b.y || (a.y == b.y && a.x < b.x);
     };
@@ -1423,7 +1573,7 @@ void initialize_op_internal_tensor_syncs(
         corerange_to_cores(worker_cores.partial_reducers[LineDirection::BACKWARD], std::nullopt, true)
     };
     auto all_partial_reducer_cores = worker_cores.partial_reducers[LineDirection::FORWARD];
-    all_partial_reducer_cores.merge(worker_cores.partial_reducers[LineDirection::BACKWARD]);
+    all_partial_reducer_cores = all_partial_reducer_cores.merge(worker_cores.partial_reducers[LineDirection::BACKWARD]);
 
     auto partial_reducers_in1_sem_id = CreateSemaphore(program, all_partial_reducer_cores, 0, CoreType::WORKER);
     for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
@@ -1437,7 +1587,7 @@ void initialize_op_internal_tensor_syncs(
                     device->worker_core_from_logical_core(worker_core).y,
                 }
             );
-            all_tensors.input_tensor_from_remote_sync[direction].semaphore_ids.push_back(partial_reducers_in1_sem_id);
+            all_tensors.input_tensor_from_remote_sync[direction].semaphore_ids.push_back(from_remote_sem);
             all_tensors.input_tensor_from_remote_sync[direction].completion_target_value_per_semaphore.push_back(1);
 
             // remote output sync
@@ -1517,7 +1667,10 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     const size_t num_links,
     ttnn::ccl::Topology topology,
 
-    fabric_lifetime_mode fabric_mode) {
+    fabric_lifetime_mode fabric_mode,
+    GlobalSemaphore const& from_remote_sems,
+    GlobalSemaphore const& teardown_sems
+    ) {
     using namespace ttnn::ccl::worker_detail;
     bool do_dynamic_fabric_bringup_and_teardown = fabric_mode == fabric_lifetime_mode::TRANSIENT;
 
@@ -1537,9 +1690,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
 
     const size_t page_size = get_page_size(input_tensor);
     Device* device = input_tensor.device();
-    std::array<Device*, 2> neighbour_devices = {
-        forward_device.has_value() ? forward_device.value() : nullptr,
-        backward_device.has_value() ? backward_device.value() : nullptr};
+    std::array<Device*, 2> neighbour_devices = {forward_device.value_or(nullptr), backward_device.value_or(nullptr)};
     size_t fabric_buffer_size_pages = fabric.get_edm_buffer_size_bytes() / get_page_size(input_tensor);
     auto const& topology_config = LineTopology(line_size, line_index);
 
@@ -1574,19 +1725,33 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
         {ProgramTensorsBundle::build_handle(partial_output_tensor_to_forward_direction), ProgramTensorsBundle::build_handle(partial_output_tensor_to_backward_direction)},
         {}
     };
-    initialize_op_internal_tensor_syncs(program, device, neighbour_devices, all_tensors, worker_cores);
+    initialize_op_internal_tensor_syncs(program, device, neighbour_devices, all_tensors, worker_cores, from_remote_sems, teardown_sems);
 
     validate_tensors(all_tensors, topology_config);
 
-    auto drain_sync_core = CoreCoord(7, 7);
+    std::optional<FabricTeardownInfo> fabric_teardown_cmd_info;
     if (do_dynamic_fabric_bringup_and_teardown) {
-        add_final_output_sync_for_safe_fabric_teardown(
-            all_tensors, device, program, drain_sync_core, worker_cores.final_reducers.num_cores());
+        size_t num_final_output_writer_cores = worker_cores.final_reducers.num_cores();
+        size_t num_completion_signals_before_teardown = num_final_output_writer_cores - 1;
+        auto const& teardown_core = topology_config.is_last_device_in_line(LineDirection::FORWARD)
+                                        ? worker_cores.partial_reducers_vec[LineDirection::FORWARD][0]
+                                    : topology_config.is_last_device_in_line(LineDirection::BACKWARD)
+                                        ? worker_cores.partial_reducers_vec[LineDirection::BACKWARD][0]
+                                        : worker_cores.final_reducers_vec[0];
+        fabric_teardown_cmd_info = generate_teardown_commands(
+            program,
+            device,
+            forward_device.value_or(nullptr),
+            fabric,
+            topology_config,
+            teardown_core,
+            num_completion_signals_before_teardown,
+            teardown_sems);
     }
 
     // Circular Buffer Creation
     size_t const cb_page_size = page_size + sizeof(tt::fabric::PacketHeader);
-    auto cb_handles = create_worker_circular_buffers(
+    auto const cb_handles = create_worker_circular_buffers(
         program,
         worker_cores.all_worker_cores,
         fabric_buffer_size_pages,
@@ -1607,21 +1772,26 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
             all_tensors,
             kernel_ids,
             topology_config,
-            worker_cores.partial_reducers[LineDirection::FORWARD],
-            worker_cores.partial_reducers[LineDirection::BACKWARD],
+            worker_cores,
+            // worker_cores.partial_reducers[LineDirection::FORWARD],
+            // worker_cores.partial_reducers[LineDirection::BACKWARD],
             line_start_reader_cbs,
             line_start_writer_cbs,
             line_end_reader_cbs,
             line_end_writer_cbs,
             pages_per_cb_packet,
             page_size,
-            dim);
+            dim,
+            fabric_mode,
+            fabric_teardown_cmd_info);
         create_worker_runtime_args_for_inactive_workers(program, device, all_tensors, kernel_ids, worker_cores.final_reducers);
     } else {
         create_worker_runtime_args_not_end_of_line(
             program,
             all_tensors,
             device,
+            forward_device.value_or(nullptr),
+            backward_device.value_or(nullptr),
             dim,
             fabric,
             worker_cores.partial_reducers,
@@ -1634,25 +1804,17 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
             pages_per_cb_packet,
             math_out_cb,
             topology_config,
-            cb_page_size);
+            cb_page_size,
+            fabric_mode,
+            fabric_teardown_cmd_info);
     }
 
     // Synchronous mode kernel invocation
-    std::optional<ttnn::ccl::SyncModeSpec> sync_details;
-    if (do_dynamic_fabric_bringup_and_teardown) {
-        sync_details = ttnn::ccl::SyncModeSpec{
-            1,  // num_devices
-            drain_sync_core,
-            {CreateSemaphore(program, {drain_sync_core}, 0)},
-            // {CreateGlobalSemaphore(input_tensor.device(), {drain_sync_core}, 0)},
-            {topology_config.line_size() * num_links}};
-
-        build_sync_kernels(device, program, sync_details.value(), true, fabric);
-        fabric.build_kernels();
-    }
-
     auto override_runtime_arguments_callback =
-        [topology_config, kernel_ids, worker_cores](
+        [topology_config,
+        from_remote_sems,
+        teardown_sems,
+        kernel_ids, worker_cores](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -1676,6 +1838,8 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
             // }
         };
 
+    log_info(tt::LogOp, "Done program factory");
+
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
@@ -1695,8 +1859,14 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     const uint32_t line_size,
     const uint32_t line_index,
     ttnn::ccl::Topology topology,
-    std::optional<size_t> num_links_preferred) {
+    std::optional<size_t> num_links_preferred,
+    tt::tt_metal::GlobalSemaphore const& from_remote_sem,
+    tt::tt_metal::GlobalSemaphore const& teardown_sem
+    ) {
     auto program = tt::tt_metal::Program();
+
+    // Sleep for 5s * line_index
+    std::this_thread::sleep_for(std::chrono::seconds(2 * line_index));
 
     Device* device = input_tensor.device();
 
@@ -1725,7 +1895,9 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
         dim,
         line_fabric.get_num_links(),
         ttnn::ccl::Topology::Linear,
-        fabric_lifetime_mode::TRANSIENT);
+        fabric_lifetime_mode::TRANSIENT,
+        from_remote_sem,
+        teardown_sem);
 }
 
 }  // namespace ttnn::ccl::reduce_scatter_detail
