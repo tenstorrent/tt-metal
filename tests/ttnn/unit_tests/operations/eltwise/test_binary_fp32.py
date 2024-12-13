@@ -119,7 +119,6 @@ def test_mul_fp32(device, ttnn_function):
     assert status
 
 
-@pytest.mark.skip(reason="This test will be enabled after #15780 is resolved")
 @skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -130,8 +129,12 @@ def test_mul_fp32(device, ttnn_function):
 # Torch num/ 0 = inf and 0/0  nan; TT num/ 0 = inf and 0/0=nan; in fp32  tile
 # Torch num/ 0 = inf and 0/0  nan; TT num/ 0 = inf and 0/0=0; in chained (mul * recip) div op
 def test_div_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[1.00030171126, -3, 16, -5, 14, -12, 0, 0, 1]], dtype=torch.float32)
-    y_torch = torch.tensor([[2, 3, -4, -5, 0, 0, 0, 1, 0]], dtype=torch.float32)
+    x_torch = torch.tensor([[1.00030171126, -3, 16, -5, 14, -12, 0, 0, 1, 15]], dtype=torch.float32)
+    y_torch = torch.tensor([[2, 3, -4, -5, 0, 0, 0, 1, 0, 10]], dtype=torch.float32)
+    # torch out in ttnn TorchTensor([[ 0.500150859355927, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,                inf,
+    #            1.500000000000000]])
+    # tt out in torch TorchTensor([[ 0.500150859355927, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,                inf,
+    #            1.499999880790710]])
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -152,7 +155,8 @@ def test_div_fp32(device, ttnn_function):
     ],
 )
 # Torch: num/ 0 = inf and 0/0  nan;
-# TT: num/ 0 = inf but 0/0= 0 not nan and 1/0 is not inf; input_b must be non-zero
+# TT: num/ 0 = inf but 0/0= 0 not nan and 1/0 is 170141183460469231731687303715884105728.000000000000000 not inf;
+# input_b must be non-zero
 def test_div_bf16(device, ttnn_function):
     x_torch = torch.tensor(
         [
@@ -165,6 +169,7 @@ def test_div_bf16(device, ttnn_function):
                 -12,
                 0,
                 0,
+                15,
             ]
         ],
         dtype=torch.bfloat16,
@@ -180,10 +185,15 @@ def test_div_bf16(device, ttnn_function):
                 0,
                 0,
                 1,
+                10,
             ]
         ],
         dtype=torch.bfloat16,
     )
+    # torch out in ttnn TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,  1.500000000000000]],
+    #         dtype=torch.bfloat16)
+    # tt out in torch TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,  0.000000000000000,  0.000000000000000,  1.500000000000000]],
+    #         dtype=torch.bfloat16)
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
