@@ -61,7 +61,9 @@ int main(int argc, char *argv[]) {
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
-        while (*slave_idle_erisc_run != RUN_SYNC_MSG_GO);
+        while (*slave_idle_erisc_run != RUN_SYNC_MSG_GO) {
+            invalidate_l1_cache();
+        }
         DeviceZoneScopedMainN("SLAVE-IDLE-ERISC-FW");
 
         flush_erisc_icache();

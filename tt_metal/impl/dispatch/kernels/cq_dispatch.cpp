@@ -915,7 +915,9 @@ void process_go_signal_mcast_cmd() {
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
     *aligned_go_signal_storage = cmd->mcast.go_signal;
 
-    while (*worker_sem_addr < cmd->mcast.wait_count);
+    while (*worker_sem_addr < cmd->mcast.wait_count) {
+        invalidate_l1_cache();
+    }
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     // send go signal update here
     for (uint32_t i = 0, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
