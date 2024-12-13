@@ -59,6 +59,14 @@ Shape SlidingWindowConfig::get_output_shape() const {
         output_w = std::floor(eff_size_w / stride_hw.second) + 1;
     }
 
+    printf(
+        "Ceil mode: %d, eff_size_h: %f, eff_size_w: %f, output_h: %d, output_w: %d\n",
+        ceil_mode,
+        eff_size_h,
+        eff_size_w,
+        output_h,
+        output_w);
+
     if (is_bilinear) {
         TT_FATAL(!ceil_mode, "ceil_mode is not supported for bilinear operation");
 

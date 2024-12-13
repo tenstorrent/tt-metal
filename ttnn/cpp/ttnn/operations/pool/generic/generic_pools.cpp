@@ -125,7 +125,8 @@ Tensor Pool2DOp<pool_type>::invoke(
             .num_cores_nhw = num_cores_nhw,
             .num_cores_c = num_cores_c,
             .core_range_set = parallel_config.grid,
-            .snap_to_tile = false
+            .snap_to_tile = false,
+            .ceil_mode = ceil_mode,
     };
 
     // Call the halo uop

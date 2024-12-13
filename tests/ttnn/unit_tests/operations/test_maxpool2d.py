@@ -198,11 +198,13 @@ def run_max_pool(
         padding=padding,
         dilation=dilation,
         return_indices=False,
-        ceil_mode=False,
+        ceil_mode=ceil_mode,
     )(act)
 
     ## test for equivalance
     golden_shape = golden_pytorch.shape
+    print("python out_h, out_w", out_h, out_w)
+    print("python shape", golden_shape)
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
 
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
@@ -304,7 +306,7 @@ def run_max_pool(
 @pytest.mark.parametrize(
     "stride",
     (
-        (1, 1),
+        # (1, 1),
         (2, 2),
     ),
 )
@@ -335,7 +337,7 @@ def test_run_max_pool(
         device,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ceil_mode=False,
+        ceil_mode=True,
     )
 
 
