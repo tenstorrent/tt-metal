@@ -295,7 +295,14 @@ ttnn::Tensor prepare_conv_weights(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
     TT_FATAL(!ttnn::is_tensor_on_device_or_multidevice(weight_tensor), "Error: weight tensor must be on host for preparation.");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(DeviceComputeKernelConfig());
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(init_device_compute_kernel_config(
+        device->arch(),
+        std::nullopt,
+        MathFidelity::HiFi4,
+        true,
+        false,
+        false
+    ));
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
     const uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     const uint32_t output_width =
@@ -382,7 +389,14 @@ ttnn::Tensor prepare_conv_bias(
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(DeviceComputeKernelConfig());
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(init_device_compute_kernel_config(
+        device->arch(),
+        std::nullopt,
+        MathFidelity::HiFi4,
+        true,
+        false,
+        false
+    ));
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,
         in_channels,
