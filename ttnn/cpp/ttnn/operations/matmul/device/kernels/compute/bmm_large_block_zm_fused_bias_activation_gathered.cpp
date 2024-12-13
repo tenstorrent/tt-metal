@@ -261,10 +261,13 @@ void MAIN {
         // UNPACK (( DPRINT  << in1_block_num_tiles <<ENDL()));
         // UNPACK (( DPRINT  << num_blocks <<ENDL()));
         // for (uint i=0; i<(uint)(in1_block_num_tiles * num_blocks);i++){
-        //     for (uint8_t j=0; j<32;j++) {
-        //         UNPACK (( DPRINT  << TSLICE(in1_cb_id, i, SliceRange{.h0 = j, .h1 = uint8_t(j+1), .hs = 1, .w0 = 0,
+        //     // for (uint8_t j=0; j<32;j++) {
+        //     //     UNPACK (( DPRINT  << TSLICE(in1_cb_id, i, SliceRange{.h0 = j, .h1 = uint8_t(j+1), .hs = 1, .w0 =
+        //     0,
+        //     //     .w1 = 32, .ws = 1}) << ENDL() ));
+        //     // }
+        //     UNPACK (( DPRINT  << TSLICE(in1_cb_id, i, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0,
         //         .w1 = 32, .ws = 1}) << ENDL() ));
-        //     }
         // }
 
         // UNPACK (( DPRINT  << TSLICE(in1_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));

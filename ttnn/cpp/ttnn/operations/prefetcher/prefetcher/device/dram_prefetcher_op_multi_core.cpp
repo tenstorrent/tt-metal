@@ -56,7 +56,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     }
 
     /* Dataforamts */
-    tt::DataFormat reader_cb_data_format = tt::DataFormat::Float16_b;  // TODO: update?
+
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.get_dtype());
     std::vector<tt::DataFormat> tensor_data_formats;
     for (const auto& tensor : tensors) {
@@ -79,18 +79,52 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
         uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
 
+        std::cout << "height_in_tiles " << height_in_tiles << std::endl;
+        std::cout << "width_in_tiles " << width_in_tiles << std::endl;
+
         tensor_shapes.push_back({height_in_tiles, width_in_tiles});
         tensor_block_num_tiles.push_back(height_in_tiles * width_in_tiles / num_blocks);
         tensor_tile_sizes.push_back(tensor_tiles[t].get_tile_size(tensor_data_formats[t]));
     }
+    uint32_t max_block_tiles = *std::max_element(tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
+    std::cout << "max_block_tiles " << max_block_tiles << std::endl;
+
+    uint32_t max_tile_size = *std::max_element(tensor_tile_sizes.begin(), tensor_tile_sizes.end());
+    std::cout << "max_tile_size " << max_tile_size << std::endl;
+
+    uint32_t max_block_size = max_tile_size * max_block_tiles;
+
+    std::vector<uint32_t> block_sizes;
+    for (uint32_t i = 0; i < num_tensors; i++) {
+        block_sizes.push_back(tensor_block_num_tiles[i] * tensor_tile_sizes[i]);
+    }
+    uint32_t max_tensor_size = *std::max_element(block_sizes.begin(), block_sizes.end()) * num_blocks;
+    TT_FATAL(
+        max_tensor_size <= global_cb->size(),
+        "largest tensor must fit in global cb {} {}",
+        max_tensor_size,
+        global_cb->size());
 
     /* Cores setup */
     auto reader_core_range = global_cb->sender_cores();  // CoreRangeSet({CoreRange(CoreCoord(0, 0))});
     auto receiver_core_range = global_cb->receiver_cores();
 
     /* read cb setup */
-    uint32_t reader_cb_single_tile_size = 2048;  // bfloat16 tile size
-    uint32_t reader_cb_size = (global_cb->size() / reader_cb_single_tile_size) * reader_cb_single_tile_size;
+    uint32_t reader_cb_single_tile_size = max_tile_size;  // bfloat16 tile size
+    uint32_t reader_cb_size = max_block_size * 2;
+    std::cout << "reader_cb_size " << reader_cb_size << std::endl;
+
+    TT_FATAL(reader_cb_size <= global_cb->size(), "reader_cb_size must not larger than global cb");
+
+    tt::DataFormat reader_cb_data_format = tt::DataFormat::Float16_b;  // TODO: update?
+    if (max_tile_size == 2048) {
+        reader_cb_data_format = tt::DataFormat::Float16_b;
+    } else if (max_tile_size == 1088) {
+        reader_cb_data_format = tt::DataFormat::Bfp8_b;
+    } else {
+        reader_cb_data_format = tt::DataFormat::Bfp4_b;
+    }
+
     // uint32_t reader_cb_size = 2048*2;
 
     // uint32_t reader_cb_single_tile_size = 1088;  // bfp8_b tile size
@@ -121,13 +155,13 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* remote cb setup */
     uint32_t remote_cb_size = global_cb->size();
-    uint32_t remote_cb_single_tile_size = reader_cb_single_tile_size;  // 16B aligned
+    uint32_t remote_cb_single_tile_size = 2048;  // 16B aligned
 
     uint32_t remote_cb_index = tt::CBIndex::c_31;
     CircularBufferConfig remote_cb_config = CircularBufferConfig(remote_cb_size);
     remote_cb_config.remote_index(remote_cb_index)
         .set_page_size(remote_cb_single_tile_size)
-        .set_data_format(reader_cb_data_format);
+        .set_data_format(tt::DataFormat::Float16_b);
     auto remote_cb =
         tt::tt_metal::v1::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, *global_cb);
 
@@ -157,7 +191,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     /* Compile time args */
 
     // Reader kernel
-    std::vector<uint32_t> reader_ct_args = {num_layers, num_tensors, num_blocks, reader_cb_size};
+    std::vector<uint32_t> reader_ct_args = {num_layers, num_tensors, num_blocks, reader_cb_size, max_block_tiles};
 
     auto reader_kernel_id = CreateKernel(
         program,
@@ -170,7 +204,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             .compile_args = reader_ct_args});
 
     // Writer kernel
-    std::vector<uint32_t> writer_ct_args = {num_layers, num_tensors, num_blocks, num_receivers_per_reader};
+    std::vector<uint32_t> writer_ct_args = {
+        num_layers, num_tensors, num_blocks, num_receivers_per_reader, max_block_tiles};
 
     auto writer_kernel_id = CreateKernel(
         program,
