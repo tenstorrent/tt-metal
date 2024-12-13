@@ -4,14 +4,18 @@
 
 #include <vector>
 
-#include "buffers/buffer.hpp"
-#include "buffers/buffer_constants.hpp"
-#include "common/assert.hpp"
-#include "common/core_coord.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
+#include <math.h>
+
+#include "upsample_op.hpp"
+#include "ttnn/operations/math.hpp"
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/math.hpp"
+
+#include "tt_metal/tt_stl/reflection.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -229,7 +233,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
                                                ? ShardOrientation::COL_MAJOR
                                                : shard_spec.orientation;
     ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation, false);
-    MemoryConfig memory_config{input.memory_config().memory_layout, BufferType::L1, config_shard_spec};
+    MemoryConfig memory_config{input.memory_config().memory_layout, BufferType::L1_SMALL, config_shard_spec};
     auto config_tensor_device = config_tensor.to(device, memory_config);
     tt::tt_metal::detail::AddConfigBuffer(program, config_tensor_device.device_buffer());
 

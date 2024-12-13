@@ -119,6 +119,7 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
         [1, 64, 132, 19],
     ],
 )
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("scale_h", [2, 3])
 @pytest.mark.parametrize("scale_w", [2, 3])
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
