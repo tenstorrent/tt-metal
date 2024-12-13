@@ -37,10 +37,11 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
     # ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     sharding_strategy_list = ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     shard_orientation_list = ["COL_MAJOR", "ROW_MAJOR"]
+    shard_height_mul_of_32_list = [False]
     spec_list = []
 
-    for sharding_strategy, shard_orientation, rank, layout in itertools.product(
-        sharding_strategy_list, shard_orientation_list, [4, 3, 2], layouts
+    for sharding_strategy, shard_orientation, rank, layout, shard_height_mul_of_32 in itertools.product(
+        sharding_strategy_list, shard_orientation_list, [4, 3, 2], layouts, shard_height_mul_of_32_list
     ):
         if sharding_strategy == "tensor_wh":
             tensor_hw_as_shard_shape = True
@@ -78,8 +79,15 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                     input_shape[-2] //= 2
 
             elif sharding_strategy == "BLOCK":
-                min_shard_size_y = 32 * y
-                min_shard_size_x = 32 * x
+                if shard_height_mul_of_32:
+                    min_shard_size_y = 1
+                    if shard_orientation == "ROW_MAJOR":
+                        min_shard_size_x = 32 * x
+                    else:
+                        min_shard_size_x = 32 * y
+                else:
+                    min_shard_size_y = 32 * y
+                    min_shard_size_x = 32 * x
 
                 rest_volume = random.randint(1, max_tensor_size // (min_shard_size_x * min_shard_size_y))
                 physical_shape = random.choice(_gen_reshape_args_from_volume(rest_volume, step=1, out_dims=2))
@@ -102,12 +110,22 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
 
                 if layout == "TILE_LAYOUT":
                     # In shard mode ShardMode::PHYSICAL, physical shard shape {12, 13312} is not compatible with alignment Alignment([32, 32])!
-                    min_shard_size_x = 32
-                    min_shard_size_y = 32 * x * y
+                    if shard_height_mul_of_32:
+                        min_shard_size_y = 1
+                        if sharding_strategy == "HEIGHT":
+                            min_shard_size_x = 32
+                        else:
+                            min_shard_size_x = 32 * y * x
+                    else:
+                        min_shard_size_x = 32
+                        min_shard_size_y = 32 * x * y
                 else:  # if layout == "ROW_MAJOR_LAYOUT":
                     # Shard Size must be multiple of input_tile_size
                     # Shard width should be multiple of 16 to satisfy L1 alignment
-                    mul_32_y = random.choice([16, 32, 64, 128, 256, 512, 1024])
+                    if shard_height_mul_of_32:
+                        mul_32_y = random.randint(1, 1024)
+                    else:
+                        mul_32_y = random.choice([16, 32, 64, 128, 256, 512, 1024])
                     mul_32_x = 1024 // mul_32_y
 
                     if sharding_strategy == "HEIGHT":
@@ -141,6 +159,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                     "shard_orientation": shard_orientation,
                     "tensor_hw_as_shard_shape": tensor_hw_as_shard_shape,
                     "input_layout": layout,
+                    "shard_height_mul_of_32": shard_height_mul_of_32,
                 }
             )
 
@@ -245,6 +264,7 @@ def gen_sharded_spec_unary_2(
                 else:
                     min_pre_sharded_height = 1
                     interval_height = 1
+
                 min_pre_sharded_width = 32
                 interval_width = 32
 
@@ -257,7 +277,7 @@ def gen_sharded_spec_unary_2(
 
                 if (
                     shard_height_mul_of_32
-                ):  # tensor height could grow beyond the maximum allowed when padding it to be multiple of total_num_cores * 32
+                ):  # tensor height could grow beyond the maximum allowed size when padding it to be multiple of total_num_cores * 32
                     while roundup(pre_sharded_height, y * x * 32) > max_tensor_size // pre_sharded_width:
                         pre_sharded_height = random.randrange(
                             min_pre_sharded_height, max_pre_sharded_height + 1, interval_height
@@ -341,8 +361,7 @@ def parse_sharding_spec(input_spec):
 
     return (
         input_shape,
-        x,
-        y,
+        ttnn.CoreGrid(y=y, x=x),
         sharding_strategy,
         shard_orientation,
         tensor_hw_as_shard_shape,
@@ -351,16 +370,8 @@ def parse_sharding_spec(input_spec):
     )
 
 
-def invalidate_vector_sharding(
-    input_shape,
-    x,
-    y,
-    sharding_strategy,
-    shard_orientation,
-    tensor_hw_as_shard_shape,
-    input_layout,
-    shard_height_mul_of_32=False,
-):
+def invalidate_vector_sharding(input_spec):
+    input_shape, X, Y, _, shard_orientation, tensor_hw_as_shard_shape, input_layout, _ = input_spec.values()
     pre_sharded_height = math.prod(input_shape[:-1])
     pre_sharded_width = input_shape[-1]
 
@@ -371,7 +382,11 @@ def invalidate_vector_sharding(
                 "Last two dimensions must be multiples of tile size when using tensor heght and width as shard shape",
             )
 
-    if input_layout == ttnn.ROW_MAJOR_LAYOUT and (input_shape[-1] % input_shape[-2] != 0):
+    if (
+        input_layout == "ROW_MAJOR_LAYOUT"
+        and shard_orientation == "COL_MAJOR"
+        and (input_shape[-1] % input_shape[-2] != 0)
+    ):
         return True, "Physical size <width, height> must be a multuple of page size <1, width>"
 
     return False, ""
