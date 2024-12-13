@@ -1584,7 +1584,9 @@ void Matmul::validate(
 
 std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
-    TT_FATAL(optional_output_tensors.length() <= 1, "None or One Optional output tensor can be passed when accessing it for computing Matmul's output specs");
+    TT_FATAL(
+        optional_output_tensors.size() <= 1,
+        "None or One Optional output tensor can be passed when accessing it for computing Matmul's output specs");
 
     const bool is_optional_output_tensor = !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
 
@@ -1616,28 +1618,6 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
     auto output_tile = this->output_tile.value();
     auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-
-    auto compute_output_shape = [&](const std::vector<Tensor>& input_tensors) -> ttnn::SimpleShape {
-        const ttnn::SimpleShape input_shape_a = input_tensors.at(0).get_logical_shape();
-        const ttnn::SimpleShape input_shape_b = input_tensors.at(1).get_logical_shape();
-        const uint32_t a_rank = input_shape_a.rank();
-        const uint32_t b_rank = input_shape_b.rank();
-        const uint32_t out_rank = std::max(a_rank, b_rank);
-        const uint32_t rank_difference = out_rank - a_rank;
-        ttnn::SimpleShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
-
-        for (auto index = 0; index < rank_difference; index++) {
-            TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
-            output_shape[index] = input_shape_b[index];
-        }
-        for (auto index = 0; index < a_rank - 1; index++) {
-            output_shape[rank_difference + index] = input_shape_a[index];
-        }
-        output_shape[-1] = input_shape_b[-1];
-        return std::move(output_shape);
-    };
-
-    const auto output_shape = compute_output_shape(input_tensors);
 
     TT_FATAL(this->output_dtype.has_value(), "Error");
     if (this->output_mem_config.is_sharded()) {
@@ -1785,8 +1765,10 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
         output_shape, TensorLayout(output_dtype.value(), PageConfig(Layout::TILE, output_tile), output_mem_config))};
 }
 
-std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::default_create_output_tensors(*this, input_tensors, {});
+std::vector<Tensor> Matmul::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    return operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
+}
 
 operation::ProgramWithCallbacks Matmul::create_program(
     const std::vector<Tensor>& input_tensors,
