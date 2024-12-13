@@ -44,35 +44,256 @@ real-world applications including video analysis, medical imaging
 analysis, and natural language processing, where they can analyze data
 to extract meaningful features and patterns.
 
+2D Convolution
+--------------
+A 2D or matrix convolution is a operation often in image processing 
+especially in neural networks (convolutional neural networks or CNNs). 
+In essence, it involves the shifting dot product or sum of element-wise 
+products of the elements or one matrix (e.g. the image) with another matrix
+(the filter or "kernel").  The result is a new matrix whose elements are the 
+dot products of the positioned kernel.
+
+As an example, consider the convolution of the $3\times3$ input matrix
+
+$$\begin{bmatrix} 1 & 2 & 3 \\
+                  4 & 5 & 6 \\
+                  7 & 8 & 9 
+\end{bmatrix}$$
+
+with the 3x3 kernel
+
+$$\begin{bmatrix} -4 & -3 & -2 \\
+                  -1 &  0 & 1 \\
+                   2 &  3 & 4 
+\end{bmatrix}$$
+
+The result of the convolution is the $5\times5$ matrix
+
+$$\begin{bmatrix}  -4 & -11 & -20 & -13  & -6 \\
+                  -17 & -34 & -49 & -26  & -9 \\
+                  -30 & -51 & -60 & -21  &  0 \\
+                    1 &  14 &  41 &  46  & 33 \\
+                   14 &  37 &  70 &  59  & 36 
+\end{bmatrix}$$
+
+In computing the convolution, conceptually the kernel matrix is "flipped" in both vertical and horizontal directions then positioned in shifted, overlapping positions on the input matrix.  The overlapping elements of the kernel and input matrices are multiplied, then the products summed.  The resulting sum becomes the element of the output matrix.  First, the kernel is flipped:
+
+$$\begin{bmatrix} 4 &  3 & 2 \\
+                  1 &  0 & -1 \\
+                 -2 & -3 & -4 
+\end{bmatrix}$$
+
+The first possible position wherein the kernel interacts with the matrix, and therefore the first element in the output matrix, is when the bottom right element of the kernel overlaps with the upper left element of the input matrix.
+
+![pos_1](https://github.com/user-attachments/assets/6b03ab8b-c821-427f-85a4-c667b5d70532)
+
+Note that there are variations on the convolution surrounding what should be done with the kernel elements that fall "outside" of the input matrix (e.g. here the first two rows of the kernel).  Some algorithms disallow kernel positions without overlap, some require at least the center value of the kernel to be within the input matrix, some, as we'll assume here place zero values in the non-overlapping elements (i.e. the oinput matrix is "zero padded" to the appropriate size, here an additional two rows and columns around the outside of the input matrix).  Computing the dot product of the (zero padded) input matrix with the kernel we have only one overlapping non-zero element, the $-4$ from the kernel with the $1$ from the input matrix so the first output matrix element is $-4 * 1 = -4$.  The kernel is the shifted to the right (the second column) to form the second column element of the output matrix.
+
+![pos_2](https://github.com/user-attachments/assets/518b3c22-a6f5-40c8-9a22-9b87ae270afb)
+
+Here the second element (first row, second column) of the output is  $-4 * 2 + -3 * 1 = -11$.  There are five possible positions the kernel can take sliding across the first row so the output matrix has five columns.  After the fifth right shift the kernel is then shifted back to the leftomost position and down one row.  This forms the first element of the second row of the output matrix.
+
+![pos_6](https://github.com/user-attachments/assets/b50ea8b3-445f-4063-858c-a282f5996b03)
+
+The first element of the second row of the output matrix has value, therefore, of $-1 * 1 + -4 * 4 = -17$.   This row-by-row and column-by-column shifting continues until the final kernel position.
+
+![pos_25](https://github.com/user-attachments/assets/78a3d012-c1c0-4b75-a500-4526feef1949)
+
+The final element is then $9 * 4 = 36$.
+
 Convolution as Matrix Multiplication
 ------------------------------------
+One issue with the convolution as described above is the inefficiency.  The algorithm generally uses for-loops to perform the 2D shifting and multiply-accumulate operations.  The loop inefficiency can be mitigated by exploiting highly optimized matrix multiplies instead.  This is accomplished by re-forming the kernel into a Toeplitz matrix and input matrix into to a suitably-structured vector.  The convolution is then just one matrix-vector multiplication with suitable rearranging of the resulting vector.
 
-Consider an example input image of resolution (dimensions) $16\times16$,
-that is, height and width, $H$ and $W$ are both $16$, and each pixel has
-a channel depth, $C$, of $32$ (see
-Figure [\[fig:input\]](#fig:input){reference-type="ref"
-reference="fig:input"}). Let us input two such images, setting batch
-$N=2$, to the convolution operation. Putting it together, the input
-tensor to convolution operation is, hence, of dimensions $[2,16,16,32]$,
-where the order of the dimensions is $[N, H, W, C]$. Let us perform the
-convolution with filters of size $[3,3]$ (see
-Figure [\[fig:filters\]](#fig:filters){reference-type="ref"
-reference="fig:filters"}), using a stride of $2$ in both $H$ and $W$
-dimensions, indicating downsample, and with padding enabled. The output
-of this convolution would be a tensor of dimensions $[2,8,8,64]$.
+To re-cast the convolution we first need to compute the output matrix size.  Let $I_w$ and $I_h$ be the input matrix dimensions (i.e. the input matrix is $I_w \times I_h$.  Likewise the kernel has dimensions $K_w \times K_h$ then the output matrix size will be $(I_w + K_w - 1) \times (I_h + K_h - 1)$.  In the example above the input matrix and kernel were both $3 \times 3$ so the output matrix would be $(3 + 3 - 1) \times (3 + 3 - 1)$ or $5 \times 5$.
+
+### Zero pad kernel
+
+The next step is to zero-pad the kernel to make it the same size as the output. Zeros should be added to the top and right sides of the filter.
+
+$$\begin{bmatrix} 0 &  0 &  0 & 0 & 0 \\
+                  0 &  0 &  0 & 0 & 0 \\
+                 -4 & -3 & -2 & 0 & 0 \\
+                 -1 &  0 &  1 & 0 & 0 \\
+                  2 &  3 &  4 & 0 & 0 
+\end{bmatrix}$$
+
+### Form Toeplitz matrices
+
+For each row of the zero-padded kernel create a Toeplitz matrix with number of columns equal to the number of columns of the input matrix.  Here, this results in five matrices identified "bottom to top" (last row first).
+
+$$F_0 = \begin{bmatrix}  2 &   0 &   0 \\
+                         3 &   2 &   0 \\
+                         4 &   3 &   2 \\
+                         0 &   4 &   3 \\
+                         0 &   0 &   4 
+\end{bmatrix}$$
+
+$$F_1 = \begin{bmatrix} -1 &   0 &   0 \\
+                         0 &  -1 &   0 \\
+                         1 &   0 &  -1 \\
+                         0 &   1 &   0 \\
+                         0 &   0 &   1 
+\end{bmatrix}$$
+
+$$F_2 = \begin{bmatrix} -4 &   0 &   0 \\
+                        -3 &  -4 &   0 \\
+                        -2 &  -3 &  -4 \\
+                         0 &  -2 &  -3 \\
+                         0 &   0 &  -2 
+\end{bmatrix}$$
+
+$$F_3 = \begin{bmatrix}  0 &   0 &   0 \\
+                         0 &   0 &   0 \\
+                         0 &   0 &   0 \\
+                         0 &   0 &   0 \\
+                         0 &   0 &   0 
+\end{bmatrix}$$
+
+$$F_4 = \begin{bmatrix}  0 &   0 &   0 \\
+                         0 &   0 &   0 \\
+                         0 &   0 &   0 \\
+                         0 &   0 &   0 \\
+                         0 &   0 &   0 
+\end{bmatrix}$$
+
+### Form Kernel matrix
+
+The complete matrix is then formed as a doubly-blocked Toeplitz matrix formed from these (sub) toepltiz matrices.  The number of sub-block columns in this matrix should be same as the number of rows in the input signal (here $I_w$ or 3).
+
+$$M = \begin{bmatrix}  F_0 &     0 &     0 \\
+                       F_1 &   F_0 &     0 \\
+                       F_2 &   F_1 &   F_0 \\
+                       F_3 &   F_2 &   F_1 \\
+                       F_4 &   F_3 &   F_2 
+\end{bmatrix}$$
+
+Substituting in the Toeplitz sub-matrices:
+
+$$M = \begin{bmatrix}   2  &  0  &  0  &  0  &  0  &  0  &  0  &  0  &  0 \\
+                        3  &  2  &  0  &  0  &  0  &  0  &  0  &  0  &  0 \\
+                        4  &  3  &  2  &  0  &  0  &  0  &  0  &  0  &  0 \\
+                        0  &  4  &  3  &  0  &  0  &  0  &  0  &  0  &  0 \\
+                        0  &  0  &  4  &  0  &  0  &  0  &  0  &  0  &  0 \\
+                       -1  &  0  &  0  &  2  &  0  &  0  &  0  &  0  &  0 \\
+                        0  & -1  &  0  &  3  &  2  &  0  &  0  &  0  &  0 \\
+                        1  &  0  & -1  &  4  &  3  &  2  &  0  &  0  &  0 \\
+                        0  &  1  &  0  &  0  &  4  &  3  &  0  &  0  &  0 \\
+                        0  &  0  &  1  &  0  &  0  &  4  &  0  &  0  &  0 \\
+                       -4  &  0  &  0  & -1  &  0  &  0  &  2  &  0  &  0 \\
+                       -3  & -4  &  0  &  0  & -1  &  0  &  3  &  2  &  0 \\
+                       -2  & -3  & -4  &  1  &  0  & -1  &  4  &  3  &  2 \\
+                        0  & -2  & -3  &  0  &  1  &  0  &  0  &  4  &  3 \\
+                        0  &  0  & -2  &  0  &  0  &  1  &  0  &  0  &  4 \\
+                        0  &  0  &  0  & -4  &  0  &  0  & -1  &  0  &  0 \\
+                        0  &  0  &  0  & -3  & -4  &  0  &  0  & -1  &  0 \\
+                        0  &  0  &  0  & -2  & -3  & -4  &  1  &  0  & -1 \\
+                        0  &  0  &  0  &  0  & -2  & -3  &  0  &  1  &  0 \\
+                        0  &  0  &  0  &  0  &  0  & -2  &  0  &  0  &  1 \\
+                        0  &  0  &  0  &  0  &  0  &  0  & -4  &  0  &  0 \\
+                        0  &  0  &  0  &  0  &  0  &  0  & -3  & -4  &  0 \\
+                        0  &  0  &  0  &  0  &  0  &  0  & -2  & -3  & -4 \\
+                        0  &  0  &  0  &  0  &  0  &  0  &  0  & -2  & -3 \\
+                        0  &  0  &  0  &  0  &  0  &  0  &  0  &  0  & -2 \\
+\end{bmatrix}$$
+
+### Rearrange input
+
+To perform the matrix-vector multiply we need to rearrange the input matrix into a vector.  The arrangement puts all the rows of the input matrix into a vector, last row first.
+
+$$V = \begin{bmatrix} 7 & 8 & 9 & 4 & 5 & 6 & 1 & 2 & 3 \end{bmatrix}$$
+
+### Multiply abd rearrange
+
+The 2D convolution is now computed with the matrix-vector multiply.  Note that the input vector, $V$, is transposed since it was formed as a row vector.
+
+$$O = M V^T$$
+
+In this example
+
+$$O_v = \begin{bmatrix}   2  &  0  &  0  &  0  &  0  &  0  &  0  &  0  &  0 \\
+                          3  &  2  &  0  &  0  &  0  &  0  &  0  &  0  &  0 \\
+                          4  &  3  &  2  &  0  &  0  &  0  &  0  &  0  &  0 \\
+                          0  &  4  &  3  &  0  &  0  &  0  &  0  &  0  &  0 \\
+                          0  &  0  &  4  &  0  &  0  &  0  &  0  &  0  &  0 \\
+                         -1  &  0  &  0  &  2  &  0  &  0  &  0  &  0  &  0 \\
+                          0  & -1  &  0  &  3  &  2  &  0  &  0  &  0  &  0 \\
+                          1  &  0  & -1  &  4  &  3  &  2  &  0  &  0  &  0 \\
+                          0  &  1  &  0  &  0  &  4  &  3  &  0  &  0  &  0 \\
+                          0  &  0  &  1  &  0  &  0  &  4  &  0  &  0  &  0 \\
+                         -4  &  0  &  0  & -1  &  0  &  0  &  2  &  0  &  0 \\
+                         -3  & -4  &  0  &  0  & -1  &  0  &  3  &  2  &  0 \\
+                         -2  & -3  & -4  &  1  &  0  & -1  &  4  &  3  &  2 \\
+                          0  & -2  & -3  &  0  &  1  &  0  &  0  &  4  &  3 \\
+                          0  &  0  & -2  &  0  &  0  &  1  &  0  &  0  &  4 \\
+                          0  &  0  &  0  & -4  &  0  &  0  & -1  &  0  &  0 \\
+                          0  &  0  &  0  & -3  & -4  &  0  &  0  & -1  &  0 \\
+                          0  &  0  &  0  & -2  & -3  & -4  &  1  &  0  & -1 \\
+                          0  &  0  &  0  &  0  & -2  & -3  &  0  &  1  &  0 \\
+                          0  &  0  &  0  &  0  &  0  & -2  &  0  &  0  &  1 \\
+                          0  &  0  &  0  &  0  &  0  &  0  & -4  &  0  &  0 \\
+                          0  &  0  &  0  &  0  &  0  &  0  & -3  & -4  &  0 \\
+                          0  &  0  &  0  &  0  &  0  &  0  & -2  & -3  & -4 \\
+                          0  &  0  &  0  &  0  &  0  &  0  &  0  & -2  & -3 \\
+                          0  &  0  &  0  &  0  &  0  &  0  &  0  &  0  & -2 \\
+\end{bmatrix} \begin{bmatrix} 7 \\ 
+                              8 \\ 
+                              9 \\ 
+                              4 \\ 
+                              5 \\ 
+                              6 \\ 
+                              1 \\ 
+                              2 \\ 
+                              3 \\ \end{bmatrix} =  
+\begin{bmatrix} 14 \\
+                37 \\
+                70 \\
+                59 \\
+                36 \\
+                 1 \\
+                14 \\
+                41 \\
+                46 \\
+                33 \\
+               -30 \\
+               -51 \\
+               -60 \\
+               -21 \\
+                 0 \\
+               -17 \\
+               -34 \\
+               -49 \\
+               -26 \\
+                -9 \\
+                -4 \\
+               -11 \\
+               -20 \\
+               -13 \\
+                -6 \\ \end{bmatrix}
+$$
+
+The resulting vector, $O_v$ is the $(I_w + K_w - 1) \times (I_h + K_h - 1)$ (here $5 \times 5$) output matrix $O$ that is the convolution of the input matrix with the kernel.  Notice that $O_v$ must be rearranged from the 1D column vector to the $5 \times 5$ output convolution matrix, $O$.  The rows or $O$ are "stacked" bottom to top from the vector.  That is, the first $(I_w + K_w - 1)$ (5) elements of the vector become the last rown of the matrix.  The next 5 become the next-to-last row and so on.  The final matrix is then seen as 
+
+$$\begin{bmatrix}  -4 & -11 & -20 & -13  & -6 \\
+                  -17 & -34 & -49 & -26  & -9 \\
+                  -30 & -51 & -60 & -21  &  0 \\
+                    1 &  14 &  41 &  46  & 33 \\
+                   14 &  37 &  70 &  59  & 36 
+\end{bmatrix}$$
+
+Tenstorrent Convolution API
+---------------------------
+
+The tt-metal convolution expands on the matrix multiply method of convolution by extending to to not just a single $W \times H$ matrix, but rather a set of large collection of such matrices.  In keeping with the image processing vernacular, we'll consider a collection of images (a "batch") all with the same size and number of color planes. For example, each input image has a resolution (dimensions) of $16 \times 16$, that is, height $H = W = 16$ pixels, and each pixel has $C = 32$ channels associated with it (seeFigure [\[fig:input\]](#fig:input){reference-type="ref" reference="fig:input"}).  Let us input a batch of two such images, setting batch $N=2$, to the convolution operation. Putting it together, the input tensor to convolution operation is, hence, of dimensions $[2,16,16,32]$, where the order of the dimensions is $[N, H, W, C]$. Let us perform the convolution with filters of size $[3,3]$ (see Figure [\[fig:filters\]](#fig:filters){reference-type="ref" reference="fig:filters"}), using a stride of $2$ in both $H$ and $W$ dimensions, indicating downsample, and with padding enabled. The output of this convolution would be a tensor of dimensions $[2,8,8,64]$.
 
 The key variables as input to the convolution operation are:
-
-  -------------------- ----------- ------------ ------------ ------------
-            **Input**:   $N = 2$    $H_i = 16$   $W_i = 16$   $C_i = 32$
-
-    **Kernel window**:  $K_h = 3$   $K_w = 3$
-
-           **Stride**:  $S_h = 2$   $S_w = 2$
-
-           **Output**:   $N = 2$    $H_o = 8$    $W_o = 8$    $C_o = 64$
-  -------------------- ----------- ------------ ------------ ------------
-
+   |                    |           |              |            |             |
+   | ------------------ | --------- | ------------ | ---------- | ----------- |
+   |         **Input**: |  $N = 2$  |  $H_i = 16$  | $W_i = 16$ |  $C_i = 32$ |
+   | **Kernel window**: | $K_h = 3$ |  $K_w = 3$   |            |             |
+   |        **Stride**: | $S_h = 2$ |  $S_w = 2$   |            |             |
+   |        **Output**: |  $N = 2$  |  $H_o = 8$   | $W_o = 8$  |  $C_o = 64$ |
+  
 The input tensor to the convolution must first be transformed into a
 matrix such that multiplying this matrix with the filters (as weights)
 gives the convolution output -- In a convolution a dot product is
