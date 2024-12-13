@@ -125,9 +125,11 @@ FORCE_INLINE void remote_cb_pop_front(uint32_t cb_id, uint32_t num_pages, uint8_
     *pages_acked_ptr += num_aligned_pages;
     // DPRINT << "num_aligned_pages " << num_aligned_pages << ENDL();
     remote_cb.fifo_rd_ptr += len_bytes;
+    uint32_t cb_size = remote_cb.fifo_limit_page_aligned - remote_cb.fifo_start_addr;
 
     if (remote_cb.fifo_rd_ptr >= remote_cb.fifo_limit_page_aligned) {
-        remote_cb.fifo_rd_ptr = remote_cb.fifo_start_addr;
+        // remote_cb.fifo_rd_ptr = remote_cb.fifo_start_addr;
+        remote_cb.fifo_rd_ptr -= cb_size;
     }
 
     uint64_t remote_ack_ptr_addr =
