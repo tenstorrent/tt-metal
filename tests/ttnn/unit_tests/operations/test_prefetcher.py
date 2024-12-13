@@ -255,25 +255,25 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, num_layers",
     [  # TODO: test different shapes etc
-        # (2, 2, [(256, 512), (256, 512)], 1),
-        # (2, 2, [(1024, 256), (1024, 256)], 1),
-        # (2, 2, [(128, 128), (128, 128)], 1),
-        # (2, 2, [(256, 1024), (256, 1024)], 1),
-        # (
-        #     12,
-        #     3,
-        #     [(2304, 3840)] * 3,
-        #     1,
-        # ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
-        # (
-        #     1,
-        #     8,
-        #     [(768, 64),(256, 384),(768, 64),(192, 320),(128, 64),(64, 384),(32, 768),(32, 512)],
-        #     1,
-        # ),
-        # (12, 5, [(3840, 2304)]*5, 1),  # FF2
-        # (12, 6, [(2304, 1536)]*6, 1),  # QKV
-        # (12, 5, [(2304, 2304)] * 5, 1),  # DO
+        (2, 2, [(256, 512), (256, 512)], 1),
+        (2, 2, [(1024, 256), (1024, 256)], 1),
+        (2, 2, [(128, 128), (128, 128)], 1),
+        (2, 2, [(256, 1024), (256, 1024)], 1),
+        (
+            12,
+            3,
+            [(2304, 3840)] * 3,
+            1,
+        ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
+        (
+            1,
+            4,
+            [(192, 320), (192, 320), (192, 320), (192, 320)],
+            1,
+        ),
+        (12, 5, [(7680, 2304)] * 5, 1),  # FF2
+        (12, 6, [(2304, 1536)] * 6, 1),  # QKV
+        (12, 5, [(2304, 2304)] * 5, 1),  # DO
         (12, 5, [(2304, 3840), (3840, 2304), (2304, 3840), (1536, 2304), (2304, 2304)], 1),  # ff1 + ff2 +ff3+ qkv + do
     ],
 )
@@ -567,11 +567,7 @@ def test_run_prefetcher(
 
     for i in range(num_tensors):
         tt_out = ttnn.to_torch(outputs_t[i])
-
         pt_out = in0_tensors[i] @ pt_tensors[i]
-        # print(pt_tensors[i])
-        print(tt_out)
-        print(pt_out)
         logger.info("Using prefetched weights")
 
         if dtype == ttnn.bfloat4_b:
