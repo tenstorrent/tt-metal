@@ -330,7 +330,7 @@ def run_test_sdpa_decode_single_iter(
             pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
     else:
         unharvested_grid_size = (7, 10)
-        if compute_grid_size.x > unharvested_grid_size[0] or compute_grid_size.y > unharvested_grid_size[1]:
+        if unharvested_grid_size[0] > compute_grid_size.x or unharvested_grid_size[1] > compute_grid_size.y:
             pytest.skip(f"Need {unharvested_grid_size} grid size to run this test but core grid is {compute_grid_size}")
         if grid_size[0] * grid_size[1] > sub_core_grids.num_cores():
             pytest.skip(

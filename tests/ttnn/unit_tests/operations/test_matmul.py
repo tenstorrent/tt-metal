@@ -93,6 +93,7 @@ def test_pytorch_2_0_failed_cases(device, m, k, n):
     assert_with_pcc(z_t, z)
 
 
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [256])
