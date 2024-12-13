@@ -124,13 +124,18 @@ void MAIN {
         cb_wait_front(in1_cb_id, in1_block_num_tiles * num_blocks);
         // UNPACK (( DPRINT  << in1_block_num_tiles <<ENDL()));
         // UNPACK (( DPRINT  << num_blocks <<ENDL()));
-        // for (int i=0; i<36;i++)
-        // UNPACK (( DPRINT  << TSLICE(in1_cb_id, i, SliceRange::h0_w0_32()) << ENDL() ));
+        // for (uint i=0; i<(uint)(in1_block_num_tiles * num_blocks);i++){
+        //     for (uint8_t j=0; j<32;j++) {
+        //         UNPACK (( DPRINT  << TSLICE(in1_cb_id, i, SliceRange{.h0 = j, .h1 = uint8_t(j+1), .hs = 1, .w0 = 0,
+        //         .w1 = 32, .ws = 1}) << ENDL() ));
+        //     }
+        // }
+
         // UNPACK (( DPRINT  << TSLICE(in1_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
         // UNPACK (( DPRINT  << TSLICE(in1_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
         // UNPACK (( DPRINT  << TSLICE(in1_cb_id, 0, SliceRange::h0_w0_32()) << ENDL() ));
 
-        cb_pop_front(in1_cb_id, in1_block_num_tiles * ring_idx);
+        // cb_pop_front(in1_cb_id, in1_block_num_tiles * ring_idx);
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
             bool last_out = block == (num_blocks - 1);
@@ -143,10 +148,19 @@ void MAIN {
 #endif
 
             cb_wait_front(input0_cb_id, in0_block_num_tiles);
+            // for (uint i=0; i<(uint)(in0_block_num_tiles);i++)
+            // UNPACK (( DPRINT  << TSLICE(input0_cb_id, i, SliceRange::h0_w0_32()) << ENDL() ));
+            // UNPACK (( DPRINT  <<"num_blocks " <<num_blocks << ENDL() ));
+            // for (uint i=0; i<(uint)(in0_block_num_tiles);i++){
+            //     for (uint8_t j=0; j<32;j++) {
+            //         UNPACK (( DPRINT  << TSLICE(input0_cb_id, i, SliceRange{.h0 = j, .h1 = uint8_t(j+1), .hs = 1, .w0
+            //         = 0, .w1 = 32, .ws = 1}) << ENDL() ));
+            //     }
+            // }
 
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                int in1_index_subblock_offset = 0;
+                int in1_index_subblock_offset = in1_block_num_tiles * ((ring_idx + block) % num_blocks);
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
                     if (enable_reload) {
@@ -267,11 +281,11 @@ void MAIN {
 #endif
 
             cb_pop_front(input0_cb_id, in0_block_num_tiles);
-            cb_pop_front(in1_cb_id, in1_block_num_tiles);
 
             cb_reserve_back(sync_cb, 1);
             cb_push_back(sync_cb, 1);
         }
+        cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
 
         if constexpr (batch > 1) {
             // reconfigure init for matmul

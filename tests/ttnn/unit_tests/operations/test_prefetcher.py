@@ -54,7 +54,7 @@ def num_cores_to_rectangle_grid(num_cores, device):
     return (x, y)
 
 
-def get_core_ranges(num_reader_cores):
+def get_core_ranges(num_reader_cores, num_global_cb_receivers):
     all_dram_cores = [
         ttnn.CoreCoord(0, 0),
         ttnn.CoreCoord(1, 0),
@@ -114,8 +114,7 @@ def get_core_ranges(num_reader_cores):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 9),
-                    # ttnn.CoreCoord(1, 9),
-                    ttnn.CoreCoord(2, 9),
+                    ttnn.CoreCoord(1, 9) if num_global_cb_receivers == 1 else ttnn.CoreCoord(2, 9),
                 ),
             ]
         ),
@@ -218,7 +217,7 @@ def get_core_ranges(num_reader_cores):
 
     dram_cores = all_dram_cores[:num_reader_cores]
     sender_cores = all_sender_cores[:num_reader_cores]
-    receiver_cores_list = all_receiver_cores_list[: num_reader_cores * 2]
+    receiver_cores_list = all_receiver_cores_list[: num_reader_cores * num_global_cb_receivers]
     # receiver_cores_list = all_receiver_cores_list[:num_reader_cores]
     receiver_cores = all_receiver_cores[:num_reader_cores]
 
@@ -234,8 +233,8 @@ def get_core_ranges(num_reader_cores):
         # (2, 2, [(256, 1024), (256, 1024)], 1),
         (
             1,
-            1,
-            [(64, 64)] * 1,
+            7,
+            [(384, 640)] * 7,
             1,
         ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
         # (
@@ -270,10 +269,13 @@ def test_run_prefetcher(
     function_level_defaults,
 ):
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shapes[0]}")
+
+    num_global_cb_receivers = 2
+
     K, N = input_shapes[0]
 
     dram_cores, sender_cores, receiver_cores_list, receiver_cores, worker_cores_range_set = get_core_ranges(
-        num_reader_cores
+        num_reader_cores, num_global_cb_receivers
     )
 
     receiver_core_range_set = ttnn.CoreRangeSet(
@@ -305,7 +307,10 @@ def test_run_prefetcher(
     pt_tensors = []
     for tid in range(num_tensors):
         if tid == 0:
-            tensor = torch.ones(input_shapes[tid])
+            tensor = torch.randn(input_shapes[tid])
+            # shape = input_shapes[tid]
+            # rows, cols = shape
+            # tensor = torch.arange(1, rows + 1).unsqueeze(1).expand(rows, cols).float()
         elif tid == 1:
             tensor = torch.randn(input_shapes[tid])
         else:
@@ -476,7 +481,7 @@ def test_run_prefetcher(
         fused_activation=None,
         mcast_in0=False,
         gather_in0=True,
-        num_global_cb_receivers=2,
+        num_global_cb_receivers=num_global_cb_receivers,
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
