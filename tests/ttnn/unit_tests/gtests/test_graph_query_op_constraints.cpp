@@ -18,7 +18,7 @@
 #include "impl/event/event.hpp"
 #include "impl/program/program.hpp"
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 #include "tt_metal/common/logger.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_operation_queries.hpp"
@@ -556,6 +556,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .in0_block_w = 2,
                 .out_subblock_h = 1,
                 .out_subblock_w = 1,
+                .out_block_h = 64,
+                .out_block_w = 2,
                 .per_core_M = 64,
                 .per_core_N = 2,
                 .fuse_batch = true,

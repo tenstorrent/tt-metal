@@ -18,7 +18,7 @@
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/core_coord.hpp"
-#include "umd/device/xy_pair.h"
+#include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
 
 #include "llrt/hal.hpp"
@@ -75,17 +75,17 @@ void init_compute_and_storage_l1_bank_manager(Allocator& allocator, const Alloca
     num_banks_t num_banks = compute_total_and_storage_only_num_l1_banks(alloc_config);
     auto logical_to_noc_coord = [&alloc_config](CoreCoord logical_core) {
         TT_ASSERT(
-            alloc_config.worker_log_to_physical_routing_x.find(logical_core.x) !=
-                    alloc_config.worker_log_to_physical_routing_x.end() and
-                alloc_config.worker_log_to_physical_routing_y.find(logical_core.y) !=
-                    alloc_config.worker_log_to_physical_routing_y.end(),
+            alloc_config.worker_log_to_virtual_routing_x.find(logical_core.x) !=
+                    alloc_config.worker_log_to_virtual_routing_x.end() and
+                alloc_config.worker_log_to_virtual_routing_y.find(logical_core.y) !=
+                    alloc_config.worker_log_to_virtual_routing_y.end(),
             "Cannot find log_coord=[.y={}, .x={}] in logical to routing coord lookup tables... invalid AllocatorConfig "
             "setup",
             logical_core.y,
             logical_core.x);
         CoreCoord noc_core({
-            static_cast<std::size_t>(alloc_config.worker_log_to_physical_routing_x.at(logical_core.x)),
-            static_cast<std::size_t>(alloc_config.worker_log_to_physical_routing_y.at(logical_core.y)),
+            static_cast<std::size_t>(alloc_config.worker_log_to_virtual_routing_x.at(logical_core.x)),
+            static_cast<std::size_t>(alloc_config.worker_log_to_virtual_routing_y.at(logical_core.y)),
         });
         TT_ASSERT(
             alloc_config.core_type_from_noc_coord_table.find(noc_core) !=

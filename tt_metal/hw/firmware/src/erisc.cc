@@ -5,7 +5,6 @@
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "firmware_common.h"
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "noc_parameters.h"
 #include "risc_attribs.h"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -34,6 +33,13 @@ uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
+// These arrays are stored in local memory of FW, but primarily used by the kernel which shares
+// FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+
 void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
 
@@ -42,6 +48,8 @@ void __attribute__((noinline)) Application(void) {
     // TODO: need to find free space that routing FW is not using
 
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
+
+    noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 
     risc_init();
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
@@ -84,9 +92,10 @@ void __attribute__((noinline)) Application(void) {
 
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                                NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                uint64_t dispatch_addr = NOC_XY_ADDR(
+                    NOC_X(mailboxes->go_message.master_x),
+                    NOC_Y(mailboxes->go_message.master_y),
+                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
@@ -97,9 +106,10 @@ void __attribute__((noinline)) Application(void) {
         } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
             // Reset the launch message buffer read ptr
             mailboxes->launch_msg_rd_ptr = 0;
-            uint64_t dispatch_addr =
-                NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                            NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+            uint64_t dispatch_addr = NOC_XY_ADDR(
+                NOC_X(mailboxes->go_message.master_x),
+                NOC_Y(mailboxes->go_message.master_y),
+                DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
             mailboxes->go_message.signal = RUN_MSG_DONE;
             internal_::notify_dispatch_core_done(dispatch_addr);
         } else {

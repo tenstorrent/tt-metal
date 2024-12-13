@@ -10,9 +10,7 @@
 #include "chlkc_unpack_tile_dims.h"
 #define DATA_FORMATS_DEFINED
 #endif
-#if __has_include("generated_bank_to_noc_coord_mapping.h")
-#include "generated_bank_to_noc_coord_mapping.h"
-#endif
+#include <noc/noc_parameters.h>
 
 #include <stdint.h>
 
@@ -37,9 +35,15 @@ constexpr uint8_t proc_type = static_cast<std::underlying_type_t<TensixProcessor
 constexpr uint8_t noc_index = NOC_INDEX;
 constexpr uint8_t noc_mode = NOC_MODE;
 #else
+
 extern uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
 #endif
+extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
+extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
+extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
+extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
+
 extern uint32_t tt_l1_ptr* rta_l1_base;
 extern uint32_t tt_l1_ptr* crta_l1_base;
 extern uint32_t tt_l1_ptr* sem_l1_base[];
@@ -88,6 +92,10 @@ constexpr uint32_t write_at_cmd_buf = NCRISC_AT_CMD_BUF;
 #define EXCLUDE_START_Y_OFFSET 14
 #define EXCLUDE_START_X_OFFSET 8
 #define DYNAMIC_NOC_DIRECTION(noc, direction) (noc == 1 ? 1 - direction : direction)
+
+static_assert(NUM_NOCS == 2);
+// "Scratch" in L1 has space allocated for 256 DRAM and L1 enteries, to store offsets and NOC XY data. (MEM_BANK_TO_NOC_XY_SCRATCH and MEM_BANK_OFFSET_SCRATCH)
+static_assert((NUM_DRAM_BANKS + NUM_L1_BANKS) <= 256);
 
 namespace interleaved_addr_gen {
 
@@ -410,7 +418,7 @@ constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
 FORCE_INLINE
 uint32_t get_write_ptr(uint32_t operand) {
     // return byte address (fifo_wr_ptr is 16B address)
-    uint32_t wr_ptr_bytes = get_local_cb_interface(operand).fifo_wr_ptr << 4;
+    uint32_t wr_ptr_bytes = get_local_cb_interface(operand).fifo_wr_ptr;
     return wr_ptr_bytes;
 }
 
@@ -429,7 +437,7 @@ uint32_t get_write_ptr(uint32_t operand) {
 FORCE_INLINE
 uint32_t get_read_ptr(uint32_t operand) {
     // return byte address (fifo_rd_ptr is 16B address)
-    uint32_t rd_ptr_bytes = get_local_cb_interface(operand).fifo_rd_ptr << 4;
+    uint32_t rd_ptr_bytes = get_local_cb_interface(operand).fifo_rd_ptr;
     return rd_ptr_bytes;
 }
 
@@ -1997,4 +2005,18 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     } while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid));
 #endif
     WAYPOINT("NBTD");
+}
+
+template<bool DRAM>
+FORCE_INLINE
+uint64_t get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
+    // Use addrgen tables to convert bank_ids to physical NOC coordinates
+    uint64_t noc_addr = 0;
+    if constexpr (DRAM) {
+        noc_addr = dram_bank_to_noc_xy[noc_index][bank_id];
+        bank_address_offset += bank_to_dram_offset[bank_id];
+    } else {
+        noc_addr = l1_bank_to_noc_xy[noc_index][bank_id];
+    }
+    return (noc_addr << NOC_ADDR_COORD_SHIFT) | (bank_address_offset);
 }

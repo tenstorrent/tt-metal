@@ -10,7 +10,7 @@
 
 #include "gtest/gtest.h"
 
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 // #include "tt_backend_api_types.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/math.hpp"

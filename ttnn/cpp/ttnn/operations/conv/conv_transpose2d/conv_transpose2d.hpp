@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 
@@ -34,6 +35,7 @@ struct ConvTranpose2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
     static Result invoke(
@@ -54,6 +56,7 @@ struct ConvTranpose2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 };
 

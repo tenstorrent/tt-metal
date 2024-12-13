@@ -18,7 +18,10 @@ namespace tt::tt_metal::distributed {
 
 using DeviceIds = std::vector<int>;
 using MeshDeviceID = size_t;
-using MeshOffset = std::pair<size_t, size_t>;
+struct MeshOffset {
+    size_t row = 0;
+    size_t col = 0;
+};
 class MeshDeviceView;
 
 struct MeshSubDeviceManagerId;
@@ -133,6 +136,9 @@ public:
         const MeshShape& submesh_shape, MeshType type = MeshType::RowMajor);
 
     MeshSubDeviceManagerId create_sub_device_manager(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
+    // TODO #15944: Temporary api until migration to actual fabric is complete
+    std::tuple<MeshSubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
     void load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
     void clear_loaded_sub_device_manager();

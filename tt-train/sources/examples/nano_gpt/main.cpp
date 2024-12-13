@@ -20,6 +20,7 @@
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/sgd.hpp"
+#include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
@@ -142,6 +143,9 @@ struct TrainingConfig {
     uint32_t gradient_accumulation_steps = 1;
     std::string model_path;
     std::string data_path;
+    std::string tokenizer_type = "char";
+    std::string scheduler_type = "identity";
+
     ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
@@ -161,9 +165,17 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_path = training_config["model_path"].as<std::string>("");
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
+    config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
+    config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
+
     config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
     return config;
 }
+
+const std::unordered_map<
+    std::string,
+    std::function<std::unique_ptr<ttml::schedulers::LRSchedulerBase>(ttml::optimizers::OptimizerBase *, size_t)>>
+    schedulers = {{"identity", create_idendity_scheduler}, {"warmup_linear", create_warmup_with_linear_scheduler}};
 
 int main(int argc, char **argv) {
     auto result = signal(SIGINT, signal_handler);
@@ -186,7 +198,6 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
-
     wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
     wandbcpp::update_config({
         {"model", "transformer"},
@@ -200,16 +211,19 @@ int main(int argc, char **argv) {
         {"sequence_length", static_cast<int>(config.transformer_config.max_sequence_length)},
         {"max_steps", static_cast<int>(config.max_steps)},
         {"seed", static_cast<int>(config.seed)},
+        {"tokenizer_type", config.tokenizer_type},
         {"use_kahan_summation", config.use_kahan_summation},
         {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
         {"positional_embedding_type",
          config.transformer_config.positional_embedding_type == ttml::models::gpt2::PositionalEmbeddingType::Trainable
              ? "trainable"
              : "fixed"},
+        {"scheduler_type", config.scheduler_type},
     });
 
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
+    auto schedule_func = schedulers.at(config.scheduler_type);
 
     std::string text;
     try {
@@ -218,18 +232,30 @@ int main(int argc, char **argv) {
         std::cerr << e.what() << std::endl;
         return -1;
     }
-
     fmt::print("Max steps {}\n", config.max_steps);
     fmt::print("Batch size {}\n", config.batch_size);
     fmt::print("Gradient accumulation steps {}\n", config.gradient_accumulation_steps);
     fmt::print("Total batch size {}\n", config.batch_size * config.gradient_accumulation_steps);
+    fmt::print("Scheduler type {}\n", config.scheduler_type);
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = config.transformer_config.max_sequence_length;
 
-    auto [dataset, tokenizer] =
-        ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(text, sequence_length);
+    auto create_dataset_and_tokenizer = [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
+        if (tokenizer_type == "char") {
+            return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                text, sequence_length);
+        } else if (tokenizer_type == "bpe") {
+            return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
+                text, sequence_length);
+        } else {
+            throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+        }
+    };
+
+    auto [dataset, tokenizer] = create_dataset_and_tokenizer(text, sequence_length, config.tokenizer_type);
     fmt::print("Dataset size: {}\n", dataset.get_size());
-    fmt::print("Vocab size: {}\n", tokenizer.get_vocab_size());
+    fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
+    fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
@@ -259,8 +285,7 @@ int main(int argc, char **argv) {
         mask, ttml::core::create_shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, vocab_size = tokenizer.get_vocab_size(), device, &cached_data](
-            std::vector<DatasetSample> &&samples) {
+        [sequence_length, num_heads, device, &cached_data](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -292,7 +317,7 @@ int main(int argc, char **argv) {
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
-    config.transformer_config.vocab_size = round_up_to_tile(tokenizer.get_vocab_size());
+    config.transformer_config.vocab_size = round_up_to_tile(tokenizer->get_vocab_size());
     auto model = ttml::models::gpt2::create(config.transformer_config);
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
@@ -304,17 +329,17 @@ int main(int argc, char **argv) {
     fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
     fmt::print("    Use Kahan summation: {}\n", adamw_params.use_kahan_summation);
     auto optimizer = ttml::optimizers::AdamW(model->parameters(), adamw_params);
-
+    auto scheduler = schedule_func(&optimizer, config.max_steps);
     if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
         fmt::print("Loading model from {}\n", config.model_path);
-        load_model_and_optimizer(config.model_path, model, optimizer, "transformer", "adamw");
+        load_training_state(config.model_path, model, scheduler, "transformer", "adamw");
         fmt::print("Model loaded after {} steps\n", optimizer.get_steps());
     }
 
     if (is_eval) {
         fmt::print("\nEvaluation started\n");
         for (;;) {
-            generate(model, tokenizer, config.transformer_config.max_sequence_length, num_heads);
+            generate(model, *tokenizer, config.transformer_config.max_sequence_length, num_heads);
         }
         fmt::print("\nEvaluation finished\n");
         return 0;
@@ -345,6 +370,7 @@ int main(int argc, char **argv) {
 
             if (gradient_accumulator_helper.should_step()) {
                 optimizer.step();
+                scheduler->step();
                 auto global_step = optimizer.get_steps();
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
@@ -353,11 +379,12 @@ int main(int argc, char **argv) {
                     wandbcpp::log(
                         {{"Step", (int)global_step},
                          {"Samples", (int)get_samples_count(global_step)},
-                         {"Loss", loss_meter.average()}});
+                         {"Loss", loss_meter.average()},
+                         {"Learning rate", optimizer.get_lr()}});
                     loss_meter.reset();
                 }
                 if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
-                    save_model_and_optimizer(config.model_path, model, optimizer, "transformer", "adamw");
+                    save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
                 }
 
                 if (global_step >= config.max_steps) {
@@ -379,7 +406,7 @@ int main(int argc, char **argv) {
     }
 
     if (!config.model_path.empty()) {
-        save_model_and_optimizer(config.model_path, model, optimizer, "transformer", "adamw");
+        save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
     }
 
     auto end_timer = std::chrono::high_resolution_clock::now();

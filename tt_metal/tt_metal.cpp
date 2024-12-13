@@ -162,13 +162,13 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range) {
+std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange& core_range, CoreType core_type) {
     std::optional<uint32_t> semaphore_id = std::nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             CoreCoord logical_core(x, y);
-            auto semaphores = program.semaphores_on_core(logical_core);
+            auto semaphores = program.semaphores_on_core(logical_core, core_type);
             if (semaphores.size() == NUM_SEMAPHORES) {
                 TT_THROW(
                     "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
@@ -312,7 +312,7 @@ bool WriteToDeviceL1(
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
     ZoneScoped;
-    auto worker_core = device->physical_core_from_logical_core(logical_core, core_type);
+    auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
     llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
     return true;
 }
@@ -426,17 +426,22 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     auto total_pages = buffer.num_pages();
+    std::vector<uint32_t> page;
+    page.resize(page_size / sizeof(uint32_t));
     for (int host_page_id = 0; host_page_id < total_pages; host_page_id++) {
         auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
         auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
         auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto absolute_address = buffer.sharded_page_address(bank_id, dev_page_id);
+        auto bank_local_address = buffer.bank_local_page_address(bank_id, dev_page_id);
         auto data_index = host_page_id * page_size;
-        std::vector<uint8_t> page;
-        page.insert(page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + page_size);
-
-        auto noc_coordinates = buffer.noc_coordinates(bank_id);
-        llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
+        std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
+        if (buffer.is_l1()) {
+            auto core_coordinates = device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_id));
+            llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
+        } else {
+            WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
+        }
     }
 }
 
@@ -455,16 +460,22 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     auto num_banks = device->num_banks(buffer.buffer_type());
     uint32_t bank_index = 0;
     int data_index = 0;
+    std::vector<uint32_t> page;
+    page.resize(page_size / sizeof(uint32_t));
     for (int page_index = 0; page_index < num_pages; page_index++) {
         auto absolute_address = buffer.page_address(bank_index, page_index);
-        std::vector<uint8_t> page;
-        page.insert(page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + page_size);
+        // Get address offset of buffer in bank. Required when writing to DRAM.
+        auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
+        std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
+                WriteToDeviceDRAMChannel(device, bank_index, bank_local_address, page);
+                break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
-                auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
+                auto core_coordinates =
+                    device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
+                llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
             } break;
             default: TT_THROW("Unsupported buffer type to write to device!");
         }
@@ -509,26 +520,30 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
     size_t host_idx = 0;
 
     uint32_t bank_index = 0;
-    std::vector<uint8_t> page;
+    std::vector<uint32_t> page;
+    page.resize(page_size / sizeof(uint32_t));
     for (int page_index = 0; page_index < num_pages; page_index++) {
         auto absolute_address = buffer.page_address(bank_index, page_index);
+        // Get address offset of buffer in bank. Required when reading from DRAM.
+        auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
         page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
             case BufferType::TRACE:
+                ReadFromDeviceDRAMChannel(device, bank_index, bank_local_address, page_size, page);
+                break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
-                auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                page.resize(page_size);
-                tt::Cluster::instance().read_core(
-                    page.data(), page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
+                auto core_coordinates =
+                    device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
+                tt::Cluster::instance().read_core(page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
 
         // Copy page into host buffer
-        std::memcpy(host_buffer + host_idx, page.data(), page.size());
-        host_idx += page.size();
+        std::memcpy(host_buffer + host_idx, page.data(), page_size);
+        host_idx += page_size;
 
         bank_index = (bank_index + 1) % num_banks;
     }
@@ -543,10 +558,18 @@ void read_pages_to_host_helper(
     const uint32_t& dev_page_id,
     const uint32_t& bank_id) {
     auto absolute_address = dev_buffer.sharded_page_address(bank_id, dev_page_id);
-    auto noc_coordinates = dev_buffer.noc_coordinates(bank_id);
     uint32_t host_buffer_start = host_page_id * page_size;
-    tt::Cluster::instance().read_core(
-        host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
+    if (dev_buffer.is_l1()) {
+        auto core_coordinates = device->worker_core_from_logical_core(dev_buffer.logical_core_from_bank_id(bank_id));
+        tt::Cluster::instance().read_core(
+            host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
+    } else {
+        std::vector<uint32_t> page;
+        page.resize(page_size / sizeof(uint32_t));
+        auto bank_local_address = dev_buffer.bank_local_page_address(bank_id, dev_page_id);
+        ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, page_size, page);
+        std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
+    }
 }
 
 void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
@@ -669,7 +692,7 @@ void LaunchProgram(Device* device, Program& program, bool wait_until_cores_done)
                 go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
                 msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
-                auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+                auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
                 tt::llrt::write_launch_msg_to_core(
                     device->id(),
@@ -697,7 +720,7 @@ void WaitProgramDone(Device* device, Program& program) {
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
         for (const auto& logical_core : logical_cores) {
-            auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             not_done_cores.insert(physical_core);
         }
     }
@@ -726,8 +749,7 @@ bool ConfigureDeviceWithProgram(Device* device, Program& program, bool fd_bootlo
         CoreType core_type = hal.get_core_type(index);
         for (const auto& logical_core : logical_cores) {
             KernelGroup* kernel_group = program.kernels_on_core(logical_core, index);
-            CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
-
+            CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
@@ -745,13 +767,10 @@ bool ConfigureDeviceWithProgram(Device* device, Program& program, bool fd_bootlo
                             uint32_t size_in_bytes = circular_buffer->size();
                             uint32_t num_pages = circular_buffer->num_pages(buffer_index);
                             uint32_t page_size = size_in_bytes / num_pages;
-                            circular_buffer_config_vec[base_index] =
-                                addr_in_bytes >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;  // convert to addr in 16B words
-                            circular_buffer_config_vec[base_index + 1] =
-                                size_in_bytes >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;  // convert to addr in 16B words
+                            circular_buffer_config_vec[base_index] = addr_in_bytes;      // convert to addr in 16B words
+                            circular_buffer_config_vec[base_index + 1] = size_in_bytes;  // convert to addr in 16B words
                             circular_buffer_config_vec[base_index + 2] = num_pages;
-                            circular_buffer_config_vec[base_index + 3] =
-                                page_size >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+                            circular_buffer_config_vec[base_index + 3] = page_size;
                         }
                         for (uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                             uint32_t base_index =
@@ -788,7 +807,7 @@ void WriteRuntimeArgsToDevice(Device* device, Program& program) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core(x, y);
-                        auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+                        auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                         for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
                             auto& optional_id = kg.kernel_ids[dispatch_class];
                             if (optional_id) {
@@ -866,7 +885,7 @@ DeviceAddr AllocateBuffer(Buffer* buffer) {
     GraphTracker::instance().track_allocate(buffer);
 
 #if defined(TRACY_ENABLE)
-    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_buffer_usage_enabled()) {
         TracyAllocN(
             reinterpret_cast<void const*>(allocated_addr),
             buffer->size(),
@@ -883,7 +902,7 @@ void DeallocateBuffer(Buffer* buffer) {
     }
 
 #if defined(TRACY_ENABLE)
-    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_buffer_usage_enabled()) {
         TracyFreeN(
             reinterpret_cast<void const*>(buffer->address()),
             get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
@@ -1139,7 +1158,7 @@ uint32_t CreateSemaphore(
             for (const auto& core_range : crs.ranges()) {
                 CoreCoord start_core = core_range.start_coord;
                 CoreCoord end_core = core_range.end_coord;
-                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range);
+                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
                 if (!semaphore_id.has_value()) {
                     semaphore_id = semaphore_id_candidate;
                 } else {
@@ -1156,13 +1175,21 @@ uint32_t CreateSemaphore(
 }
 
 std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore::create(device, cores, initial_value, buffer_type);
+    Device* device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    return GlobalSemaphore::create(device, cores, initial_value, buffer_type, sub_device_ids);
 }
 
 std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type);
+    Device* device,
+    CoreRangeSet&& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    return GlobalSemaphore::create(device, std::move(cores), initial_value, buffer_type, sub_device_ids);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
@@ -1365,8 +1392,9 @@ std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
     Device* device,
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer::create(device, sender_receiver_core_mapping, size, buffer_type);
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    return GlobalCircularBuffer::create(device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
 }
 
 CBHandle CreateCircularBuffer(

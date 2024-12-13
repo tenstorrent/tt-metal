@@ -26,11 +26,9 @@ Checks: >
   -bugprone-unhandled-self-assignment,
   -bugprone-unused-raii,
   -cert-env33-c,
-  -cert-err09-cpp,
   -cert-err33-c,
   -cert-err34-c,
   -cert-err58-cpp,
-  -cert-err61-cpp,
   -cert-flp30-c,
   -cert-msc30-c,
   -cert-msc32-c,
@@ -121,7 +119,6 @@ Checks: >
   -misc-no-recursion,
   -misc-non-private-member-variables-in-classes,
   -misc-redundant-expression,
-  -misc-throw-by-value-catch-by-reference,
   -misc-unconventional-assign-operator,
   -misc-uniqueptr-reset-release,
   -misc-unused-parameters,
@@ -195,3 +192,5 @@ Checks: >
 CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
+
+FormatStyle: 'file'

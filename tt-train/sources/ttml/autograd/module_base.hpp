@@ -7,6 +7,7 @@
 #include <memory>
 #include <unordered_map>
 
+#include "serialization/serializable.hpp"
 #include "tensor.hpp"
 
 namespace ttml::autograd {
@@ -15,7 +16,6 @@ enum class RunMode { TRAIN, EVAL };
 
 class ModuleBase;
 using ModuleBasePtr = std::shared_ptr<ModuleBase>;
-using NamedParameters = std::unordered_map<std::string, TensorPtr>;
 
 class ModuleBase {
 private:
@@ -39,7 +39,7 @@ public:
     ModuleBase& operator=(ModuleBase&&) = default;
 
     [[nodiscard]] const std::string& get_name() const;
-    [[nodiscard]] NamedParameters parameters() const;
+    [[nodiscard]] serialization::NamedParameters parameters() const;
 
     void train();
     void eval();

@@ -2,10 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "prepare_conv2d_weights.hpp"
-#include "conv2d_utils.hpp"
-#include <sys/types.h>
-#include <cstdint>
+#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+
+#include "tt_metal/common/work_split.hpp"
+
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 using namespace tt;
 namespace ttnn {
@@ -54,7 +60,7 @@ void validate_weights_format(const std::string& weights_format) {
 }
 
 template <typename T>
-OptimizedConvBlockConfig get_opt_block_config(
+static OptimizedConvBlockConfig get_opt_block_config(
     bool mm_conv,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -67,6 +73,7 @@ OptimizedConvBlockConfig get_opt_block_config(
     T *device,
     Conv2dConfig& conv_config,
     Layout input_tensor_layout,
+    const DeviceComputeKernelConfig& compute_config,
     const MemoryConfig& input_memory_config) {
     auto compute_grid_size = device->compute_with_storage_grid_size();
 
@@ -138,7 +145,7 @@ OptimizedConvBlockConfig get_opt_block_config(
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
-        conv_config.fp32_dest_acc_enabled,
+        get_fp32_dest_acc_en(compute_config),
         conv_config.enable_split_reader);
 }
 
@@ -289,9 +296,18 @@ ttnn::Tensor prepare_conv_weights(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T *device,
-    const std::optional<const Conv2dConfig>& conv_config_) {
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
     TT_FATAL(!ttnn::is_tensor_on_device_or_multidevice(weight_tensor), "Error: weight tensor must be on host for preparation.");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(init_device_compute_kernel_config(
+        device->arch(),
+        std::nullopt,
+        MathFidelity::HiFi4,
+        true,
+        false,
+        false
+    ));
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
     const uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     const uint32_t output_width =
@@ -309,6 +325,7 @@ ttnn::Tensor prepare_conv_weights(
         device,
         conv_config,
         input_tensor_layout,
+        compute_config,
         input_memory_config
     );
 
@@ -366,7 +383,8 @@ ttnn::Tensor prepare_conv_bias(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T *device,
-    const std::optional<const Conv2dConfig>& conv_config_) {
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
 
     TT_FATAL(!ttnn::is_tensor_on_device_or_multidevice(bias_tensor), "Error: bias tensor must be on host for preparation.");
 
@@ -376,6 +394,14 @@ ttnn::Tensor prepare_conv_bias(
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(init_device_compute_kernel_config(
+        device->arch(),
+        std::nullopt,
+        MathFidelity::HiFi4,
+        true,
+        false,
+        false
+    ));
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,
         in_channels,
@@ -389,6 +415,7 @@ ttnn::Tensor prepare_conv_bias(
         device,
         conv_config,
         input_tensor_layout,
+        compute_config,
         input_memory_config
     );
 
@@ -423,6 +450,7 @@ template OptimizedConvBlockConfig get_opt_block_config<Device>(
     Device *device,
     Conv2dConfig& conv_config,
     Layout input_tensor_layout,
+    const DeviceComputeKernelConfig& compute_config,
     const ttnn::MemoryConfig& input_memory_config);
 
 template OptimizedConvBlockConfig get_opt_block_config<MeshDevice>(
@@ -438,6 +466,7 @@ template OptimizedConvBlockConfig get_opt_block_config<MeshDevice>(
     MeshDevice *device,
     Conv2dConfig& conv_config,
     Layout input_tensor_layout,
+    const DeviceComputeKernelConfig& compute_config,
     const ttnn::MemoryConfig& input_memory_config);
 
 template ttnn::Tensor prepare_conv_weights<Device>(
@@ -456,7 +485,8 @@ template ttnn::Tensor prepare_conv_weights<Device>(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     Device *device,
-    const std::optional<const Conv2dConfig>& conv_config_);
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
 template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     const ttnn::Tensor& weight_tensor,
@@ -474,7 +504,8 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     MeshDevice *device,
-    const std::optional<const Conv2dConfig>& conv_config_);
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device<Device>(
     const ttnn::Tensor& weight_tensor,
@@ -521,7 +552,8 @@ template ttnn::Tensor prepare_conv_bias<Device>(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     Device *device,
-    const std::optional<const Conv2dConfig>& conv_config_);
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
 template ttnn::Tensor prepare_conv_bias<MeshDevice>(
     const ttnn::Tensor& bias_tensor,
@@ -538,7 +570,8 @@ template ttnn::Tensor prepare_conv_bias<MeshDevice>(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     MeshDevice *device,
-    const std::optional<const Conv2dConfig>& conv_config_);
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
 }  // namespace conv2d
 }  // namespace operations

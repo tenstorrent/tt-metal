@@ -25,6 +25,9 @@ public:
 
     // Pure virtual function to decode a vector of token IDs back into a string
     [[nodiscard]] virtual std::string decode(const std::vector<uint32_t>& tokens) const = 0;
+
+    // Pure virtual function to get the vocabulary size
+    [[nodiscard]] virtual uint32_t get_vocab_size() const = 0;
 };
 
 }  // namespace ttml::tokenizers
