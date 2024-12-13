@@ -6,6 +6,7 @@ set -eo pipefail
 default_tt_arch="grayskull"
 default_pipeline_type="post_commit"
 default_dispatch_mode="fast"
+default_model="None"
 
 assert_requested_module_matches() {
     local actual=$1
@@ -250,8 +251,9 @@ unit_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
-    ./tests/scripts/tg/run_tg_unit_tests.sh
+    ./tests/scripts/tg/run_tg_unit_tests.sh --model "$model"
 }
 
 # Run tg frequent tests
@@ -259,8 +261,9 @@ frequent_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
-    ./tests/scripts/tg/run_tg_frequent_tests.sh
+    ./tests/scripts/tg/run_tg_frequent_tests.sh --model "$model"
 }
 
 # Run tg demo tests
@@ -268,8 +271,9 @@ demos_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
-    ./tests/scripts/tg/run_tg_demo_tests.sh
+    ./tests/scripts/tg/run_tg_demo_tests.sh --model "$model"
 }
 
 # Run tg model perf tests
@@ -324,6 +328,7 @@ run_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
     # Add your logic here for pipeline-specific tests
     echo "Running tests for pipeline: $pipeline_type with tt-arch: $tt_arch"
@@ -355,13 +360,13 @@ run_pipeline_tests() {
         model_perf_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     # TG pipelines
     elif [[ $pipeline_type == "unit_tg_device" ]]; then
-        unit_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        unit_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == "frequent_tg_device" ]]; then
-        frequent_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        frequent_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == "demos_tg_device" ]]; then
-        demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == *"model_perf_tg_device" ]]; then
-        model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == "ccl_perf_tg_device" ]]; then
         ./tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t tg
         ./tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t tg
@@ -446,6 +451,10 @@ main() {
                 pipeline_type=$2
                 shift
                 ;;
+            --model)
+                model=$2
+                shift
+                ;;
             *)
                 echo "Unknown option: $1"
                 exit 1
@@ -458,6 +467,7 @@ main() {
     tt_arch=${tt_arch:-$default_tt_arch}
     dispatch_mode=${dispatch_mode:-$default_dispatch_mode}
     pipeline_type=${pipeline_type:-$default_pipeline_type}
+    model=${model:-$default_model}
 
     available_dispatch_modes=("fast" "slow")
     available_tt_archs=("grayskull" "wormhole_b0" "blackhole")
@@ -482,7 +492,7 @@ main() {
         # Module invocation
         run_module_tests "$tt_arch" "$module" "$pipeline_type"
     elif [[ -n $pipeline_type ]]; then
-        run_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        run_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     else
         echo "You must have at least a module or pipeline_type specified"
         exit 1
