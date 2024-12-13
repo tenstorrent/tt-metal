@@ -6,11 +6,10 @@
 
 #include "impl/buffers/buffer_constants.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/math.hpp"
+#include "ttnn/common/constants.hpp"
 
 #include <limits>
 
