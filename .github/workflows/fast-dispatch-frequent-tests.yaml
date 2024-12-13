@@ -1,0 +1,19 @@
+name: "(Single-card) Fast dispatch frequent tests"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "0 */4 * * *"
+  push:
+    branches:
+      - "rkim/0-new-fd-frequent"
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  fd-nightly:
+    needs: build-artifact
+    uses: ./.github/workflows/fast-dispatch-frequent-tests-impl.yaml
+    secrets: inherit
