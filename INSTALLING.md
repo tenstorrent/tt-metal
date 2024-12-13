@@ -34,6 +34,13 @@ chmod a+x install_dependencies.sh
 sudo ./install_dependencies.sh
 ```
 
+- Note: Some advanced build configurations like unity builds require at least `CMake 3.20`.
+  To upgrade Cmake run:
+    ```sh
+    sudo apt update
+    sudo apt install cmake
+    ```
+
 ---
 
 #### Install the Driver (TT-KMD)
@@ -173,15 +180,6 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
 ### Step 2. Setup Environment Variables and Invoke our Build Scripts:
-
-- Note: Some advanced build configurations like unity builds require `CMake 3.20`.
-  To upgrade Cmake run:
-    ```sh
-    pip3 install cmake --upgrade
-    hash -r
-    cmake --version
-    ```
-
 - Run the appropriate command for the Tenstorrent card you have installed:
 
 | Card             | Command                              |
@@ -197,7 +195,7 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
   ./build_metal.sh
   ```
 
-- (recomended) For an out-of-the-box virtual environment to use, execute:
+- (recommended) For an out-of-the-box virtual environment to use, execute:
 ```
 ./create_venv.sh
 source python_env/bin/activate
