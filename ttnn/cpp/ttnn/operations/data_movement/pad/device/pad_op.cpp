@@ -48,7 +48,7 @@ void Pad::validate_with_output_tensors(
     }
 
     if (input_tensor.is_sharded()) {
-        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "ttnn.pad: Only for sharded inputs, only height-sharding is supported.");
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "ttnn.pad: For sharded inputs, only height-sharding is supported.");
         TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "ttnn.pad: Only row-major sharded inputs are supported.");
 
         TT_FATAL(this->output_mem_config.is_sharded(), "ttnn.pad: For sharded inputs, the output must be sharded.");
