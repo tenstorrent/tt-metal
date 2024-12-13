@@ -715,6 +715,11 @@ set(PRECOMPILED_HEADER_TARGET "")
 
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
+    if(WITH_PYTHON_BINDINGS)
+        target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
+    else()
+        target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=0)
+    endif()
     target_include_directories(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_INCLUDE_DIRS})
     target_link_libraries(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_LINK_LIBRARIES})
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
@@ -808,7 +813,7 @@ set_target_properties(
             ""
 )
 
-TT_ENABLE_UNITY_BUILD(ttnn)
+# TT_ENABLE_UNITY_BUILD(ttnn)
 
 #We move the library binaries to a different path rather than PROJECT_BINARY_DIR
 #in the Python wheel
