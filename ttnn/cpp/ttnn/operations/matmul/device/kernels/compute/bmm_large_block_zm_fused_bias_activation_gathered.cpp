@@ -89,9 +89,9 @@ FORCE_INLINE void calculate_next_block_index_and_update_rd_ptr(
         // UNPACK(( DPRINT << "local_cb.fifo_rd_ptr " <<  (uint)local_cb.fifo_rd_ptr <<ENDL() ));
         // UNPACK(( DPRINT << "local_cb.fifo_limit " <<  (uint)local_cb.fifo_limit <<ENDL() ));
         // UNPACK(( DPRINT << "reach_limit " <<  (uint)reach_limit <<ENDL() ));
-        UNPACK((DPRINT << "block_index " << (uint)curr_block_index << ENDL()));
-        UNPACK((DPRINT << "last_block " << (uint)last_block << ENDL()));
-        UNPACK((DPRINT << "reach_limit " << (uint)reach_limit << ENDL()));
+        // UNPACK((DPRINT << "block_index " << (uint)curr_block_index << ENDL()));
+        // UNPACK((DPRINT << "last_block " << (uint)last_block << ENDL()));
+        // UNPACK((DPRINT << "reach_limit " << (uint)reach_limit << ENDL()));
         if (reach_limit) {
             local_cb.fifo_rd_ptr = cb_start_addr;
             if (last_block) {
@@ -115,7 +115,7 @@ FORCE_INLINE void calculate_next_block_index_and_update_rd_ptr(
         // UNPACK(( DPRINT << "local_cb.fifo_rd_ptr " <<  (uint)local_cb.fifo_rd_ptr <<ENDL() ));
         // UNPACK(( DPRINT << "local_cb.fifo_limit " <<  (uint)local_cb.fifo_limit <<ENDL() ));
         // UNPACK(( DPRINT << "reach_limit " <<  (uint)reach_limit <<ENDL() ));
-        // UNPACK(( DPRINT << "last_block " <<  (uint)last_block <<ENDL() ));
+        UNPACK((DPRINT << "last_block " << (uint)last_block << ENDL()));
         if (last_block) {
             next_block_index = 0;
             next_fifo_rd_ptr = rd_ptr_start_addr;
@@ -141,12 +141,12 @@ FORCE_INLINE void update_rd_ptr_to_ring_index(
                 fifo_start_addr +
                 (fifo_size_skip_bytes + ring_index * block_size_bytes / L1_ALIGNMENT) % local_cb.fifo_size;
 
-            UNPACK((DPRINT << "fifo_start_addr " << (uint)fifo_start_addr << ENDL()));
-            UNPACK((DPRINT << "fifo_size_skip_bytes " << (uint)fifo_size_skip_bytes << ENDL()));
-            UNPACK(
-                (DPRINT << "mod "
-                        << (fifo_size_skip_bytes + ring_index * block_size_bytes / L1_ALIGNMENT) % local_cb.fifo_size
-                        << ENDL()));
+            // UNPACK((DPRINT << "fifo_start_addr " << (uint)fifo_start_addr << ENDL()));
+            // UNPACK((DPRINT << "fifo_size_skip_bytes " << (uint)fifo_size_skip_bytes << ENDL()));
+            // UNPACK(
+            //     (DPRINT << "mod "
+            //             << (fifo_size_skip_bytes + ring_index * block_size_bytes / L1_ALIGNMENT) % local_cb.fifo_size
+            //             << ENDL()));
 
         } else {
             local_cb.fifo_rd_ptr = local_cb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT;
@@ -220,9 +220,9 @@ void MAIN {
     // UNPACK(( DPRINT << "num_blocks " <<  (uint)num_blocks <<ENDL() ));
     // UNPACK(( DPRINT << "in1_tile_size " <<  (uint)in1_tile_size <<ENDL() ));
 
-    UNPACK((DPRINT << "in1_cb_start_addr " << (uint)in1_cb_start_addr << ENDL()));
-    UNPACK((DPRINT << "local_cb_rd_ptr " << (uint)get_local_cb_rd_ptr(in1_cb_id) << ENDL()));
-    // UNPACK(( DPRINT << "in1_rd_ptr_start_addr " <<  (uint)in1_rd_ptr_start_addr <<ENDL() ));
+    // UNPACK((DPRINT << "in1_cb_start_addr " << (uint)in1_cb_start_addr << ENDL()));
+    // UNPACK((DPRINT << "local_cb_rd_ptr " << (uint)get_local_cb_rd_ptr(in1_cb_id) << ENDL()));
+    UNPACK((DPRINT << "in1_rd_ptr_start_addr " << (uint)in1_rd_ptr_start_addr << ENDL()));
     // UNPACK(( DPRINT << "curr_in1_block_index " <<  (uint)curr_in1_block_index <<ENDL() ));
     // UNPACK(( DPRINT << "in1_tensor_split " <<  (uint)in1_tensor_split <<ENDL() ));
 

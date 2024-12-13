@@ -140,7 +140,7 @@ void kernel_main() {
 #ifdef ENABLE_GLOBAL_CB
         experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
 #endif
-        // DPRINT << get_remote_cb_rd_ptr(remote_cb_id) << ENDL();
+        DPRINT << "remote ptr " << get_remote_cb_rd_ptr(remote_cb_id) / 16 << ENDL();
         LocalCBInterface& local_cb = get_local_cb_interface(cb_id_in1);
 
         // DPRINT << "fifo_limit " << local_cb.fifo_limit << ENDL();
@@ -192,6 +192,7 @@ void kernel_main() {
     }
 
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
+    DPRINT << "remote ptr after " << get_remote_cb_rd_ptr(remote_cb_id) / 16 << ENDL();
     // DPRINT << "get_local_cb_rd_ptr " << get_local_cb_rd_ptr(cb_id_in1) << ENDL();
     // experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {cb_id_in1});
     // DPRINT << "get_local_cb_rd_ptr " << get_local_cb_rd_ptr(cb_id_in1) << ENDL();

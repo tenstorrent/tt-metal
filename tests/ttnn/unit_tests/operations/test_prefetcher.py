@@ -259,29 +259,29 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
         # (2, 2, [(1024, 256), (1024, 256)], 1),
         # (2, 2, [(128, 128), (128, 128)], 1),
         # (2, 2, [(256, 1024), (256, 1024)], 1),
-        (
-            3,
-            4,
-            [(1152 // 2, 1920 // 2)] * 4,
-            1,
-        ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
+        # (
+        #     12,
+        #     3,
+        #     [(2304, 3840)] * 3,
+        #     1,
+        # ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
         # (
         #     1,
         #     4,
         #     [(192, 320), (192, 320), (192, 320), (192, 320)],
         #     1,
         # ),
-        # (12, 2, [(7680, 2304), (7680, 2304)], 1),  # FF2
-        # (12, 2, [(2304, 1536), (2304, 1536)], 1),  # QKV
-        # (12, 2, [(2304, 2304), (2304, 2304)], 1),  # DO
+        # (12, 5, [(7680, 2304)]*5, 1),  # FF2
+        # (12, 6, [(2304, 1536)]*6, 1),  # QKV
+        (12, 5, [(2304, 2304)] * 5, 1),  # DO
     ],
 )
 @pytest.mark.parametrize(
     "dtype, pcc_threshold",
     [
-        (ttnn.bfloat16, 0.999),
+        # (ttnn.bfloat16, 0.999),
         # (ttnn.bfloat8_b, 0.999),
-        # (ttnn.bfloat4_b, 0.99),
+        (ttnn.bfloat4_b, 0.99),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
@@ -298,7 +298,7 @@ def test_run_prefetcher(
 ):
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shapes[0]}")
 
-    num_global_cb_receivers = 1
+    num_global_cb_receivers = 2
 
     K, N = input_shapes[0]
 
@@ -325,7 +325,7 @@ def test_run_prefetcher(
     # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 1088 * (360))
     # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 576 * (800))
 
-    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 512)
+    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 256)
 
     ##### Set up the input tensors #####
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
@@ -487,8 +487,7 @@ def test_run_prefetcher(
         ),
     )
 
-    in0 = torch.ones(in0_shape)
-    in1 = torch.randn(in1_shape)
+    in0 = torch.randn(in0_shape)
 
     in0_t = ttnn.from_torch(
         in0,
