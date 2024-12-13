@@ -16,7 +16,7 @@ namespace {
 
 class ReplicateTensorToMesh : public TensorToMesh {
 public:
-    ReplicateTensorToMesh(int num_devices) : num_devices_(num_devices) {}
+    ReplicateTensorToMesh(size_t num_devices) : num_devices_(num_devices) {}
 
     std::vector<Tensor> map(const Tensor& tensor) override {
         std::vector<Tensor> tensors;
@@ -28,12 +28,12 @@ public:
     DistributedTensorConfig config() const override { return DistributedTensorConfig{ReplicateTensor{num_devices_}}; }
 
 private:
-    int num_devices_ = -1;
+    size_t num_devices_ = 0;
 };
 
 class ShardTensorToMesh : public TensorToMesh {
 public:
-    ShardTensorToMesh(int num_devices, int dim) : num_devices_(num_devices), shard_dim_(dim) {}
+    ShardTensorToMesh(size_t num_devices, int dim) : num_devices_(num_devices), shard_dim_(dim) {}
 
     std::vector<Tensor> map(const Tensor& tensor) override {
         return experimental::xtensor::chunk(tensor, num_devices_, shard_dim_);
@@ -42,7 +42,7 @@ public:
     DistributedTensorConfig config() const override { return DistributedTensorConfig{ShardTensor{shard_dim_}}; }
 
 private:
-    int num_devices_ = -1;
+    size_t num_devices_ = 0;
     int shard_dim_ = -1;
 };
 

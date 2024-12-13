@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/assert.hpp"
+#include "common/bfloat16.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>
 
@@ -89,34 +91,23 @@ Tensor from_span<float>(tt::stl::Span<const float> buffer, const TensorSpec& spe
     }
 }
 
-template <>
-Tensor from_span<bfloat16>(tt::stl::Span<const bfloat16> buffer, const TensorSpec& spec) {
+template <typename T>
+Tensor from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     TT_FATAL(
-        spec.data_type() == DataType::BFLOAT16, "Unsupported data type for from_span<bfloat16>: {}", spec.data_type());
+        spec.data_type() == convert_to_data_type<T>(),
+        "Unsupported data type for from_span: got {}, expected: {}",
+        spec.data_type(),
+        convert_to_data_type<T>());
     return create_owned_tensor(buffer, spec);
 }
 
-template <>
-Tensor from_span<uint32_t>(tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec) {
-    size_t volume = spec.logical_shape().volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    TT_FATAL(
-        spec.data_type() == DataType::UINT32, "Unsupported data type for from_span<uint32_t>: {}", spec.data_type());
-    return create_owned_tensor(buffer, spec);
-}
-
-template <>
-Tensor from_span<int32_t>(tt::stl::Span<const int32_t> buffer, const TensorSpec& spec) {
-    size_t volume = spec.logical_shape().volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    TT_FATAL(spec.data_type() == DataType::INT32, "Unsupported data type for from_span<int32_t>: {}", spec.data_type());
-    return create_owned_tensor(buffer, spec);
-}
+// Instantiate explicitly for the supported types.
+template Tensor from_span<bfloat16>(tt::stl::Span<const bfloat16> buffer, const TensorSpec& spec);
+template Tensor from_span<uint32_t>(tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec);
+template Tensor from_span<int32_t>(tt::stl::Span<const int32_t> buffer, const TensorSpec& spec);
 
 template <>
 std::vector<float> to_vector<float>(const Tensor& tensor) {
@@ -131,34 +122,20 @@ std::vector<float> to_vector<float>(const Tensor& tensor) {
     }
 }
 
-template <>
-std::vector<bfloat16> to_vector<bfloat16>(const Tensor& tensor) {
+template <typename T>
+std::vector<T> to_vector(const Tensor& tensor) {
     auto cpu_tensor = tensor.cpu().to(Layout::ROW_MAJOR);
     TT_FATAL(
-        cpu_tensor.get_dtype() == DataType::BFLOAT16,
-        "Unsupported data type for to_vector<bfloat16>: {}",
-        cpu_tensor.get_dtype());
-    return untile_tensor_to_vec<bfloat16, bfloat16>(cpu_tensor);
+        cpu_tensor.get_dtype() == convert_to_data_type<T>(),
+        "Unsupported data type for to_vector: got {}, expected: {}",
+        cpu_tensor.get_dtype(),
+        convert_to_data_type<T>());
+    return untile_tensor_to_vec<T, T>(cpu_tensor);
 }
 
-template <>
-std::vector<uint32_t> to_vector<uint32_t>(const Tensor& tensor) {
-    auto cpu_tensor = tensor.cpu().to(Layout::ROW_MAJOR);
-    TT_FATAL(
-        cpu_tensor.get_dtype() == DataType::UINT32,
-        "Unsupported data type for to_vector<uint32_t>: {}",
-        cpu_tensor.get_dtype());
-    return untile_tensor_to_vec<uint32_t, uint32_t>(cpu_tensor);
-}
-
-template <>
-std::vector<int32_t> to_vector<int32_t>(const Tensor& tensor) {
-    auto cpu_tensor = tensor.cpu().to(Layout::ROW_MAJOR);
-    TT_FATAL(
-        cpu_tensor.get_dtype() == DataType::INT32,
-        "Unsupported data type for to_vector<int32_t>: {}",
-        cpu_tensor.get_dtype());
-    return untile_tensor_to_vec<int32_t, int32_t>(cpu_tensor);
-}
+// Instantiate explicitly for the supported types.
+template std::vector<bfloat16> to_vector<bfloat16>(const Tensor& tensor);
+template std::vector<uint32_t> to_vector<uint32_t>(const Tensor& tensor);
+template std::vector<int32_t> to_vector<int32_t>(const Tensor& tensor);
 
 }  // namespace ttnn::experimental::xtensor

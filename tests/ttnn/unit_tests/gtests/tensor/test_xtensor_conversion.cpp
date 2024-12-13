@@ -17,11 +17,11 @@ using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::ttnn::experimental::xtensor::from_xtensor;
 using ::ttnn::experimental::xtensor::get_shape_from_xarray;
-using ::ttnn::experimental::xtensor::span_to_xtensor;
+using ::ttnn::experimental::xtensor::span_to_xtensor_view;
 using ::ttnn::experimental::xtensor::to_xtensor;
 using ::ttnn::experimental::xtensor::xtensor_to_span;
 
-TensorSpec GetTensorSpec(const ttnn::SimpleShape& shape) {
+TensorSpec get_tensor_spec(const ttnn::SimpleShape& shape) {
     return TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
@@ -30,7 +30,7 @@ TEST(XtensorConversionTest, SpanToXtensor) {
     tt::stl::Span<const int> data_span(data.data(), data.size());
     ttnn::SimpleShape shape({2, 3});
 
-    auto result = span_to_xtensor(data_span, shape);
+    auto result = span_to_xtensor_view(data_span, shape);
 
     // Check shape
     EXPECT_THAT(result.shape(), ElementsAre(2, 3));
@@ -57,7 +57,7 @@ TEST(XtensorConversionTest, GetShape) {
 
 TEST(XtensorConversionTest, FromXtensorInvalidShape) {
     xt::xarray<float> arr = {{1.0f, 2.0f}, {3.0f, 4.0f}};
-    EXPECT_ANY_THROW(from_xtensor(arr, GetTensorSpec(ttnn::SimpleShape{3, 3})));
+    EXPECT_ANY_THROW(from_xtensor(arr, get_tensor_spec(ttnn::SimpleShape{3, 3})));
 }
 
 TEST(XtensorConversionTest, Roundtrip) {
@@ -72,7 +72,7 @@ TEST(XtensorConversionTest, Roundtrip) {
     };
 
     for (const auto& shape : shapes) {
-        const auto tensor_spec = GetTensorSpec(shape);
+        const auto tensor_spec = get_tensor_spec(shape);
         xt::xarray<float> input = xt::arange<float>(shape.volume());
         xt::dynamic_shape<std::size_t> new_shape(shape.cbegin(), shape.cend());
         input.reshape(new_shape);
