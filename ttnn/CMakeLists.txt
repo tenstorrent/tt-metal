@@ -689,7 +689,6 @@ if(WITH_PYTHON_BINDINGS)
         APPEND
         TTNN_PUBLIC_INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/experimental/tt_lib
-        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include
         ${Python3_INCLUDE_DIRS}
     )
 
@@ -793,7 +792,7 @@ endif()
 target_include_directories(ttnn PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
 target_link_libraries(
     ttnn
-    PRIVATE
+    PUBLIC
         ${TTNN_PUBLIC_LINK_LIBRARIES}
         ${ALL_TTNN_SUBLIBRARIES}
         ttnn_tensor
