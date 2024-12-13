@@ -146,8 +146,12 @@ void kernel_main() {
         // DPRINT << "reader " << local_cb.fifo_size << ENDL();
         // DPRINT << "reader " << local_cb.fifo_limit << ENDL();
         // DPRINT << "reader " << get_local_cb_rd_ptr(cb_id_in1) << ENDL();
-        // DPRINT << TSLICE(cb_id_in1, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, true)
-        // << ENDL(); DPRINT << TSLICE(cb_id_in1, 0, SliceRange{.h0 = 1, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+        // DPRINT << TSLICE(cb_id_in1, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+        // true)<< ENDL(); DPRINT << TSLICE(cb_id_in1, 0, SliceRange{.h0 = 1, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 32, .ws =
+        // 1}, true, true)<< ENDL(); DPRINT << TSLICE(cb_id_in1, 0, SliceRange{.h0 = 2, .h1 = 3, .hs = 1, .w0 = 0, .w1 =
+        // 32, .ws = 1}, true, true)<< ENDL(); DPRINT << TSLICE(cb_id_in1, 0, SliceRange{.h0 = 3, .h1 = 4, .hs = 1, .w0
+        // = 0, .w1 = 32, .ws = 1}, true, true)<< ENDL();
+        //  DPRINT << TSLICE(cb_id_in1, 0, SliceRange{.h0 = 1, .h1 = 2, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
         // true, true) << ENDL(); DPRINT << TSLICE(cb_id_in1, 0, SliceRange{.h0 = 2, .h1 = 3, .hs = 1, .w0 = 0, .w1 =
         // 32, .ws = 1}, true, true) << ENDL();
 

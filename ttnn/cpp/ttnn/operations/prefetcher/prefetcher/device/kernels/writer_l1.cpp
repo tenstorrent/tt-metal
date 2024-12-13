@@ -119,8 +119,8 @@ void kernel_main() {
     // const uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t noc = noc_index;
 
-    // DPRINT << "num_tensors " << num_tensors <<ENDL();
-    // DPRINT << "num_blocks " << num_blocks <<ENDL();
+    DPRINT << "num_tensors " << num_tensors << ENDL();
+    DPRINT << "num_blocks " << num_blocks << ENDL();
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         for (uint32_t t = 0; t < num_tensors; t++) {
@@ -129,13 +129,24 @@ void kernel_main() {
             uint32_t curr_block_num_tiles = block_num_tiles[t];
             uint32_t curr_single_tile_sizes = single_tile_sizes[t];
             uint32_t curr_block_height_in_tiles = block_height_in_tiles[t];
-            uint32_t curr_block_size = curr_block_num_tiles / num_receivers * curr_single_tile_sizes;
+            uint32_t curr_block_size = curr_block_num_tiles * curr_single_tile_sizes;
+            uint32_t curr_block_size_per_receiver = curr_block_size / num_receivers;
 
             resize_local_cb_interface(local_cb_id, curr_block_size, fifo_start_address, fifo_start_size);
-            experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size, noc);
+            experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size_per_receiver, noc);
+
+            DPRINT << "curr_block_size" << curr_block_size << ENDL();
+            DPRINT << "curr_block_size_per_receiver" << curr_block_size_per_receiver << ENDL();
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 cb_wait_front(local_cb_id, 1);
+
+                // for (uint i=0; i<(uint)(curr_block_num_tiles);i++){
+                //     for (uint8_t j=0; j<32;j++) {
+                //         DPRINT  << TSLICE(local_cb_id, i, SliceRange{.h0 = j, .h1 = uint8_t(j+1), .hs = 1, .w0 = 0,
+                //         .w1 = 32, .ws = 1}, true, true) << ENDL();
+                //     }
+                // }
 
                 // DPRINT  << TSLICE(local_cb_id, 0, SliceRange::h0_w0_32(), true, true) << ENDL();
 
