@@ -10,7 +10,7 @@
 #include <type_traits>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 #include <magic_enum.hpp>
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"

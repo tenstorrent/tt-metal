@@ -25,7 +25,7 @@
 #include "umd/device/types/xy_pair.h"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/common/assert.hpp"
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 
 #include "llrt/hal.hpp"
 

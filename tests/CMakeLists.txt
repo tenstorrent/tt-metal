@@ -6,6 +6,7 @@ target_link_libraries(
     INTERFACE
         pthread
         gmock_main
+        nlohmann_json::nlohmann_json
         magic_enum
         fmt::fmt-header-only
         span
