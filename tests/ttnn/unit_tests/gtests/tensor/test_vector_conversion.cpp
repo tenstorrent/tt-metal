@@ -20,6 +20,7 @@ using ::ttnn::experimental::xtensor::to_vector;
 
 const std::vector<ttnn::SimpleShape>& GetShapesForTest() {
     static auto* shapes = new std::vector<ttnn::SimpleShape>{
+        ttnn::SimpleShape{1},
         ttnn::SimpleShape{1, 1, 1, 1},
         ttnn::SimpleShape{1, 1, 1, 10},
         ttnn::SimpleShape{1, 32, 32, 16},
@@ -53,7 +54,7 @@ class VectorConversionTest : public ::testing::Test {};
 using TestTypes = ::testing::Types<float, bfloat16, uint32_t, int32_t>;
 TYPED_TEST_SUITE(VectorConversionTest, TestTypes);
 
-TYPED_TEST(VectorConversionTest, Basic) {
+TYPED_TEST(VectorConversionTest, Roundtrip) {
     for (const auto& shape : GetShapesForTest()) {
         auto input = Arange<TypeParam>(0, static_cast<int64_t>(shape.volume()), 1);
         auto output = to_vector<TypeParam>(from_vector(input, GetTensorSpec(shape, convert_to_data_type<TypeParam>())));
@@ -69,7 +70,7 @@ TYPED_TEST(VectorConversionTest, InvalidSize) {
     EXPECT_ANY_THROW(from_vector(input, GetTensorSpec(shape, convert_to_data_type<TypeParam>())));
 }
 
-TYPED_TEST(VectorConversionTest, TilezedLayout) {
+TYPED_TEST(VectorConversionTest, RoundtripTilezedLayout) {
     ttnn::SimpleShape shape{128, 128};
 
     auto input = Arange<TypeParam>(0, shape.volume(), 1);
@@ -94,7 +95,7 @@ TYPED_TEST(VectorConversionTest, InvalidDtype) {
             (std::is_same_v<TypeParam, int32_t> ? DataType::FLOAT32 : DataType::INT32))));
 }
 
-TEST(FloatVectorConversionTest, Bfloat16Representation) {
+TEST(FloatVectorConversionTest, RoundtripBfloat16Representation) {
     for (const auto& shape : GetShapesForTest()) {
         auto input_bf16 = Arange<bfloat16>(0, static_cast<int64_t>(shape.volume()), 1);
         std::vector<float> input_ft;

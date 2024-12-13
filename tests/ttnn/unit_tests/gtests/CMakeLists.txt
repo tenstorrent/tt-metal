@@ -30,6 +30,7 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_shape_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_sharding_with_alignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_vector_conversion.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_xtensor_conversion.cpp
 )
 
 add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})

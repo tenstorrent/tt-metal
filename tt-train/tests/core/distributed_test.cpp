@@ -5,7 +5,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <core/xtensor_all_includes.hpp>
+#include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>
 
 #include "core/distributed_mapping.hpp"
 

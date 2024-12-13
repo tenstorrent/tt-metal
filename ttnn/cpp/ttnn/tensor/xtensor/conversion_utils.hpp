@@ -36,12 +36,11 @@ tt::tt_metal::Tensor from_vector(const std::vector<T>& buffer, const TensorSpec&
 }
 
 template <typename T>
-xt::xarray<T> tt_span_to_xtensor(tt::stl::Span<const T> vec, const ttnn::SimpleShape& shape) {
+xt::xarray<T> span_to_xtensor(tt::stl::Span<const T> vec, const ttnn::SimpleShape& shape) {
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(vec.data(), vec.size(), xt::no_ownership(), shape_vec);
 }
 
-// TODO: make the usage of std::span / tt::stl::Span consistent.
 template <typename T>
 xt::xarray<T> span_to_xtensor(std::span<T> vec, const ttnn::SimpleShape& shape) {
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
@@ -49,23 +48,16 @@ xt::xarray<T> span_to_xtensor(std::span<T> vec, const ttnn::SimpleShape& shape) 
 }
 
 template <typename T>
-auto xtensor_to_tt_span(const xt::xarray<T>& xtensor) {
-    auto adaptor = xt::adapt(xtensor.data(), xtensor.size(), xt::no_ownership());
-    return tt::stl::Span<const T>(adaptor.data(), adaptor.size());
-}
-
-// TODO: make the usage of std::span / tt::stl::Span consistent.
-template <typename T>
 auto xtensor_to_span(const xt::xarray<T>& xtensor) {
     auto adaptor = xt::adapt(xtensor.data(), xtensor.size(), xt::no_ownership());
-    return std::span(adaptor.data(), adaptor.size());
+    return tt::stl::Span<const T>(adaptor.data(), adaptor.size());
 }
 
 template <typename T>
 tt::tt_metal::Tensor from_xtensor(const xt::xarray<T>& buffer, const TensorSpec& spec) {
     auto shape = get_shape_from_xarray(buffer);
     TT_FATAL(shape == spec.logical_shape(), "xtensor has a different shape than the supplied TensorSpec");
-    auto buffer_view = xtensor_to_tt_span(buffer);
+    auto buffer_view = xtensor_to_span(buffer);
     return from_span<T>(buffer_view, spec);
 }
 
@@ -73,7 +65,7 @@ template <typename T>
 xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     auto vec = to_vector<T>(tensor);
     auto shape = tensor.get_shape().logical_shape();
-    return tt_span_to_xtensor(tt::stl::Span<const T>(vec.data(), vec.size()), shape);
+    return span_to_xtensor(tt::stl::Span<const T>(vec.data(), vec.size()), shape);
 }
 
 }  // namespace ttnn::experimental::xtensor

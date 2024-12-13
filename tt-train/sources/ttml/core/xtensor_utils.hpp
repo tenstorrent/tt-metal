@@ -5,7 +5,6 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
-#include <core/xtensor_all_includes.hpp>
 #include <span>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/xtensor/conversion_utils.hpp>

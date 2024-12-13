@@ -175,10 +175,9 @@ std::unique_ptr<MeshToTensor> concat_mesh_2d_to_tensor_composer(MeshDevice& mesh
 }
 
 Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, TensorToMesh& mapper) {
-    // TODO: test and optimize for the borrowed storage type.
     TT_FATAL(
-        tensor.storage_type() == StorageType::OWNED,
-        "TensorToMesh only supports owned tensors; got storage type: {}",
+        tensor.storage_type() != StorageType::MULTI_DEVICE && tensor.storage_type() != StorageType::MULTI_DEVICE_HOST,
+        "TensorToMesh does not support multi-device or multi-device host tensors; got storage type: {}",
         tensor.storage_type());
     std::vector<Tensor> tensors = mapper.map(tensor);
     Tensor output = aggregate_as_tensor(tensors, mapper.config());
