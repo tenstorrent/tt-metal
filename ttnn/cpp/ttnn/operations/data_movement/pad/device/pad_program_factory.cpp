@@ -1589,18 +1589,14 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         output.shard_spec().has_value() and output.shard_spec()->shape[1] == output_tensor_shape[-1],
         "output must be sharded with shard width equal to output width");
 
-    auto output_shape = output_tensor_shape;
     uint32_t W = input_tensor.shape()[3], H = input_tensor.shape()[2], C = input_tensor.shape()[1], N = input_tensor.shape()[0];
-    uint32_t num_unpadded_sticks = H * C * N;
     uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
-    uint32_t num_padded_sticks = H_padded * C_padded * N_padded;
-    // stick sizes
+
     auto unpadded_stick_bytes = W * input_tensor.element_size();
     auto padded_stick_bytes = W_padded * input_tensor.element_size();
-    TT_FATAL(unpadded_stick_bytes != padded_stick_bytes,
-             "ttnn.pad: pad_rm_sharded_stickwise should only be used with non-zero width padding.");
 
-    uint32_t row_major_min_bytes = 16;
+    TT_FATAL(unpadded_stick_bytes != padded_stick_bytes,
+             "ttnn.pad: pad_rm_sharded_width_only should only be used with non-zero width padding.");
 
     Device *device = input_tensor.device();
 
@@ -1608,14 +1604,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     auto input_shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height_unpadded = input_shard_spec.shape[0];
     uint32_t shard_width_unpadded = input_shard_spec.shape[1];
-    bool row_major = input_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-
-    auto& input_shard_grid = input_shard_spec.grid;
-    uint32_t num_cores_input = input_shard_spec.num_cores();
-    auto input_bbox = input_shard_grid.bounding_box();
-    CoreCoord input_grid_size = {input_bbox.end_coord.x + 1, input_bbox.end_coord.y+1};
-    uint32_t num_cores_x_input = input_grid_size.x;
-    uint32_t num_cores_y_input = input_grid_size.y;
 
     // output shard spec
     auto shard_spec_padded = output.shard_spec().value();
@@ -1623,12 +1611,6 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     uint32_t shard_width_padded = shard_spec_padded.shape[1];
 
     auto& all_cores_padded = shard_spec_padded.grid;
-
-    uint32_t num_cores_padded = shard_spec_padded.num_cores();
-    auto bbox_padded = shard_spec_padded.grid.bounding_box();
-    CoreCoord grid_size_padded = {bbox_padded.end_coord.x + 1, bbox_padded.end_coord.y+1};
-    uint32_t num_cores_x_padded = grid_size_padded.x;
-    uint32_t num_cores_y_padded = grid_size_padded.y;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
