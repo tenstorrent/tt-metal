@@ -154,7 +154,7 @@ struct FullRep {
 
     FullRep(uint32_t n_rows, uint32_t n_pads, uint32_t times, uint32_t pads_mul, uint32_t times_total) :
         rep{n_rows / 32, n_rows % 32, n_pads / 32, times},
-        pad{0, 0, (n_rows + n_pads) * pads_mul, 1},
+        pad{0, 0, (n_rows + n_pads) * pads_mul / 32, 1},
         times_total(times_total) {
         TT_FATAL((n_rows + n_pads) % 32 == 0 && "total rows must be divisible by 32", "Error");
     }
