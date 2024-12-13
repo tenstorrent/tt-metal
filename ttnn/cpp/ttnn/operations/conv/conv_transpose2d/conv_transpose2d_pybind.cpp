@@ -108,8 +108,9 @@ void py_bind_conv_transpose2d(py::module& module) {
                 const std::optional<const Conv2dConfig>& conv_config,
                 const std::optional<const DeviceComputeKernelConfig>& compute_config,
                 const std::optional<const MemoryConfig>& memory_config,
+                bool mirror_kernel,
                 const uint8_t& queue_id) -> Result {
-                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config, compute_config, memory_config);
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config, compute_config, memory_config, mirror_kernel);
 
             },
             py::kw_only(),
@@ -131,6 +132,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("mirror_kernel") = true,
             py::arg("queue_id") = 0},
 
         ttnn::pybind_overload_t{
@@ -152,8 +154,9 @@ void py_bind_conv_transpose2d(py::module& module) {
                 const std::optional<const Conv2dConfig>& conv_config,
                 const std::optional<const DeviceComputeKernelConfig>& compute_config,
                 const std::optional<const MemoryConfig>& memory_config,
+                bool mirror_kernel,
                 const uint8_t& queue_id) -> Result {
-                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config, compute_config, memory_config);
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config, compute_config, memory_config, mirror_kernel);
 
             },
             py::kw_only(),
@@ -175,6 +178,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("mirror_kernel") = true,
             py::arg("queue_id") = 0}
     );
 }
