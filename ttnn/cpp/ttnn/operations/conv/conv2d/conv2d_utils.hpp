@@ -226,5 +226,7 @@ OptimizedConvBlockConfig get_opt_block_config(
     Layout input_tensor_layout,
     Conv2dConfig& conv_config);
 
+std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
+
 } // namespace operations::conv
 } // namespace ttnn
