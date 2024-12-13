@@ -27,7 +27,7 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 void DeviceProfiler::readRiscProfilerResults(
-    IDevice* device, const std::vector<std::uint32_t>& profile_buffer, CoreCoord& worker_core) {
+    IDevice* device, CoreCoord& worker_core) {
     ZoneScoped;
     auto device_id = device->id();
 
@@ -397,8 +397,6 @@ void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& 
     generateZoneSourceLocationsHashes();
 
     if (output_dram_buffer != nullptr) {
-        std::vector<uint32_t> profile_buffer(output_dram_buffer->size() / sizeof(uint32_t), 0);
-
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (lastDump) {
@@ -415,7 +413,7 @@ void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& 
         }
 
         for (auto worker_core : worker_cores) {
-            readRiscProfilerResults(device, profile_buffer, worker_core);
+            readRiscProfilerResults(device, worker_core);
         }
     } else {
         log_warning("DRAM profiler buffer is not initialized");

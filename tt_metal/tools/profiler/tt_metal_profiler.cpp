@@ -265,8 +265,6 @@ void syncDeviceHost(
 
     tt_metal_device_profiler_map.at(device_id).device_core_sync_info.emplace(
         core, std::make_tuple(smallestHostime[device_id], delay, frequencyFit));
-    tt_metal_device_profiler_map.at(device_id).device_core_sync_info[core] =
-        std::make_tuple(smallestHostime[device_id], delay, frequencyFit);
 }
 
 void ClearProfilerControlBuffer(IDevice* device) {
@@ -312,6 +310,8 @@ void InitDeviceProfiler(IDevice* device) {
                 .page_size = pageSize,
                 .buffer_type = tt::tt_metal::BufferType::DRAM};
             tt_metal_device_profiler_map.at(device_id).output_dram_buffer = tt_metal::CreateBuffer(dram_config);
+            tt_metal_device_profiler_map.at(device_id).profile_buffer.resize(
+                tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size() / sizeof(uint32_t));
         }
 
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
