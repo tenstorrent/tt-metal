@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 import torch
 import random
 import ttnn
+import traceback
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -18,7 +19,18 @@ random.seed(0)
 parameters = {
     "nightly": {
         "shard_specs": [
-            {"shape": [1, 1, 32], "shard_shape": None},
+            {"shape": [1, 1, 1, 16], "shard_shape": None},
+            {"shape": [1, 1, 32, 16], "shard_shape": None},
+            {"shape": [1, 1, 16, 32], "shard_shape": None},
+            {"shape": [1, 1, 32, 32], "shard_shape": None},
+            {"shape": [1, 1, 64, 64], "shard_shape": None},
+            {"shape": [1, 1, 128, 128], "shard_shape": None},
+            {"shape": [1, 1, 1, 16], "shard_shape": [1, 1, 1, 16]},
+            {"shape": [1, 1, 32, 16], "shard_shape": [1, 1, 16, 16]},
+            {"shape": [1, 1, 16, 32], "shard_shape": [1, 1, 1, 16]},
+            {"shape": [1, 1, 32, 32], "shard_shape": [1, 1, 16, 16]},
+            {"shape": [1, 1, 64, 64], "shard_shape": [1, 1, 16, 16]},
+            {"shape": [1, 1, 128, 128], "shard_shape": [1, 1, 32, 16]},
         ],
         "strategy": [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.HEIGHT],
         "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.ROW_MAJOR],
@@ -29,7 +41,7 @@ parameters = {
             ttnn.CoreGrid(y=2, x=2),
         ],
         "dtype": [ttnn.bfloat16],
-        "layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_buffer_type": [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
         "output_buffer_type": [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
     }
@@ -60,26 +72,9 @@ def run(
     device,
 ):
     device.enable_async(False)
-    print("shard_specs:", shard_specs)
-    # Ensure shard_specs is a dictionary
-    if not isinstance(shard_specs, dict):
-        print("shard_specs should be a dictionary")
-        raise ValueError("shard_specs should be a dictionary")
-    else:
-        print("shard_specs is a dictionary")
-    # Debug print to check the type and content of shard_specs
-    print("Debug: shard_specs:", shard_specs)
 
-    # Extract the shape specs from the input vector
     shape = shard_specs["shape"]
     shard_shape = shard_specs["shard_shape"]
-
-    # Debug prints to check the values of the variables
-    print("Debug: shape:", shape)
-    print("Debug: shard_shape:", shard_shape)
-    print("Debug: strategy:", strategy)
-    print("Debug: orientation:", orientation)
-    print("Debug: core_grid:", core_grid)
 
     # Prepare the shard config accordingly
     if shard_shape is None:
@@ -120,7 +115,7 @@ def run(
 
     output_data = ttnn.from_device(interleaved_output)
     output_data = ttnn.to_torch(output_data)
+
     # Compare the concatenated tensors and return performance and accuracy check
     result = check_with_pcc(input_data, output_data, 0.999)
-
     return [result, e2e_perf]
