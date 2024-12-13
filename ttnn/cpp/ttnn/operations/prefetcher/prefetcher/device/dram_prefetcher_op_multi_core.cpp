@@ -91,6 +91,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = 2048;  // bfloat16 tile size
     uint32_t reader_cb_size = (global_cb->size() / reader_cb_single_tile_size) * reader_cb_single_tile_size;
+    // uint32_t reader_cb_size = 2048*2;
 
     // uint32_t reader_cb_single_tile_size = 1088;  // bfp8_b tile size
     // uint32_t reader_cb_single_tile_size = 576;  // bfp4_b tile size
