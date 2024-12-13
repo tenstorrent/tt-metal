@@ -123,7 +123,7 @@ FORCE_INLINE void remote_cb_pop_front(uint32_t cb_id, uint32_t num_pages, uint8_
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_acked_ptr);
 
     *pages_acked_ptr += num_aligned_pages;
-    DPRINT << "num_aligned_pages " << num_aligned_pages << ENDL();
+    // DPRINT << "num_aligned_pages " << num_aligned_pages << ENDL();
     remote_cb.fifo_rd_ptr += len_bytes;
 
     if (remote_cb.fifo_rd_ptr >= remote_cb.fifo_limit_page_aligned) {
@@ -243,7 +243,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         next_receiver_start_addr_offset += next_receiver_start_addr_stride;
         *pages_sent_ptr += pages_sent;
 
-        DPRINT << "pages_sent " << pages_sent << ENDL();
+        // DPRINT << "pages_sent " << pages_sent << ENDL();
 
         uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
         noc_semaphore_inc(remote_sent_ptr_addr, pages_sent, noc);

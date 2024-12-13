@@ -119,8 +119,8 @@ void kernel_main() {
     // const uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t noc = noc_index;
 
-    DPRINT << "num_tensors " << num_tensors << ENDL();
-    DPRINT << "num_blocks " << num_blocks << ENDL();
+    // DPRINT << "num_tensors " << num_tensors << ENDL();
+    // DPRINT << "num_blocks " << num_blocks << ENDL();
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         for (uint32_t t = 0; t < num_tensors; t++) {
@@ -135,8 +135,8 @@ void kernel_main() {
             resize_local_cb_interface(local_cb_id, curr_block_size, fifo_start_address, fifo_start_size);
             experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size_per_receiver, noc);
 
-            DPRINT << "curr_block_size" << curr_block_size << ENDL();
-            DPRINT << "curr_block_size_per_receiver" << curr_block_size_per_receiver << ENDL();
+            // DPRINT << "curr_block_size" << curr_block_size << ENDL();
+            // DPRINT << "curr_block_size_per_receiver" << curr_block_size_per_receiver << ENDL();
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 cb_wait_front(local_cb_id, 1);
@@ -154,7 +154,7 @@ void kernel_main() {
                 experimental::remote_cb_reserve_back(remote_cb_id, 1);  // Reserve back 1 curr_block_size
 
                 // print_remote_fifo(remote_cb_id);
-                // if (t==0 or t==1 or t==2 or t==3)
+                // if (t==0 or t==1)
                 experimental::remote_cb_push_back_and_write_pages(
                     remote_cb_id,
                     local_cb_addr,
