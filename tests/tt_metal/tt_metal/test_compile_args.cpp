@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
         tt_metal::Device* device = tt_metal::CreateDevice(device_id);
         // Remove old compiled kernels
         static const std::string kernel_name = "test_compile_args";
-        auto binary_path_str = jit_build_get_kernel_compile_outpath(device->build_key()) + kernel_name;
+        auto binary_path_str = device->build_env().get_out_kernel_root_path() + kernel_name;
         std::filesystem::remove_all(binary_path_str);
 
         pass &= test_compile_args({0, 68, 0, 124}, device);
