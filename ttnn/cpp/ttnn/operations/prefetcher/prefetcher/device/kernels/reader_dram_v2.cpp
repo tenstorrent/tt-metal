@@ -56,6 +56,8 @@ FORCE_INLINE void resize_local_cb_interface(
     local_cb.fifo_wr_ptr = next_fifo_wr_ptr;
     local_cb.fifo_rd_ptr = next_fifo_rd_ptr;
 
+    // DPRINT << "fifo_num_pages " <<fifo_num_pages <<ENDL();
+
     // DPRINT << "local_cb.fifo_wr_ptr " << local_cb.fifo_wr_ptr -fifo_start_addr<<ENDL();
 }
 
@@ -73,10 +75,11 @@ void kernel_main() {
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     constexpr uint32_t read_cb_size = get_compile_time_arg_val(3);
+    constexpr uint32_t max_block_num_tiles = get_compile_time_arg_val(4);
 
     constexpr uint32_t cb_id = 0;        // Reader cb
     constexpr uint32_t addrs_cb_id = 1;  // Tensor specs
-    constexpr uint32_t out_cb_id = 2;    // Output cb
+    constexpr uint32_t sync_cb = 2;
 
     uint32_t fifo_start_address = get_fifo_start_address(cb_id);
     uint32_t fifo_start_size = get_fifo_start_size(cb_id);
@@ -103,8 +106,13 @@ void kernel_main() {
             uint32_t curr_block_num_tiles = block_num_tiles[t];
             uint32_t curr_block_size_bytes = curr_block_num_pages * curr_page_size;
 
-            resize_local_cb_interface(cb_id, curr_block_size_bytes, fifo_start_address, fifo_start_size);
+            // resize_local_cb_interface(cb_id, curr_block_size_bytes, fifo_start_address, fifo_start_size);
+            //
+            // DPRINT << "curr_page_size " << curr_page_size <<ENDL();
+            // DPRINT << "curr_block_num_pages " << curr_block_num_pages <<ENDL();
+            // DPRINT << "curr_block_num_tiles " << curr_block_num_tiles <<ENDL();
             // DPRINT << "curr_block_size_bytes " << curr_block_size_bytes <<ENDL();
+
             // DPRINT << "get_local_cb_wr_ptr " << get_local_cb_wr_ptr(cb_id, fifo_start_address) << ENDL();
 
             // Address setup
@@ -113,10 +121,14 @@ void kernel_main() {
                 noc_async_read_tile_dram_sharded_set_state<true>(tensor_base_address, curr_page_size, bank_id, vc);
             uint32_t src_read_addr = 0;
 
+            // DPRINT << "reader tensor_base_address" << tensor_base_address << ENDL();
+
             for (uint32_t block = 0; block < num_blocks; ++block) {
-                // TODO: Fix granularity of the CB
-                cb_reserve_back(cb_id, 1);
+                cb_reserve_back(cb_id, max_block_num_tiles);
+                // cb_reserve_back(cb_id, curr_block_num_tiles);
                 auto l1_write_addr = get_write_ptr(cb_id);
+
+                DPRINT << "reader max_block_num_tiles " << max_block_num_tiles << ENDL();
 
                 for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
                     noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
@@ -125,8 +137,16 @@ void kernel_main() {
                 }
 
                 noc_async_read_barrier();
-                cb_push_back(cb_id, 1);
+
+                // for (uint i=0; i<(uint)(curr_block_num_tiles);i++){
+                //     DPRINT  << TSLICE(cb_id, i, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0,
+                //         .w1 = 32, .ws = 1}, true, true) << ENDL();
+                // }
+
+                cb_push_back(cb_id, max_block_num_tiles);
+                // cb_push_back(cb_id, curr_block_num_tiles);
             }
         }
     }
+    DPRINT << "reader done " << ENDL();
 }
