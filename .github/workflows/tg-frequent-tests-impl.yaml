@@ -14,7 +14,6 @@ jobs:
           { name: "TG resnet50 frequent tests", arch: wormhole_b0, model: resnet50, timeout: 90, owner_id: U013121KDH9}, # Austin Ho
           { name: "TG unit/distributed frequent tests", arch: wormhole_b0, model: unit, timeout: 90, owner_id: XXXXX}, # Add owner
         ]
-    name: ${{ matrix.test-group.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}

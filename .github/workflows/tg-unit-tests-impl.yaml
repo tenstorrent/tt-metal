@@ -16,7 +16,6 @@ jobs:
             cmd: "./build/test/umd/galaxy/unit_tests_glx"
           },
         ]
-    name: ${{ matrix.test-group.name }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
