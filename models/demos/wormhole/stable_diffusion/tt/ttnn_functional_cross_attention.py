@@ -13,6 +13,8 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     dealloc_input,
     determine_blocking,
     reshard_to,
+    weight_to_bfp8,
+    get_mesh_mappers,
 )
 
 
@@ -47,13 +49,14 @@ def ttnn_to_torch(input):
     return input
 
 
-def pad_heads(tensor, num_heads=8, dim=-1):
-    device = tensor.device()
+def pad_heads(device, tensor, num_heads=8, dim=-1):
+    inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
     memory_config = ttnn.get_memory_config(tensor)
 
     padding_needed = not is_tile_dim_alligned(tensor.shape[dim] // num_heads)
     if padding_needed:
-        tensor = ttnn_to_torch(tensor)
+        tensor = ttnn.to_torch(tensor, mesh_composer=output_mesh_composer)
+        tensor = torch.split(tensor, 1, dim=0)[0]
         unpadded_len = tensor.shape[-1] // num_heads
         padding_needed = round_up_to_tile_dim(unpadded_len) - unpadded_len
         unpadded_tensors = torch.split(tensor, tensor.shape[dim] // num_heads, dim=dim)
@@ -76,25 +79,32 @@ def pad_heads(tensor, num_heads=8, dim=-1):
         while len(padded_tensor.shape) < 4:
             padded_tensor = padded_tensor.unsqueeze(0)
 
-        padded_tensor = ttnn.from_torch(padded_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        padded_tensor = ttnn.to_device(padded_tensor, device, memory_config=memory_config)
+        padded_tensor = ttnn.from_torch(
+            padded_tensor,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=memory_config,
+            mesh_mapper=inputs_mesh_mapper,
+        )
         tensor = padded_tensor
 
     return tensor
 
 
-def concatenate_qkv(q, k, v):
+def concatenate_qkv(device, q, k, v):
     dim = -1
-    device = k.device()
+    inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
     memory_config = ttnn.get_memory_config(k)
 
     if q is not None:
-        q = ttnn_to_torch(q)
+        q = ttnn.to_torch(q, mesh_composer=output_mesh_composer)
+        q = torch.split(q, 1, dim=0)[0]
         assert is_tile_dim_alligned(q.shape[dim])
-
-    k = ttnn_to_torch(k)
-    v = ttnn_to_torch(v)
-
+    k = ttnn.to_torch(k, mesh_composer=output_mesh_composer)
+    k = torch.split(k, 1, dim=0)[0]
+    v = ttnn.to_torch(v, mesh_composer=output_mesh_composer)
+    v = torch.split(v, 1, dim=0)[0]
     assert is_tile_dim_alligned(k.shape[dim])
     assert is_tile_dim_alligned(v.shape[dim])
 
@@ -131,41 +141,41 @@ def concatenate_qkv(q, k, v):
             else:
                 qkv = torch.cat([qkv, qkv_partial], dim=dim)
 
-    qkv = ttnn.from_torch(qkv, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    qkv = ttnn.to_device(qkv, device, memory_config=memory_config)
+    qkv = ttnn.from_torch(
+        qkv,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+        mesh_mapper=weights_mesh_mapper,
+    )
+
     return qkv
-
-
-def weight_to_bfp8(weight):
-    device = weight.device()
-    memory_config = ttnn.get_memory_config(weight)
-    weight = ttnn_to_torch(weight)
-    weight = ttnn.from_torch(weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    weight = ttnn.to_device(weight, device, memory_config=memory_config)
-    return weight
 
 
 class cross_attention:
     def __init__(self, device, parameters, seq_len):
+        self.device = device
         self.program_configs = {}
         self.seq_len = seq_len
         self.fused_qkv = parameters.to_q.weight.shape[-2] == parameters.to_k.weight.shape[-2]
+        self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = get_mesh_mappers(device)
         for key in ["to_q", "to_k", "to_v"]:
-            parameters[key].weight = pad_heads(parameters[key].weight, 8)
+            parameters[key].weight = pad_heads(device, parameters[key].weight, 8)
             assert "bias" not in parameters[key]
-        parameters.to_out[0].weight = pad_heads(parameters.to_out[0].weight, 8, dim=-2)
+        parameters.to_out[0].weight = pad_heads(device, parameters.to_out[0].weight, 8, dim=-2)
 
         if self.fused_qkv:
             parameters["qkv"] = ttnn.model_preprocessing.ParameterDict()
             parameters.qkv["weight"] = concatenate_qkv(
-                parameters.to_q.weight, parameters.to_k.weight, parameters.to_v.weight
+                device, parameters.to_q.weight, parameters.to_k.weight, parameters.to_v.weight
             )
             parameters.qkv.weight = ttnn.unsqueeze_to_4D(parameters.qkv.weight)
             self.qkv_len = parameters.qkv.weight.shape[-1]
         else:
             parameters["kv"] = ttnn.model_preprocessing.ParameterDict()
-            parameters.kv["weight"] = concatenate_qkv(None, parameters.to_k.weight, parameters.to_v.weight)
-            parameters.to_q.weight = weight_to_bfp8(parameters.to_q.weight)
+            parameters.kv["weight"] = concatenate_qkv(device, None, parameters.to_k.weight, parameters.to_v.weight)
+            parameters.to_q.weight = weight_to_bfp8(self.device, parameters.to_q.weight)
             self.q_len = parameters.to_q.weight.shape[-1]
             self.kv_len = parameters.kv.weight.shape[-1]
 
@@ -185,22 +195,36 @@ class cross_attention:
             self.dim_head = 160
 
         scale = torch.ones((1, 1, 1, 1)) * 1 / math.sqrt(self.dim_head)
-        self.scale = ttnn.from_torch(scale, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device)
+        self.scale = ttnn.from_torch(
+            scale,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            # mesh_mapper=self.weights_mesh_mapper,
+        )
 
         attention_mask_96 = torch.ones((1, 1, seq_len, 96)) * -1e9
         attention_mask_96[:, :, :, :77] = 0
         attention_mask_96 = ttnn.from_torch(
-            attention_mask_96, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
+            attention_mask_96,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=self.weights_mesh_mapper,
         )
 
         attention_mask_full = torch.zeros((1, 1, seq_len, seq_len))
         attention_mask_full = ttnn.from_torch(
-            attention_mask_full, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device
+            attention_mask_full,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=self.weights_mesh_mapper,
         )
         self.attention_masks = {"cross": attention_mask_96, "self": attention_mask_full}
 
-        self.parameters.to_out[0].weight = weight_to_bfp8(self.parameters.to_out[0].weight)
-        self.parameters.to_out[0].bias = weight_to_bfp8(self.parameters.to_out[0].bias)
+        self.parameters.to_out[0].weight = weight_to_bfp8(self.device, self.parameters.to_out[0].weight)
+        self.parameters.to_out[0].bias = weight_to_bfp8(self.device, self.parameters.to_out[0].bias)
 
         self.dram_interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
         self.l1_interleaved_memory_config = ttnn.L1_MEMORY_CONFIG
@@ -339,10 +363,20 @@ class cross_attention:
                 fused_activation=None,
                 mcast_in0=False,
             )
-            self.tsa_output_shape = (2, 8, seq_len, self.key_len)
+
+            bs = self.encoder_hidden_states_shape[0]
+            bs = bs * 2 if self.inputs_mesh_mapper else bs
+
+            self.tsa_output_shape = (bs, 8, seq_len, self.key_len)
             output_tensor = torch.zeros(self.tsa_output_shape)
-            output_tensor = ttnn.from_torch(output_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-            self.output_tensor = ttnn.to_device(output_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            self.output_tensor = ttnn.from_torch(
+                output_tensor,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.inputs_mesh_mapper,
+            )
 
             output_cores = 16
             self.tsa_output_shard_shape = [

@@ -131,12 +131,19 @@ def ttnn_to_torch(input):
     return input
 
 
-def weight_to_bfp8(weight):
-    device = weight.device()
+def weight_to_bfp8(device, weight):
+    inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
     memory_config = ttnn.get_memory_config(weight)
-    weight = ttnn_to_torch(weight)
-    weight = ttnn.from_torch(weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    weight = ttnn.to_device(weight, device, memory_config=memory_config)
+    weight = ttnn.to_torch(weight, mesh_composer=output_mesh_composer)
+    weight = torch.split(weight, 1, dim=0)[0]
+    weight = ttnn.from_torch(
+        weight,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+        mesh_mapper=weights_mesh_mapper,
+    )
     return weight
 
 
@@ -178,6 +185,21 @@ def dealloc_input(fn, *args, **kwargs):
             if a.is_allocated():
                 ttnn.deallocate(a)
     return out
+
+
+def get_mesh_mappers(device):
+    is_mesh_device = isinstance(device, ttnn.MeshDevice)
+    if is_mesh_device:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(
+            device
+        )  # causes unnecessary replication/takes more time on the first pass
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
 
 
 def find_max_subblock(out_block_h, out_block_w):

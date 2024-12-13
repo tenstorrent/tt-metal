@@ -31,19 +31,27 @@ from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_p
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import round_up_to_tile_dim
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    round_up_to_tile_dim,
+    get_mesh_mappers,
+)
 from torchvision.transforms import ToTensor
 from torchmetrics.multimodal.clip_score import CLIPScore
 from torchmetrics.image.fid import FrechetInceptionDistance
 from scipy import integrate
 
+from models.demos.wormhole.stable_diffusion_dp.tests.custom_preprocessing import create_custom_mesh_preprocessor
 
-def load_inputs(input_path):
-    with open(input_path) as f:
-        input_data = json.load(f)
-        assert input_data, "Input data is empty."
-        prompt = [item["prompt"] for item in input_data]
-        return prompt
+
+def load_inputs(user_input, batch):
+    if isinstance(user_input, str):
+        with open(user_input, "r") as f:
+            user_input = json.load(f)
+    assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
+    input_prompt = []
+    for i in range(batch):
+        input_prompt.append(user_input[i]["prompt"])
+    return input_prompt
 
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):
@@ -69,8 +77,8 @@ def tt_guide(noise_pred, guidance_scale):  # will return latents
     return noise_pred
 
 
-def _save_image_and_latents(latents, iter, vae, pre_fix="", pre_fix2=""):
-    latents = ttnn.to_torch(latents).to(torch.float32)
+def _save_image_and_latents(latents, iter, vae, mesh_composer, pre_fix="", pre_fix2=""):
+    latents = ttnn.to_torch(latents, mesh_composer=mesh_composer).to(torch.float32)
     pre_fix = "" if pre_fix == "" else f"{pre_fix}_"
     pre_fix2 = "" if pre_fix2 == "" else f"{pre_fix2}_"
     _latents = 1 / 0.18215 * latents
@@ -114,6 +122,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
 
     height, width = image_size
+    model_name = "CompVis/stable-diffusion-v1-4"
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
@@ -127,6 +136,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
     # 3. The UNet model for generating the latents.
     unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
+    inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -144,7 +154,10 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
     config = unet.config
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
+        model_name=model_name,
+        initialize_model=lambda: unet,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=device,
     )
     input_height = 64
     input_width = 64
@@ -153,7 +166,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
     guidance_scale = 7.5  # Scale for classifier-free guidance
     generator = torch.manual_seed(174)  # 10233 Seed generator to create the inital latent noise
-    batch_size = 1
+    batch_size = 1 if inputs_mesh_mapper is None else 2
 
     # Initial random noise
     latents = torch.randn(
@@ -161,38 +174,39 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         generator=generator,
     )
     latents = latents.to(torch_device)
-
     ttnn_scheduler.set_timesteps(num_inference_steps)
-
     latents = latents * ttnn_scheduler.init_noise_sigma
     rand_latents = torch.tensor(latents)
-    rand_latents = ttnn.from_torch(rand_latents, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    rand_latents = ttnn.from_torch(
+        rand_latents, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=inputs_mesh_mapper
+    )
 
     # ttnn_latents = ttnn.from_torch(ttnn_latents, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     ttnn_latent_model_input = ttnn.concat([rand_latents, rand_latents], dim=0)
+
     _tlist = []
     for t in ttnn_scheduler.timesteps:
         _t = constant_prop_time_embeddings(t, ttnn_latent_model_input, unet.time_proj)
         _t = _t.unsqueeze(0).unsqueeze(0)
         _t = _t.permute(2, 0, 1, 3)  # pre-permute temb
-        _t = ttnn.from_torch(_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        _t = ttnn.from_torch(
+            _t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=weights_mesh_mapper
+        )
         _tlist.append(_t)
 
     time_step = ttnn_scheduler.timesteps.tolist()
     i = 0
 
-    inputs = load_inputs(input_path)
+    inputs = load_inputs(input_path, batch_size)
     input_prompts = inputs[:num_prompts]
 
     while i < num_prompts:
         ttnn_scheduler.set_timesteps(num_inference_steps)
-        input_prompt = [input_prompts[i]]
-        i = i + 1
-
+        batch_end = min(i + batch_size, num_prompts)
+        input_prompt = input_prompts[i:batch_end]
+        i = batch_end
         experiment_name = f"input_data_{i}_{height}x{width}"
-        logger.info(f"input prompt : {input_prompt}")
         batch_size = len(input_prompt)
-
         ## First, we get the text_embeddings for the prompt. These embeddings will be used to condition the UNet model.
         # Tokenizer and Text Encoder
         text_input = tokenizer(
@@ -213,7 +227,11 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
         ttnn_text_embeddings = torch.nn.functional.pad(text_embeddings, (0, 0, 0, 19))
         ttnn_text_embeddings = ttnn.from_torch(
-            ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ttnn_text_embeddings,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=inputs_mesh_mapper,
         )
 
         iter = 0
@@ -238,13 +256,15 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
                 )
             # perform guidance
             noise_pred = tt_guide(ttnn_output, guidance_scale)
-
             ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
-            _save_image_and_latents(ttnn_latents, iter, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
+            # latents = ttnn.to_torch(ttnn_latents, mesh_composer=output_mesh_composer).to(torch.float32)
+            _save_image_and_latents(
+                latents, iter, vae, output_mesh_composer, pre_fix=f"{experiment_name}_tt", pre_fix2=""
+            )
 
             iter += 1
 
-        latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
+        latents = ttnn.to_torch(ttnn_latents, mesh_composer=output_mesh_composer).to(torch.float32)
 
         # scale and decode the image latents with vae
         latents = 1 / 0.18215 * latents
@@ -260,19 +280,23 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         pil_images.save(ttnn_output_path)
 
 
-def run_interactive_demo_inference(device, num_inference_steps, image_size=(256, 256)):
+def run_interactive_demo_inference(device, num_prompts, num_inference_steps, image_size=(256, 256)):
     disable_persistent_kernel_cache()
     device.enable_program_cache()
 
     # Until di/dt issues are resolved
     os.environ["SLOW_MATMULS"] = "1"
+
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
 
     height, width = image_size
+    model_name = "CompVis/stable-diffusion-v1-4"
+    inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
 
     torch_device = "cpu"
+
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
     vae.to(torch_device)
@@ -295,23 +319,22 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
         steps_offset=1,
         device=device,
     )
-
     text_encoder.to(torch_device)
     unet.to(torch_device)
-
     config = unet.config
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
+        model_name=model_name,
+        initialize_model=lambda: unet,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=device,
     )
     input_height = 64
     input_width = 64
     reader_patterns_cache = {} if height == 512 and width == 512 else None
     model = UNet2D(device, parameters, 2, input_height, input_width, reader_patterns_cache)
-
     guidance_scale = 7.5  # Scale for classifier-free guidance
     generator = torch.manual_seed(174)  # 10233 Seed generator to create the inital latent noise
-    batch_size = 1
-
+    batch_size = 1 if inputs_mesh_mapper is None else 2
     # Initial random noise
     latents = torch.randn(
         (batch_size, unet.config.in_channels, height // vae_scale_factor, width // vae_scale_factor),
@@ -323,30 +346,50 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
     latents = latents * ttnn_scheduler.init_noise_sigma
     rand_latents = torch.tensor(latents)
-    rand_latents = ttnn.from_torch(rand_latents, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # ttnn_latents = ttnn.from_torch(ttnn_latents, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    rand_latents = ttnn.from_torch(
+        rand_latents, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=inputs_mesh_mapper
+    )
     ttnn_latent_model_input = ttnn.concat([rand_latents, rand_latents], dim=0)
+
     _tlist = []
     for t in ttnn_scheduler.timesteps:
         _t = constant_prop_time_embeddings(t, ttnn_latent_model_input, unet.time_proj)
         _t = _t.unsqueeze(0).unsqueeze(0)
         _t = _t.permute(2, 0, 1, 3)  # pre-permute temb
-        _t = ttnn.from_torch(_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        _t = ttnn.from_torch(
+            _t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=weights_mesh_mapper
+        )
         _tlist.append(_t)
 
     time_step = ttnn_scheduler.timesteps.tolist()
 
     while 1:
         ttnn_scheduler.set_timesteps(num_inference_steps)
-        print("Enter the input promt, or q to exit:")
-        new_prompt = input()
-        if len(new_prompt) > 0:
-            input_prompt = [new_prompt]
-        if input_prompt[0] == "q":
-            break
+        # print("Enter the input prompt, or 'q' to exit:")
+        # first_prompt = input().strip()
+        # if first_prompt.lower() == "q":
+        #     break
 
-        experiment_name = f"interactive_{height}x{width}"
+        # print("Enter the second input prompt, or 'q' to exit:")
+        # second_prompt = input().strip()
+        # if second_prompt.lower() == "q":
+        #     break
+        # input_prompt = [first_prompt, second_prompt]
+
+        input_prompt = []
+
+        for i in range(num_prompts):
+            prompt = input(f"Enter prompt {i + 1}, or 'q' to exit: ").strip()
+            if prompt.lower() == "q":
+                break
+            input_prompt.append(prompt)
+
+        if len(input_prompts) < num_prompts:
+            logger.warning("Fewer prompts entered than expected. Proceeding with the entered prompts.")
+        else:
+            logger.info("All prompts collected.")
+
+        experiment_name = f"input_data_{len(input_prompt)}_{height}x{width}"
         logger.info(f"input prompt : {input_prompt}")
         batch_size = len(input_prompt)
 
@@ -369,8 +412,13 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
         # In practice, we can concatenate both into a single batch to avoid doing two forward passes.
         text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
         ttnn_text_embeddings = torch.nn.functional.pad(text_embeddings, (0, 0, 0, 19))
+
         ttnn_text_embeddings = ttnn.from_torch(
-            ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ttnn_text_embeddings,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=inputs_mesh_mapper,
         )
 
         iter = 0
@@ -397,13 +445,13 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
                 )
             # perform guidance
             noise_pred = tt_guide(ttnn_output, guidance_scale)
-
             ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
             total_accum += time.time() - t0
             iter += 1
+
         print(f"Time taken for {iter} iterations: total: {total_accum:.3f}")
 
-        latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
+        latents = ttnn.to_torch(ttnn_latents, mesh_composer=output_mesh_composer).to(torch.float32)
 
         # scale and decode the image latents with vae
         latents = 1 / 0.18215 * latents
@@ -427,10 +475,10 @@ def run_demo_inference_diffusiondb(
 
     # Until di/dt issues are resolved
     os.environ["SLOW_MATMULS"] = "1"
-
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
+
     # 0. Load a sample prompt from the dataset
     dataset = load_dataset("poloclub/diffusiondb", "2m_random_1k")
     data_1k = dataset["train"]
@@ -450,7 +498,7 @@ def run_demo_inference_diffusiondb(
     # 3. The UNet model for generating the latents.
     unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
 
-    # 4. load the K-LMS scheduler with some fitting parameters.
+    # 4. load the PNDM scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
         beta_start=0.00085,
         beta_end=0.012,
@@ -466,10 +514,14 @@ def run_demo_inference_diffusiondb(
 
     config = unet.config
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
+        model_name=model_name,
+        initialize_model=lambda: unet,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=device,
     )
     input_height = 64
     input_width = 64
+
     reader_patterns_cache = {} if height == 512 and width == 512 else None
     model = UNet2D(device, parameters, 2, input_height, input_width, reader_patterns_cache)
 
@@ -490,7 +542,6 @@ def run_demo_inference_diffusiondb(
     rand_latents = torch.tensor(latents)
     rand_latents = ttnn.from_torch(rand_latents, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # ttnn_latents = ttnn.from_torch(ttnn_latents, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     ttnn_latent_model_input = ttnn.concat([rand_latents, rand_latents], dim=0)
     _tlist = []
     for t in ttnn_scheduler.timesteps:
@@ -515,7 +566,6 @@ def run_demo_inference_diffusiondb(
         i = i + 1
 
         logger.info(f"input_prompts: {input_prompt}")
-
         ## First, we get the text_embeddings for the prompt. These embeddings will be used to condition the UNet model.
         # Tokenizer and Text Encoder
         text_input = tokenizer(
@@ -562,12 +612,15 @@ def run_demo_inference_diffusiondb(
             # perform guidance
             noise_pred = tt_guide(ttnn_output, guidance_scale)
             ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
-            _save_image_and_latents(ttnn_latents, iter, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
+            # latents = ttnn.to_torch(ttnn_latents, mesh_composer=output_mesh_composer).to(torch.float32)
+            _save_image_and_latents(
+                latents, iter, vae, output_mesh_composer, pre_fix=f"{experiment_name}_tt", pre_fix2=""
+            )
 
             iter += 1
             enable_persistent_kernel_cache()
 
-        latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
+        latents = ttnn.to_torch(ttnn_latents, mesh_composer=output_mesh_composer).to(torch.float32)
         # scale and decode the image latents with vae
         latents = 1 / 0.18215 * latents
         with torch.no_grad():
@@ -598,12 +651,16 @@ def run_demo_inference_diffusiondb(
         logger.info(f"CLIP Score (TTNN): {clip_score_ttnn}")
 
 
-@pytest.mark.skip(reason="#9945: Skip for now since this breaks on WH because of di/dt")
+# @pytest.mark.skip(reason="#9945: Skip for now since this breaks on WH because of di/dt")
 @skip_for_grayskull()
+@pytest.mark.parametrize(
+    "input_path",
+    (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "num_prompts",
-    ((1),),
+    ((2),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
@@ -613,8 +670,8 @@ def run_demo_inference_diffusiondb(
     "image_size",
     ((512, 512),),
 )
-def test_demo(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
-    return run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
+def test_demo(mesh_device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
+    return run_demo_inference(mesh_device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
 
 
 @skip_for_grayskull()
@@ -638,6 +695,10 @@ def test_demo_diffusiondb(device, reset_seeds, input_path, num_prompts, num_infe
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
+    "num_prompts",
+    ((2),),
+)
+@pytest.mark.parametrize(
     "num_inference_steps",
     ((50),),
 )
@@ -645,5 +706,5 @@ def test_demo_diffusiondb(device, reset_seeds, input_path, num_prompts, num_infe
     "image_size",
     ((512, 512),),
 )
-def test_interactive_demo(device, num_inference_steps, image_size):
-    return run_interactive_demo_inference(device, num_inference_steps, image_size)
+def test_interactive_demo(mesh_device, num_prompts, num_inference_steps, image_size):
+    return run_interactive_demo_inference(mesh_device, num_prompts, num_inference_steps, image_size)

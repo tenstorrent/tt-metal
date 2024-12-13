@@ -8,6 +8,7 @@ import math
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     determine_largest_subblock_size,
     determine_blocking,
+    get_mesh_mappers,
 )
 
 
@@ -17,36 +18,61 @@ def ttnn_to_torch(input):
     return input
 
 
-def split_linear_params(params):
+def split_linear_params(device, params):
     dim = -1
-    device = params.proj.weight.device()
+    inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
     memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    weight = ttnn_to_torch(params.proj.weight)
-    bias = ttnn_to_torch(params.proj.bias)
+    weight = ttnn.to_torch(params.proj.weight, mesh_composer=output_mesh_composer)
+    weight = torch.split(weight, 1, dim=0)[0]
+    bias = ttnn.to_torch(params.proj.bias, mesh_composer=output_mesh_composer)
+    bias = torch.split(bias, 1, dim=0)[0]
 
     proj_weight, gate_weight = torch.split(weight, weight.shape[dim] // 2, dim=dim)
     proj_bias, gate_bias = torch.split(bias, bias.shape[dim] // 2, dim=dim)
 
     while len(proj_weight.shape) < 4:
         proj_weight = proj_weight.unsqueeze(0)
-    proj_weight = ttnn.from_torch(proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    proj_weight = ttnn.to_device(proj_weight, device, memory_config=memory_config)
+    proj_weight = ttnn.from_torch(
+        proj_weight,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+        mesh_mapper=weights_mesh_mapper,
+    )
 
     while len(gate_weight.shape) < 4:
         gate_weight = gate_weight.unsqueeze(0)
-    gate_weight = ttnn.from_torch(gate_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    gate_weight = ttnn.to_device(gate_weight, device, memory_config=memory_config)
+    gate_weight = ttnn.from_torch(
+        gate_weight,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+        mesh_mapper=weights_mesh_mapper,
+    )
 
     while len(proj_bias.shape) < 4:
         proj_bias = proj_bias.unsqueeze(0)
-    proj_bias = ttnn.from_torch(proj_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    proj_bias = ttnn.to_device(proj_bias, device, memory_config=memory_config)
-
+    proj_bias = ttnn.from_torch(
+        proj_bias,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+        mesh_mapper=weights_mesh_mapper,
+    )
     while len(gate_bias.shape) < 4:
         gate_bias = gate_bias.unsqueeze(0)
-    gate_bias = ttnn.from_torch(gate_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    gate_bias = ttnn.to_device(gate_bias, device, memory_config=memory_config)
+    gate_bias = ttnn.from_torch(
+        gate_bias,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+        mesh_mapper=weights_mesh_mapper,
+    )
 
     params.proj.proj_weight = proj_weight
     params.proj.gate_weight = gate_weight
@@ -61,7 +87,7 @@ def split_linear_params(params):
 class geglu:
     def __init__(self, device, parameters):
         self.device = device
-        parameters = split_linear_params(parameters)
+        parameters = split_linear_params(self.device, parameters)
         self.parameters = parameters
         self.grid_sizes = {8192: (5, 8), 2048: (5, 8), 512: (8, 8), 128: (8, 4)}
         self.out_subblock_hs = {8192: 8, 2048: 8, 512: 2, 128: 1}

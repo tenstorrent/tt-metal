@@ -38,6 +38,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     pad_group_norm_weight,
     pre_process_input,
     conv_cache,
+    get_mesh_mappers,
 )
 
 fp32_accum = True
@@ -58,26 +59,6 @@ if not is_grayskull():
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-
-
-def permute_conv_weights(weight, bias):
-    weight = ttnn.to_torch(weight)
-    weight = torch.permute(weight, (2, 3, 0, 1))
-    bias = ttnn.to_torch(bias)
-    return weight, bias
-
-
-def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, layout)
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return input
-
-
-def ttnn_to_torch(input):
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
 
 
 class UNet2DConditionModel:
@@ -108,16 +89,13 @@ class UNet2DConditionModel:
         self.batch_size = batch_size
         self.input_height = input_height
         self.input_width = input_width
-        parameters.conv_in.weight, parameters.conv_in.bias = permute_conv_weights(
-            parameters.conv_in.weight, parameters.conv_in.bias
-        )
-        parameters.conv_in.bias = torch.reshape(parameters.conv_in.bias, (1, 1, 1, parameters.conv_in.bias.shape[-1]))
-        self.conv_in_weights = ttnn.from_torch(parameters.conv_in.weight, ttnn.float32)
-        self.conv_in_bias = ttnn.from_torch(parameters.conv_in.bias, ttnn.float32)
+        self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = get_mesh_mappers(self.device)
 
+        self.conv_in_weights = parameters.conv_in.weight
+        self.conv_in_bias = parameters.conv_in.bias
         # breakpoint()
-        out_channels = parameters.conv_in.weight.shape[0]
-        in_channels = parameters.conv_in.weight.shape[1]
+        out_channels = parameters.conv_in.weight.shape[-2]
+        in_channels = parameters.conv_in.weight.shape[-1]
 
         logger.info(f"CIN: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
 
@@ -201,17 +179,11 @@ class UNet2DConditionModel:
             input_width = up_block.output_width
             logger.info(f"UP{i}: height: {input_height}, width: {input_width}, dim: {2 * input_height * input_width}")
 
-        parameters.conv_out.weight, parameters.conv_out.bias = permute_conv_weights(
-            parameters.conv_out.weight, parameters.conv_out.bias
-        )
-        parameters.conv_out.bias = torch.reshape(
-            parameters.conv_out.bias, (1, 1, 1, parameters.conv_out.bias.shape[-1])
-        )
-        self.conv_out_weights = ttnn.from_torch(parameters.conv_out.weight, ttnn.float32)
-        self.conv_out_bias = ttnn.from_torch(parameters.conv_out.bias, ttnn.float32)
+        self.conv_out_weights = parameters.conv_out.weight
+        self.conv_out_bias = parameters.conv_out.bias
 
-        self.conv_out_out_channels = parameters.conv_out.weight.shape[0]
-        self.conv_out_in_channels = parameters.conv_out.weight.shape[1]
+        self.conv_out_out_channels = parameters.conv_out.weight.shape[-2]
+        self.conv_out_in_channels = parameters.conv_out.weight.shape[-1]
         self.conv_out_input_height = input_height
         self.conv_out_input_width = input_width
 
@@ -238,11 +210,21 @@ class UNet2DConditionModel:
             else:
                 num_cores_across_channel = int(self.group_norm_core_grid.x * self.group_norm_core_grid.y)
 
-            self.parameters.conv_norm_out.weight = ttnn.create_group_norm_weight_bias_rm(
-                ttnn.to_torch(self.parameters.conv_norm_out.weight), self.conv_out_in_channels, num_cores_across_channel
+            self.parameters.conv_norm_out.weight = ttnn.to_torch(
+                self.parameters.conv_norm_out.weight, mesh_composer=self.output_mesh_composer
             )
+            self.parameters.conv_norm_out.weight = torch.split(self.parameters.conv_norm_out.weight, 1, dim=0)[0]
+
+            self.parameters.conv_norm_out.weight = ttnn.create_group_norm_weight_bias_rm(
+                self.parameters.conv_norm_out.weight, self.conv_out_in_channels, num_cores_across_channel
+            )
+            self.parameters.conv_norm_out.bias = ttnn.to_torch(
+                self.parameters.conv_norm_out.bias, mesh_composer=self.output_mesh_composer
+            )
+            self.parameters.conv_norm_out.bias = torch.split(self.parameters.conv_norm_out.bias, 1, dim=0)[0]
+
             self.parameters.conv_norm_out.bias = ttnn.create_group_norm_weight_bias_rm(
-                ttnn.to_torch(self.parameters.conv_norm_out.bias), self.conv_out_in_channels, num_cores_across_channel
+                self.parameters.conv_norm_out.bias, self.conv_out_in_channels, num_cores_across_channel
             )
             self.parameters.conv_norm_out.weight = ttnn.from_torch(
                 self.parameters.conv_norm_out.weight,
@@ -250,6 +232,7 @@ class UNet2DConditionModel:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.weights_mesh_mapper,
             )
             self.parameters.conv_norm_out.bias = ttnn.from_torch(
                 self.parameters.conv_norm_out.bias,
@@ -257,6 +240,7 @@ class UNet2DConditionModel:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.weights_mesh_mapper,
             )
             self.norm_input_mask_torch_tensor = ttnn.create_group_norm_input_mask(
                 self.conv_out_in_channels, self.norm_num_groups, num_cores_across_channel
@@ -267,6 +251,7 @@ class UNet2DConditionModel:
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.inputs_mesh_mapper,
             )
 
         # breakpoint()
@@ -375,8 +360,8 @@ class UNet2DConditionModel:
 
         # sample = ttnn.to_memory_config(sample, self.conv_in.conv.input_sharded_memory_config)
         # sample = self.conv_in(sample)
-        out_channels = self.parameters.conv_in.weight.shape[0]
-        in_channels = self.parameters.conv_in.weight.shape[1]
+        out_channels = self.parameters.conv_in.weight.shape[-2]
+        in_channels = self.parameters.conv_in.weight.shape[-1]
         shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if in_channels < 320 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
@@ -396,6 +381,15 @@ class UNet2DConditionModel:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+
+        self.conv_in_weights = ttnn.from_device(
+            ttnn.to_layout(ttnn.permute(self.conv_in_weights, (2, 3, 0, 1)), layout=ttnn.ROW_MAJOR_LAYOUT)
+        )
+        self.conv_in_bias = ttnn.from_device(ttnn.to_layout(self.conv_in_bias, layout=ttnn.ROW_MAJOR_LAYOUT))
+        sample = ttnn.from_device(ttnn.to_layout(sample, layout=ttnn.ROW_MAJOR_LAYOUT))
+
+        self.conv_in_weights = ttnn.to_dtype(self.conv_in_weights, ttnn.float32)
+        self.conv_in_bias = ttnn.to_dtype(self.conv_in_bias, ttnn.float32)
 
         [sample, [self.conv_in_weights, self.conv_in_bias]] = ttnn.conv2d(
             input_tensor=sample,
@@ -417,7 +411,6 @@ class UNet2DConditionModel:
             return_weights_and_bias=True,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
-
         # con_in completes
 
         if isinstance(only_cross_attention, bool):
@@ -431,7 +424,7 @@ class UNet2DConditionModel:
         down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
-            ttnn.DumpDeviceProfiler(self.device)
+            # ttnn.DumpDeviceProfiler(self.device)
             logger.info(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
@@ -516,7 +509,7 @@ class UNet2DConditionModel:
         only_cross_attention = list(reversed(only_cross_attention))
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
-            ttnn.DumpDeviceProfiler(self.device)
+            # ttnn.DumpDeviceProfiler(self.device)
             logger.info(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 
@@ -525,7 +518,6 @@ class UNet2DConditionModel:
             input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
 
             # add upsample block for all BUT final layer
-
             if not is_final_block:
                 add_upsample = True
             else:
@@ -666,6 +658,16 @@ class UNet2DConditionModel:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+
+        self.conv_out_weights = ttnn.from_device(
+            ttnn.to_layout(ttnn.permute(self.conv_out_weights, (2, 3, 0, 1)), layout=ttnn.ROW_MAJOR_LAYOUT)
+        )
+        self.conv_out_bias = ttnn.from_device(ttnn.to_layout(self.conv_out_bias, layout=ttnn.ROW_MAJOR_LAYOUT))
+        sample = ttnn.from_device(ttnn.to_layout(sample, layout=ttnn.ROW_MAJOR_LAYOUT))
+
+        self.conv_out_weights = ttnn.to_dtype(self.conv_out_weights, ttnn.float32)
+        self.conv_out_bias = ttnn.to_dtype(self.conv_out_bias, ttnn.float32)
+
         [sample, [self.conv_out_weights, self.conv_out_bias]] = ttnn.conv2d(
             input_tensor=sample,
             in_channels=self.conv_out_in_channels,

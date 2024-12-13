@@ -165,8 +165,8 @@ class basic_transformer_block:
 
         mem_cfg = hidden_states.memory_config()
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        if hidden_states.shape[-2] == 8192:
-            hidden_states = ttnn.reallocate(hidden_states)
+        # if hidden_states.shape[-2] == 8192:
+        #     hidden_states = ttnn.reallocate(hidden_states)
         norm_hidden_states = self.ff(config=config, hidden_states=norm_hidden_states)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
