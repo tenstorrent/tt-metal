@@ -42,8 +42,9 @@ void kernel_main() {
     uint32_t l1_write_addr = get_write_ptr(cb_attn);
     for (uint32_t w = 0; w < block_wt; w++) {
         uint64_t mask_noc_addr = get_noc_addr(mask_start_tile_id + w, addr_mask);
-        noc_async_read(mask_noc_addr, l1_write_addr, mask_read_tile_face_bytes);
-        mask_noc_addr += mask_read_tile_face_bytes;
+        noc_async_read(mask_noc_addr, l1_write_addr, mask_read_tile_face_bytes * 2);
+        mask_noc_addr = get_noc_addr(l1_write_addr + mask_read_tile_face_bytes);
+        noc_async_read_barrier();
         noc_async_read(mask_noc_addr, l1_write_addr + mask_read_tile_offset_bytes, mask_read_tile_face_bytes);
         l1_write_addr += mask_tile_bytes;
     }
