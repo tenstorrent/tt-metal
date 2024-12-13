@@ -11,15 +11,7 @@ import torch
 import numpy as np
 
 import ttnn
-
-tt_dtype_to_torch_dtype = {
-    ttnn.uint16: torch.int16,
-    ttnn.uint32: torch.int32,
-    ttnn.float32: torch.float,
-    ttnn.bfloat16: torch.bfloat16,
-    ttnn.bfloat8_b: torch.float,
-    ttnn.bfloat4_b: torch.float,
-}
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])

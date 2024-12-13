@@ -100,6 +100,8 @@ void py_device_module_types(py::module& m_device) {
 
     py::class_<SubDevice>(m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
 
+    py::class_<SubDeviceId>(m_device, "SubDeviceId", "ID of a sub-device.");
+
     py::class_<SubDeviceManagerId>(m_device, "SubDeviceManagerId", "ID of a sub-device manager.");
 }
 
@@ -112,6 +114,14 @@ void device_module(py::module& m_device) {
             Creates a SubDevice object from a list of CoreRangeSet objects, where each CoreRangeSet object
             represents the cores from a specific CoreType.
             The order of cores is Tensix, then Ethernet.
+        )doc");
+
+    auto pySubDeviceId = static_cast<py::class_<SubDeviceId>>(m_device.attr("SubDeviceId"));
+    pySubDeviceId.def(
+        py::init<uint8_t>(),
+        py::arg("id"),
+        R"doc(
+            Creates a SubDeviceId object with the given ID.
         )doc");
 
     auto pyDevice = static_cast<py::class_<Device, std::unique_ptr<Device, py::nodelete>>>(m_device.attr("Device"));
@@ -482,10 +492,11 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "synchronize_device",
-        [](Device* device, const std::optional<uint8_t> cq_id) {
+        [](Device* device, const std::optional<uint8_t> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
             // Send finish command to issue queue through worker thread
             // Worker thread will stall until the device is flushed.
-            device->push_work([device, cq_id]() mutable { Synchronize(device, cq_id); });
+            device->push_work(
+                [device, cq_id, &sub_device_ids]() mutable { Synchronize(device, cq_id, sub_device_ids); });
             // Main thread stalls until worker is complete (full device and worker queue flush).
             device->synchronize();
         },
@@ -493,10 +504,13 @@ void device_module(py::module& m_device) {
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,
                 otherwise operations for all command queues are waited on.
+                If the device has been configured with sub-devices, then sub_device_ids can be provided to only wait
+                for the operations that ran on the specified sub-devices, otherwise all sub-devices (the entire chip) are waited on.
 
                 Args:
                     device (ttnn.device.Device): The device to synchronize with.
                     cq_id (int, optional): The command queue ID to synchronize. Defaults to `None`.
+                    sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to synchronize. Defaults to all sub-devices.
 
                 Returns:
                     `None`: The op ensures that all operations are completed.
@@ -508,7 +522,8 @@ void device_module(py::module& m_device) {
                     >>> ttnn.synchronize_device(device)
             )doc",
         py::arg("device"),
-        py::arg("cq_id") = std::nullopt);
+        py::arg("cq_id") = std::nullopt,
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def("SetLazyCommandQueueMode", &tt::tt_metal::detail::SetLazyCommandQueueMode, R"doc(
         If set to true, the host does not notify the device that there are commands available other than
         the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
@@ -527,6 +542,8 @@ void device_module(py::module& m_device) {
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
     m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
+
+    m_device.attr("DefaultQueueId") = ttnn::DefaultQueueId;
 }
 
 void py_device_module(py::module& module) {

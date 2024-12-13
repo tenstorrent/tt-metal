@@ -306,6 +306,8 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
         .in0_block_w = k_tiles_per_core,
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
+        .out_block_h = batch_and_m_tiles_per_core,
+        .out_block_w = n_tiles_per_core,
         .per_core_M = batch_and_m_tiles_per_core,
         .per_core_N = n_tiles_per_core,
         .fuse_batch = true,
@@ -357,6 +359,8 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
         .in0_block_w = in0_block_w,
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
+        .out_block_h = per_core_M,
+        .out_block_w = per_core_N,
         .per_core_M = per_core_M,
         .per_core_N = per_core_N,
         .fuse_batch = fuse_batch,
@@ -701,6 +705,8 @@ MatmulProgramConfig get_matmul_program_config(
                 .in0_block_w = in0_block_w,
                 .out_subblock_h = out_subblock_h,
                 .out_subblock_w = out_subblock_w,
+                .out_block_h = per_core_M,
+                .out_block_w = per_core_N,
                 .per_core_M = per_core_M,
                 .per_core_N = per_core_N,
                 .fuse_batch = true,
@@ -1183,6 +1189,26 @@ void Matmul::validate(
             // We can uplift these variants to skip mcasting to support single core (1D) or single row/col (2D)
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 TT_FATAL(
+                    program_config.per_core_M % program_config.out_block_h == 0,
+                    "Error: incompatible values {} and {}",
+                    program_config.per_core_M,
+                    program_config.out_block_h);
+                TT_FATAL(
+                    program_config.per_core_N % program_config.out_block_w == 0,
+                    "Error: incompatible values {} and {}",
+                    program_config.per_core_N,
+                    program_config.out_block_w);
+                TT_FATAL(
+                    program_config.out_block_h % program_config.out_subblock_h == 0,
+                    "Error: incompatible values {} and {}",
+                    program_config.out_block_h,
+                    program_config.out_subblock_h);
+                TT_FATAL(
+                    program_config.out_block_w % program_config.out_subblock_w == 0,
+                    "Error: incompatible values {} and {}",
+                    program_config.out_block_w,
+                    program_config.out_subblock_w);
+                TT_FATAL(
                     !(program_config.mcast_in0 && program_config.gather_in0),
                     "Matmul1D does not support mcast_in0 and gather_in0 at the same time.");
 
@@ -1536,9 +1562,11 @@ void Matmul::validate(
         chosen_program_config);
 }
 
-std::vector<ttnn::SimpleShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const ttnn::SimpleShape input_shape_a = input_tensors.at(0).get_logical_shape();
-    const ttnn::SimpleShape input_shape_b = input_tensors.at(1).get_logical_shape();
+std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    const ttnn::SimpleShape input_shape_a = input_tensor_a.get_logical_shape();
+    const ttnn::SimpleShape input_shape_b = input_tensor_b.get_logical_shape();
     const uint32_t a_rank = input_shape_a.rank();
     const uint32_t b_rank = input_shape_b.rank();
     const uint32_t out_rank = std::max(a_rank, b_rank);
@@ -1553,12 +1581,7 @@ std::vector<ttnn::SimpleShape> Matmul::compute_output_shapes(const std::vector<T
         output_shape[rank_difference + index] = input_shape_a[index];
     }
     output_shape[-1] = input_shape_b[-1];
-    return {std::move(output_shape)};
-}
 
-std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
     auto in0_tile_shape = input_tensor_a.get_tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.get_tensor_spec().tile().get_tile_shape();
     auto output_tile = this->output_tile.value();
@@ -1568,14 +1591,14 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
     if (this->output_mem_config.is_sharded()) {
         MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
         return std::visit(
-            [&](const auto& program_config) -> std::vector<Tensor> {
+            [&](const auto& program_config) -> std::vector<TensorSpec> {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                     uint32_t M =
-                        (program_config.fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1]
-                                                   : input_tensor_a.get_legacy_shape()[-2]) /
+                        (program_config.fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]
+                                                   : input_tensor_a.get_padded_shape()[-2]) /
                         in0_tile_shape[0];
-                    uint32_t N = input_tensor_b.get_legacy_shape()[-1] / in1_tile_shape[1];
+                    uint32_t N = input_tensor_b.get_padded_shape()[-1] / in1_tile_shape[1];
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
 
@@ -1596,19 +1619,14 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                             ShardOrientation::ROW_MAJOR};
                         mem_config.shard_spec = shard_spec;
                     }
-                    return {create_device_tensor(
-                        this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype.value(),
-                        output_layout,
-                        input_tensor_a.device(),
-                        mem_config,
-                        output_tile)};
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                    uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[0];
-                    uint32_t N = input_tensor_b.get_legacy_shape()[-1] / in1_tile_shape[1];
-                    auto input_tensor_b_shape = input_tensor_b.get_legacy_shape();
+                    uint32_t M = input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1] / in0_tile_shape[0];
+                    uint32_t N = input_tensor_b.get_padded_shape()[-1] / in1_tile_shape[1];
 
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
@@ -1619,7 +1637,6 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
 
                     uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
                     uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
-                    uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     auto end_core = input_tensor_a.shard_spec()->grid.bounding_box().end_coord;
                     auto grid_size = CoreCoord{end_core.x + 1, end_core.y + 1};
@@ -1630,13 +1647,9 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         ShardOrientation::ROW_MAJOR};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_device_tensor(
-                        this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype.value(),
-                        output_layout,
-                        input_tensor_a.device(),
-                        mem_config,
-                        output_tile)};
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
                     uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.get_legacy_shape()[-1] / in1_tile_shape[1];
@@ -1649,8 +1662,6 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
 
                     uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
                     uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
-                    uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
-                    uint32_t num_cores = num_blocks_x * num_blocks_y;
                     CoreRangeSet all_cores;
                     ShardOrientation shard_orientation;
                     if (program_config.transpose_mcast) {
@@ -1664,13 +1675,9 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, shard_orientation};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_device_tensor(
-                        this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype.value(),
-                        output_layout,
-                        input_tensor_a.device(),
-                        mem_config,
-                        output_tile)};
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                     uint32_t M = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.get_legacy_shape()[-1] / in1_tile_shape[1];
@@ -1683,7 +1690,6 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
 
                     uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
                     uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
-                    uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     ShardOrientation shard_orientation = ShardOrientation::COL_MAJOR;
                     if (input_tensor_a.is_sharded()) {
@@ -1700,13 +1706,9 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         all_cores, {per_core_M * in0_tile_shape[0], per_core_N * in1_tile_shape[1]}, shard_orientation};
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
-                    return {create_device_tensor(
-                        this->compute_output_shapes(input_tensors).at(0),
-                        this->output_dtype.value(),
-                        output_layout,
-                        input_tensor_a.device(),
-                        mem_config,
-                        output_tile)};
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else {
                     TT_FATAL(
                         in0_tile_shape[0] == TILE_HEIGHT and in0_tile_shape[1] == TILE_WIDTH,
@@ -1727,8 +1729,12 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
             chosen_program_config);
     }
 
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, this->output_dtype.value(), Layout::TILE, this->output_mem_config, output_tile);
+    return {TensorSpec(
+        output_shape, TensorLayout(output_dtype.value(), PageConfig(Layout::TILE, output_tile), output_mem_config))};
+}
+
+std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    return operation::default_create_output_tensors(*this, input_tensors, {});
 }
 
 operation::ProgramWithCallbacks Matmul::create_program(
@@ -1806,6 +1812,8 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.in0_block_w,
                     program_config.out_subblock_h,
                     program_config.out_subblock_w,
+                    program_config.out_block_h,
+                    program_config.out_block_w,
                     program_config.per_core_M,
                     program_config.per_core_N,
                     program_config.fuse_batch,

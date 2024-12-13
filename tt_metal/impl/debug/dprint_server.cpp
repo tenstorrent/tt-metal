@@ -57,21 +57,21 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
     return f;
 }
 
-static string GetRiscName(CoreType core_type, int hart_id) {
+static string GetRiscName(CoreType core_type, int hart_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (hart_id) {
             case DPRINT_RISCV_INDEX_ER:
-                return "ERISC";
+                return abbreviated ? "ER" : "ERISC";
                 // Default case falls through and handled at end.
         }
     } else {
         switch (hart_id) {
-            case DPRINT_RISCV_INDEX_NC: return "NCRISC";
-            case DPRINT_RISCV_INDEX_TR0: return "TRISC0";
-            case DPRINT_RISCV_INDEX_TR1: return "TRISC1";
-            case DPRINT_RISCV_INDEX_TR2: return "TRISC2";
+            case DPRINT_RISCV_INDEX_NC: return abbreviated ? "NC" : "NCRISC";
+            case DPRINT_RISCV_INDEX_TR0: return abbreviated ? "TR0" : "TRISC0";
+            case DPRINT_RISCV_INDEX_TR1: return abbreviated ? "TR1" : "TRISC1";
+            case DPRINT_RISCV_INDEX_TR2: return abbreviated ? "TR2" : "TRISC2";
             case DPRINT_RISCV_INDEX_BR:
-                return "BRISC";
+                return abbreviated ? "BR" : "BRISC";
                 // Default case falls through and handled at end.
         }
     }
@@ -225,6 +225,9 @@ private:
     // Transfers data from the given intermediate stream to the output stream and flushes the output stream so that the
     // data is visible to the user.
     void TransferToAndFlushOutputStream(const HartKey& hart_key, ostringstream* intermediate_stream);
+
+    // Returns the dprint data that should be outputted by the output stream.
+    string GetDataToOutput(const HartKey& hart_key, const ostringstream* stream);
 
     // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
     // stdout, or nothing.
@@ -460,9 +463,14 @@ DebugPrintServerContext::DebugPrintServerContext() {
     inst = this;
 
     // Read hart mask + log file from rtoptions
-    uint32_t hart_mask = tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
-    string file_name = tt::llrt::OptionsG.get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
-    bool one_file_per_risc = tt::llrt::OptionsG.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint);
+    uint32_t hart_mask =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
+    string file_name =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
+    bool one_file_per_risc =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint);
+    bool prepend_device_core_risc =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
 
     // One file per risc auto-generates the output files and ignores the env var for it. Print a warning if both are
     // specified just in case.
@@ -472,8 +480,15 @@ DebugPrintServerContext::DebugPrintServerContext() {
             "TT_METAL_DPRINT_FILE_NAME will be ignored.");
     }
 
+    if (prepend_device_core_risc && one_file_per_risc) {
+        log_warning(
+            "Both TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC and TT_METAL_DPRINT_ONE_FILE_PER_RISC are specified. "
+            "TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC will be disabled.");
+        tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
+    }
+
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
-    std::filesystem::path output_dir(tt::llrt::OptionsG.get_root_dir() + logfile_path);
+    std::filesystem::path output_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
     if (file_name != "" && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
@@ -551,7 +566,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
     // flushed from the host.
     for (auto& logical_core : all_cores) {
-        CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
+        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
             WriteInitMagic(device, phys_core, hart_index, false);
         }
@@ -559,8 +574,9 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 
     // If RTOptions doesn't enable DPRINT on this device, return here and don't actually attach it
     // to the server.
-    std::vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
-    if (!tt::llrt::OptionsG.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
+    std::vector<chip_id_t> chip_ids =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    if (!tt::llrt::RunTimeOptions::get_instance().get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end()) {
             return;
         }
@@ -569,8 +585,8 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     // Core range depends on whether dprint_all_cores flag is set.
     std::vector<CoreDescriptor> print_cores_sanitized;
     for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
-        if (tt::llrt::OptionsG.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
-            tt::llrt::RunTimeDebugClassAll) {
+        if (tt::llrt::RunTimeOptions::get_instance().get_feature_all_cores(
+                tt::llrt::RunTimeDebugFeatureDprint, core_type) == tt::llrt::RunTimeDebugClassAll) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
             for (CoreDescriptor logical_core : all_cores) {
                 if (logical_core.type == core_type) {
@@ -583,8 +599,8 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                 device->id(),
                 tt::llrt::get_core_type_name(core_type));
         } else if (
-            tt::llrt::OptionsG.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
-            tt::llrt::RunTimeDebugClassDispatch) {
+            tt::llrt::RunTimeOptions::get_instance().get_feature_all_cores(
+                tt::llrt::RunTimeDebugFeatureDprint, core_type) == tt::llrt::RunTimeDebugClassDispatch) {
             for (CoreDescriptor logical_core : dispatch_cores) {
                 if (logical_core.type == core_type) {
                     print_cores_sanitized.push_back(logical_core);
@@ -596,8 +612,8 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                 device->id(),
                 tt::llrt::get_core_type_name(core_type));
         } else if (
-            tt::llrt::OptionsG.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
-            tt::llrt::RunTimeDebugClassWorker) {
+            tt::llrt::RunTimeOptions::get_instance().get_feature_all_cores(
+                tt::llrt::RunTimeDebugFeatureDprint, core_type) == tt::llrt::RunTimeDebugClassWorker) {
             // For worker cores, take all cores and remove dispatch cores.
             for (CoreDescriptor logical_core : all_cores) {
                 if (dispatch_cores.find(logical_core) == dispatch_cores.end()) {
@@ -613,8 +629,8 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                 tt::llrt::get_core_type_name(core_type));
         } else {
             // No "all cores" option provided, which means print from the cores specified by the user
-            std::vector<CoreCoord>& print_cores =
-                tt::llrt::OptionsG.get_feature_cores(tt::llrt::RunTimeDebugFeatureDprint)[core_type];
+            std::vector<CoreCoord>& print_cores = tt::llrt::RunTimeOptions::get_instance().get_feature_cores(
+                tt::llrt::RunTimeDebugFeatureDprint)[core_type];
 
             // We should also validate that the cores the user specified are valid worker cores.
             for (auto& logical_core : print_cores) {
@@ -623,7 +639,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                 CoreCoord phys_core;
                 bool valid_logical_core = true;
                 try {
-                    phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+                    phys_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 } catch (std::runtime_error& error) {
                     valid_logical_core = false;
                 }
@@ -651,9 +667,10 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     }
 
     // Write print enable magic for the cores the user specified.
-    uint32_t hart_mask = tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
+    uint32_t hart_mask =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
     for (auto& logical_core : print_cores_sanitized) {
-        CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
+        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
             if (hart_mask & (1 << hart_index)) {
                 WriteInitMagic(device, phys_core, hart_index, true);
@@ -682,8 +699,9 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 
 void DebugPrintServerContext::DetachDevice(Device* device) {
     // Don't detach the device if it's disabled by env vars - in this case it wasn't attached.
-    std::vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
-    if (!tt::llrt::OptionsG.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
+    std::vector<chip_id_t> chip_ids =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    if (!tt::llrt::RunTimeOptions::get_instance().get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end()) {
             return;
         }
@@ -691,7 +709,8 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
 
     // When we detach a device, we should poll to make sure there's no outstanding prints.
     chip_id_t chip_id = device->id();
-    uint32_t risc_mask = tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
+    uint32_t risc_mask =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
     bool outstanding_prints = true;
     while (outstanding_prints && !server_killed_due_to_hang_) {
         // Polling interval of 1ms
@@ -700,7 +719,7 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
         // Check all dprint-enabled cores on this device for outstanding prints.
         outstanding_prints = false;
         for (auto& logical_core : device_to_core_range_.at(device)) {
-            CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
+            CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
             for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
                 if (risc_mask & (1 << risc_id)) {
                     // No need to check if risc is not dprint-enabled.
@@ -762,7 +781,7 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
     // When detaching a device, disable prints on it.
     CoreDescriptorSet all_cores = GetAllCores(device);
     for (auto& logical_core : all_cores) {
-        CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
+        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
             WriteInitMagic(device, phys_core, hart_index, false);
         }
@@ -776,7 +795,8 @@ void DebugPrintServerContext::ClearLogFile() {
         outfile_->close();
         delete outfile_;
 
-        string file_name = tt::llrt::OptionsG.get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
+        string file_name =
+            tt::llrt::RunTimeOptions::get_instance().get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
         outfile_ = new ofstream(file_name);
         stream_ = outfile_ ? outfile_ : &cout;
     }
@@ -791,7 +811,7 @@ void DebugPrintServerContext::ClearSignals() {
 bool DebugPrintServerContext::PeekOneHartNonBlocking(
     Device* device, const CoreDescriptor& logical_core, int hart_id, bool new_data_this_iter) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
+    CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
     if (!CheckInitMagicCleared(device, phys_core, hart_id)) {
         return false;
     }
@@ -1139,7 +1159,7 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
                         } catch (std::runtime_error& e) {
                             // Depending on if test mode is enabled, catch and stop server, or
                             // re-throw the exception.
-                            if (tt::llrt::OptionsG.get_test_mode_enabled()) {
+                            if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
                                 server_killed_due_to_hang_ = true;
                                 device_to_core_range_lock_.unlock();
                                 return;  // Stop the print loop
@@ -1182,20 +1202,44 @@ void DebugPrintServerContext::TransferIntermediateStreamsToOutputStreamAndFlush(
 
 void DebugPrintServerContext::TransferToAndFlushOutputStream(
     const HartKey& hart_key, ostringstream* intermediate_stream) {
-    const string& intermediate_stream_data = intermediate_stream->str();
+    const string& output_data = GetDataToOutput(hart_key, intermediate_stream);
     ostream* output_stream = GetOutputStream(hart_key);
-    *output_stream << intermediate_stream_data << flush;
+    *output_stream << output_data << flush;
     ResetStream(intermediate_stream);
 }  // TransferToAndFlushOutputStream
 
+string DebugPrintServerContext::GetDataToOutput(const HartKey& hart_key, const ostringstream* stream) {
+    string output;
+    const bool prepend_device_core_risc =
+        tt::llrt::RunTimeOptions::get_instance().get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
+    if (prepend_device_core_risc) {
+        const chip_id_t device_id = get<0>(hart_key);
+        const CoreDescriptor& core_desc = get<1>(hart_key);
+        const uint32_t risc_id = get<2>(hart_key);
+
+        const string& device_id_str = to_string(device_id);
+        const string& core_coord_str = core_desc.coord.str();
+        const string& risc_name = GetRiscName(core_desc.type, risc_id, true);
+        output += fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
+    }
+
+    if (stream->str().empty()) {
+        output = "";
+    } else {
+        output += stream->str();
+    }
+
+    return output;
+}
+
 ostream* DebugPrintServerContext::GetOutputStream(const HartKey& hart_key) {
     ostream* output_stream = stream_;
-    if (tt::llrt::OptionsG.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (!risc_to_file_stream_[hart_key]) {
             const chip_id_t chip_id = get<0>(hart_key);
             const CoreDescriptor& logical_core = get<1>(hart_key);
             const int hart_id = get<2>(hart_key);
-            string filename = tt::llrt::OptionsG.get_root_dir() + logfile_path;
+            string filename = tt::llrt::RunTimeOptions::get_instance().get_root_dir() + logfile_path;
             filename += fmt::format(
                 "device-{}_{}-core-{}-{}_{}.txt",
                 chip_id,
@@ -1225,7 +1269,7 @@ namespace tt {
 
 void DprintServerAttach(Device* device) {
     // Skip if DPRINT not enabled, and make sure profiler is not running.
-    if (!tt::llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+    if (!tt::llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         return;
     }
     TT_FATAL(

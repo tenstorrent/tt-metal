@@ -26,7 +26,6 @@ from models.demos.llama3.tt.llama_common import (
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3.tt.model_config import TtModelArgs
 
@@ -227,6 +226,7 @@ def run_llama3_demo(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
@@ -259,33 +259,12 @@ def run_llama3_demo(
             ), "T3K only supports a max context length of 128k tokens for Llama3.1-8B and Llama3.2-11B"
     if llama_model_name == "3.1-70B":
         assert tt_device_name in ["T3K", "TG"], "Llama3.1-70B is only supported on T3K or TG"
+        assert max_seq_len <= 64 * 1024, "T3K only supports a max context length of 64k tokens for Llama3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
     state_dict = model_args.load_state_dict()
     profiler.end("weight_loading")
-
-    # Setup RoPE transformation matrices
-    rope_setup = TtLlamaRotarySetup(
-        mesh_device,
-        batch_size,
-        model_args.head_dim,
-        model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.use_scaled_rope,
-    )
-    transformation_mats_decode = rope_setup.get_trans_mats()
-
-    transformation_mats_prefill_torch = get_rot_transformation_mat(model_args.head_dim)
-    transformation_mats_prefill = ttnn.from_torch(
-        transformation_mats_prefill_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    transformation_mats = {"decode": transformation_mats_decode, "prefill": transformation_mats_prefill}
 
     page_table_tt = None
 
@@ -302,7 +281,7 @@ def run_llama3_demo(
             device=mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         )
 
     # Load TTNN Llama3.1 model
@@ -314,7 +293,6 @@ def run_llama3_demo(
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
     )
     tt_embd = TtLlamaEmbedding(
@@ -384,7 +362,7 @@ def run_llama3_demo(
                     :, decoding_pos[batch_id] :, :
                 ] = 0  # Zero out the tokens after the prefill length
 
-            prefill_input = model_args.prepare_inputs_ttnn_prefill(
+            prefill_input = model_args.prepare_residual_tensor_prefill(
                 pt_prefill_input[batch_id],
             )
 
@@ -409,6 +387,9 @@ def run_llama3_demo(
             # [PROFILER-ONLY] In runs where there is only one user, run the prefill twice to measure compile and inference prefill times
             if batch_size == 1:
                 ttnn.deallocate(tt_out)
+                prefill_input = model_args.prepare_residual_tensor_prefill(
+                    pt_prefill_input[batch_id],
+                )
                 tt_out = tt_model(
                     prefill_input,
                     current_pos=None,
@@ -420,9 +401,14 @@ def run_llama3_demo(
                 )
 
             pt_out.append(
-                ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
-                    0, 0, (decoding_pos[batch_id] - 1) % 32, :
-                ]
+                ttnn.to_torch(
+                    tt_out,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device,
+                        dims=(3, 1) if model_args.is_galaxy else (1, -1),
+                        mesh_shape=model_args.cluster_shape,
+                    ),
+                )[0, 0, (decoding_pos[batch_id] - 1) % 32, :]
             )
             ttnn.deallocate(tt_out)
 
@@ -457,6 +443,19 @@ def run_llama3_demo(
 
         logger.info("Starting decode...")
 
+        # Shard the page table for TG decode
+        if paged_attention and model_args.is_galaxy and batch_size > 1:
+            page_table_tt = ttnn.from_torch(
+                page_table,
+                device=mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device,
+                    dims=(None, -2) if batch_size > 1 else (None, None),
+                    mesh_shape=model_args.cluster_shape,
+                ),
+            )
         # Set sampling mode
         argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
@@ -472,15 +471,22 @@ def run_llama3_demo(
             current_pos,
             device=mesh_device,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats, rot_mat_idxs = rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+        rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
         # Compile
         logger.info(f"Compiling model trace...")
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
-        decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"])
+        decode_input = ttnn.to_memory_config(
+            decode_input,
+            ttnn.L1_MEMORY_CONFIG if model_args.is_galaxy else tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"],
+        )
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
@@ -489,7 +495,12 @@ def run_llama3_demo(
             page_table=page_table_tt,
         )
         if tt_model.args.num_devices > 1:
-            tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+            if tt_model.args.is_galaxy:
+                tt_out_gathered = ttnn.all_gather(
+                    tt_out, dim=3, num_links=2, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear
+                )
+            else:
+                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out
@@ -519,7 +530,7 @@ def run_llama3_demo(
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         decode_input = ttnn.to_memory_config(decode_input, tt_model.args.model_config["DECODE_RESIDUAL_MEMCFG"])
-        rot_mats = rope_setup.get_rot_mats(rot_mat_idxs)
+        rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
@@ -528,7 +539,12 @@ def run_llama3_demo(
             page_table=page_table_tt,
         )
         if tt_model.args.num_devices > 1:
-            tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+            if tt_model.args.is_galaxy:
+                tt_out_gathered = ttnn.all_gather(
+                    tt_out, dim=3, num_links=2, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear
+                )
+            else:
+                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out
@@ -548,7 +564,13 @@ def run_llama3_demo(
         current_pos_reset = ttnn.from_torch(
             current_pos,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices > 1 else None,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            )
+            if tt_model.args.num_devices > 1
+            else None,
         )
         tt_out_tok_reset = ttnn.from_torch(
             torch.nn.functional.pad(
@@ -562,7 +584,7 @@ def run_llama3_demo(
         # Reset the current position and output token tensors for the real decode run
         ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
         ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-        rot_mat_idxs_reset = rope_setup.get_rot_idxs(current_pos, on_host=True)
+        rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
         ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
         profiler.end(f"capture_trace_{batch_idx}")
@@ -591,14 +613,19 @@ def run_llama3_demo(
             # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.
             # If this tensor is int32, it won't be supported by ttnn.embedding
             current_pos += 1
-            rot_mat_idxs_updated = rope_setup.get_rot_idxs(current_pos, on_host=True)
+            rot_mat_idxs_updated = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
             ttnn.copy_host_to_device_tensor(rot_mat_idxs_updated, rot_mat_idxs)
 
             # Write to host
             ttnn.wait_for_event(1, op_event)
             if argmax_on_device:
                 tt_output_torch = ttnn.to_torch(
-                    tt_out_tok.cpu(blocking=True, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+                    tt_out_tok.cpu(blocking=True, cq_id=1),
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device,
+                        dims=(3, 1) if tt_model.args.is_galaxy else (1, -1),
+                        mesh_shape=model_args.cluster_shape,
+                    ),
                 )[0, 0, 0, :batch_size]
             else:
                 tt_out_tok_reset, tt_output_torch = sample_host(
@@ -758,7 +785,7 @@ def run_llama3_demo(
     logger.info("")
 
     supported_models = ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
-    supported_devices = ["N150", "N300", "T3K"]
+    supported_devices = ["N150", "N300", "T3K", "TG"]
 
     # TODO update targets based on the llama3 model and the target device
     llama_model_name = model_args.model_name
@@ -772,22 +799,27 @@ def run_llama3_demo(
         "N150_3.2-1B": 1050,  # TODO Update target
         "N300_3.2-1B": 1050,  # TODO Update target
         "T3K_3.2-1B": 1050,  # TODO Update target
+        "TG_3.2-1B": 1050,  # TODO Update target
         #
         "N150_3.2-3B": 1050,  # TODO Update target
         "N300_3.2-3B": 1050,  # TODO Update target
         "T3K_3.2-3B": 1050,  # TODO Update target
+        "TG_3.2-3B": 1050,  # TODO Update target
         #
         "N150_3.1-8B": 1050,
         "N300_3.1-8B": 1050,
         "T3K_3.1-8B": 1050,
+        "TG_3.1-8B": 1050,
         #
         "N150_3.2-11B": 1050,  # TODO Update target
         "N300_3.2-11B": 1050,  # TODO Update target
         "T3K_3.2-11B": 1050,  # TODO Update target
+        "TG_3.2-11B": 1050,  # TODO Update target
         #
         "N150_3.1-70B": 1050,  # TODO Update target
         "N300_3.1-70B": 1050,  # TODO Update target
         "T3K_3.1-70B": 1050,  # TODO Update target
+        "TG_3.1-70B": 1050,  # TODO Update target
     }[f"{tt_device_name}_{llama_model_name}"]
 
     # Set the target decode timesfor every combination of device and model
@@ -795,20 +827,25 @@ def run_llama3_demo(
         "N150_3.2-1B": 160,  # TODO Update target
         "N300_3.2-1B": 250,  # TODO Update target
         "T3K_3.2-1B": 300,  # TODO Update target
+        "TG_3.2-1B": 300,  # TODO Update target
         #
         "N150_3.2-3B": 60,  # TODO Update target
         "N300_3.2-3B": 100,  # TODO Update target
         "T3K_3.2-3B": 150,  # TODO Update target
+        "TG_3.2-3B": 150,  # TODO Update target
         #
         "N150_3.1-8B": 23,  # TODO Update target
         "N300_3.1-8B": 38,
         "T3K_3.1-8B": 45,
+        "TG_3.1-8B": 45,  # TODO Update target
         #
         "N150_3.2-11B": 23,
         "N300_3.2-11B": 38,  # TODO Update target
         "T3K_3.2-11B": 45,  # TODO Update target
+        "TG_3.2-11B": 45,  # TODO Update target
         #
         "T3K_3.1-70B": 20,  # TODO Update target
+        "TG_3.1-70B": 20,  # TODO Update target
     }[f"{tt_device_name}_{llama_model_name}"]
 
     target_decode_tok_s = target_decode_tok_s_u * batch_size
@@ -925,6 +962,10 @@ def test_llama_demo(
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
+
+    # TODO: Remove this once all batch sizes are supported on TG
+    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
+        pytest.skip("TG only supports batch 1 and 32")
 
     mesh_device.enable_async(True)
 

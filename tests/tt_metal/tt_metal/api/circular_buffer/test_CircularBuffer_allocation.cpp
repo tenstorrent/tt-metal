@@ -41,8 +41,7 @@ void validate_cb_address(
 
                 for (const auto& [buffer_index, expected_address] : address_per_buffer_index) {
                     auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
-                    EXPECT_EQ(
-                        expected_address >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES, cb_config_vector.at(base_index));
+                    EXPECT_EQ(expected_address, cb_config_vector.at(base_index));
                 }
             }
         }
@@ -358,9 +357,8 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
 
                     for (const auto& [buffer_index, expected_address] : address_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
-                        EXPECT_EQ(
-                            expected_address >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES,
-                            cb_config_vector.at(base_index));  // address validation
+                        EXPECT_EQ(expected_address,
+                                  cb_config_vector.at(base_index));  // address validation
                         EXPECT_EQ(
                             num_pages_per_buffer_index.at(buffer_index),
                             cb_config_vector.at(base_index + 2));  // num pages validation
@@ -391,9 +389,8 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
 
                     for (const auto& [buffer_index, expected_address] : address_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
-                        EXPECT_EQ(
-                            expected_address >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES,
-                            cb_config_vector.at(base_index));  // address validation
+                        EXPECT_EQ(expected_address,
+                                  cb_config_vector.at(base_index));  // address validation
                         EXPECT_EQ(
                             num_pages_per_buffer_index.at(buffer_index),
                             cb_config_vector.at(base_index + 2));  // num pages validation
@@ -455,8 +452,7 @@ TEST_F(DeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
             core,
             {
                 (uint32_t)src_dram_buffer->address(),
-                (uint32_t)src_dram_buffer->noc_coordinates().x,
-                (uint32_t)src_dram_buffer->noc_coordinates().y,
+                0,
                 (uint32_t)num_tiles,
             });
         SetRuntimeArgs(
@@ -465,8 +461,7 @@ TEST_F(DeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
             core,
             {
                 (uint32_t)dst_dram_buffer->address(),
-                (uint32_t)dst_dram_buffer->noc_coordinates().x,
-                (uint32_t)dst_dram_buffer->noc_coordinates().y,
+                0,
                 (uint32_t)num_tiles,
             });
 

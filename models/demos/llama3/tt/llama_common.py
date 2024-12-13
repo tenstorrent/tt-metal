@@ -209,6 +209,27 @@ def num_to_core_range_set(x):
     )
 
 
+def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
+    """
+    Helper function which copies host tensors to device tensors.
+    If no device_tensors are provided, it creates new device tensors and returns them.
+    """
+    if device_tensors is None:
+        assert mesh_device is not None, "mesh_device is required when device_tensors is None"
+        ret = []
+        for i in range(len(host_tensors)):
+            on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
+            ret.append(on_device)
+        return ret
+    else:
+        for i in range(len(host_tensors)):
+            if host_tensors[i] is None:
+                assert device_tensors[i] is None
+                continue
+            ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
+        return device_tensors
+
+
 def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
     """Helper function based on logic used in reference model:
     https://github.com/meta-llama/llama-models/blob/e4a6ed52a142bb9b5106dcbf48e41f97f8e7378e/models/llama3/reference_impl/model.py#L227C7-L231C83
@@ -256,7 +277,10 @@ def sample_top_p(probs: torch.Tensor, p: float):
 def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True):
     vocab_size = tt_input.shape[-1]
     if mesh_device:
-        pt_input = ttnn.to_torch(tt_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[..., :vocab_size]
+        pt_input = ttnn.to_torch(
+            tt_input,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=list(mesh_device.shape)),
+        )[:, :1, :, :vocab_size]
     else:  # input already on host
         pt_input = tt_input[..., :vocab_size]
 
@@ -295,3 +319,29 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
             ),
             pt_out,
         )
+
+
+def get_padded_prefill_len(seq_len):
+    """
+    If seq_len is less than 32, pad to 32
+    If seq_len is more than 32, pad to whichever is smaller: a power of 2 or a multiple of 1024
+    TODO: Generalize for max_mm_seq_len different from 1024
+    """
+    if seq_len <= 32:
+        return 32
+    pow_2_pad = nearest_pow_2(seq_len)
+    mult_1024_pad = 1024 * math.ceil(seq_len / 1024)
+    min_extended_pad = min(pow_2_pad, mult_1024_pad)
+    return min_extended_pad
+
+
+def get_block_size(kv_cache):
+    return kv_cache[0][0].shape[2]
+
+
+def num_blocks_in_seq(seq_len, block_size):
+    return math.ceil(seq_len / block_size)
+
+
+def nearest_pow_2(x):
+    return 2 ** math.ceil(math.log2(x))

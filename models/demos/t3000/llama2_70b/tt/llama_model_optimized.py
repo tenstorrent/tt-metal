@@ -178,8 +178,8 @@ class TtLlamaModel_optimized:
 
         if mode == "prefill":
             assert (
-                seq_len < self.model_config["MAX_PREFILL_SEQ_LEN"]
-            ), f"Prefill only supports seq_len < {self.model_config['MAX_PREFILL_SEQ_LEN']}"
+                seq_len <= self.model_config["MAX_PREFILL_SEQ_LEN"]
+            ), f"Prefill only supports seq_len <= {self.model_config['MAX_PREFILL_SEQ_LEN']}"
 
     def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None, mode="decode", page_table=None):
         """

@@ -8,7 +8,6 @@ import subprocess
 import shutil
 import curses
 import threading
-import subprocess
 import shlex
 import re
 import time
@@ -45,12 +44,78 @@ def ensure_ttsmi_installed():
     os.makedirs(config_dir, exist_ok=True)
     config_file = os.path.join(config_dir, f"reset_config_{hostname}.json")
 
+    device = get_device()
     try:
-        subprocess.run(["tt-smi", "-g", config_file], check=True)
+        if device == "TG":
+            generate_tg_config_file()
+        else:
+            subprocess.run(["tt-smi", "-g", config_file], check=True)
         print(f"Generated reset config file: {config_file}")
     except subprocess.CalledProcessError as e:
         print(f"Error generating reset config file: {e}")
         sys.exit(1)
+
+    if device == "TG":  # Reset TG device on program start
+        print("Resetting device on program start...")
+        reset_device_sync(config_file)
+
+
+def reset_device_sync(config_file):
+    reset_cmd = ["tt-smi", "-r", config_file]
+    try:
+        print(f"Resetting device using config file: {config_file}")
+        result = subprocess.run(reset_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        print(f"Device reset successfully: {result.stdout}")
+    except subprocess.CalledProcessError as e:
+        print(f"Error during device reset: {e.stderr}")
+        sys.exit(1)
+
+
+def get_device():
+    smi_ls = ["tt-smi", "-ls"]
+    smi_ls_output = subprocess.run(smi_ls, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout
+    total_devices = count_devices(smi_ls_output)
+
+    if total_devices == 1:
+        device = "N150"
+    elif total_devices == 2:
+        device = "N150"
+    elif total_devices == 8:
+        device = "T3K"
+    else: # TG has 36 devices
+        device = "TG"
+
+    # Old method of getting device name based on hostname
+    # hostname = os.environ.get("HOSTNAME", "unknown")
+    # if "t30" in hostname:
+    #     device = "T3K"
+    # elif "glx" in hostname:
+    #     device = "TG"
+
+    return device
+
+
+def list_supported_devices(device):
+    if device == "TG":
+        return "n150, n300, t3k, tg"
+    elif device == "T3K":
+        return "n150, n300, t3k"
+    elif device == "N300":
+        return "n150, n300"
+    else:  # N150
+        return "n150"
+
+
+# Counts number of devices using `tt-smi -ls` output
+def count_devices(output):
+    # Split the output into available boards section
+    sections = output.split('All available boards on host')
+    available_boards = sections[1].split('Boards that can be reset')[0]
+
+    # Count total PCI devices (ignoring N/A)
+    total_pci_devices = len([line for line in available_boards.split('\n') if ('Wormhole' or 'Grayskull' or 'Blackhole') in line])
+
+    return total_pci_devices
 
 
 class OutputEntryList:
@@ -262,11 +327,18 @@ def main(stdscr):
 
     max_y, max_x = stdscr.getmaxyx()
 
+    host_device = get_device()
+
     # Input fields positions (reordered)
     input_fields = [
         {"label": "Command [demo]", "value": "", "x": 0, "y": 0},
         {"label": "Model (1b, 3b, 8b, 11b, 70b) [all]", "value": "", "x": 0, "y": 1},
-        {"label": "Device (n150, n300, t3k) [all]", "value": "", "x": 0, "y": 2},
+        {
+            "label": f"Device ({list_supported_devices(host_device)}) [all]",
+            "value": "",
+            "x": 0,
+            "y": 2,
+        },
     ]
 
     output_entries = OutputEntryList()
@@ -375,7 +447,9 @@ def main(stdscr):
                         # Submit command
                         command_input = input_fields[0]["value"] or "demo"
                         model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b"
-                        device_input = input_fields[2]["value"] or "n150,n300,t3k"
+                        device_input = (
+                            input_fields[2]["value"] or list_supported_devices(host_device)
+                        )
 
                         if command_input == "modules":
                             command_input = "rmsnorm,attention,attention-prefill,mlp,lm-head"
@@ -729,11 +803,13 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     # Open log file
     entry.open_log_file()
 
+    env["ACTUAL_DEVICE"] = get_device()
+
     # Define command shortcuts
     command_shortcuts = {
         "demo": "pytest models/demos/llama3/demo/demo.py -k performance-batch-1",
         "demo-32": "pytest models/demos/llama3/demo/demo.py -k performance-batch-32",
-        "demo-long": "pytest models/demos/llama3/demo/demo.py -k long",
+        "demo-long": "pytest models/demos/llama3/demo/demo.py -k performance-long",
         "attention": "pytest models/demos/llama3/tests/test_llama_attention.py",
         "attention-prefill": "pytest models/demos/llama3/tests/test_llama_attention_prefill.py",
         "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py",
@@ -742,8 +818,8 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "decoder": "pytest models/demos/llama3/tests/test_llama_decoder.py",
         "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py",
         "lm-head": "pytest models/demos/llama3/tests/test_lm_head.py",
-        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k 'performance-128 and full'",
-        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k 'performance-128 and quick'",
+        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k 'performance-256 and full'",
+        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k 'performance-256 and quick'",
         "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py -k performance-4096",
         # Vision tests (require 11B weights)
         "vision-mlp": "pytest models/demos/llama3/tests/multimodal/test_llama_image_mlp.py",
@@ -783,6 +859,12 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         entry["log_file"].write(entry["output"] + "\n")
         entry["log_file"].flush()
         return
+
+    # Write the command to the log file
+    entry["log_file"].write(
+        f"FAKE_DEVICE={entry['device']} LLAMA_DIR={get_llama_dir(entry['model'])} ACTUAL_DEVICE={get_device()} {command_input}"
+        + "\n"
+    )
 
     # Start the subprocess
     entry["process"] = subprocess.Popen(
@@ -990,6 +1072,35 @@ def terminate_process_tree(pid):
         os.killpg(os.getpgid(pid), signal.SIGTERM)
     except (psutil.NoSuchProcess, ProcessLookupError):
         pass  # Process already terminated
+
+
+def generate_tg_config_file():
+    hostname = os.environ.get("HOSTNAME", "unknown")
+    host_name_config = hostname.split("-special-")[0]  # e.g. aus-glx-NR
+    mobo_name_config = (
+        host_name_config.split("-")[0]
+        + "-"
+        + host_name_config.split("-")[1]
+        + "-mgmt-"
+        + host_name_config.split("-")[2]
+    )  # e.g. aus-glx-mgmt-NR
+    config_file = os.path.expanduser(f"~/.config/tenstorrent/reset_config_{hostname}.json")
+    config = {
+        "time": "",
+        "host_name": host_name_config,
+        "wh_link_reset": {"pci_index": [0, 1, 2, 3]},
+        "re_init_devices": True,
+        "wh_mobo_reset": [
+            {
+                "nb_host_pci_idx": [0, 1, 2, 3],
+                "mobo": mobo_name_config,
+                "disabled_ports": ["0:0", "0:1", "0:2", "1:0", "1:1", "1:2", "6:2", "7:2"],
+            }
+        ],
+    }
+    with open(config_file, "w") as f:
+        json.dump(config, f)
+        f.close()
 
 
 def reset_device_async(entry, screen_lock, screen_needs_update):
