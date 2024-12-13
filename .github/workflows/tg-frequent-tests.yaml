@@ -11,7 +11,19 @@ jobs:
     with:
       arch: '["wormhole_b0"]'
     secrets: inherit
-  tg-frequent-tests:
+  build-wheels:
     needs: build-artifact
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        arch: [wormhole_b0]
+    uses: ./.github/workflows/_build-wheels-impl.yaml
+    with:
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
+      from-precompiled: true
+    secrets: inherit
+  tg-frequent-tests:
+    needs: [build-wheels]
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml

@@ -2,6 +2,11 @@ name: "[internal] TG frequent tests"
 
 on:
   workflow_call:
+    inputs:
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
 
 jobs:
   tg-frequent-tests:
@@ -14,36 +19,43 @@ jobs:
           { name: "TG resnet50 frequent tests", arch: wormhole_b0, model: resnet50, timeout: 90, owner_id: U013121KDH9}, # Austin Ho
           { name: "TG unit/distributed frequent tests", arch: wormhole_b0, model: unit, timeout: 90, owner_id: XXXXX}, # Add owner
         ]
-    name: ${{ matrix.test-group.name }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.test-group.arch }}
+      # TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      # ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      # LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
-      - arch-wormhole_b0
-      - config-tg
+      # - arch-wormhole_b0
+      # - config-tg
       - in-service
-      - bare-metal
-      - pipeline-functional
+      # - bare-metal
+      - cloud-virtual-machine
+      # - pipeline-functional
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      # - name: Set up dynamic env vars for build
+        # run: |
+          # echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+          name: eager-dist-${{ inputs.os }}-${{ matrix.test-group.arch }}
+          # name: TTMetal_build_${{ matrix.test-group.arch }}
+      # - name: Extract files
+        # run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+      # - uses: ./.github/actions/install-python-deps
       - name: Run frequent regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
+          install_wheel: true
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          # docker_opts: |
+          #   -e ARCH_NAME=${{ matrix.test-group.arch}}
+          #   -e TT_METAL_HOME=${{ github.workspace }}
+          #   -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+          run_args: |
+            ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
