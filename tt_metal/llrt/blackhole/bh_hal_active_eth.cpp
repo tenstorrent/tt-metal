@@ -72,7 +72,7 @@ HalCoreInfoType create_active_eth_mem_map() {
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
-    for (std::uint8_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
+    for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
         // BH active ethernet runs idle erisc FW on the second ethernet
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,

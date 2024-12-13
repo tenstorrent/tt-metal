@@ -21,7 +21,6 @@ Checks: >
   -bugprone-string-integer-assignment,
   -bugprone-suspicious-include,
   -bugprone-switch-missing-default-case,
-  -bugprone-too-small-loop-variable,
   -bugprone-unchecked-optional-access,
   -bugprone-unhandled-self-assignment,
   -bugprone-unused-raii,

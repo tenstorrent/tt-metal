@@ -2046,7 +2046,7 @@ void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
     if (reset_launch_msg_state) {
         if (device->dispatch_s_enabled()) {
             uint16_t index_bitmask = 0;
-            for (uint8_t i = 0; i < num_sub_devices; ++i) {
+            for (uint32_t i = 0; i < num_sub_devices; ++i) {
                 index_bitmask |= 1 << i;
             }
             command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
@@ -2056,7 +2056,7 @@ void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
         reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
         reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->virtual_enqueue_program_dispatch_core.x;
         reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->virtual_enqueue_program_dispatch_core.y;
-        for (uint8_t i = 0; i < num_sub_devices; ++i) {
+        for (uint32_t i = 0; i < num_sub_devices; ++i) {
             reset_launch_message_read_ptr_go_signal.dispatch_message_offset = (uint8_t)dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
