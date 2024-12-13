@@ -35,7 +35,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(12, max_tensor_size_per_core=14 * 1024, layouts=["TILE_LAYOUT"]),
+        "input_spec": gen_sharded_spec_unary(16, max_tensor_size_per_core=14 * 1024, layouts=["TILE_LAYOUT"]),
         "input_a_dtype": [ttnn.bfloat16],
     },
 }
@@ -78,6 +78,7 @@ def run(
         shard_orientation,
         tensor_hw_as_shard_shape,
         input_layout,
+        shard_height_mul_of_32,
     ) = parse_sharding_spec(input_spec)
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
