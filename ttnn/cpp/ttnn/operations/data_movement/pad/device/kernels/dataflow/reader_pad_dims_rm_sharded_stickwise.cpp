@@ -23,29 +23,25 @@ void kernel_main() {
     constexpr uint32_t unpadded_stick_step = get_compile_time_arg_val(7);
     constexpr uint32_t padded_stick_step = get_compile_time_arg_val(8);
 
-    auto output_offset_bytes = get_arg_val<uint32_t>(0);
     uint32_t input_shard_base_addr = get_write_ptr(input_shard_cb);
     uint32_t output_shard_base_addr = get_write_ptr(output_shard_cb);
-    // for the first stick, we need to add the front padding by adjusting where
-    // we start writing into the output shard
-    uint32_t output_shard_addr = output_shard_base_addr + output_offset_bytes;
 
     auto input_stick_ptr = reinterpret_cast<u8_l1_ptr>(input_shard_base_addr);
-    auto output_stick_ptr = reinterpret_cast<u8_l1_ptr>(output_shard_addr);
+    auto output_stick_ptr = reinterpret_cast<u8_l1_ptr>(output_shard_base_addr);
 
     // fill the sticks that aren't entirely padding with data from the input tensor
     for (uint32_t h = 0; h < unpadded_shard_height; h++) {
         cb_wait_front(output_shard_cb, 1);  // wait for writer to fill this stick with padding
 
-        // read the input stick into the padded output stick starting after the
-        // front padding
-
         // FIXME: this isn't aligned. we need to do a memcpy for now. we can try
         // to do a noc_async_read later on with a trick.
+        //
+        // currently small noc transfers are slow, but once runtime drops an
+        // optimization (upcoming as of 12/12/2024) this might be worth
+        // investigating.
 
-        // noc_async_read(output_stick_addr + W_front_pad_bytes, input_stick_addr, unpadded_stick_bytes);
-
-        // NOTE: memcpy is safe here because the input/output tensors have disjoint buffers.
+        // read the input stick into the padded output stick starting after the
+        // front padding
         for (uint32_t i = 0; i < unpadded_stick_bytes; i++) {
             output_stick_ptr[W_front_pad_bytes + i] = input_stick_ptr[i];
         }

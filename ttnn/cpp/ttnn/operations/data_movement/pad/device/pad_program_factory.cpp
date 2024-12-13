@@ -1696,26 +1696,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         all_cores_padded,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    uint32_t first_shard_output_offset = 0;
-
-    auto [which_shard, shard_coord] = tensor_coord_to_shard_coord<ShardStrategy::HEIGHT>(
-        output_tensor_shape.logical_shape().view(), shard_spec_padded.shape, input_tensor_start.view());
-
-    TT_FATAL(which_shard == 0, "pad_rm_sharded_stickwise: input tensor start should be in the first shard.");
-    uint32_t h_in_shard = shard_coord[0];
-    first_shard_output_offset = h_in_shard * tt::round_up(padded_stick_bytes, dram_alignment_bytes);
-
-    auto all_cores_padded_vec = corerange_to_cores(all_cores_padded, std::nullopt, true);
-
-    // Set runtime args for all cores
-    for (const auto& core : all_cores_padded_vec) {
-        // First core gets first_shard_output_offset, others get 0
-        uint32_t offset = (core == *all_cores_padded_vec.begin()) ? first_shard_output_offset : 0;
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {offset});
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {});
-    }
-
-    // FIXME: need to update runtime args?
+    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores_padded, {});
+    tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores_padded, {});
 
     auto override_runtime_args_callback = [
             input_shard_cb,
