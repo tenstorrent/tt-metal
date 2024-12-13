@@ -122,7 +122,6 @@ def test_tensor_creation_api_parity(shape, tt_dtype, layout, device):
     assert passing
 
 
-"""
 grid_size = [8, 7]
 
 
@@ -191,4 +190,3 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
 
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip, **allclose_kwargs)
     assert passing
-"""

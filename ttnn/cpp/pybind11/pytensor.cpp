@@ -159,6 +159,8 @@ Tensor create_tt_tensor_from_py_data(
     if (layout != Layout::ROW_MAJOR or override_enable_borrow) {
         enable_borrow = false;
     }
+    // TODO: FIX MEEEE
+    enable_borrow = false;
 
     auto data_type = tensor_spec.data_type();
     std::size_t num_elements = tensor_spec.logical_shape().volume();
