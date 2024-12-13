@@ -139,6 +139,25 @@ struct Tensor {
 
     std::vector<Device*> get_workers(bool blocking = false) const;
 
+    // Converts a buffer of elements of type `T` to a `Tensor`.
+    // Elements are assumed to be stored in row-major order. The size of the span and the type have to match `spec`.
+    //
+    // TODO: tilized layouts and reduced precision types are currently not supported.
+    template <typename T>
+    static Tensor from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec);
+
+    // Same as `from_span`, but takes a vector instead.
+    template <typename T>
+    static Tensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec) {
+        return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), spec);
+    }
+
+    // Converts a `Tensor` to a buffer of elements of type `T`.
+    // Elements in the buffer will be stored in row-major order. The type of the elements has to match that of the
+    // `Tensor`.
+    template <typename T>
+    std::vector<T> to_vector() const;
+
     Tensor to(
         Device* target_device,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},

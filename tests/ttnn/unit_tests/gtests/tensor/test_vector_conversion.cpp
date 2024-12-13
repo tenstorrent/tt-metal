@@ -16,8 +16,6 @@ namespace {
 
 using ::testing::Eq;
 using ::testing::Pointwise;
-using ::ttnn::experimental::xtensor::from_vector;
-using ::ttnn::experimental::xtensor::to_vector;
 
 const std::vector<ttnn::SimpleShape>& get_shapes_for_test() {
     static auto* shapes = new std::vector<ttnn::SimpleShape>{
@@ -58,8 +56,8 @@ TYPED_TEST_SUITE(VectorConversionTest, TestTypes);
 TYPED_TEST(VectorConversionTest, Roundtrip) {
     for (const auto& shape : get_shapes_for_test()) {
         auto input = arange<TypeParam>(0, static_cast<int64_t>(shape.volume()), 1);
-        auto output =
-            to_vector<TypeParam>(from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
+        auto output = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>()))
+                          .template to_vector<TypeParam>();
         EXPECT_THAT(output, Pointwise(Eq(), input)) << "for shape: " << shape;
     }
 }
@@ -69,7 +67,7 @@ TYPED_TEST(VectorConversionTest, InvalidSize) {
     auto input = arange<TypeParam>(0, 42, 1);
 
     ASSERT_NE(input.size(), shape.volume());
-    EXPECT_ANY_THROW(from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
+    EXPECT_ANY_THROW(Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
 }
 
 TYPED_TEST(VectorConversionTest, RoundtripTilezedLayout) {
@@ -77,10 +75,12 @@ TYPED_TEST(VectorConversionTest, RoundtripTilezedLayout) {
 
     auto input = arange<TypeParam>(0, shape.volume(), 1);
     // TODO: Support this.
-    EXPECT_ANY_THROW(from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE)));
+    EXPECT_ANY_THROW(
+        Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE)));
 
-    auto output = to_vector<TypeParam>(
-        from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())).to(Layout::TILE));
+    auto output = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>()))
+                      .to(Layout::TILE)
+                      .template to_vector<TypeParam>();
     EXPECT_THAT(output, Pointwise(Eq(), input));
 }
 
@@ -89,7 +89,7 @@ TYPED_TEST(VectorConversionTest, InvalidDtype) {
     auto input = arange<TypeParam>(0, 42, 1);
 
     ASSERT_NE(input.size(), shape.volume());
-    EXPECT_ANY_THROW(from_vector(
+    EXPECT_ANY_THROW(Tensor::from_vector(
         input,
         get_tensor_spec(
             shape,
@@ -106,10 +106,11 @@ TEST(FloatVectorConversionTest, RoundtripBfloat16Representation) {
             return bf.to_float();
         });
 
-        auto output_bf16 = to_vector<bfloat16>(from_vector(input_ft, get_tensor_spec(shape, DataType::BFLOAT16)));
+        auto output_bf16 =
+            Tensor::from_vector(input_ft, get_tensor_spec(shape, DataType::BFLOAT16)).to_vector<bfloat16>();
         EXPECT_THAT(output_bf16, Pointwise(Eq(), input_bf16)) << "for shape: " << shape;
 
-        auto output_ft = to_vector<float>(from_vector(input_bf16, get_tensor_spec(shape, DataType::BFLOAT16)));
+        auto output_ft = Tensor::from_vector(input_bf16, get_tensor_spec(shape, DataType::BFLOAT16)).to_vector<float>();
         EXPECT_THAT(output_ft, Pointwise(Eq(), input_ft)) << "for shape: " << shape;
     }
 }

@@ -30,12 +30,9 @@
 
 using namespace tt::constants;
 
-namespace tt {
-
-namespace tt_metal {
-
+namespace tt::tt_metal {
 namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
+
 MemoryConfig extract_memory_config(const Storage& storage) {
     return std::visit(
         [](const auto& storage) -> MemoryConfig {
@@ -50,7 +47,60 @@ MemoryConfig extract_memory_config(const Storage& storage) {
         },
         storage);
 }
-}  // namespace CMAKE_UNIQUE_NAMESPACE
+
+template <typename T>
+Tensor create_owned_tensor_from_span(tt::stl::Span<const T> data, const TensorSpec& spec) {
+    // TODO: support tilized layouts.
+    TT_FATAL(spec.layout() == Layout::ROW_MAJOR, "Unsupported layout: {}", spec.layout());
+    auto buffer = tt::tt_metal::owned_buffer::create(std::vector<T>(data.begin(), data.end()));
+    auto storage = OwnedStorage{std::move(buffer)};
+    return Tensor{std::move(storage), spec};
+}
+
+// TODO: optimize precomputing multipliers
+template <typename T, typename InternalType>
+std::vector<T> untile_tensor_to_vec(const Tensor& cpu_tensor) {
+    auto tiled_buffer = tt::tt_metal::host_buffer::get_as<InternalType>(cpu_tensor);
+    auto untiled_shape = cpu_tensor.get_logical_shape();
+    auto tiled_shape = cpu_tensor.get_padded_shape();
+
+    // Calculate total size of the untiled tensor
+    size_t total_size = untiled_shape.volume();
+
+    std::vector<T> untiled_data(total_size);
+
+    auto compute_flat_index = [](const std::vector<uint32_t>& indices, ttnn::SimpleShape& shape) -> uint32_t {
+        uint32_t flat_index = 0;
+        uint32_t multiplier = 1;
+        for (int i = (int)indices.size() - 1; i >= 0; --i) {
+            flat_index += indices[i] * multiplier;
+            multiplier *= shape[i];
+        }
+        return flat_index;
+    };
+
+    std::vector<uint32_t> indices(tiled_shape.rank(), 0);
+
+    for (size_t idx = 0; idx < total_size; ++idx) {
+        uint32_t untiled_index = compute_flat_index(indices, untiled_shape);
+        uint32_t tiled_index = compute_flat_index(indices, tiled_shape);
+        if constexpr (std::is_same_v<InternalType, bfloat16>) {
+            untiled_data[untiled_index] = tiled_buffer[tiled_index].to_float();
+        } else {
+            untiled_data[untiled_index] = tiled_buffer[tiled_index];
+        }
+
+        for (int dim = (int)tiled_shape.rank() - 1; dim >= 0; --dim) {
+            if (++indices[dim] < untiled_shape[dim]) {
+                break;
+            }
+            indices[dim] = 0;
+        }
+    }
+
+    return untiled_data;
+}
+
 }  // namespace
 
 Tensor::TensorAttributes::TensorAttributes() :
@@ -111,7 +161,7 @@ Tensor::Tensor(
                 tile->get_tile_shape());
         }
     }
-    auto memory_config = CMAKE_UNIQUE_NAMESPACE::extract_memory_config(storage);
+    auto memory_config = extract_memory_config(storage);
     init(
         std::move(storage),
         TensorSpec(
@@ -559,6 +609,72 @@ const Storage& Tensor::get_storage() const {
     return this->tensor_attributes->storage;
 }
 
+template <>
+Tensor Tensor::from_span<float>(tt::stl::Span<const float> buffer, const TensorSpec& spec) {
+    size_t volume = spec.logical_shape().volume();
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (spec.data_type() == DataType::FLOAT32) {
+        return create_owned_tensor_from_span(buffer, spec);
+    } else if (spec.data_type() == DataType::BFLOAT16) {
+        std::vector<bfloat16> bfloat16_data;
+        bfloat16_data.reserve(buffer.size());
+        std::transform(std::begin(buffer), std::end(buffer), std::back_inserter(bfloat16_data), [](float value) {
+            return bfloat16(value);
+        });
+        return create_owned_tensor_from_span(
+            tt::stl::Span<const bfloat16>(bfloat16_data.data(), bfloat16_data.size()), spec);
+    } else {
+        // TODO: support bf8 and bf4
+        TT_THROW("Unsupported data type for from_span<float>: {}", spec.data_type());
+    }
+}
+
+template <typename T>
+Tensor Tensor::from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec) {
+    size_t volume = spec.logical_shape().volume();
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    TT_FATAL(
+        spec.data_type() == convert_to_data_type<T>(),
+        "Unsupported data type for from_span: got {}, expected: {}",
+        spec.data_type(),
+        convert_to_data_type<T>());
+    return create_owned_tensor_from_span(buffer, spec);
+}
+
+template <>
+std::vector<float> Tensor::to_vector<float>() const {
+    auto cpu_tensor = this->cpu().to(Layout::ROW_MAJOR);
+    if (cpu_tensor.get_dtype() == DataType::BFLOAT16) {
+        return untile_tensor_to_vec<float, bfloat16>(cpu_tensor);
+    } else if (cpu_tensor.get_dtype() == DataType::FLOAT32) {
+        return untile_tensor_to_vec<float, float>(cpu_tensor);
+    } else {
+        // TODO: support bf4, bf8.
+        TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.get_dtype());
+    }
+}
+
+template <typename T>
+std::vector<T> Tensor::to_vector() const {
+    auto cpu_tensor = this->cpu().to(Layout::ROW_MAJOR);
+    TT_FATAL(
+        cpu_tensor.get_dtype() == convert_to_data_type<T>(),
+        "Unsupported data type for to_vector: got {}, expected: {}",
+        cpu_tensor.get_dtype(),
+        convert_to_data_type<T>());
+    return untile_tensor_to_vec<T, T>(cpu_tensor);
+}
+
+// Instantiate explicitly for the supported types.
+template Tensor Tensor::from_span<bfloat16>(tt::stl::Span<const bfloat16> buffer, const TensorSpec& spec);
+template Tensor Tensor::from_span<uint32_t>(tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec);
+template Tensor Tensor::from_span<int32_t>(tt::stl::Span<const int32_t> buffer, const TensorSpec& spec);
+template std::vector<bfloat16> Tensor::to_vector<bfloat16>() const;
+template std::vector<uint32_t> Tensor::to_vector<uint32_t>() const;
+template std::vector<int32_t> Tensor::to_vector<int32_t>() const;
+
 Tensor Tensor::to(Device* target_device, const MemoryConfig& mem_config,uint8_t cq_id,
     const std::vector<SubDeviceId>& sub_device_ids) const {
     return tensor_ops::tensor_to(*this, target_device, mem_config, cq_id, sub_device_ids);
@@ -959,6 +1075,4 @@ bool validate_worker_modes(const std::vector<Device*>& workers) {
     return worker_modes_match;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -32,7 +32,7 @@ T get_median(std::vector<T>& vec) {
 template <typename T>
 void print_tensor_stats_(const tt::tt_metal::Tensor& tensor, const std::string& name) {
     auto tensor_shape = tensor.get_shape();
-    auto tensor_vec = ttml::core::to_vector<T>(tensor);
+    auto tensor_vec = tensor.to_vector<T>();
 
     auto median = get_median(tensor_vec);
     auto mean = std::accumulate(tensor_vec.begin(), tensor_vec.end(), 0.F) / static_cast<float>(tensor_vec.size());

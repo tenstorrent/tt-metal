@@ -20,22 +20,6 @@ ttnn::SimpleShape get_shape_from_xarray(const E& xarr) {
     return ttnn::SimpleShape(shape_dims);
 }
 
-// Converts a buffer of elements of type `T` to a Tensor.
-// Elements are assumed to be stored in row-major order. The size of the span and the type have to match Tensor spec.
-// TODO: tilized layouts and reduced precision types are currently not supported.
-template <typename T>
-tt::tt_metal::Tensor from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec);
-
-// Converts a Tensor to a buffer of elements of type `T`.
-// Elements in the buffer will be stored in row-major order. The type of the elements has to match that of the Tensor.
-template <typename T>
-std::vector<T> to_vector(const tt::tt_metal::Tensor& tensor);
-
-template <typename T>
-tt::tt_metal::Tensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec) {
-    return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), spec);
-}
-
 // Converts a span to an xtensor view.
 // IMPORTANT: the lifetime of the returned xtensor view is tied to the lifetime of the underlying buffer.
 template <typename T>
@@ -66,13 +50,13 @@ tt::tt_metal::Tensor from_xtensor(const xt::xarray<T>& buffer, const TensorSpec&
     auto shape = get_shape_from_xarray(buffer);
     TT_FATAL(shape == spec.logical_shape(), "xtensor has a different shape than the supplied TensorSpec");
     auto buffer_view = xtensor_to_span(buffer);
-    return from_span<T>(buffer_view, spec);
+    return tt::tt_metal::Tensor::from_span<T>(buffer_view, spec);
 }
 
 // Converts a Tensor to an xtensor.
 template <typename T>
 xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
-    auto vec = to_vector<T>(tensor);
+    auto vec = tensor.to_vector<T>();
     auto shape = tensor.get_shape().logical_shape();
     return xt::xarray<T>(span_to_xtensor_view(tt::stl::Span<const T>(vec.data(), vec.size()), shape));
 }

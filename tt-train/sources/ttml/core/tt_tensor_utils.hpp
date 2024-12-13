@@ -39,7 +39,7 @@ template <class VectorType = float, DataType TensorType = DataType::BFLOAT16>
 
 template <class T = float>
 [[nodiscard]] std::vector<T> to_vector(const tt::tt_metal::Tensor& tensor) {
-    return ttnn::experimental::xtensor::to_vector<T>(tensor);
+    return tensor.to_vector<T>();
 }
 
 [[nodiscard]] bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor);
@@ -56,7 +56,7 @@ template <class T = float, DataType TensorType = DataType::BFLOAT16>
 
 template <class T = float>
 [[nodiscard]] xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
-    auto vec = to_vector<T>(tensor);
+    auto vec = tensor.to_vector<T>();
     const auto& shape = tensor.get_shape().logical_shape();
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(std::move(vec), shape_vec);

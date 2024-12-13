@@ -17,7 +17,6 @@ using ::testing::SizeIs;
 using ::tt::tt_metal::Tensor;
 using ::ttnn::experimental::xtensor::chunk;
 using ::ttnn::experimental::xtensor::concatenate;
-using ::ttnn::experimental::xtensor::from_vector;
 
 TEST(PartitionTest, ChunkBasicNonDivisible3) {
     // Create a 1D tensor: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
