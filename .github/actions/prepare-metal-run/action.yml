@@ -13,6 +13,10 @@ inputs:
     description: 'Which version of Python to use to run the tests.'
     required: false
     default: '3.8'
+  run-telemetry:
+    description: 'Whether to run telemetry'
+    required: false
+    default: 'false'
 
 runs:
   using: "composite"
@@ -32,5 +36,5 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
     - name: Collect Workflow Telemetry
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && inputs.run-telemetry == 'true' }}
       uses: catchpoint/workflow-telemetry-action@v2
