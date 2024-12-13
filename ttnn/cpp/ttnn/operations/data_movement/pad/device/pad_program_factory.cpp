@@ -1589,8 +1589,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         output.shard_spec().has_value() and output.shard_spec()->shape[1] == output_tensor_shape[-1],
         "output must be sharded with shard width equal to output width");
 
-    uint32_t W = input_tensor.shape()[3], H = input_tensor.shape()[2], C = input_tensor.shape()[1], N = input_tensor.shape()[0];
-    uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
+    uint32_t W = input_tensor.shape()[3];
+    uint32_t W_padded = output_tensor_shape[3];
 
     auto unpadded_stick_bytes = W * input_tensor.element_size();
     auto padded_stick_bytes = W_padded * input_tensor.element_size();
@@ -1603,12 +1603,10 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     // input shard spec
     auto input_shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height_unpadded = input_shard_spec.shape[0];
-    uint32_t shard_width_unpadded = input_shard_spec.shape[1];
 
     // output shard spec
     auto shard_spec_padded = output.shard_spec().value();
     uint32_t shard_height_padded = shard_spec_padded.shape[0];
-    uint32_t shard_width_padded = shard_spec_padded.shape[1];
 
     auto& all_cores_padded = shard_spec_padded.grid;
 
@@ -1665,24 +1663,24 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         dram_alignment_bytes);  // round unpadded_stick bytes to a multiple of dram_alignment_bytes
 
     std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)unpadded_stick_bytes,
-        (std::uint32_t)padded_stick_bytes,
-        (std::uint32_t)shard_height_unpadded,
-        (std::uint32_t)shard_height_padded,
-        (std::uint32_t)W_padding_front_bytes,
-        (std::uint32_t)input_shard_cb_index,
-        (std::uint32_t)output_shard_cb_index,
-        (std::uint32_t)unpadded_stick_step,
-        (std::uint32_t)padded_stick_step};
+        unpadded_stick_bytes,
+        padded_stick_bytes,
+        shard_height_unpadded,
+        shard_height_padded,
+        W_padding_front_bytes,
+        input_shard_cb_index,
+        output_shard_cb_index,
+        unpadded_stick_step,
+        padded_stick_step};
 
     std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)padded_stick_bytes,
-        (std::uint32_t)shard_height_padded,
-        (std::uint32_t)padding_value_as_u32,
-        (std::uint32_t)output.element_size(),
-        (std::uint32_t)output_shard_cb_index,
-        (std::uint32_t)pad_val_cb_index,
-        (std::uint32_t)padded_stick_step};
+        padded_stick_bytes,
+        shard_height_padded,
+        padding_value_as_u32,
+        output.element_size(),
+        output_shard_cb_index,
+        pad_val_cb_index,
+        padded_stick_step};
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
