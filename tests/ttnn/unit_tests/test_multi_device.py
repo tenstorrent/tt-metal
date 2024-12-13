@@ -684,6 +684,6 @@ def test_all_gather_multiple_submeshes(t3k_mesh_device):
             device_tensor_torch = ttnn.to_torch(device_tensor)
             assert torch.all(device_tensor_torch == full_tensor)
 
-    submesh_devices = t3k_mesh_device.create_submeshes((2, 2), ttnn.MeshType.Ring)
+    submesh_devices = t3k_mesh_device.create_submeshes(ttnn.MeshShape(2, 2), ttnn.MeshType.Ring)
     for submesh in submesh_devices:
         model(submesh)
