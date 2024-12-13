@@ -438,10 +438,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                 auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                 for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
                     ll_api::memory const& binary_mem = llrt::get_risc_binary(
-                        firmware_build_states_[riscv_id]->get_target_out_path(""),
-                        core_type_idx,
-                        processor_class,
-                        (riscv_id - build_idx));
+                        firmware_build_states_[riscv_id]->get_target_out_path(""));
                     uint32_t fw_size = binary_mem.get_text_size();
                     if (riscv_id == 1) { // TODO: clean up how brisc/ncrisc are handled
                         // In this context, ncrisc_kernel_size16 is the size of the fw
@@ -485,10 +482,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = build_idx; eriscv_id < (build_idx + num_build_states); eriscv_id++) {
                         ll_api::memory const& binary_mem = llrt::get_risc_binary(
-                            firmware_build_states_[eriscv_id]->get_target_out_path(""),
-                            core_type_idx,
-                            processor_class,
-                            (eriscv_id - build_idx));
+                            firmware_build_states_[eriscv_id]->get_target_out_path(""));
                         uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                         llrt::test_load_write_read_risc_binary(binary_mem, this->id(), virtual_core, core_type_idx, processor_class, (eriscv_id - build_idx));

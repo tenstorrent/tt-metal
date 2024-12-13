@@ -55,6 +55,7 @@ class TtTransformer(LightweightModule):
             args.max_seq_len,
             args.rope_theta,
             args.use_scaled_rope,
+            args.rope_scaling_factor,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -85,6 +86,7 @@ class TtTransformer(LightweightModule):
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
             ),
             args,
+            args.is_galaxy,
         )
 
         self.lm_head = LMHead(
@@ -105,19 +107,25 @@ class TtTransformer(LightweightModule):
 
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
+        dims = (None, -1) if self.args.is_galaxy else (None, None)
+        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
         tokens = ttnn.from_torch(
             tokens,
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=mesh_mapper,
         )
 
         tokens_embd = self.embd(tokens)
 
         tt_rot_mats_prefill = get_prefill_rot_mat(
-            self.args.head_dim, self.args.max_seq_len, self.mesh_device, seq_len=S
+            self.args.head_dim,
+            self.args.max_seq_len,
+            self.mesh_device,
+            seq_len=S,
+            scale_factor=self.args.rope_scaling_factor,
         )
 
         if page_table is not None:
@@ -154,11 +162,14 @@ class TtTransformer(LightweightModule):
         assert current_pos.shape[0] == B, "Batch size mismatch"
         assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
 
+        dims = (None, -1) if self.args.is_galaxy else (None, None)
+        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
+
         tokens = ttnn.from_torch(
             tokens,
             device=None,
             dtype=ttnn.uint32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=mesh_mapper,
         )
 
         rope_idxs = self.rope_setup.get_rot_idxs(current_pos, on_host=True)
@@ -166,7 +177,11 @@ class TtTransformer(LightweightModule):
             current_pos,
             device=None,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(None, 0) if (self.args.is_galaxy and B > 1) else (None, None),
+                mesh_shape=self.args.cluster_shape,
+            ),
         )
 
         if page_table is not None:
@@ -174,7 +189,11 @@ class TtTransformer(LightweightModule):
                 page_table,
                 device=None,
                 dtype=ttnn.int32,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(None, -2) if (self.args.is_galaxy and B > 1) else (None, None),
+                    mesh_shape=self.args.cluster_shape,
+                ),
             )
         return tokens, current_pos_tt, rope_idxs, page_table
 
@@ -198,9 +217,12 @@ class TtTransformer(LightweightModule):
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        logits = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, -1))[
-            0, 0, last_token_idx, :
-        ]
+        logits = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, dims=(3, 1) if self.args.is_galaxy else (1, -1), mesh_shape=self.args.cluster_shape
+            ),
+        )[0, 0, last_token_idx, :]
         return logits
 
     def process_output_decode(self, tt_out):
@@ -268,7 +290,7 @@ class TtTransformer(LightweightModule):
         get_last_token=-1,
     ):
         # No-op if callers already provide the right memory config
-        if mode == "decode":
+        if mode == "decode" and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
         for layer in self.layers:
@@ -284,7 +306,7 @@ class TtTransformer(LightweightModule):
         # Output norm
         x = self.norm(x, mode=mode)
 
-        if mode == "prefill":
+        if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
         return self.lm_head(x)
