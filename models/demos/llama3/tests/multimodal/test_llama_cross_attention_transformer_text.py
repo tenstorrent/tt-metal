@@ -214,7 +214,11 @@ def test_llama_cross_attention_transformer_text_inference(
                 )
 
                 rot_mats = get_prefill_rot_mat(
-                    model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len
+                    model_args.head_dim,
+                    model_args.max_seq_len,
+                    mesh_device,
+                    seq_len=seq_len,
+                    scale_factor=model_args.rope_scaling_factor,
                 )
                 tt_out = tt_model(
                     tt_h,

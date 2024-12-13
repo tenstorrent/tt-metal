@@ -127,6 +127,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             configuration.max_seq_len,
             configuration.rope_theta,
             configuration.use_scaled_rope,
+            configuration.rope_scaling_factor,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 

@@ -136,20 +136,26 @@ class TtModelArgs:
         if "3.2-1B" in LLAMA_DIR:
             local_params = "LLAMA3_2_1B_PARAMS"
             self.model_name = "3.2-1B"
+            self.rope_scaling_factor = 32
         elif "3.2-3B" in LLAMA_DIR:
             local_params = "LLAMA3_2_3B_PARAMS"
             self.model_name = "3.2-3B"
+            self.rope_scaling_factor = 32
         elif "3.1-8B" in LLAMA_DIR:
             local_params = "LLAMA3_1_8B_PARAMS"
             self.model_name = "3.1-8B"
+            self.rope_scaling_factor = 8
         elif "3.2-11B" in LLAMA_DIR:
             local_params = "LLAMA3_2_11B_PARAMS"
             self.model_name = "3.2-11B"
+            self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in LLAMA_DIR:
             local_params = "LLAMA3_1_70B_PARAMS"
             self.model_name = "3.1-70B"
+            self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         else:
+            # NOTE: 3.2-90B and 3.3-70B also use scaling factor of 8
             raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
 
         if callable(optimizations):
@@ -194,7 +200,7 @@ class TtModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         self.cos, self.sin = precompute_freqs(
-            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope
+            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope, self.rope_scaling_factor
         )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 

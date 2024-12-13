@@ -8,6 +8,7 @@
   "norm_eps": 1e-05,
   "rope_theta": 500000.0,
   "use_scaled_rope": true,
+  "rope_scaling_factor": 8,
   "vision_chunk_size": 560,
   "vision_max_num_chunks": 4,
   "vocab_size": 128256,
