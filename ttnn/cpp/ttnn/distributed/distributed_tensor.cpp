@@ -11,7 +11,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
 
-namespace ttnn::distributed::api {
+namespace ttnn::distributed {
 namespace {
 
 class ReplicateTensorToMesh : public TensorToMesh {
@@ -189,4 +189,4 @@ Tensor aggregate_tensor(const Tensor& tensor, MeshToTensor& composer) {
                                           : composer.compose({tensor});
 }
 
-}  // namespace ttnn::distributed::api
+}  // namespace ttnn::distributed

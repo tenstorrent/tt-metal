@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::distributed::api {
+namespace ttnn::distributed {
 
 // Mapper interface that distributes a host tensor onto a multi-device configuration.
 class TensorToMesh {
@@ -55,4 +55,4 @@ Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, TensorTo
 // Aggregates a multi-device tensor into a host tensor according to the `composer`.
 Tensor aggregate_tensor(const Tensor& tensor, MeshToTensor& composer);
 
-}  // namespace ttnn::distributed::api
+}  // namespace ttnn::distributed

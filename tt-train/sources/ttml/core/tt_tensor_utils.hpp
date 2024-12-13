@@ -66,7 +66,7 @@ template <class T = float>
 auto to_xtensor(const tt::tt_metal::Tensor& tensor, const MeshToXTensorVariant<T>& composer) {
     auto cpu_tensor = tensor.cpu();
     cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
-    auto cpu_tensors = ttnn::distributed::api::get_device_tensors(cpu_tensor);
+    auto cpu_tensors = ttnn::distributed::get_device_tensors(cpu_tensor);
     std::vector<xt::xarray<T>> res;
     res.reserve(cpu_tensors.size());
     for (const auto& shard : cpu_tensors) {

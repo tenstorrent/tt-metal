@@ -28,10 +28,10 @@ TEST_F(TensorDistributionTest, Replication) {
     Tensor input_tensor = from_vector(
         std::vector<float>{42.F, 13.F, -99.F}, GetTensorSpec(ttnn::SimpleShape{1, 1, 1, 3}, DataType::FLOAT32));
 
-    auto mapper = api::replicate_tensor_to_mesh_mapper(*mesh_device_);
-    Tensor replicated_tensor = api::distribute_tensor(input_tensor, *mesh_device_, *mapper);
+    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    Tensor replicated_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
 
-    std::vector<Tensor> device_tensors = api::get_device_tensors(replicated_tensor);
+    std::vector<Tensor> device_tensors = get_device_tensors(replicated_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (const auto& device_tensor : device_tensors) {
         EXPECT_THAT(to_vector<float>(device_tensor), ElementsAre(42.F, 13.F, -99.F));
@@ -44,13 +44,13 @@ TEST_F(TensorDistributionTest, Shard1DInvalidDim) {
         std::vector<float>(num_devices, 0), GetTensorSpec(ttnn::SimpleShape{1, 1, 1, num_devices}, DataType::FLOAT32));
 
     EXPECT_ANY_THROW({
-        auto mapper = api::shard_tensor_to_mesh_mapper(*mesh_device_, -1);
-        Tensor sharded_tensor = api::distribute_tensor(input_tensor, *mesh_device_, *mapper);
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -1);
+        Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
     });
 
     EXPECT_ANY_THROW({
-        auto mapper = api::shard_tensor_to_mesh_mapper(*mesh_device_, 4);
-        Tensor sharded_tensor = api::distribute_tensor(input_tensor, *mesh_device_, *mapper);
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 4);
+        Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
     });
 }
 
@@ -61,8 +61,8 @@ TEST_F(TensorDistributionTest, Shard1DTooFewShards) {
         std::vector<float>{42.F, 13.F, -99.F}, GetTensorSpec(ttnn::SimpleShape{1, 1, 1, 3}, DataType::FLOAT32));
 
     EXPECT_ANY_THROW({
-        auto mapper = api::shard_tensor_to_mesh_mapper(*mesh_device_, 3);
-        Tensor sharded_tensor = api::distribute_tensor(input_tensor, *mesh_device_, *mapper);
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 3);
+        Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
     });
 }
 
@@ -75,17 +75,17 @@ TEST_F(TensorDistributionTest, Shard1D) {
     Tensor input_tensor =
         from_vector(test_data, GetTensorSpec(ttnn::SimpleShape{1, num_devices, 3, 1}, DataType::FLOAT32));
 
-    auto mapper = api::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
-    Tensor sharded_tensor = api::distribute_tensor(input_tensor, *mesh_device_, *mapper);
+    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
 
-    std::vector<Tensor> device_tensors = api::get_device_tensors(sharded_tensor);
+    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (int i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(to_vector<float>(device_tensors[i]), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
 
-    auto composer = api::concat_mesh_to_tensor_composer(/*dim=*/0);
-    Tensor concatenated_tensor = api::aggregate_tensor(sharded_tensor, *composer);
+    auto composer = concat_mesh_to_tensor_composer(/*dim=*/0);
+    Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
 
     Tensor expected_tensor =
         from_vector(test_data, GetTensorSpec(ttnn::SimpleShape{num_devices, 1, 3, 1}, DataType::FLOAT32));
@@ -98,18 +98,18 @@ TEST_F(TensorDistributionTest, Shard2DInvalidMeshShape) {
     ASSERT_EQ(num_cols, 4);
 
     EXPECT_ANY_THROW(
-        api::shard_tensor_2d_to_mesh_mapper(*mesh_device_, MeshShape{3, 1}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
+        shard_tensor_2d_to_mesh_mapper(*mesh_device_, MeshShape{3, 1}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
 
     EXPECT_ANY_THROW(
-        api::shard_tensor_2d_to_mesh_mapper(*mesh_device_, MeshShape{2, 5}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
+        shard_tensor_2d_to_mesh_mapper(*mesh_device_, MeshShape{2, 5}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
 }
 
 TEST_F(TensorDistributionTest, Shard2DInvalidShardConfig) {
-    EXPECT_ANY_THROW(api::shard_tensor_2d_to_mesh_mapper(*mesh_device_, MeshShape{2, 4}, Shard2dConfig{}));
+    EXPECT_ANY_THROW(shard_tensor_2d_to_mesh_mapper(*mesh_device_, MeshShape{2, 4}, Shard2dConfig{}));
 }
 
 TEST_F(TensorDistributionTest, Concat2DInvalidConfig) {
-    EXPECT_ANY_THROW(api::concat_mesh_2d_to_tensor_composer(*mesh_device_, Concat2dConfig{.row_dim = 2, .col_dim = 2}));
+    EXPECT_ANY_THROW(concat_mesh_2d_to_tensor_composer(*mesh_device_, Concat2dConfig{.row_dim = 2, .col_dim = 2}));
 }
 
 TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
@@ -123,16 +123,16 @@ TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
         from_vector(test_data, GetTensorSpec(ttnn::SimpleShape{1, num_rows, num_cols, 1}, DataType::FLOAT32));
     input_tensor.print();
 
-    auto mapper = api::shard_tensor_2d_to_mesh_mapper(
+    auto mapper = shard_tensor_2d_to_mesh_mapper(
         *mesh_device_,
         MeshShape{num_rows, num_cols},
         Shard2dConfig{
             .row_dim = 1,
         });
-    Tensor sharded_tensor = api::distribute_tensor(input_tensor, *mesh_device_, *mapper);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
     sharded_tensor.print();
 
-    std::vector<Tensor> device_tensors = api::get_device_tensors(sharded_tensor);
+    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
 
     int i = 0;
@@ -157,28 +157,28 @@ TEST_F(TensorDistributionTest, Shard2D) {
     Tensor input_tensor =
         from_vector(test_data, GetTensorSpec(ttnn::SimpleShape{1, num_rows, num_cols, 3}, DataType::FLOAT32));
 
-    auto mapper = api::shard_tensor_2d_to_mesh_mapper(
+    auto mapper = shard_tensor_2d_to_mesh_mapper(
         *mesh_device_,
         MeshShape{num_rows, num_cols},
         Shard2dConfig{
             .row_dim = 1,
             .col_dim = 2,
         });
-    Tensor sharded_tensor = api::distribute_tensor(input_tensor, *mesh_device_, *mapper);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
 
-    std::vector<Tensor> device_tensors = api::get_device_tensors(sharded_tensor);
+    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (int i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(to_vector<float>(device_tensors[i]), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
 
-    auto composer = api::concat_mesh_2d_to_tensor_composer(
+    auto composer = concat_mesh_2d_to_tensor_composer(
         *mesh_device_,
         Concat2dConfig{
             .row_dim = 0,
             .col_dim = 2,
         });
-    Tensor concatenated_tensor = api::aggregate_tensor(sharded_tensor, *composer);
+    Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
 
     Tensor expected_tensor =
         from_vector(test_data, GetTensorSpec(ttnn::SimpleShape{num_rows, 1, num_cols, 3}, DataType::FLOAT32));

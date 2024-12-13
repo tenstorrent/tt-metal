@@ -15,7 +15,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::distributed::api {
+namespace ttnn::distributed {
 
 std::shared_ptr<MeshDevice> open_mesh_device(
     const MeshShape& mesh_shape,
@@ -298,4 +298,4 @@ Tensor create_multi_device_tensor(
     }
 }
 
-}  // namespace ttnn::distributed::api
+}  // namespace ttnn::distributed
