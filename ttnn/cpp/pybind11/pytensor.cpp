@@ -12,6 +12,7 @@
 #include "tensor.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/tt_stl/overloaded.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/run_operation.hpp"
@@ -483,12 +484,12 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
 std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(const Tensor& tt_tensor) {
     TT_ASSERT(tt_tensor.storage_type() == StorageType::OWNED or tt_tensor.storage_type() == StorageType::BORROWED);
 
-    const auto& tensor_spec = tt_tensor.get_tensor_spec();
+    using RetType = std::variant<OwnedBuffer, BorrowedBuffer>;
     return std::visit(
-        [&tensor_spec, &tt_tensor](auto&& storage) -> std::variant<OwnedBuffer, BorrowedBuffer> {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, OwnedStorage>) {
-                auto tt_dtype = tensor_spec.data_type();
+        tt::stl::overloaded{
+            [&tt_tensor](const OwnedStorage& storage) -> RetType {
+                const auto& tensor_spec = tt_tensor.get_tensor_spec();
+                const auto tt_dtype = tensor_spec.data_type();
                 switch (tt_dtype) {
                     case DataType::UINT8: {
                         return create_row_major_owned_buffer(
@@ -531,19 +532,13 @@ std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(const Tens
                         break;
                     }
                 }
-            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                TT_THROW("Device tensor cannot be converted to torch");
-            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                return storage.buffer;
-            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                TT_THROW("Tensor with MultiDeviceStorage cannot be converted to torch");
-            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+            },
+            [](const BorrowedStorage& borrowed_storage) -> RetType { return borrowed_storage.buffer; },
+            [&tt_tensor](auto&&) -> RetType {
                 TT_THROW(
-                    "Tensor MultiDeviceHostStorage cannot be converted to torch directly. Use composer(..) "
-                    "functionality.");
-            } else {
-                raise_unsupported_storage<T>();
-            }
+                    "Tensor with {} cannot be converted to torch",
+                    tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
+            },
         },
         tt_tensor.get_storage());
 }
@@ -556,54 +551,33 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor) {
     py::object torch = py::module_::import("torch");
     auto frombuffer = torch.attr("frombuffer");
 
-    auto torch_dtype = [&]() {
-        if (std::holds_alternative<OwnedBuffer>(buffer)) {
+    py::object torch_dtype = std::visit(
+        [&torch](auto&& owned_or_borrowed_buffer) -> py::object {
+            // Peel off outer variant type.
+            using BufferType = std::decay_t<decltype(owned_or_borrowed_buffer)>;
+            static_assert(std::is_same_v<BufferType, OwnedBuffer> or std::is_same_v<BufferType, BorrowedBuffer>);
             return std::visit(
-                [&torch](auto& owned_buffer) -> py::object {
-                    using T = std::decay_t<decltype(owned_buffer)>;
-                    if constexpr (std::is_same_v<T, owned_buffer::Buffer<uint8_t>>) {
+                [&torch](auto&& b) -> py::object {
+                    using T = typename std::decay_t<decltype(b)>::value_type;
+                    if constexpr (std::is_same_v<T, uint8_t>) {
                         return torch.attr("uint8");
-                    } else if constexpr (std::is_same_v<T, owned_buffer::Buffer<uint16_t>>) {
+                    } else if constexpr (std::is_same_v<T, uint16_t>) {
                         return torch.attr("int16");
-                    } else if constexpr (std::is_same_v<T, owned_buffer::Buffer<int32_t>>) {
+                    } else if constexpr (std::is_same_v<T, int32_t>) {
                         return torch.attr("int32");
-                    } else if constexpr (std::is_same_v<T, owned_buffer::Buffer<uint32_t>>) {
+                    } else if constexpr (std::is_same_v<T, uint32_t>) {
                         return torch.attr("int32");
-                    } else if constexpr (std::is_same_v<T, owned_buffer::Buffer<float>>) {
+                    } else if constexpr (std::is_same_v<T, float>) {
                         return torch.attr("float32");
-                    } else if constexpr (std::is_same_v<T, owned_buffer::Buffer<::bfloat16>>) {
+                    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
                         return torch.attr("bfloat16");
                     } else {
                         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported buffer!");
                     }
                 },
-                std::get<OwnedBuffer>(buffer));
-
-        } else if (std::holds_alternative<BorrowedBuffer>(buffer)) {
-            return std::visit(
-                [&torch](auto& borrowed_buffer) -> py::object {
-                    using T = std::decay_t<decltype(borrowed_buffer)>;
-                    if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<uint8_t>>) {
-                        return torch.attr("uint8");
-                    } else if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<uint16_t>>) {
-                        return torch.attr("int16");
-                    } else if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<int32_t>>) {
-                        return torch.attr("int32");
-                    } else if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<uint32_t>>) {
-                        return torch.attr("int32");
-                    } else if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<float>>) {
-                        return torch.attr("float32");
-                    } else if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<::bfloat16>>) {
-                        return torch.attr("bfloat16");
-                    } else {
-                        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported buffer!");
-                    }
-                },
-                std::get<BorrowedBuffer>(buffer));
-        } else {
-            TT_THROW("Only OwnedBuffer or BorrowedBuffer is supported for converting to python buffers!");
-        }
-    }();
+                owned_or_borrowed_buffer);
+        },
+        buffer);
 
     auto shape = tt_tensor.get_legacy_shape();
     auto torch_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
@@ -634,54 +608,33 @@ py::object convert_tt_tensor_to_numpy_tensor(const Tensor& tt_tensor) {
     py::object np = py::module_::import("numpy");
     auto frombuffer = np.attr("frombuffer");
 
-    auto np_dtype = [&]() {
-        if (std::holds_alternative<OwnedBuffer>(buffer)) {
+    py::object np_dtype = std::visit(
+        [&np](auto&& owned_or_borrowed_buffer) -> py::object {
+            // Peel off outer variant type.
+            using BufferType = std::decay_t<decltype(owned_or_borrowed_buffer)>;
+            static_assert(std::is_same_v<BufferType, OwnedBuffer> or std::is_same_v<BufferType, BorrowedBuffer>);
             return std::visit(
-                [&np](auto& owned_buffer) -> py::object {
-                    using T = std::decay_t<decltype(owned_buffer)>;
-                    if constexpr (std::is_same_v<T, owned_buffer::Buffer<uint8_t>>) {
+                [&np](auto&& b) -> py::object {
+                    using T = typename std::decay_t<decltype(b)>::value_type;
+                    if constexpr (std::is_same_v<T, uint8_t>) {
                         return np.attr("ubyte");
-                    } else if constexpr (std::is_same_v<T, owned_buffer::Buffer<uint16_t>>) {
+                    } else if constexpr (std::is_same_v<T, uint16_t>) {
                         return np.attr("int16");
-                    } else if constexpr (std::is_same_v<T, owned_buffer::Buffer<int32_t>>) {
+                    } else if constexpr (std::is_same_v<T, int32_t>) {
                         return np.attr("int32");
-                    } else if constexpr (std::is_same_v<T, owned_buffer::Buffer<uint32_t>>) {
+                    } else if constexpr (std::is_same_v<T, uint32_t>) {
                         return np.attr("int32");
-                    } else if constexpr (std::is_same_v<T, owned_buffer::Buffer<float>>) {
+                    } else if constexpr (std::is_same_v<T, float>) {
                         return np.attr("float32");
-                    } else if constexpr (std::is_same_v<T, owned_buffer::Buffer<::bfloat16>>) {
+                    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
                         TT_THROW("Bfloat16 is not supported for numpy!");
                     } else {
                         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported buffer!");
                     }
                 },
-                std::get<OwnedBuffer>(buffer));
-
-        } else if (std::holds_alternative<BorrowedBuffer>(buffer)) {
-            return std::visit(
-                [&np](auto& borrowed_buffer) -> py::object {
-                    using T = std::decay_t<decltype(borrowed_buffer)>;
-                    if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<uint8_t>>) {
-                        return np.attr("ubyte");
-                    } else if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<uint16_t>>) {
-                        return np.attr("int16");
-                    } else if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<int32_t>>) {
-                        return np.attr("int32");
-                    } else if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<uint32_t>>) {
-                        return np.attr("int32");
-                    } else if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<float>>) {
-                        return np.attr("float32");
-                    } else if constexpr (std::is_same_v<T, borrowed_buffer::Buffer<::bfloat16>>) {
-                        TT_THROW("Bfloat16 is not supported for numpy!");
-                    } else {
-                        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported buffer!");
-                    }
-                },
-                std::get<BorrowedBuffer>(buffer));
-        } else {
-            TT_THROW("Only OwnedBuffer or BorrowedBuffer is supported for converting to python buffers!");
-        }
-    }();
+                owned_or_borrowed_buffer);
+        },
+        buffer);
 
     auto shape = tt_tensor.get_legacy_shape();
     auto np_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
@@ -1629,22 +1582,16 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "buffer",
             [](const Tensor& self) -> std::variant<OwnedBuffer, BorrowedBuffer> {
+                using RetType = std::variant<OwnedBuffer, BorrowedBuffer>;
                 return std::visit(
-                    [](auto&& storage) -> std::variant<OwnedBuffer, BorrowedBuffer> {
-                        using T = std::decay_t<decltype(storage)>;
-                        if constexpr (std::is_same_v<T, OwnedStorage>) {
-                            return storage.buffer;
-                        } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                            TT_THROW("Device storage doesn't support buffer method");
-                        } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                            return storage.buffer;
-                        } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                            TT_THROW("MultiDeviceStorage doesn't support buffer method");
-                        } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                            TT_THROW("MultiDeviceHostStorage doesn't support buffer method");
-                        } else {
-                            raise_unsupported_storage<T>();
-                        }
+                    tt::stl::overloaded{
+                        [](const OwnedStorage& s) -> RetType { return s.buffer; },
+                        [](const BorrowedStorage& s) -> RetType { return s.buffer; },
+                        [&](auto&&) -> RetType {
+                            TT_THROW(
+                                "{} doesn't support buffer method",
+                                tt::stl::get_active_type_name_in_variant(self.get_storage()));
+                        },
                     },
                     self.get_storage());
             },
@@ -1662,21 +1609,13 @@ void pytensor_module(py::module& m_tensor) {
             "buffer_address",
             [](const Tensor& self) -> uint32_t {
                 return std::visit(
-                    [](auto&& storage) -> uint32_t {
-                        using T = std::decay_t<decltype(storage)>;
-                        if constexpr (std::is_same_v<T, OwnedStorage>) {
-                            TT_THROW("OwnedStorage doesn't support buffer_address method");
-                        } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                            return storage.buffer->address();
-                        } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                            TT_THROW("BorrowedStorage doesn't support buffer_address method");
-                        } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                            TT_THROW("MultiDeviceStorage doesn't support buffer_address method");
-                        } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                            TT_THROW("MultiDeviceHostStorage doesn't support buffer_address method");
-                        } else {
-                            raise_unsupported_storage<T>();
-                        }
+                    tt::stl::overloaded{
+                        [](const DeviceStorage& s) -> uint32_t { return s.buffer->address(); },
+                        [&](auto&&) -> uint32_t {
+                            TT_THROW(
+                                "{} doesn't support buffer_address method",
+                                tt::stl::get_active_type_name_in_variant(self.get_storage()));
+                        },
                     },
                     self.get_storage());
             },
