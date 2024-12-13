@@ -195,6 +195,7 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+    if: github.event_name == 'push'
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow
   # build-and-test-measure-perf:
