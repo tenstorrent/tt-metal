@@ -22,7 +22,7 @@ struct ExecuteTilizeWithValPadding {
         const PadValue pad_value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false);
+        bool use_multicore = true);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -30,7 +30,7 @@ struct ExecuteTilizeWithValPadding {
         const PadValue pad_value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false);
+        bool use_multicore = true);
 };
 
 struct ExecuteTilizeWithZeroPadding {
@@ -39,13 +39,13 @@ struct ExecuteTilizeWithZeroPadding {
         const ttnn::Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false);
+        bool use_multicore = true);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false);
+        bool use_multicore = true);
 };
 
 }  // namespace operations::data_movement
