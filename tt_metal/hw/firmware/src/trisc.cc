@@ -91,7 +91,9 @@ int main(int argc, char *argv[]) {
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
-        while (*trisc_run != RUN_SYNC_MSG_GO);
+        while (*trisc_run != RUN_SYNC_MSG_GO) {
+            invalidate_l1_cache();
+        }
         DeviceZoneScopedMainN("TRISC-FW");
 
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
