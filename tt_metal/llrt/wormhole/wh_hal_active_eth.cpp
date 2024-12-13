@@ -26,6 +26,7 @@ HalCoreInfoType create_active_eth_mem_map() {
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = 0x0;  // Anything better to use?
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = eth_l1_mem::address_map::ERISC_BARRIER_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] =
         eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = GET_ETH_MAILBOX_ADDRESS_HOST(launch);
@@ -47,6 +48,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] =
         eth_l1_mem::address_map::MAX_SIZE;  // Anything better to use?
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = eth_l1_mem::address_map::ERISC_BARRIER_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] =
         eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
