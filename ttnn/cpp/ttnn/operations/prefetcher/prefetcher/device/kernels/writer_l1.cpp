@@ -65,6 +65,11 @@ FORCE_INLINE uint32_t get_local_cb_wr_ptr(uint32_t cb_id, uint32_t fifo_start_ad
     return local_cb.fifo_wr_ptr - fifo_start_addr;
 }
 
+FORCE_INLINE uint32_t get_remote_cb_rd_ptr(uint32_t cb_id) {
+    RemoteSenderCBInterface& cb = get_remote_sender_cb_interface(cb_id);
+    return cb.fifo_wr_ptr;
+}
+
 FORCE_INLINE void print_remote_fifo(uint32_t cb_id) {
     RemoteSenderCBInterface& cb = get_remote_sender_cb_interface(cb_id);
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
@@ -72,8 +77,8 @@ FORCE_INLINE void print_remote_fifo(uint32_t cb_id) {
     volatile tt_l1_ptr uint32_t* pages_acked_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.aligned_pages_sent_ptr + L1_ALIGNMENT);
     // DPRINT << "fifo_wr_ptr " << cb.fifo_wr_ptr << ENDL();
-    // DPRINT << "pages_sent " << *pages_sent_ptr << ENDL();
-    // DPRINT << "pages_ack " << *pages_acked_ptr << ENDL();
+    DPRINT << "pages_sent " << *pages_sent_ptr << ENDL();
+    DPRINT << "pages_ack " << *pages_acked_ptr << ENDL();
 
     uint32_t fifo_aligned_num_pages = cb.fifo_limit_page_aligned / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
     uint32_t free_pages = fifo_aligned_num_pages - (*pages_sent_ptr - *pages_acked_ptr);
@@ -82,7 +87,57 @@ FORCE_INLINE void print_remote_fifo(uint32_t cb_id) {
 
     // DPRINT << "fifo_page_size " << cb.fifo_page_size << ENDL();
 }
+template <bool update_remote_over_noc = false>
+FORCE_INLINE void resize_remote_sender_cb_interface_(uint32_t cb_id, uint32_t page_size, uint8_t noc) {
+    ASSERT(page_size % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
+    RemoteSenderCBInterface& sender_cb_interface = get_remote_sender_cb_interface(cb_id);
+    uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_cb_interface.config_ptr)[3];
+    uint32_t fifo_start_addr = sender_cb_interface.fifo_start_addr;
+    uint32_t fifo_wr_ptr = sender_cb_interface.fifo_wr_ptr;
+    uint32_t cb_size_page_aligned = fifo_size - fifo_size % page_size;
+    uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
+    uint32_t prev_fifo_limit_page_aligned = sender_cb_interface.fifo_limit_page_aligned;
 
+    uint32_t next_fifo_wr_ptr = fifo_start_addr + align(fifo_wr_ptr - fifo_start_addr, page_size);
+    if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
+        next_fifo_wr_ptr = fifo_start_addr;
+    } else {
+#ifndef COMPILE_FOR_TRISC
+        if constexpr (update_remote_over_noc) {
+            uint32_t aligned_pages_sent_addr = sender_cb_interface.aligned_pages_sent_ptr;
+            uint32_t remote_noc_xy_addr = sender_cb_interface.receiver_noc_xy_ptr;
+            uint32_t num_receivers = sender_cb_interface.num_receivers;
+            uint32_t aligned_page_adjustment =
+                (next_fifo_wr_ptr - fifo_wr_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            if (prev_fifo_limit_page_aligned < fifo_limit_page_aligned) {
+                aligned_page_adjustment +=
+                    (fifo_limit_page_aligned - prev_fifo_limit_page_aligned) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            }
+            // increment the aligned pages sent because we skipped to next aligned page location
+            volatile tt_l1_ptr uint32_t* pages_sent_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_sent_addr);
+            volatile tt_l1_ptr uint32_t* remote_noc_xy_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_noc_xy_addr);
+            for (uint32_t i = 0; i < num_receivers; ++i) {
+                uint32_t remote_noc_xy = uint32_t(NOC_XY_ENCODING(
+                    DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]), DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1])));
+                *pages_sent_ptr += aligned_page_adjustment;
+                uint64_t remote_ack_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
+                if (aligned_page_adjustment != 0) {
+                    noc_semaphore_inc(remote_ack_ptr_addr, aligned_page_adjustment, noc);
+                }
+                pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+                remote_noc_xy_ptr += 2;
+
+                // DPRINT << "aligned_page_adjustment " << aligned_page_adjustment <<ENDL();
+            }
+        }
+#endif
+    }
+    sender_cb_interface.fifo_wr_ptr = next_fifo_wr_ptr;
+    sender_cb_interface.fifo_limit_page_aligned = fifo_limit_page_aligned;
+    sender_cb_interface.fifo_page_size = page_size;
+}
 /*
 TODO:
     - How do the coalesced sizes differ?
@@ -97,9 +152,11 @@ void kernel_main() {
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
+    constexpr uint32_t max_block_num_tiles = get_compile_time_arg_val(4);
 
     constexpr uint32_t local_cb_id = 0;
     constexpr uint32_t remote_cb_id = 31;
+    constexpr uint32_t sync_cb = 2;
 
     uint32_t fifo_start_address = get_fifo_start_address(local_cb_id);
     uint32_t fifo_start_size = get_fifo_start_size(local_cb_id);
@@ -132,29 +189,52 @@ void kernel_main() {
             uint32_t curr_block_size = curr_block_num_tiles * curr_single_tile_sizes;
             uint32_t curr_block_size_per_receiver = curr_block_size / num_receivers;
 
-            resize_local_cb_interface(local_cb_id, curr_block_size, fifo_start_address, fifo_start_size);
-            experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size_per_receiver, noc);
+            // resize_local_cb_interface(local_cb_id, curr_block_size, fifo_start_address, fifo_start_size);
+            // experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size_per_receiver, noc);
+            resize_remote_sender_cb_interface_<true>(remote_cb_id, curr_block_size_per_receiver, noc);
 
-            // DPRINT << "curr_block_size" << curr_block_size << ENDL();
-            // DPRINT << "curr_block_size_per_receiver" << curr_block_size_per_receiver << ENDL();
+            DPRINT << "curr_block_size" << curr_block_size << ENDL();
+            DPRINT << "curr_block_height_in_tiles" << curr_block_height_in_tiles << ENDL();
+            DPRINT << "curr_coalesced_num_pages" << curr_coalesced_num_pages << ENDL();
+            DPRINT << "curr_coalesced_page_size" << curr_coalesced_page_size << ENDL();
+
+            experimental::remote_cb_reserve_back(remote_cb_id, num_blocks);
+
+            DPRINT << "remote ptr " << get_remote_cb_rd_ptr(remote_cb_id) / 16 << ENDL();
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
-                cb_wait_front(local_cb_id, 1);
+                DPRINT << "writer max_block_num_tiles " << max_block_num_tiles << ENDL();
+                cb_wait_front(local_cb_id, max_block_num_tiles);
+                DPRINT << "writer max_block_num_tiles " << max_block_num_tiles << ENDL();
+                // cb_wait_front(local_cb_id, curr_block_num_tiles);
+
+                DPRINT << "layer " << layer << " t " << t << " block " << block << ENDL();
+
+                // DPRINT << "writer max_block_num_tiles " << max_block_num_tiles << ENDL();
 
                 // for (uint i=0; i<(uint)(curr_block_num_tiles);i++){
-                //     for (uint8_t j=0; j<32;j++) {
-                //         DPRINT  << TSLICE(local_cb_id, i, SliceRange{.h0 = j, .h1 = uint8_t(j+1), .hs = 1, .w0 = 0,
+                //     DPRINT  << TSLICE(local_cb_id, i, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0,
                 //         .w1 = 32, .ws = 1}, true, true) << ENDL();
-                //     }
+                //     // for (uint8_t j=0; j<32;j++) {
+                //     //     DPRINT  << TSLICE(local_cb_id, i, SliceRange{.h0 = j, .h1 = uint8_t(j+1), .hs = 1, .w0 =
+                //     0,
+                //     //     .w1 = 32, .ws = 1}, true, true) << ENDL();
+                //     // }
                 // }
 
                 // DPRINT  << TSLICE(local_cb_id, 0, SliceRange::h0_w0_32(), true, true) << ENDL();
 
                 uint32_t local_cb_addr = get_read_ptr(local_cb_id);
-                experimental::remote_cb_reserve_back(remote_cb_id, 1);  // Reserve back 1 curr_block_size
+                // DPRINT << "writer local_cb_addr" << local_cb_addr << ENDL();
+
+                // experimental::remote_cb_reserve_back(remote_cb_id, 1);  // Reserve back 1 curr_block_size
+
+                // DPRINT << "writer local_cb_addr" << local_cb_addr << ENDL();
+
+                // for (volatile int i=0; i< 100000; ++i);
 
                 // print_remote_fifo(remote_cb_id);
-                // if (t==0 or t==1)
+                // if (t==0 or t==1 or t==2)
                 experimental::remote_cb_push_back_and_write_pages(
                     remote_cb_id,
                     local_cb_addr,
@@ -164,10 +244,15 @@ void kernel_main() {
                     curr_coalesced_page_size,
                     noc);
 
+                // print_remote_fifo(remote_cb_id);
                 // DPRINT << "block " << block <<ENDL();
 
-                cb_pop_front(local_cb_id, 1);
+                cb_pop_front(local_cb_id, max_block_num_tiles);
+                // cb_pop_front(local_cb_id, curr_block_num_tiles);
             }
+
+            // noc_async_write_barrier();
         }
     }
+    DPRINT << "writer done " << ENDL();
 }

@@ -267,13 +267,14 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
         # ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
         # (
         #     1,
-        #     4,
-        #     [(192, 320), (192, 320), (192, 320), (192, 320)],
+        #     8,
+        #     [(768, 64),(256, 384),(768, 64),(192, 320),(128, 64),(64, 384),(32, 768),(32, 512)],
         #     1,
         # ),
-        # (12, 5, [(7680, 2304)]*5, 1),  # FF2
+        # (12, 5, [(3840, 2304)]*5, 1),  # FF2
         # (12, 6, [(2304, 1536)]*6, 1),  # QKV
-        (12, 5, [(2304, 2304)] * 5, 1),  # DO
+        # (12, 5, [(2304, 2304)] * 5, 1),  # DO
+        (12, 5, [(2304, 3840), (3840, 2304), (2304, 3840), (1536, 2304), (2304, 2304)], 1),  # ff1 + ff2 +ff3+ qkv + do
     ],
 )
 @pytest.mark.parametrize(
@@ -325,7 +326,8 @@ def test_run_prefetcher(
     # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 1088 * (360))
     # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 576 * (800))
 
-    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * 256)
+    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 512 * 512 * 4)
+    print(f"global cb size {512 * 512 * 4}")
 
     ##### Set up the input tensors #####
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
@@ -340,6 +342,8 @@ def test_run_prefetcher(
             # rows, cols = shape
             # tensor = torch.arange(1, rows + 1).unsqueeze(1).expand(rows, cols).float()
         elif tid == 1:
+            tensor = torch.randn(input_shapes[tid])
+        elif tid == 2:
             tensor = torch.randn(input_shapes[tid])
         else:
             tensor = torch.randn(input_shapes[tid])
@@ -419,33 +423,38 @@ def test_run_prefetcher(
     device.load_sub_device_manager(sub_device_manager)
 
     max_dst_tiles = 8
-    B = 1
-    M = 32
-    in0_shape = [1, B, M, K]
-    in1_shape = [1, 1, K, N]
     grid = receiver_cores_list
     num_cores = grid[0] * grid[1] if isinstance(grid, tuple) else len(grid)
     storage_grid = num_cores_to_rectangle_grid(num_cores, device)
-    M *= B  # Fuse batch always enabled
-    in0_block_h = M // ttnn.TILE_SIZE
-    in0_block_w = K // num_cores // ttnn.TILE_SIZE
-    out_block_h = M // ttnn.TILE_SIZE
-    out_block_w = N // num_cores // ttnn.TILE_SIZE
+    M = 32
 
-    num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
-    num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
-    num_blocks_total = num_blocks_y * num_blocks_x
+    in0_shapes = []
+    out_shapes = []
+    block_dims = []
+    for tid in range(num_tensors):
+        K, N = input_shapes[tid]
+        in0_shape = [1, 1, M, K]
+        in0_shapes.append(in0_shape)
+        out_shape = [1, 1, M, N]
+        out_shapes.append(out_shape)
 
-    out_subblock_h = 1
-    out_subblock_w = max_dst_tiles if (out_block_h == 1 and out_block_w <= max_dst_tiles) else 4
-    while out_block_w % out_subblock_w != 0:
-        out_subblock_w -= 1
+        in0_block_h = M // ttnn.TILE_SIZE
+        in0_block_w = K // num_cores // ttnn.TILE_SIZE
+        out_block_h = M // ttnn.TILE_SIZE
+        out_block_w = N // num_cores // ttnn.TILE_SIZE
 
-    logger.debug("in0 block h w " + str(in0_block_h) + " " + str(in0_block_w))
-    logger.debug("in1 block h w " + str(in0_block_w) + " " + str(out_block_w))
-    logger.debug("out block h w " + str(out_block_h) + " " + str(out_block_w))
-    logger.debug("out subblock h w " + str(out_subblock_h) + " " + str(out_subblock_w))
+        out_subblock_h = 1
+        out_subblock_w = max_dst_tiles if (out_block_h == 1 and out_block_w <= max_dst_tiles) else 4
+        while out_block_w % out_subblock_w != 0:
+            out_subblock_w -= 1
 
+        logger.debug("in0 block h w " + str(in0_block_h) + " " + str(in0_block_w))
+        logger.debug("in1 block h w " + str(in0_block_w) + " " + str(out_block_w))
+        logger.debug("out block h w " + str(out_block_h) + " " + str(out_block_w))
+        logger.debug("out subblock h w " + str(out_subblock_h) + " " + str(out_subblock_w))
+
+        block_dim = [in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w]
+        block_dims.append(block_dim)
     # x, y
     if isinstance(grid, tuple):  # Generate random grid
         CORE_RANGE = [(x, y) for y in range(storage_grid[1]) for x in range(storage_grid[0])]
@@ -465,51 +474,67 @@ def test_run_prefetcher(
 
     print(f"num_cores: {num_cores}")
 
-    in0_sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            core_range_set,
-            [M, K // num_cores],
-            ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
+    output_mem_configs = []
+    for shape in out_shapes:
+        _, _, M, N = shape
 
-    output_sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            core_range_set,
-            [M, N // num_cores],
-            ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
+        output_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                core_range_set,
+                [M, N // num_cores],
+                ttnn.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+        output_mem_configs.append(output_sharded_mem_config)
 
-    in0 = torch.randn(in0_shape)
+    in0_tensors = []
+    in0_t_tensors = []
+    for shape in in0_shapes:
+        in0 = torch.randn(shape)
+        in0_tensors.append(in0)
 
-    in0_t = ttnn.from_torch(
-        in0,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=in0_sharded_mem_config,
-    )
+        _, _, M, K = shape
 
-    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=storage_grid,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=out_block_h,
-        per_core_N=out_block_w,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=False,
-        gather_in0=True,
-        num_global_cb_receivers=num_global_cb_receivers,
-    )
+        in0_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                core_range_set,
+                [M, K // num_cores],
+                ttnn.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
+
+        in0_t = ttnn.from_torch(
+            in0,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=in0_sharded_mem_config,
+        )
+        in0_t_tensors.append(in0_t)
+
+    program_configs = []
+    for block_dim in block_dims:
+        in0_block_w, out_subblock_h, out_subblock_w, out_block_h, out_block_w = block_dim
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=storage_grid,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=out_block_h,
+            per_core_N=out_block_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            num_global_cb_receivers=num_global_cb_receivers,
+        )
+        program_configs.append(program_config)
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -531,10 +556,10 @@ def test_run_prefetcher(
     outputs_t = []
     for i in range(num_tensors):
         output_t = ttnn.matmul(
-            in0_t,
+            in0_t_tensors[i],
             tt_tensors[i],
-            program_config=program_config,
-            memory_config=output_sharded_mem_config,
+            program_config=program_configs[i],
+            memory_config=output_mem_configs[i],
             compute_kernel_config=compute_kernel_config,
             global_cb=global_circular_buffer,
         )
@@ -543,7 +568,7 @@ def test_run_prefetcher(
     for i in range(num_tensors):
         tt_out = ttnn.to_torch(outputs_t[i])
 
-        pt_out = in0 @ pt_tensors[i]
+        pt_out = in0_tensors[i] @ pt_tensors[i]
         # print(pt_tensors[i])
         print(tt_out)
         print(pt_out)
