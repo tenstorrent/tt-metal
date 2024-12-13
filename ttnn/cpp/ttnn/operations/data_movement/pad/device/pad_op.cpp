@@ -12,6 +12,7 @@ void Pad::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
+    TT_FATAL(input_tensor.rank() <= 4, "ttnn.pad: input tensor rank currently must be 4 or less");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE || input_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
