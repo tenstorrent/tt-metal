@@ -55,7 +55,7 @@ void bind_untilize_with_unpadding(py::module& module) {
             py::arg("output_tensor_end"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("use_multicore") = false,
+            py::arg("use_multicore") = true,
             py::arg("use_pack_untilize") = true,
             py::arg("queue_id") = 0,
         });
