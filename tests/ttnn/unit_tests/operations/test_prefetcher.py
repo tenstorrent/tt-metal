@@ -83,38 +83,66 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
         ttnn.CoreCoord(4, 4),
         ttnn.CoreCoord(4, 5),
     ]
-    all_receiver_cores_list = [
-        (1, 9),
-        (2, 9),
-        (1, 0),
-        (2, 0),
-        (1, 4),
-        (2, 4),
-        (1, 5),
-        (2, 5),
-        (5, 0),
-        (6, 0),
-        (5, 9),
-        (6, 9),
-        (5, 1),
-        (6, 1),
-        (5, 8),
-        (6, 8),
-        (5, 3),
-        (6, 3),
-        (5, 2),
-        (6, 2),
-        (5, 4),
-        (6, 4),
-        (5, 5),
-        (6, 5),
-    ]
+    if num_global_cb_receivers == 2:
+        all_receiver_cores_list = [
+            (1, 9),
+            (2, 9),
+            (1, 0),
+            (2, 0),
+            (1, 4),
+            (2, 4),
+            (1, 5),
+            (2, 5),
+            (5, 0),
+            (6, 0),
+            (5, 9),
+            (6, 9),
+            (5, 1),
+            (6, 1),
+            (5, 8),
+            (6, 8),
+            (5, 3),
+            (6, 3),
+            (5, 2),
+            (6, 2),
+            (5, 4),
+            (6, 4),
+            (5, 5),
+            (6, 5),
+        ]
+    else:
+        all_receiver_cores_list = [
+            (1, 9),
+            # (2, 9),
+            (1, 0),
+            # (2, 0),
+            (1, 4),
+            # (2, 4),
+            (1, 5),
+            # (2, 5),
+            (5, 0),
+            # (6, 0),
+            (5, 9),
+            # (6, 9),
+            (5, 1),
+            # (6, 1),
+            (5, 8),
+            # (6, 8),
+            (5, 3),
+            # (6, 3),
+            (5, 2),
+            # (6, 2),
+            (5, 4),
+            # (6, 4),
+            (5, 5),
+            # (6, 5),
+        ]
     all_receiver_cores = [
         ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 9),
-                    ttnn.CoreCoord(1, 9) if num_global_cb_receivers == 1 else ttnn.CoreCoord(2, 9),
+                    ttnn.CoreCoord(2, 9) if num_global_cb_receivers == 2 else ttnn.CoreCoord(1, 9),
                 ),
             ]
         ),
@@ -122,7 +150,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 0),
-                    ttnn.CoreCoord(2, 0),
+                    ttnn.CoreCoord(2, 0) if num_global_cb_receivers == 2 else ttnn.CoreCoord(1, 0),
                 ),
             ]
         ),
@@ -130,7 +158,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 4),
-                    ttnn.CoreCoord(2, 4),
+                    ttnn.CoreCoord(2, 4) if num_global_cb_receivers == 2 else ttnn.CoreCoord(1, 4),
                 ),
             ]
         ),
@@ -138,7 +166,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(1, 5),
-                    ttnn.CoreCoord(2, 5),
+                    ttnn.CoreCoord(2, 5) if num_global_cb_receivers == 2 else ttnn.CoreCoord(1, 5),
                 ),
             ]
         ),
@@ -146,7 +174,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 0),
-                    ttnn.CoreCoord(6, 0),
+                    ttnn.CoreCoord(6, 0) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 0),
                 ),
             ]
         ),
@@ -154,7 +182,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 9),
-                    ttnn.CoreCoord(6, 9),
+                    ttnn.CoreCoord(6, 9) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 9),
                 ),
             ]
         ),
@@ -162,7 +190,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 1),
-                    ttnn.CoreCoord(6, 1),
+                    ttnn.CoreCoord(6, 1) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 1),
                 ),
             ]
         ),
@@ -170,7 +198,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 8),
-                    ttnn.CoreCoord(6, 8),
+                    ttnn.CoreCoord(6, 8) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 8),
                 ),
             ]
         ),
@@ -178,7 +206,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 3),
-                    ttnn.CoreCoord(6, 3),
+                    ttnn.CoreCoord(6, 3) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 3),
                 ),
             ]
         ),
@@ -186,7 +214,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 2),
-                    ttnn.CoreCoord(6, 2),
+                    ttnn.CoreCoord(6, 2) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 2),
                 ),
             ]
         ),
@@ -194,7 +222,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 4),
-                    ttnn.CoreCoord(6, 4),
+                    ttnn.CoreCoord(6, 4) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 4),
                 ),
             ]
         ),
@@ -202,7 +230,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [
                 ttnn.CoreRange(
                     ttnn.CoreCoord(5, 5),
-                    ttnn.CoreCoord(6, 5),
+                    ttnn.CoreCoord(6, 5) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 5),
                 ),
             ]
         ),
@@ -232,9 +260,9 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
         # (2, 2, [(128, 128), (128, 128)], 1),
         # (2, 2, [(256, 1024), (256, 1024)], 1),
         (
-            1,
-            7,
-            [(384, 640)] * 7,
+            3,
+            4,
+            [(1152 // 2, 1920 // 2)] * 4,
             1,
         ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
         # (
@@ -270,7 +298,7 @@ def test_run_prefetcher(
 ):
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shapes[0]}")
 
-    num_global_cb_receivers = 2
+    num_global_cb_receivers = 1
 
     K, N = input_shapes[0]
 

@@ -1784,6 +1784,8 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
+    std::cout << "in1_block_num_tiles " << in1_block_num_tiles << std::endl;
+
     /* Compile time args */
     std::vector<uint32_t> in0_sender_compile_time_args = {
         (std::uint32_t)in0_shard_width_in_tiles,
@@ -1819,8 +1821,8 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out  // untilize_out
-    };
+        untilize_out,  // untilize_out
+        in1_single_tile_size};
 
     /* Kernel defines */
     std::map<string, string> mm_in1_kernel_defines;
@@ -1859,7 +1861,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
-            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            // .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = in0_sender_compile_time_args});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -1869,7 +1871,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
-            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            // .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_in1_kernel_defines});
 
@@ -1903,11 +1905,20 @@ operation::ProgramWithCallbacks create_program_gather_in0(
                 .set_page_size(sync_cb_index, sync_cb_size_bytes);
         auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
 
+        uint32_t sync_cb2_index = tt::CBIndex::c_6;
+        uint32_t sync_cb2_size_bytes = 16;
+        tt_metal::CircularBufferConfig sync_cb2_config =
+            tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
+                .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
+        auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
+
+        uint32_t in1_block_size_bytes = in1_single_tile_size * in1_block_num_tiles;
         uint32_t remote_cb_index = tt::CBIndex::c_31;
-        tt_metal::CircularBufferConfig remote_cb_config = tt_metal::CircularBufferConfig(in1_CB_size);
-        std::cout << "in1_CB_size " << in1_CB_size << std::endl;
+        tt_metal::CircularBufferConfig remote_cb_config =
+            tt_metal::CircularBufferConfig((global_cb->size() / in1_block_size_bytes) * in1_block_size_bytes);
+        std::cout << "in1_CB_size " << (global_cb->size() / in1_single_tile_size) * in1_single_tile_size << std::endl;
         remote_cb_config.remote_index(remote_cb_index)
-            .set_page_size(in1_single_tile_size * in1_block_num_tiles)
+            .set_page_size(in1_block_size_bytes)
             .set_data_format(in1_data_format);
         remote_cb_config.index(src1_cb_index).set_page_size(in1_single_tile_size).set_data_format(in1_data_format);
         cb_src1 = tt_metal::v1::experimental::CreateCircularBuffer(program, all_cores, remote_cb_config, *global_cb);

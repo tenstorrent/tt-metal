@@ -281,7 +281,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         next_receiver_start_addr_offset += next_receiver_start_addr_stride;
         *pages_sent_ptr += pages_sent;
 
-        DPRINT << "pages_sent " << pages_sent << ENDL();
+        // DPRINT << "pages_sent " << pages_sent << ENDL();
 
         uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
         noc_semaphore_inc(remote_sent_ptr_addr, pages_sent, noc);
