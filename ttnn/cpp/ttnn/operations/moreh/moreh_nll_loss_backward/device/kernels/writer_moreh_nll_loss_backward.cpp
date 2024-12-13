@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     uint32_t end_id = start_id + num_tiles_per_core;
-    for (uint32_t i = start_id; i < end_id; ++ i) {
+    for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(cb_input_grad, onetile);
         uint32_t input_grad_l1_write_addr = get_read_ptr(cb_input_grad);
         noc_async_write_tile(i, input_grad_addrg, input_grad_l1_write_addr);

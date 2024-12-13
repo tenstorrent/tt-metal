@@ -118,14 +118,14 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         all_cores,
         cb_data_format,
         {
-            {tt::CBIndex::c_0, in0_t},                            // output_grad(==dy)
-            {tt::CBIndex::c_1, in1_t},                            // input(==x)
-            {tt::CBIndex::c_2, in2_t},                            // mean
-            {tt::CBIndex::c_3, in3_t},                            // rstd
-            {tt::CBIndex::c_4, in4_t},                            // scaler
-            {tt::CBIndex::c_5, in5_t},                            // mask_h
-            {tt::CBIndex::c_16, out0_t},                          // gamma_grad(==dgamma)
-            {tt::CBIndex::c_17, out1_t},                          // beta_grad(==dbeta)
+            {tt::CBIndex::c_0, in0_t},                       // output_grad(==dy)
+            {tt::CBIndex::c_1, in1_t},                       // input(==x)
+            {tt::CBIndex::c_2, in2_t},                       // mean
+            {tt::CBIndex::c_3, in3_t},                       // rstd
+            {tt::CBIndex::c_4, in4_t},                       // scaler
+            {tt::CBIndex::c_5, in5_t},                       // mask_h
+            {tt::CBIndex::c_16, out0_t},                     // gamma_grad(==dgamma)
+            {tt::CBIndex::c_17, out1_t},                     // beta_grad(==dbeta)
             {tt::CBIndex::c_24, im0_t, intermed_cb_format},  // output(==y)
             {tt::CBIndex::c_25, im1_t, intermed_cb_format},  // y * dy
             {tt::CBIndex::c_26, im2_t, intermed_cb_format},  // Add[dy]
@@ -167,10 +167,9 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "writer_moreh_layer_norm_backward_gamma_beta_grad.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernels_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     const std::vector<uint32_t> compute_args_group_1{
         num_cols_per_core_group_1,

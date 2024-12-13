@@ -39,6 +39,6 @@ private:
     std::size_t width_ = 0;
 };
 
-std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Size &size);
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size);
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

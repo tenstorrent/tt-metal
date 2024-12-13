@@ -38,7 +38,7 @@ uint32_t get_receiver_stream_config_reg(uint32_t data_noc_id, uint32_t update_no
     return stream_cfg_reg;
 }
 
-FORCE_INLINE bool messages_are_available(uint32_t stream_id, stream_state_t &stream_state) {
+FORCE_INLINE bool messages_are_available(uint32_t stream_id, stream_state_t& stream_state) {
     uint32_t wrptr = NOC_STREAM_READ_REG(stream_id, STREAM_MSG_INFO_WR_PTR_REG_INDEX);
     uint32_t rdptr = NOC_STREAM_READ_REG(stream_id, STREAM_MSG_INFO_PTR_REG_INDEX);
     uint32_t internal_rdptr = stream_state.local_msg_info_ptr >> 4;
@@ -47,7 +47,7 @@ FORCE_INLINE bool messages_are_available(uint32_t stream_id, stream_state_t &str
 }
 
 FORCE_INLINE void flush_message_from_stream_buffer(
-    uint32_t stream_id, stream_state_t &stream_state, uint32_t msg_size_bytes) {
+    uint32_t stream_id, stream_state_t& stream_state, uint32_t msg_size_bytes) {
     stream_receiver_endpoint_tiles_clear_b0(stream_id, 1);
     while (!is_stream_receiver_endpoint_tile_clearing_finished(stream_id)) {
         asm volatile("");
@@ -55,14 +55,14 @@ FORCE_INLINE void flush_message_from_stream_buffer(
 }
 
 FORCE_INLINE uint32_t
-get_next_available_stream_message_size_in_bytes(stream_state_t &stream_state, uint32_t stream_id) {
+get_next_available_stream_message_size_in_bytes(stream_state_t& stream_state, uint32_t stream_id) {
     uint32_t msg_info_byte_ptr = stream_state.local_msg_info_ptr;
-    uint32_t msg_size_bytes = *reinterpret_cast<volatile uint32_t *>(msg_info_byte_ptr) << 4;
+    uint32_t msg_size_bytes = *reinterpret_cast<volatile uint32_t*>(msg_info_byte_ptr) << 4;
     ASSERT(msg_size_bytes > 0);
     return msg_size_bytes;
 }
 
-FORCE_INLINE std::tuple<uint32_t, uint32_t> get_next_message_info(uint32_t stream_id, stream_state_t &stream_state) {
+FORCE_INLINE std::tuple<uint32_t, uint32_t> get_next_message_info(uint32_t stream_id, stream_state_t& stream_state) {
     uint32_t rdptr_offset = NOC_STREAM_READ_REG(stream_id, STREAM_RD_PTR_REG_INDEX) << 4;
     uint32_t addr = rdptr_offset + stream_state.local_data_buffer_base_address;
     ASSERT((rdptr_offset & 0xF) == 0);
@@ -71,7 +71,7 @@ FORCE_INLINE std::tuple<uint32_t, uint32_t> get_next_message_info(uint32_t strea
 }
 
 FORCE_INLINE void advance_stream_state_struct(
-    uint32_t stream_id, stream_state_t &stream_state, uint32_t msg_size_bytes) {
+    uint32_t stream_id, stream_state_t& stream_state, uint32_t msg_size_bytes) {
     uint32_t next_offset = stream_state.local_buffer_read_offset + msg_size_bytes;
     if (next_offset >= stream_state.local_buffer_size) {
         next_offset -= stream_state.local_buffer_size;
@@ -81,7 +81,7 @@ FORCE_INLINE void advance_stream_state_struct(
 }
 
 FORCE_INLINE void advance_phase(
-    noc_endpoint_info_t const &remote_endpoint_info, stream_state_t &state, uint32_t stream_id) {
+    noc_endpoint_info_t const& remote_endpoint_info, stream_state_t& state, uint32_t stream_id) {
     // This is remote receiver, so it sends messages (updates) to remote source, NOT data, so it uses
     // the update noc to communicate to remote src instead of the data noc. Therefore, we need to set remote
     // src x/y based on the update noc.
@@ -117,12 +117,12 @@ FORCE_INLINE void advance_phase(
 }
 
 FORCE_INLINE void advance_stream_to_next_message(
-    noc_endpoint_info_t const &remote_endpoint_info,
-    stream_state_t &state,
+    noc_endpoint_info_t const& remote_endpoint_info,
+    stream_state_t& state,
     uint32_t stream_id,
     uint32_t msg_size_bytes,
-    phase_iterator_t &local_phase_iterator,
-    phase_iterator_t &remote_phase_iterator) {
+    phase_iterator_t& local_phase_iterator,
+    phase_iterator_t& remote_phase_iterator) {
     advance_stream_state_struct(stream_id, state, msg_size_bytes);
     flush_message_from_stream_buffer(stream_id, state, msg_size_bytes);
 
@@ -142,7 +142,7 @@ FORCE_INLINE void advance_stream_to_next_message(
 }
 
 FORCE_INLINE void copy_message_to_cb_blocking(
-    uint32_t cb, uint32_t msg_addr, uint32_t msg_size_bytes, stream_state_t &stream_state) {
+    uint32_t cb, uint32_t msg_addr, uint32_t msg_size_bytes, stream_state_t& stream_state) {
     uint32_t cb_write_addr = get_write_ptr(cb);
     uint64_t dest_noc_addr = get_noc_addr(cb_write_addr);
     ASSERT((dest_noc_addr & 0xF) == 0);
@@ -191,7 +191,7 @@ void kernel_main() {
     uint32_t remote_src_start_phase_addr = get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t first_phase_remote_src_phase =
-        wait_for_remote_source_starting_phase(reinterpret_cast<volatile uint32_t *>(remote_src_start_phase_addr));
+        wait_for_remote_source_starting_phase(reinterpret_cast<volatile uint32_t*>(remote_src_start_phase_addr));
     const uint32_t second_phase_remote_src_phase = first_phase_remote_src_phase + 1;
     const uint32_t local_first_phase = get_first_available_phase_out_of_reset(stream_id);
     const uint32_t local_second_phase = local_first_phase;
@@ -242,7 +242,7 @@ void kernel_main() {
             asm volatile("nop");
         }
 
-        auto const &[msg_addr, msg_size_bytes] = get_next_message_info(stream_id, stream_state);
+        auto const& [msg_addr, msg_size_bytes] = get_next_message_info(stream_id, stream_state);
         ASSERT(msg_size_bytes > 0);
         ASSERT(msg_size_bytes <= stream_state.local_buffer_size);
 

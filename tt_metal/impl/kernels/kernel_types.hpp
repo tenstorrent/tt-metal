@@ -71,7 +71,6 @@ struct EthernetConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
-
 };
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

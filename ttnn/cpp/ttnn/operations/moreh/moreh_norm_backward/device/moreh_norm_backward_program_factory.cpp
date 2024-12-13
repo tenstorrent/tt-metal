@@ -12,8 +12,9 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     auto floored_p = std::floor(p);
     auto decimal = p - floored_p;
     bool p_is_negative = floored_p < 0.0f;
-    if (p_is_negative)
+    if (p_is_negative) {
         floored_p = -floored_p;
+    }
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
@@ -21,17 +22,19 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::Legacy
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
-        if (idx == rank - 1 || idx == rank - 2)
+        if (idx == rank - 1 || idx == rank - 2) {
             dim[i] = shape[idx] / tt::constants::TILE_HEIGHT;
-        else
+        } else {
             dim[i] = shape[idx];
+        }
     }
 }
 
 tt::tt_metal::LegacyShape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
-    if (keepdim)
+    if (keepdim) {
         return output_grad.get_legacy_shape();
+    }
 
     auto shape = input_grad.get_legacy_shape();
     auto rank = shape.rank();
@@ -42,8 +45,9 @@ tt::tt_metal::LegacyShape get_output_grad_shape(
         if (is_tile_dim) {
             shape[dim] = tt::constants::TILE_HEIGHT;
             padding[dim] = Padding::PadDimension{0, 31};
-        } else
+        } else {
             shape[dim] = 1;
+        }
     }
     return tt::tt_metal::LegacyShape(shape, padding);
 }
@@ -174,12 +178,9 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         static_cast<uint32_t>(is_dram(output)),
         static_cast<uint32_t>(is_dram(output_grad)),
         static_cast<uint32_t>(input_grad_rank)};
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input_grad))};
-    const auto reader_kernels_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernels_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(input_grad))};
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

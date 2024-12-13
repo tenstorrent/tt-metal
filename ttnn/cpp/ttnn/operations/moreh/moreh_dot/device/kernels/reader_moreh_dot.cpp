@@ -12,7 +12,7 @@ void mask_tile_in_reader(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h
         uint32_t u;
     } zero;
     zero.f = 0.0f;
-    auto ptr = reinterpret_cast<uint16_t *>(l1_addr);
+    auto ptr = reinterpret_cast<uint16_t*>(l1_addr);
     for (uint32_t h = 0; h < 16; h++) {
         // sub tile 0
         {
@@ -71,11 +71,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = 2;
     cb_reserve_back(cb_id_in2, 1);
     if (scaler != 0) {
-        auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id_in2));
-        for (int j = 0; j < 1024; j++) ptr[j] = uint16_t(0);
+        auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id_in2));
+        for (int j = 0; j < 1024; j++) {
+            ptr[j] = uint16_t(0);
+        }
 
-        for (int k = 0; k < 4; k++)
-            for (int j = 0; j < 16; j++) ptr[k * 256 + j] = uint16_t(scaler >> 16);
+        for (int k = 0; k < 4; k++) {
+            for (int j = 0; j < 16; j++) {
+                ptr[k * 256 + j] = uint16_t(scaler >> 16);
+            }
+        }
     }
     cb_push_back(cb_id_in2, 1);
 

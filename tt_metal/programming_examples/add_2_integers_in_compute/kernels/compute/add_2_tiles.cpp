@@ -10,7 +10,7 @@ namespace NAMESPACE {
 void MAIN {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_out0 =  tt::CBIndex::c_16;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     add_tiles_init();
@@ -19,17 +19,17 @@ void MAIN {
     cb_wait_front(cb_in0, 1);
     cb_wait_front(cb_in1, 1);
 
-    //cb_reserve_back(cb_out0, 1);
+    // cb_reserve_back(cb_out0, 1);
 
-    tile_regs_acquire(); // acquire 8 tile registers
+    tile_regs_acquire();  // acquire 8 tile registers
 
     add_tiles(cb_in0, cb_in1, 0, 0, 0);
 
-    tile_regs_commit(); // signal the packer
+    tile_regs_commit();  // signal the packer
 
-    tile_regs_wait(); // packer waits here
+    tile_regs_wait();  // packer waits here
     pack_tile(0, cb_out0);
-    tile_regs_release(); // packer releases
+    tile_regs_release();  // packer releases
 
     cb_pop_front(cb_in0, 1);
     cb_pop_front(cb_in1, 1);
@@ -54,4 +54,4 @@ void MAIN {
     release_dst();
     */
 }
-}
+}  // namespace NAMESPACE

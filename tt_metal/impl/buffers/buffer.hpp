@@ -21,11 +21,11 @@
 #include "common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
-#include "third_party/umd/device/xy_pair.h"
+#include "umd/device/tt_soc_descriptor.h"
+#include "umd/device/types/xy_pair.h"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/common/assert.hpp"
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 
 #include "llrt/hal.hpp"
 
@@ -221,13 +221,9 @@ class Buffer final {
 
     CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
-    CoreCoord noc_coordinates(uint32_t bank_id) const;
-
-    // returns NoC coordinates of first bank buffer is in
-    CoreCoord noc_coordinates() const;
-
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
+    DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const;
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;
@@ -247,6 +243,8 @@ class Buffer final {
 
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
     std::optional<SubDeviceManagerId> sub_device_manager_id() const { return sub_device_manager_id_; }
+
+    size_t unique_id() const { return unique_id_; }
 
     Buffer(
         Device *device,
@@ -300,6 +298,8 @@ class Buffer final {
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::weak_ptr<Buffer> weak_self;
+    size_t unique_id_ = 0;
+    static std::atomic<size_t> next_unique_id;
 };
 
 }  // namespace v0

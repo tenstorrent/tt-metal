@@ -20,7 +20,7 @@ struct EmbeddingBackwardOperation {
         const Tensor& output_gradient_tensor_arg,
         const std::optional<const DataType> dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor_arg,
@@ -28,7 +28,7 @@ struct EmbeddingBackwardOperation {
         const Tensor& output_gradient_tensor_arg,
         const std::optional<const DataType> dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 }  // namespace embedding_backward

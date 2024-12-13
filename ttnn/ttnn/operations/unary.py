@@ -255,7 +255,7 @@ def _golden_function_leaky_relu(input_tensor_a, *args, negative_slope=0.01, **kw
 ttnn.attach_golden_function(ttnn.leaky_relu, golden_function=_golden_function_leaky_relu)
 
 
-def _golden_function_relu_min(input_tensor_a, *args, lower_limit, **kwargs):
+def _golden_function_relu_min(input_tensor_a, lower_limit, *args, **kwargs):
     import torch
 
     return torch.max(input_tensor_a, torch.tensor(lower_limit))
@@ -264,7 +264,7 @@ def _golden_function_relu_min(input_tensor_a, *args, lower_limit, **kwargs):
 ttnn.attach_golden_function(ttnn.relu_min, golden_function=_golden_function_relu_min)
 
 
-def _golden_function_relu_max(input_tensor_a, *args, upper_limit, **kwargs):
+def _golden_function_relu_max(input_tensor_a, upper_limit, *args, **kwargs):
     import torch
 
     return torch.relu(torch.min(input_tensor_a, torch.tensor(upper_limit)))
@@ -273,13 +273,22 @@ def _golden_function_relu_max(input_tensor_a, *args, upper_limit, **kwargs):
 ttnn.attach_golden_function(ttnn.relu_max, golden_function=_golden_function_relu_max)
 
 
-def _golden_function_heaviside(input_tensor_a, *args, value, **kwargs):
+def _golden_function_heaviside(input_tensor_a, value, *args, **kwargs):
     import torch
 
     return torch.heaviside(input_tensor_a, torch.tensor(value, dtype=input_tensor_a.dtype))
 
 
 ttnn.attach_golden_function(ttnn.heaviside, golden_function=_golden_function_heaviside)
+
+
+def _golden_function_fill(input_tensor_a, fill_value, *args, **kwargs):
+    import torch
+
+    return torch.full_like(input_tensor_a, fill_value)
+
+
+ttnn.attach_golden_function(ttnn.fill, golden_function=_golden_function_fill)
 
 
 def _golden_function_polygamma(input_tensor_a, k, *args, **kwargs):

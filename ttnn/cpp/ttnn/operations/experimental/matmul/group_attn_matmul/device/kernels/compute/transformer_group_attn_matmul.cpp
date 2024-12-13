@@ -75,6 +75,9 @@ void MAIN {
                         cb_wait_front(cb_in1, in1_block_num_tiles);
                         cb_pop_front(cb_in1, num_kv_heads_skip);
 
+			// This init changes DEST mapping, hence needs to be called before MATH does any processing, so that it has correct DEST mapping.
+                        pack_untilize_dst_init_short<intermediate_num_tiles>(cb_intermed0);
+
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) { // TODO: Must be 1; need to review inner dim blocking and the untilizing
                             uint32_t in1_index_subblock_offset = 0;
 
@@ -133,14 +136,12 @@ void MAIN {
                             in1_index_subblock_offset += out_subblock_w;
                         } // in1_num_subblocks loop
                         cb_pop_front(cb_in1, num_kv_heads_remaining);
-
                         // TODO: Review inner dim blocking, untilizing, and in1_num_subblocks > 1 (with pack_untilize, can only untilize up to dst num tiles)
                         // This should normally be inside subblock loop and we pack out out_subblock_num_tiles
-                        pack_untilize_dst_init_short<intermediate_num_tiles>(cb_intermed0);
                         cb_reserve_back(cb_intermed0, intermediate_num_tiles);
                         tile_regs_wait();
                         pack_untilize_dst<intermediate_num_tiles>(cb_intermed0);
-                        pack_untilize_uninit();
+                        pack_untilize_uninit(cb_intermed0);
 
                         tile_regs_release();
                         cb_push_back(cb_intermed0, intermediate_num_tiles);

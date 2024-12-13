@@ -11,14 +11,12 @@
 #include "common/bfloat16.hpp"
 #include "common/test_tiles.hpp"
 
-
 using namespace tt;
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     try {
-
         uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);
         uint32_t num_tiles = 1;
         uint32_t size_in_bytes = num_tiles * single_bfp8_tile_size;
@@ -32,22 +30,38 @@ int main(int argc, char **argv) {
         }
 
         std::vector<uint32_t> shape_vec = {1, 1, 32, 32};
-        std::vector<float> tiled_fp32_vec = convert_layout(fp32_vec, shape_vec, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES);
+        std::vector<float> tiled_fp32_vec = convert_layout(
+            fp32_vec,
+            shape_vec,
+            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+            tests::utils::TensorLayoutType::TILED_NFACES);
 
-        std::vector<uint32_t> packed_bfp8b_tile_vec_rm_in = pack_fp32_vec_as_bfp8_tiles(fp32_vec, /*row_major_input=*/true, /*is_exp_a=*/false);
-        std::vector<float> unpacked_bfp8b_tile_vec_rm_out = unpack_bfp8_tiles_into_float_vec(packed_bfp8b_tile_vec_rm_in, /*row_major_output*/true, /*is_exp_a=*/false);
+        std::vector<uint32_t> packed_bfp8b_tile_vec_rm_in =
+            pack_fp32_vec_as_bfp8_tiles(fp32_vec, /*row_major_input=*/true, /*is_exp_a=*/false);
+        std::vector<float> unpacked_bfp8b_tile_vec_rm_out = unpack_bfp8_tiles_into_float_vec(
+            packed_bfp8b_tile_vec_rm_in, /*row_major_output*/ true, /*is_exp_a=*/false);
 
-        std::vector<uint32_t> packed_bfp8b_tile_vec_tile_in = pack_fp32_vec_as_bfp8_tiles(tiled_fp32_vec, /*row_major_input=*/false, /*is_exp_a=*/false);
-        std::vector<float> unpacked_bfp8b_tile_vec_tile_out = unpack_bfp8_tiles_into_float_vec(packed_bfp8b_tile_vec_tile_in, /*row_major_output=*/false, /*is_exp_a=*/false);
-
+        std::vector<uint32_t> packed_bfp8b_tile_vec_tile_in =
+            pack_fp32_vec_as_bfp8_tiles(tiled_fp32_vec, /*row_major_input=*/false, /*is_exp_a=*/false);
+        std::vector<float> unpacked_bfp8b_tile_vec_tile_out = unpack_bfp8_tiles_into_float_vec(
+            packed_bfp8b_tile_vec_tile_in, /*row_major_output=*/false, /*is_exp_a=*/false);
 
         // ////////////////////////////////////////////////////////////////////////////
         // //                      Validation
         // ////////////////////////////////////////////////////////////////////////////
-        std::vector<float> tiled_to_rm_fp32_vec = convert_layout(unpacked_bfp8b_tile_vec_tile_out, shape_vec, tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
-        std::vector<float> rm_to_tiled_fp32_vec = convert_layout(unpacked_bfp8b_tile_vec_rm_out, shape_vec, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES);
+        std::vector<float> tiled_to_rm_fp32_vec = convert_layout(
+            unpacked_bfp8b_tile_vec_tile_out,
+            shape_vec,
+            tests::utils::TensorLayoutType::TILED_NFACES,
+            tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+        std::vector<float> rm_to_tiled_fp32_vec = convert_layout(
+            unpacked_bfp8b_tile_vec_rm_out,
+            shape_vec,
+            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+            tests::utils::TensorLayoutType::TILED_NFACES);
 
-        // Ensure that passing in row_major_input=true and row_major_output=true are inverses of row_major_input=false and row_major_output=false yield the same result
+        // Ensure that passing in row_major_input=true and row_major_output=true are inverses of row_major_input=false
+        // and row_major_output=false yield the same result
         pass &= (packed_bfp8b_tile_vec_rm_in == packed_bfp8b_tile_vec_tile_in);
 
         TT_FATAL(unpacked_bfp8b_tile_vec_rm_out.size() == fp32_vec.size(), "Error");
@@ -73,7 +87,7 @@ int main(int argc, char **argv) {
         pass &= (unpacked_bfp8b_tile_vec_rm_out == tiled_to_rm_fp32_vec);
         pass &= (unpacked_bfp8b_tile_vec_tile_out == rm_to_tiled_fp32_vec);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

@@ -8,8 +8,6 @@
 
 namespace NAMESPACE {
 void MAIN {
-
-
     uint32_t NHtWt = get_arg_val<uint32_t>(0);
 
     transpose_wh_init(tt::CBIndex::c_0);
@@ -31,4 +29,4 @@ void MAIN {
         cb_pop_front(tt::CBIndex::c_0, 1);
     }
 }
-}
+}  // namespace NAMESPACE

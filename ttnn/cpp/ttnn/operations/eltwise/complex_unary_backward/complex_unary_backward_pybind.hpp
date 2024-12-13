@@ -21,7 +21,11 @@ namespace complex_unary_backward {
 namespace detail {
 
 template <typename complex_unary_backward_operation_t>
-void bind_complex_unary_backward(py::module& module, const complex_unary_backward_operation_t& operation, const std::string& description, const std::string_view supported_dtype = "") {
+void bind_complex_unary_backward(
+    py::module& module,
+    const complex_unary_backward_operation_t& operation,
+    const std::string& description,
+    const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -73,7 +77,11 @@ void bind_complex_unary_backward(py::module& module, const complex_unary_backwar
 }
 
 template <typename complex_unary_backward_operation_t>
-void bind_complex_unary_backward_tensor(py::module& module, const complex_unary_backward_operation_t& operation, const std::string& description, const std::string_view supported_dtype = "") {
+void bind_complex_unary_backward_tensor(
+    py::module& module,
+    const complex_unary_backward_operation_t& operation,
+    const std::string& description,
+    const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -126,7 +134,6 @@ void bind_complex_unary_backward_tensor(py::module& module, const complex_unary_
 
 }  // namespace detail
 
-
 void py_module(py::module& module) {
     detail::bind_complex_unary_backward(
         module,
@@ -170,7 +177,6 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
 
         )doc");
-
 }
 
 }  // namespace complex_unary_backward

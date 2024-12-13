@@ -72,8 +72,8 @@ inline auto create_async_output_tensors(
 
         return operation_t::create_async_optional_output_tensors(std::forward<decltype(args)>(args)...);
     } else if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
-        return std::vector{
-            Tensor(tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device))};
+        return std::vector{Tensor(
+            tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device))};
 
     } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
         Tensors output_tensors;

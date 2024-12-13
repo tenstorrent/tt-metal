@@ -4,11 +4,9 @@
 
 #pragma once
 
-
 #include "common_globals.h"
 
 namespace ckernel {
-
 
 /**
  * Copies a single tile from the DST register buffer at a specified index to a
@@ -34,16 +32,16 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument       | Description                                       | Type     | Valid Range                                         | Required |
+ * | Argument       | Description                                       | Type     | Valid Range | Required |
  * |----------------|---------------------------------------------------|----------|-----------------------------------------------------|----------|
- * | ifrom_dst      | The index of the tile in the DST register         | uint32_t | Must be less than the size of the DST register (16) | True     |
- * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     |
- * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
+ * | ifrom_dst      | The index of the tile in the DST register         | uint32_t | Must be less than the size of the
+ * DST register (16) | True     | | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to
+ * 31                                             | True     | | icb_tile       | The index of the tile in the output CB
+ * to copy to | uint32_t | Must be less than the size of the CB                | True     |
  */
 template <bool out_of_order_output = false>
-ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0)
-{
-    PACK((  llk_pack<out_of_order_output, false, DST_ACCUM_MODE>(ifrom_dst, icb, output_tile_index)  ));
+ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
+    PACK((llk_pack<out_of_order_output, false, DST_ACCUM_MODE>(ifrom_dst, icb, output_tile_index)));
 }
 
 /**
@@ -69,36 +67,34 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  *
  * Return value: None
  *
- * | Argument       | Description                                       | Type     | Valid Range                                         | Required |
+ * | Argument       | Description                                       | Type     | Valid Range | Required |
  * |----------------|---------------------------------------------------|----------|-----------------------------------------------------|----------|
- * | ifrom_dst      | The index of the tile in the DST register         | uint32_t | Must be less than the size of the DST register (16) | True     |
- * | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                             | True     |
- * | ntiles         | The number of tiles to copy from DST to CB        | uint32_t | Must be less than the size of the CB                | True     |
+ * | ifrom_dst      | The index of the tile in the DST register         | uint32_t | Must be less than the size of the
+ * DST register (16) | True     | | icb            | The identifier of the output circular buffer (CB) | uint32_t | 0 to
+ * 31                                             | True     | | ntiles         | The number of tiles to copy from DST
+ * to CB        | uint32_t | Must be less than the size of the CB                | True     |
  */
-ALWI void matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles)
-{
-    PACK((  llk_matmul_pack<false, false, DST_ACCUM_MODE>(ifrom_dst, icb, ntiles)  ));
+ALWI void matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+    PACK((llk_matmul_pack<false, false, DST_ACCUM_MODE>(ifrom_dst, icb, ntiles)));
 }
 
 /**
  * Helper function to reconfigure packer output data format.
  */
 ALWI void pack_reconfig_data_format(const uint32_t new_operand) {
-    PACK(( llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_operand) ));
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_operand)));
 }
 
 /**
  * Helper function to reconfigure packer output data format.
  */
 ALWI void pack_reconfig_data_format(const uint32_t old_operand, const uint32_t new_operand) {
-    PACK(( llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_operand, new_operand) ));
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_operand, new_operand)));
 }
 
 /**
  * Helper function to reconfigure packer l1 accumulation flag
  */
-ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) {
-    PACK(( llk_pack_reconfig_l1_acc(l1_acc_en) ));
-}
+ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
 
-}
+}  // namespace ckernel

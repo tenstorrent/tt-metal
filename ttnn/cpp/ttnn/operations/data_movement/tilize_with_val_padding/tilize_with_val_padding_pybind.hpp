@@ -13,7 +13,7 @@
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
-void bind_tilize_with_val_padding(py::module &module) {
+void bind_tilize_with_val_padding(py::module& module) {
     auto doc =
         R"doc(
             Changes data layout of input tensor to TILE. Pads to specified shape with a user-provided value.
@@ -44,11 +44,11 @@ void bind_tilize_with_val_padding(py::module &module) {
         ttnn::tilize_with_val_padding,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor,
-               const tt::tt_metal::LegacyShape &output_tensor_shape,
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const tt::tt_metal::LegacyShape& output_tensor_shape,
                const PadValue value,
-               const std::optional<MemoryConfig> &memory_config,
+               const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
                bool use_multicore,
                uint8_t queue_id) {
@@ -65,10 +65,10 @@ void bind_tilize_with_val_padding(py::module &module) {
             py::arg("queue_id") = 0,
         }
 
-        );
+    );
 }
 
-void bind_tilize_with_zero_padding(py::module &module) {
+void bind_tilize_with_zero_padding(py::module& module) {
     auto doc =
         R"doc(
             tilize_with_zero_padding(input_tensor: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = None, dtype: Optional[DataType] = None, use_multicore: bool = False, queue_id: int = 0) -> ttnn.Tensor
@@ -95,9 +95,9 @@ void bind_tilize_with_zero_padding(py::module &module) {
         ttnn::tilize_with_zero_padding,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor,
-               const std::optional<MemoryConfig> &memory_config,
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
                bool use_multicore,
                uint8_t queue_id) { return self(queue_id, input_tensor, memory_config, output_dtype, use_multicore); },

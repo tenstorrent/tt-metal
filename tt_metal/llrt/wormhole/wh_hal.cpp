@@ -5,17 +5,21 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "core_config.h" // ProgrammableCoreType
-#include "dev_mem_map.h" // MEM_LOCAL_BASE
+#include "core_config.h"  // ProgrammableCoreType
+#include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "noc/noc_parameters.h"
+#include "noc/noc_overlay_parameters.h"
+#include "tensix.h"
 
 #include "hal.hpp"
 #include "wormhole/wh_hal.hpp"
 
 // Reserved DRAM addresses
-// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
+// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
+// committed
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
-constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+constexpr static std::uint32_t DRAM_BARRIER_SIZE =
+    ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 namespace tt {
 
@@ -23,8 +27,10 @@ namespace tt_metal {
 
 void Hal::initialize_wh() {
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
-    static_assert(static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
-    static_assert(static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
 
     HalCoreInfoType tensix_mem_map = wormhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
@@ -49,8 +55,7 @@ void Hal::initialize_wh() {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
-        }
-        else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
+        } else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
             // Move addresses in the NCRISC memory range to l1 (copied by kernel)
             return (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
         }
@@ -59,6 +64,24 @@ void Hal::initialize_wh() {
         return addr;
     };
 
+    this->valid_reg_addr_func_ = [](uint32_t addr) {
+        return (
+            ((addr >= NOC_OVERLAY_START_ADDR) &&
+             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) ||
+            ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
+            ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
+            (addr == RISCV_DEBUG_REG_SOFT_RESET_0));
+    };
+
+    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
+    this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
+        return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
+    };
+
+    this->num_nocs_ = NUM_NOCS;
+    this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
+    this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
+    this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
 }
 
 }  // namespace tt_metal

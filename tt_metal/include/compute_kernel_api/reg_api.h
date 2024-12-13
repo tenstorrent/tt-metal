@@ -22,13 +22,14 @@ namespace ckernel {
  *
  * Return value: None
  *
- * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel configuration.
+ * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel
+ * configuration.
  */
 [[deprecated("Use tile_regs_acquire() instead")]]
 ALWI void acquire_dst() {
-    MATH(( llk_math_wait_for_dest_available()  ));
+    MATH((llk_math_wait_for_dest_available()));
 
-    PACK(( llk_packer_wait_for_math_done()  ));
+    PACK((llk_packer_wait_for_math_done()));
 }
 
 // new APIs, TODO: migrate all kernels to these
@@ -38,18 +39,14 @@ ALWI void acquire_dst() {
  * This register is an array of 16 tiles of 32x32 elements each.
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
  */
-ALWI void tile_regs_acquire() {
-    MATH(( llk_math_wait_for_dest_available()  ));
-}
+ALWI void tile_regs_acquire() { MATH((llk_math_wait_for_dest_available())); }
 
 /**
  * Acquire an exclusive lock on the DST register for the PACK thread.
  * It waits for the MATH thread to commit the DST register.
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
  */
-ALWI void tile_regs_wait() {
-    PACK(( llk_packer_wait_for_math_done()  ));
-}
+ALWI void tile_regs_wait() { PACK((llk_packer_wait_for_math_done())); }
 
 /**
  * @deprecated This function is deprecated, please use `tile_regs_release()` instead.
@@ -61,13 +58,14 @@ ALWI void tile_regs_wait() {
  *
  * Return value: None
  *
- * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel configuration.
+ * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel
+ * configuration.
  */
 [[deprecated("Use tile_regs_release() instead")]]
 ALWI void release_dst() {
-    MATH(( llk_math_dest_section_done()  ));
+    MATH((llk_math_dest_section_done()));
 
-    PACK(( llk_pack_dest_section_done()  ));
+    PACK((llk_pack_dest_section_done()));
 }
 
 // new APIs, TODO: migrate all kernels to these
@@ -75,15 +73,11 @@ ALWI void release_dst() {
 /**
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
  */
-ALWI void tile_regs_commit() {
-    MATH(( llk_math_dest_section_done()  ));
-}
+ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done())); }
 
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
  */
-ALWI void tile_regs_release() {
-    PACK(( llk_pack_dest_section_done()  ));
-}
+ALWI void tile_regs_release() { PACK((llk_pack_dest_section_done())); }
 
-} // namespace ckernel
+}  // namespace ckernel

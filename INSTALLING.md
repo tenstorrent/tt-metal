@@ -20,9 +20,9 @@ Note the current compatability matrix:
 
 | Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |---------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-| Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.9.0.0 (v80.9.0.0)               | v2.2.0 or above       | N/A                            |
-| Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.10.0.0 (v80.10.0.0)             | v2.2.0 or above       | N/A                            |
-| T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.10.0.0 (v80.10.0.0)             | v2.2.0 or above       | v1.1.3 or above, `mesh` config |
+| Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.9.0.0 (v80.9.0.0)               | v2.2.0 or above       | N/A                            |
+| Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | N/A                            |
+| T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | v1.1.3 or above, `mesh` config |
 
 ---
 
@@ -66,14 +66,14 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 
 > [!NOTE]
 >
-> You may choose to install from either source or a Python wheel.
+> You may choose to install from either source, a Python wheel, or Docker release image.
 >
 > However, no matter your method, in order to use our pre-built models or to
 > follow along with the documentation and tutorials to get started, you will
 > still need the source code.
 >
 > If you do not want to use the models or follow the tutorials and want to
-> immediately start using the API, you may install just the wheel.
+> immediately start using the API, you may install just the wheel or get the release Docker container.
 
 1. Install git and git-lfs.
 
@@ -93,7 +93,7 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 going to try using the model demos, we highly recommend you install from
 source.
 
-### Option 1: From source
+#### Option 1: From source
 
 We use CMake for our build flows.
 
@@ -127,7 +127,7 @@ depending on your Tenstorrent card type.
 > use Pip 20.1.1 or lower to install this project. This is the highest version
 > of Pip that supports editable installs in the way that we use it.
 
-### Option 2: From wheel
+#### Option 2: From wheel
 
 Download the latest wheel from our
 [releases](https://github.com/tenstorrent/tt-metal/releases/latest) page for
@@ -141,7 +141,7 @@ to install with `pip`:
 pip install <wheel_file.whl>
 ```
 
-4. (For models users only) Set up environment for models
+1. (For models users only) Set up environment for models
 
 If you are going to try our pre-built models in `models/`, then you must execute
 the following to:
@@ -157,7 +157,25 @@ sudo apt-get install cpufrequtils
 sudo cpupower frequency-set -g performance
 ```
 
-5. Start coding
+#### Option 3: From Docker Release Image
+
+Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page for
+the particular Tenstorrent card architecture that you have installed on your
+system. (ie. Grayskull, Wormhole, etc)
+
+```sh
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/<arch_name>:latest-rc
+docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/<arch_name>:latest-rc bash
+```
+where `arch_name` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
+depending on your Tenstorrent card type.
+
+When inside of the container,
+```sh
+python3 -c "import ttnn"
+```
+
+2. Start coding
 
 To verify your installation, try the executing an example:
 

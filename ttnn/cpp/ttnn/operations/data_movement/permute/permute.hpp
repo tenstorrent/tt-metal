@@ -24,7 +24,10 @@ struct ExecutePermute {
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<float>& pad_value = 0.0f);
 
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int64_t> dims, const std::optional<float>& pad_value = 0.0f);
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        tt::stl::Span<const int64_t> dims,
+        const std::optional<float>& pad_value = 0.0f);
 };
 
 }  // namespace operations::data_movement

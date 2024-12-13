@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -17,7 +16,8 @@ namespace ttnn::operations::data_movement {
 namespace detail {
 
 template <typename data_movement_sharded_operation_t>
-void bind_sharded_to_interleaved(pybind11::module& module, const data_movement_sharded_operation_t& operation, const char* doc) {
+void bind_sharded_to_interleaved(
+    pybind11::module& module, const data_movement_sharded_operation_t& operation, const char* doc) {
     bind_registered_operation(
         module,
         operation,
@@ -26,21 +26,28 @@ void bind_sharded_to_interleaved(pybind11::module& module, const data_movement_s
             [](const data_movement_sharded_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType> & output_dtype,
-               uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG), output_dtype);
+               const std::optional<DataType>& output_dtype,
+               uint8_t queue_id,
+               const std::optional<bool>& is_l1_aligned) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor,
+                    memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+                    output_dtype,
+                    is_l1_aligned);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_dtype") = std::nullopt,
             py::kw_only(),
             py::arg("queue_id") = 0,
-            });
+            py::arg("is_l1_aligned") = false,
+        });
 }
 
 }  // namespace detail
 
-//TODO: Add more descriptions to the arguments
+// TODO: Add more descriptions to the arguments
 void py_bind_sharded_to_interleaved(pybind11::module& module) {
     detail::bind_sharded_to_interleaved(
         module,
@@ -64,4 +71,4 @@ void py_bind_sharded_to_interleaved(pybind11::module& module) {
         )doc");
 }
 
-}  // namespace ttnn::operations::data_movement::sharded
+}  // namespace ttnn::operations::data_movement

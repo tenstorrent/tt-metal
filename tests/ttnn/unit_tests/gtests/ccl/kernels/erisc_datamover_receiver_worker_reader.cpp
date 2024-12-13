@@ -13,14 +13,16 @@ void kernel_main() {
     constexpr uint32_t eth_receiver_l1_base_addr = get_compile_time_arg_val(0);
     constexpr uint32_t eth_receiver_l1_sem_addr = get_compile_time_arg_val(1);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(2);
-    constexpr ttnn::ccl::EriscDataMoverTerminationMode termination_mode = static_cast<ttnn::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(3));
+    constexpr ttnn::ccl::EriscDataMoverTerminationMode termination_mode =
+        static_cast<ttnn::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(3));
     const uint32_t num_pages_per_read_chunk = get_arg_val<uint32_t>(0);
     const uint32_t total_pages_to_read = get_arg_val<uint32_t>(1);
     const uint32_t page_size = get_arg_val<uint32_t>(2);
     const uint32_t receiver_erisc_datamover_noc_x = get_arg_val<uint32_t>(3);
     const uint32_t receiver_erisc_datamover_noc_y = get_arg_val<uint32_t>(4);
     // Worker local L1 semaphore that erisc datamover signals to
-    volatile uint32_t* const  receiver_read_sem_addr = reinterpret_cast<volatile uint32_t* const >(get_semaphore(get_arg_val<uint32_t>(5)));
+    volatile uint32_t* const receiver_read_sem_addr =
+        reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(5)));
     const uint32_t num_buffers_per_edm_channel = get_arg_val<uint32_t>(6);
 
     ccl::edm::WorkerToEdmReader<termination_mode> reader(

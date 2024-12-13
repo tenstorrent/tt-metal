@@ -19,19 +19,19 @@ inline uint32_t get_block_size(uint32_t num_tiles, uint32_t max_block_size) {
 
 namespace ttnn::operations::moreh::moreh_group_norm {
 MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormOperation::MorehGroupNormFactory::create(
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &outputs) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& outputs) {
     using namespace tt;
     using namespace tt::constants;
 
-    const auto &input = tensor_args.input;
+    const auto& input = tensor_args.input;
     auto gamma = tensor_args.gamma;
     auto beta = tensor_args.beta;
     auto mean = outputs[1];
     auto rstd = outputs[2];
 
-    auto &output = outputs[0].value();
+    auto& output = outputs[0].value();
 
     auto num_groups = operation_attributes.num_groups;
     auto eps = operation_attributes.eps;
@@ -152,24 +152,24 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
         all_cores,
         cb_data_format,
         {
-            {CBIndex::c_0, in0_t},        // input
-            {CBIndex::c_1, in1_t},        // scaler
-            {CBIndex::c_2, in2_t},        // eps
-            {CBIndex::c_3, in3_t},        // gamma
-            {CBIndex::c_4, in4_t},        // beta
-            {CBIndex::c_5, in5_t},        // mask_h
-            {CBIndex::c_6, in6_t},        // mask_w
-            {CBIndex::c_16, out0_t},      // output
-            {CBIndex::c_17, out1_t},      // mean
-            {CBIndex::c_18, out2_t},      // rstd
-            {CBIndex::c_24, im0_t},  // E[x]
-            {CBIndex::c_25, im1_t},  // x - E[x]
-            {CBIndex::c_26, im2_t},  // (x - E[x])^2
-            {CBIndex::c_27, im3_t},  // Sum[(x - E[x])^2]
-            {CBIndex::c_28, im4_t},  // E[(x - E[x])^2] = Var[x]
-            {CBIndex::c_29, im5_t},  // 1.0/(sqrt(Var[x] + eps))
-            {CBIndex::c_30, im6_t},  // y * gamm + beta
-            {CBIndex::c_31, im7_t},  // Sum[x]
+            {CBIndex::c_0, in0_t},    // input
+            {CBIndex::c_1, in1_t},    // scaler
+            {CBIndex::c_2, in2_t},    // eps
+            {CBIndex::c_3, in3_t},    // gamma
+            {CBIndex::c_4, in4_t},    // beta
+            {CBIndex::c_5, in5_t},    // mask_h
+            {CBIndex::c_6, in6_t},    // mask_w
+            {CBIndex::c_16, out0_t},  // output
+            {CBIndex::c_17, out1_t},  // mean
+            {CBIndex::c_18, out2_t},  // rstd
+            {CBIndex::c_24, im0_t},   // E[x]
+            {CBIndex::c_25, im1_t},   // x - E[x]
+            {CBIndex::c_26, im2_t},   // (x - E[x])^2
+            {CBIndex::c_27, im3_t},   // Sum[(x - E[x])^2]
+            {CBIndex::c_28, im4_t},   // E[(x - E[x])^2] = Var[x]
+            {CBIndex::c_29, im5_t},   // 1.0/(sqrt(Var[x] + eps))
+            {CBIndex::c_30, im6_t},   // y * gamm + beta
+            {CBIndex::c_31, im7_t},   // Sum[x]
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -269,8 +269,8 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
             beta_addr,
             static_cast<uint32_t>(is_dram(beta)),
             static_cast<uint32_t>(beta_has_value),
-            *reinterpret_cast<uint32_t *>(&scaler),
-            *reinterpret_cast<uint32_t *>(&eps),
+            *reinterpret_cast<uint32_t*>(&scaler),
+            *reinterpret_cast<uint32_t*>(&eps),
             tile_offset,
             num_rows_per_core,
             num_inner_tiles,
@@ -306,10 +306,10 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
 }
 
 void MorehGroupNormOperation::MorehGroupNormFactory::override_runtime_arguments(
-    cached_program_t &cached_program,
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &tensor_return_value) {
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     auto input_buffer = tensor_args.input.buffer();
     auto gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
     auto beta_buffer = tensor_args.beta.has_value() ? tensor_args.beta.value().buffer() : nullptr;
@@ -327,7 +327,7 @@ void MorehGroupNormOperation::MorehGroupNormFactory::override_runtime_arguments(
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
-            auto &runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
+            auto& runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
             runtime_args[0] = input_buffer->address();
             if (gamma_buffer != nullptr) {
                 runtime_args[2] = gamma_buffer->address();
@@ -338,7 +338,7 @@ void MorehGroupNormOperation::MorehGroupNormFactory::override_runtime_arguments(
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(cached_program.program, writer_kernels_id, core);
+            auto& runtime_args = GetRuntimeArgs(cached_program.program, writer_kernels_id, core);
             runtime_args[0] = ouput_buffer->address();
             if (mean_buffer != nullptr) {
                 runtime_args[2] = mean_buffer->address();

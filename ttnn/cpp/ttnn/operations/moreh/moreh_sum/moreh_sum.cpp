@@ -10,7 +10,7 @@
 namespace ttnn::operations::moreh::moreh_sum {
 Tensor MorehSum::invoke(
     const Tensor& input,
-    std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
     const bool keepdim,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,

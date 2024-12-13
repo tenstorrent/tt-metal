@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <utility>
 
 #include "common/tt_backend_api_types.hpp"
 #include "common/utils.hpp"
@@ -49,12 +50,12 @@ static fs::path get_file_path_relative_to_dir(const string& dir, const fs::path&
 static fs::path get_relative_file_path_from_config(const fs::path& file_path) {
     fs::path file_path_relative_to_dir;
 
-    if (llrt::OptionsG.is_root_dir_specified()) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::OptionsG.get_root_dir(), file_path);
+    if (llrt::RunTimeOptions::get_instance().is_root_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::RunTimeOptions::get_instance().get_root_dir(), file_path);
     }
 
-    if (!fs::exists(file_path_relative_to_dir) && llrt::OptionsG.is_kernel_dir_specified()) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::OptionsG.get_kernel_dir(), file_path);
+    if (!fs::exists(file_path_relative_to_dir) && llrt::RunTimeOptions::get_instance().is_kernel_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::RunTimeOptions::get_instance().get_kernel_dir(), file_path);
     }
 
     return file_path_relative_to_dir;
@@ -153,7 +154,7 @@ void jit_build_genfiles_triscs_src(
 }
 
 
-static std::string data_format_vec_to_string(const vector<DataFormat> formats) {
+static std::string data_format_vec_to_string(const vector<DataFormat>& formats) {
     std::string formats_string = "";
     for (int i = 0; i < formats.size(); i++) {
         formats_string += to_string((int)formats[i]) + ",";
@@ -162,7 +163,7 @@ static std::string data_format_vec_to_string(const vector<DataFormat> formats) {
 }
 
 static std::string create_formats_array_string(
-    std::string array_type, std::string array_name, int array_size, std::string array_data) {
+    const std::string& array_type, const std::string& array_name, int array_size, const std::string& array_data) {
     stringstream str_stream;
 
     str_stream << array_type << " " << array_name << "[" << array_size << "] = {" << endl;
@@ -178,7 +179,7 @@ generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_ds
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
-        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, unpack_to_dest_mode);
+        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, std::move(unpack_to_dest_mode));
 
     TT_ASSERT(src_formats.size() == NUM_CIRCULAR_BUFFERS);
     TT_ASSERT(dst_formats.size() == NUM_CIRCULAR_BUFFERS);
@@ -187,9 +188,9 @@ generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_ds
 }
 
 static void emit_unpack_data_formats(
-    std::string unpack_data_format_descs,
-    std::vector<DataFormat> src_formats_all_cbs,
-    std::vector<DataFormat> dst_formats_all_cbs) {
+    const std::string& unpack_data_format_descs,
+    const std::vector<DataFormat>& src_formats_all_cbs,
+    const std::vector<DataFormat>& dst_formats_all_cbs) {
     // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
     ofstream file_stream;
     file_stream.open(unpack_data_format_descs);
@@ -198,12 +199,12 @@ static void emit_unpack_data_formats(
         "constexpr std::int32_t",
         "unpack_src_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(src_formats_all_cbs));
+        data_format_vec_to_string(std::move(src_formats_all_cbs)));
     file_stream << create_formats_array_string(
         "constexpr std::int32_t",
         "unpack_dst_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(dst_formats_all_cbs));
+        data_format_vec_to_string(std::move(dst_formats_all_cbs)));
     file_stream.close();
 }
 
@@ -227,9 +228,9 @@ static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack
 }
 
 static void emit_pack_data_formats(
-    std::string pack_data_format_descs,
-    std::vector<DataFormat> src_formats_all_cbs,
-    std::vector<DataFormat> dst_formats_all_cbs) {
+    const std::string& pack_data_format_descs,
+    const std::vector<DataFormat>& src_formats_all_cbs,
+    const std::vector<DataFormat>& dst_formats_all_cbs) {
     ofstream file_stream;
     file_stream.open(pack_data_format_descs);
     file_stream << "#pragma once\n\n";
@@ -237,12 +238,12 @@ static void emit_pack_data_formats(
         "constexpr unsigned char",
         "pack_src_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(src_formats_all_cbs));
+        data_format_vec_to_string(std::move(src_formats_all_cbs)));
     file_stream << create_formats_array_string(
         "constexpr unsigned char",
         "pack_dst_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(dst_formats_all_cbs));
+        data_format_vec_to_string(std::move(dst_formats_all_cbs)));
 
     // budabackend-style format array
     // file_stream << create_formats_array_string("const std::int32_t", "pack_src_format", 16,
@@ -329,7 +330,7 @@ static std::string array_to_string(const uint32_t arr[]) {
     return formats_string;
 }
 
-static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_desc& desc) {
+static void emit_unpack_tile_dims(const std::string& unpack_tile_dims_descs, tt_hlk_desc& desc) {
     ofstream file_stream;
     file_stream.open(unpack_tile_dims_descs);
     file_stream << "#pragma once\n\n";
@@ -343,7 +344,7 @@ static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_des
     file_stream.close();
 }
 
-static void emit_pack_tile_dims(std::string pack_tile_dims_descs, tt_hlk_desc& desc) {
+static void emit_pack_tile_dims(const std::string& pack_tile_dims_descs, tt_hlk_desc& desc) {
     ofstream file_stream;
     file_stream.open(pack_tile_dims_descs);
     file_stream << "#pragma once\n\n";
@@ -448,130 +449,6 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
     } catch (std::runtime_error& ex) {
         std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
     }
-}
-
-std::string generate_bank_to_noc_coord_descriptor_string(
-    tt_xy_pair grid_size,
-    std::vector<CoreCoord>& dram_bank_map,
-    std::vector<int32_t>& dram_bank_offset_map,
-    std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map,
-    uint32_t allocator_alignment) {
-    stringstream ss;
-
-    ss << "// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc." << endl;
-    ss << "//" << endl;
-    ss << "// SPDX-License-Identifier: Apache-2.0" << endl;
-    ss << endl;
-    ss << "/*" << endl;
-    ss << " * This file is autogenerated by tt-metal runtime" << endl;
-    ss << " * DO NOT EDIT" << endl;
-    ss << " * This file contains values that are visible to the device compiled code." << endl;
-    ss << " * CAREFUL: when included in the FW_BUILD, it defines global variables." << endl;
-    ss << " * When included in KERNEL_BUILD, it declares global variables." << endl;
-    ss << " */" << endl;
-    ss << endl;
-    ss << "#pragma once" << endl;
-    ss << endl;
-    ss << "#include <noc/noc_parameters.h>" << endl;
-    ss << endl;
-
-    ss << "static_assert(NUM_NOCS == 2);" << endl;
-    ss << endl;
-
-    ss << "#ifdef KERNEL_BUILD" << endl;
-    ss << endl;
-    ss << "extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];" << endl;
-    ss << "extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];" << endl;
-    ss << "extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];" << endl;
-    ss << "extern int32_t bank_to_l1_offset[NUM_L1_BANKS];" << endl;
-
-    ss << endl;
-    ss << "#else // !KERNEL_BUILD (FW_BUILD)" << endl;
-    ss << endl;
-
-    ss << "uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used)) = {" << endl;
-    for (unsigned int noc = 0; noc < 2; noc++) {
-        ss << "    {"
-           << "\t// noc=" << noc << endl;
-        for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
-            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, grid_size.x, dram_bank_map[bank_id].x);
-            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, grid_size.y, dram_bank_map[bank_id].y);
-            ss << "        (((" << noc_y << " << NOC_ADDR_NODE_ID_BITS) | " << noc_x << ") << NOC_COORD_REG_OFFSET),"
-               << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
-        }
-        ss << "    }," << endl;
-    }
-    ss << "};" << endl;
-    ss << endl;
-    ss << "int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used)) = {" << endl;
-    for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
-        ss << "    " << dram_bank_offset_map[bank_id] << "," << endl;
-    }
-    ss << "};" << endl;
-    ss << endl;
-
-    ss << "uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used)) = {" << endl;
-    for (unsigned int noc = 0; noc < 2; noc++) {
-        ss << "    {"
-           << "\t// noc=" << noc << endl;
-        for (unsigned int bank_id = 0; bank_id < l1_bank_map.size(); bank_id++) {
-            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, grid_size.x, l1_bank_map[bank_id].x);
-            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, grid_size.y, l1_bank_map[bank_id].y);
-            ss << "        (((" << noc_y << " << NOC_ADDR_NODE_ID_BITS) | " << noc_x << ") << NOC_COORD_REG_OFFSET),"
-               << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
-        }
-        ss << "    }," << endl;
-    }
-    ss << "};" << endl;
-    ss << endl;
-    ss << "int32_t bank_to_l1_offset[NUM_L1_BANKS]  __attribute__((used)) = {" << endl;
-    for (unsigned int bank_id = 0; bank_id < l1_bank_map.size(); bank_id++) {
-        ss << "    " << l1_bank_offset_map[bank_id] << "," << endl;
-    }
-    ss << "};" << endl;
-    ss << endl;
-
-    ss << "#endif // FW_BUILD" << endl;
-
-    return ss.str();
-}
-void jit_build_genfiles_bank_to_noc_coord_descriptor(
-    const string& path,
-    tt_xy_pair grid_size,
-    std::vector<CoreCoord>& dram_bank_map,
-    std::vector<int32_t>& dram_bank_offset_map,
-    std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map,
-    uint32_t allocator_alignment) {
-    string output_string = generate_bank_to_noc_coord_descriptor_string(
-        grid_size,
-        dram_bank_map,
-        dram_bank_offset_map,
-        l1_bank_map,
-        l1_bank_offset_map,
-        allocator_alignment);
-
-    fs::create_directories(path + "/brisc");
-    ofstream file_stream_br(path + "/brisc/generated_bank_to_noc_coord_mapping.h");
-    file_stream_br << output_string;
-    file_stream_br.close();
-    fs::create_directories(path + "/ncrisc");
-    ofstream file_stream_nc(path + "/ncrisc/generated_bank_to_noc_coord_mapping.h");
-    file_stream_nc << output_string;
-    file_stream_nc.close();
-    fs::create_directories(path + "/erisc");
-    ofstream file_stream_ec(path + "/erisc/generated_bank_to_noc_coord_mapping.h");
-    file_stream_ec << output_string;
-    file_stream_ec.close();
-    fs::create_directories(path + "/idle_erisc");
-    ofstream file_stream_iec(path + "/idle_erisc/generated_bank_to_noc_coord_mapping.h");
-    file_stream_iec << output_string;
-    file_stream_iec.close();
-    fs::create_directories(path + "/slave_idle_erisc");
-    ofstream file_stream_siec(path + "/slave_idle_erisc/generated_bank_to_noc_coord_mapping.h");
-    file_stream_siec << output_string;
-    file_stream_siec.close();
 }
 
 }  // namespace tt::tt_metal

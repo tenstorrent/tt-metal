@@ -6,53 +6,42 @@
 #include <array>
 #include "dataflow_api.h"
 
-
 void kernel_main() {
     // WRITER RUNTIME ARGS
-    uint32_t q_tensor_addr                       = get_arg_val<uint32_t>(0);
-    uint32_t k_tensor_addr                       = get_arg_val<uint32_t>(1);
-    uint32_t v_tensor_addr                       = get_arg_val<uint32_t>(2);
-    uint32_t num_blocks                          = get_arg_val<uint32_t>(3);
-    uint32_t q_out_h_dim                         = get_arg_val<uint32_t>(4);
-    uint32_t q_out_tensor_tile_id                = get_arg_val<uint32_t>(5);
-    uint32_t kv_out_tensor_tile_id               = get_arg_val<uint32_t>(6);
+    uint32_t q_tensor_addr = get_arg_val<uint32_t>(0);
+    uint32_t k_tensor_addr = get_arg_val<uint32_t>(1);
+    uint32_t v_tensor_addr = get_arg_val<uint32_t>(2);
+    uint32_t num_blocks = get_arg_val<uint32_t>(3);
+    uint32_t q_out_h_dim = get_arg_val<uint32_t>(4);
+    uint32_t q_out_tensor_tile_id = get_arg_val<uint32_t>(5);
+    uint32_t kv_out_tensor_tile_id = get_arg_val<uint32_t>(6);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr uint32_t out_is_dram               = get_compile_time_arg_val(0);
-    constexpr uint32_t q_num_tiles               = get_compile_time_arg_val(1);
-    constexpr uint32_t kv_num_tiles              = get_compile_time_arg_val(2);
-    constexpr uint32_t q_out_h_tiles             = get_compile_time_arg_val(3);
-    constexpr uint32_t q_out_w_tiles             = get_compile_time_arg_val(4);
-    constexpr uint32_t q_out_c                   = get_compile_time_arg_val(5);
-    constexpr uint32_t q_out_HtWt                = get_compile_time_arg_val(6);
+    constexpr uint32_t out_is_dram = get_compile_time_arg_val(0);
+    constexpr uint32_t q_num_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t kv_num_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t q_out_h_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t q_out_w_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t q_out_c = get_compile_time_arg_val(5);
+    constexpr uint32_t q_out_HtWt = get_compile_time_arg_val(6);
 
-
-    constexpr uint32_t cb_id_out0 = 0; // same as cb_id_in0
+    constexpr uint32_t cb_id_out0 = 0;  // same as cb_id_in0
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
     const DataFormat data_format = get_dataformat(cb_id_out0);
 
     constexpr bool out_is_dram_bool = out_is_dram == 1;
     const InterleavedAddrGenFast<out_is_dram_bool> sq = {
-        .bank_base_address = q_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = q_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
     const InterleavedAddrGenFast<out_is_dram_bool> sk = {
-        .bank_base_address = k_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = k_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
     const InterleavedAddrGenFast<out_is_dram_bool> sv = {
-        .bank_base_address = v_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = v_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
 
-    constexpr uint32_t block_size = 1; // micro-block size for read/write; nothing to do with num_blocks
+    constexpr uint32_t block_size = 1;  // micro-block size for read/write; nothing to do with num_blocks
     uint32_t l1_read_addr;
     uint32_t out_num_tiles_read;
-    uint32_t q_out_tensor_current_tile_id; // need this to update q_out_tensor_tile_id
+    uint32_t q_out_tensor_current_tile_id;  // need this to update q_out_tensor_tile_id
     uint32_t out_tensor_current_tile_id;
     uint32_t out_tensor_current_tile_id_along_c;
 
@@ -106,10 +95,9 @@ void kernel_main() {
             q_out_h_dim = 0;
         }
 
-        kv_out_tensor_tile_id +=  kv_num_tiles;
+        kv_out_tensor_tile_id += kv_num_tiles;
 
         noc_async_write_barrier();
         cb_pop_front(cb_id_out0, out_num_tiles_read);
     }
-
 }

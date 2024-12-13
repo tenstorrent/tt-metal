@@ -11,7 +11,7 @@ typedef union {
     uint32_t u;
 } value;
 
-bool is_in_indices(uint32_t *index_ptr, uint32_t size, uint32_t row_id) {
+bool is_in_indices(uint32_t* index_ptr, uint32_t size, uint32_t row_id) {
     for (uint32_t i = 0; i < size; i++) {
         if (row_id == index_ptr[i]) {
             return true;
@@ -53,7 +53,7 @@ void kernel_main() {
     uint64_t index_noc_addr = get_noc_addr(0, s1);
     noc_async_read(index_noc_addr, index_cb_reader, index_page_size);
     noc_async_read_barrier();
-    uint32_t *index_ptr = reinterpret_cast<uint32_t *>(index_cb_reader);
+    uint32_t* index_ptr = reinterpret_cast<uint32_t*>(index_cb_reader);
     if (is_last_dim) {
         for (uint32_t row_id = start_row_id; row_id < start_row_id + num_rows_per_core; row_id++) {
             cb_reserve_back(src_cb_id, onetile);
@@ -62,7 +62,7 @@ void kernel_main() {
             noc_async_read(input_noc_addr, src_cb_reader, input_page_size);
             noc_async_read_barrier();
 
-            uint32_t *input_ptr = reinterpret_cast<uint32_t *>(src_cb_reader);
+            uint32_t* input_ptr = reinterpret_cast<uint32_t*>(src_cb_reader);
 
             for (uint32_t i = 0; i < index_size; i++) {
                 uint32_t current_index = index_ptr[i];
@@ -81,19 +81,19 @@ void kernel_main() {
 
             if (is_in_indices(index_ptr, index_size, row_id / num_rows_to_fill_per_index % dim)) {
 #ifdef OUTPUT_DTYPE_BFLOAT16
-                auto ptr = reinterpret_cast<uint16_t *>(write_addr);
+                auto ptr = reinterpret_cast<uint16_t*>(write_addr);
                 for (uint32_t i = 0; i < index_size; ++i) {
                     ptr[i] = val.u >> 16;
                 }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
-                auto ptr = reinterpret_cast<uint32_t *>(write_addr);
+                auto ptr = reinterpret_cast<uint32_t*>(write_addr);
                 for (uint32_t i = 0; i < index_size; ++i) {
                     ptr[i] = fill_value;
                 }
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
-                auto ptr = reinterpret_cast<float *>(write_addr);
+                auto ptr = reinterpret_cast<float*>(write_addr);
                 for (uint32_t i = 0; i < index_size; ++i) {
                     ptr[i] = val.f;
                 }

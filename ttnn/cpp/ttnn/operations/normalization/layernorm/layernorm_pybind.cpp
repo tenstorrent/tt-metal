@@ -6,7 +6,6 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "layernorm.hpp"
 
-
 namespace ttnn::operations::normalization::detail {
 
 namespace py = pybind11;
@@ -14,8 +13,7 @@ namespace py = pybind11;
 void bind_normalization_layernorm_program_config(py::module& module) {
     py::class_<LayerNormProgramConfig>(module, "LayerNormProgramConfig").def(py::init<>());
 
-    py::class_<LayerNormDefaultProgramConfig>(module, "LayerNormDefaultProgramConfig")
-        .def(py::init<>());
+    py::class_<LayerNormDefaultProgramConfig>(module, "LayerNormDefaultProgramConfig").def(py::init<>());
 
     py::class_<LayerNormShardedMultiCoreProgramConfig>(module, "LayerNormShardedMultiCoreProgramConfig")
         .def(
@@ -31,7 +29,6 @@ void bind_normalization_layernorm_program_config(py::module& module) {
 }
 
 void bind_normalization_layernorm_operation(py::module& module) {
-
     ttnn::bind_registered_operation(
         module,
         ttnn::layer_norm,

@@ -59,17 +59,17 @@ void queue_synchronize(CommandQueue& cq) {
     Finish(cq);
 }
 
-void event_synchronize(std::shared_ptr<Event> event) { EventSynchronize(event); }
+void event_synchronize(const std::shared_ptr<Event>& event) { EventSynchronize(event); }
 
-bool event_query(std::shared_ptr<Event> event) { return EventQuery(event); }
+bool event_query(const std::shared_ptr<Event>& event) { return EventQuery(event); }
 
-void wait_for_event(CommandQueue& cq, std::shared_ptr<Event> event) {
+void wait_for_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     auto cq_id = cq.id();
     auto cq_worker = cq.device();
     cq_worker->push_work([cq_worker, cq_id, event]() { EnqueueWaitForEvent(cq_worker->command_queue(cq_id), event); });
 }
 
-void record_event(CommandQueue& cq, std::shared_ptr<Event> event) {
+void record_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     auto cq_id = cq.id();
     auto cq_worker = cq.device();
     cq_worker->push_work([cq_worker, cq_id, event]() { EnqueueRecordEvent(cq_worker->command_queue(cq_id), event); });

@@ -14,7 +14,7 @@
 //                  INTERNAL PROGRAM MANAGEMENT
 //==================================================
 
-namespace tt::tt_metal{
+namespace tt::tt_metal {
 namespace v1 {
 
 //==================================================
@@ -31,5 +31,5 @@ namespace v1 {
  */
 void LaunchProgram(Device device, Program program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
 
-} // namespace v1
-} // namespace tt::tt_metal
+}  // namespace v1
+}  // namespace tt::tt_metal

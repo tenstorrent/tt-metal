@@ -8,26 +8,26 @@
 namespace ttnn::operations::data_movement {
 
 namespace detail {
-    uint32_t num_pages(const ttnn::Tensor input_tensor) {
-        const auto& padded_shape = input_tensor.get_logical_shape();
-        return padded_shape.volume()/padded_shape[-1];
-    }
-
-    uint32_t page_size(const ttnn::Tensor input_tensor) {
-        const auto& padded_shape = input_tensor.get_logical_shape(); // in anticipation of RM padding
-        return padded_shape[-1] * input_tensor.element_size();
-    }
-
-    std::vector<uint32_t> get_row_strides(const ttnn::SimpleShape shape) {
-        std::vector<uint32_t> strides(shape.rank());
-        strides[shape.rank() - 1] = 1;
-        strides[shape.rank() - 2] = 1;
-        for (int i = shape.rank() - 3; i >= 0; i--) {
-            strides[i] = strides[i + 1] * shape[i + 1];
-        }
-        return strides;
-    }
+uint32_t num_pages(const ttnn::Tensor& input_tensor) {
+    const auto& padded_shape = input_tensor.get_logical_shape();
+    return padded_shape.volume() / padded_shape[-1];
 }
+
+uint32_t page_size(const ttnn::Tensor& input_tensor) {
+    const auto& padded_shape = input_tensor.get_logical_shape();  // in anticipation of RM padding
+    return padded_shape[-1] * input_tensor.element_size();
+}
+
+std::vector<uint32_t> get_row_strides(const ttnn::SimpleShape& shape) {
+    std::vector<uint32_t> strides(shape.rank());
+    strides[shape.rank() - 1] = 1;
+    strides[shape.rank() - 2] = 1;
+    for (int i = shape.rank() - 3; i >= 0; i--) {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+    return strides;
+}
+}  // namespace detail
 
 PermuteDeviceOperation::SingleCore::cached_program_t PermuteDeviceOperation::SingleCore::create(
     const operation_attributes_t& operation_attributes,
@@ -59,13 +59,13 @@ PermuteDeviceOperation::SingleCore::cached_program_t PermuteDeviceOperation::Sin
 
     CoreRange core({0, 0}, {0, 0});
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_rm_page_size, {{src0_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            num_input_pages_to_read * input_rm_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, input_rm_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t N = operation_attributes.dims.size();
     uint32_t num_rows = input_tensor.volume() / input_tensor.get_logical_shape()[-1];
-
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, N, input_rm_page_size, num_rows};
@@ -86,20 +86,18 @@ PermuteDeviceOperation::SingleCore::cached_program_t PermuteDeviceOperation::Sin
 
     std::vector<uint32_t> reader_runtime_args = {src_buffer->address()};
 
-
-    tt::tt_metal::SetRuntimeArgs(
-        program, unary_reader_kernel_id, core, reader_runtime_args);
+    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
 
     auto input_shape_view = input_tensor.get_logical_shape().view();
-    auto output_strides = detail::get_row_strides(output_tensor.get_logical_shape()); // in anticipation of RM padding
+    auto output_strides = detail::get_row_strides(output_tensor.get_logical_shape());  // in anticipation of RM padding
 
     std::vector<uint32_t> writer_runtime_args = {dst_buffer->address()};
     writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_runtime_args.insert(writer_runtime_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
+    writer_runtime_args.insert(
+        writer_runtime_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
     writer_runtime_args.insert(writer_runtime_args.end(), output_strides.begin(), output_strides.end());
 
-    tt::tt_metal::SetRuntimeArgs(
-        program, unary_writer_kernel_id, core, writer_runtime_args);
+    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
 
     return {
         std::move(program),
@@ -132,4 +130,4 @@ void PermuteDeviceOperation::SingleCore::override_runtime_arguments(
     }
 }
 
-}
+}  // namespace ttnn::operations::data_movement

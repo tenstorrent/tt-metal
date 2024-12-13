@@ -12,7 +12,6 @@
 
 #include "noc_parameters.h"
 
-
 /*
 
   Basic NOC API
@@ -52,7 +51,6 @@
 
 */
 
-
 /*
   Copy data from source to destination address.  Supports narrow transfers
   (size not a multiple of 16 bytes).  However, the alignment of source and
@@ -79,8 +77,15 @@
   <vc_arb_priority> =>  arbitration priority for VC allocation;
               set to 0 disable arbitration priority & use round-robin always
 */
-void noc_copy(uint64_t src_addr, uint64_t dst_addr, uint32_t size, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc, uint32_t vc_arb_priority);
-
+void noc_copy(
+    uint64_t src_addr,
+    uint64_t dst_addr,
+    uint32_t size,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc,
+    uint32_t vc_arb_priority);
 
 /*
   Copy a single word with byte-enables from source to destination address.
@@ -98,8 +103,14 @@ void noc_copy(uint64_t src_addr, uint64_t dst_addr, uint32_t size, bool linked, 
   <static_vc_alloc> => use static VC allocation
   <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
 */
-void noc_copy_word_be(uint64_t src_addr, uint64_t dst_addr, uint32_t be, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc);
-
+void noc_copy_word_be(
+    uint64_t src_addr,
+    uint64_t dst_addr,
+    uint32_t be,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc);
 
 /*
   Write a single 32-bit value using inline header data. (The effect is the
@@ -114,8 +125,8 @@ void noc_copy_word_be(uint64_t src_addr, uint64_t dst_addr, uint32_t be, bool li
   <static_vc_alloc> => use static VC allocation
   <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
 */
-void noc_write_dw_inline(uint64_t dst_addr, uint32_t val, uint8_t be, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc);
-
+void noc_write_dw_inline(
+    uint64_t dst_addr, uint32_t val, uint8_t be, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc);
 
 /*
   Copy data from source to multiple destinations via multicast.  Supports
@@ -136,8 +147,15 @@ void noc_write_dw_inline(uint64_t dst_addr, uint32_t val, uint8_t be, bool linke
   <static_vc_alloc> => use static VC allocation
   <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
 */
-void noc_multicast_copy(uint64_t src_addr, uint64_t dst_addr, uint32_t multicast_mode, uint32_t size, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc);
-
+void noc_multicast_copy(
+    uint64_t src_addr,
+    uint64_t dst_addr,
+    uint32_t multicast_mode,
+    uint32_t size,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc);
 
 /*
   Multicast version of noc_copy_word_be.
@@ -155,8 +173,15 @@ void noc_multicast_copy(uint64_t src_addr, uint64_t dst_addr, uint32_t multicast
   <static_vc_alloc> => use static VC allocation
   <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
 */
-void noc_multicast_copy_word_be(uint64_t src_addr, uint64_t dst_addr, uint32_t multicast_mode, uint32_t be, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc);
-
+void noc_multicast_copy_word_be(
+    uint64_t src_addr,
+    uint64_t dst_addr,
+    uint32_t multicast_mode,
+    uint32_t be,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc);
 
 /*
   Multicast version of noc_write_dw_inline.
@@ -169,8 +194,15 @@ void noc_multicast_copy_word_be(uint64_t src_addr, uint64_t dst_addr, uint32_t m
               response channel
   <static_vc_alloc> => use static VC allocation
 */
-void noc_multicast_write_dw_inline(uint64_t dst_addr, uint32_t val, uint32_t multicast_mode, uint8_t be, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc);
-
+void noc_multicast_write_dw_inline(
+    uint64_t dst_addr,
+    uint32_t val,
+    uint32_t multicast_mode,
+    uint8_t be,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc);
 
 /*
   Atomic wrapping increment of 32-bit value at destination address.  The address has
@@ -194,7 +226,6 @@ void noc_multicast_write_dw_inline(uint64_t dst_addr, uint32_t val, uint32_t mul
 */
 void noc_atomic_increment(uint64_t addr, uint32_t incr, uint32_t wrap, bool linked);
 
-
 /*
   Performs the same operation as noc_atomic_increment and reads the previous value from the
   destination address to <read_addr>.  The <read_addr> address also has 4-byte granularity,
@@ -216,7 +247,6 @@ void noc_atomic_increment(uint64_t addr, uint32_t incr, uint32_t wrap, bool link
 */
 void noc_atomic_read_and_increment(uint64_t addr, uint32_t incr, uint32_t wrap, uint64_t read_addr, bool linked);
 
-
 /*
   Performs the same operation as noc_atomic_increment on multiple multicast destinations.
 
@@ -227,7 +257,6 @@ void noc_atomic_read_and_increment(uint64_t addr, uint32_t incr, uint32_t wrap, 
   <linked> => link with previous call for ordering
 */
 void noc_multicast_atomic_increment(uint64_t addr, uint32_t multicast_mode, uint32_t incr, uint32_t wrap, bool linked);
-
 
 /*
   Performs the same operation as noc_atomic_read_and_increment on multiple multicast destinations.
@@ -247,8 +276,8 @@ void noc_multicast_atomic_increment(uint64_t addr, uint32_t multicast_mode, uint
   <read_addr> => address to store the previous value
   <linked> => link with previous call for ordering
 */
-void noc_multicast_atomic_read_and_increment(uint64_t addr, uint32_t multicast_mode, uint32_t incr, uint32_t wrap, uint64_t read_addr, bool linked);
-
+void noc_multicast_atomic_read_and_increment(
+    uint64_t addr, uint32_t multicast_mode, uint32_t incr, uint32_t wrap, uint64_t read_addr, bool linked);
 
 /*
   Set command buffer ID (0-3) to use for the next commmand issued.
@@ -315,7 +344,6 @@ volatile uint32_t noc_rd_resp_received();
 */
 bool noc_command_ready();
 
-
 /*
   Returns ID & dateline info of the local node in the format:
      {10'b0, i_dateline_node_y[0:0], i_dateline_node_x[0:0],
@@ -325,12 +353,10 @@ bool noc_command_ready();
 */
 uint32_t noc_local_node_id();
 
-
 /*
   Returns value of specific status register (see noc_parameters.h for the list).
 */
 uint32_t noc_status_reg(uint32_t status_reg_id);
-
 
 /*
   Sets value of specific NOC config register (see noc_parameters.h for the list).
@@ -348,17 +374,23 @@ uint32_t noc_get_cfg_reg(uint32_t cfg_reg_id);
 
 /*
   Allows for the enabling/disabling of ECC features in the NIU and Routers
-  Enabling full ECC is a two stage process. First you must call noc_ecc_cfg_stage_1 for all tensix, sync (ensuring all writes went through),
-  and then call noc_ecc_cfg_stage_2 for all tensix.
+  Enabling full ECC is a two stage process. First you must call noc_ecc_cfg_stage_1 for all tensix, sync (ensuring all
+  writes went through), and then call noc_ecc_cfg_stage_2 for all tensix.
 */
 void noc_ecc_cfg_stage_1(bool header_ckh_bits_en);
 
 /*
   Allows for the enabling/disabling of ECC features in the NIU and Routers
-  Enabling full ECC is a two stage process. First you must call noc_ecc_cfg_stage_1 for all tensix, sync (ensuring all writes went through),
-  and then call noc_ecc_cfg_stage_2 for all tensix.
+  Enabling full ECC is a two stage process. First you must call noc_ecc_cfg_stage_1 for all tensix, sync (ensuring all
+  writes went through), and then call noc_ecc_cfg_stage_2 for all tensix.
 */
-void noc_ecc_cfg_stage_2(bool niu_mem_parity_en, bool router_mem_parity_en, bool header_secded_en, bool mem_parity_int_en, bool header_sec_int_en, bool header_ded_int_en);
+void noc_ecc_cfg_stage_2(
+    bool niu_mem_parity_en,
+    bool router_mem_parity_en,
+    bool header_secded_en,
+    bool mem_parity_int_en,
+    bool header_sec_int_en,
+    bool header_ded_int_en);
 
 /*
   Clears the corresponding ECC error interrupt and number of errors register
@@ -372,12 +404,14 @@ void noc_ecc_clear_err(bool clear_mem_parity_err, bool clear_header_sec, bool cl
 void noc_ecc_force_err(bool force_mem_parity_err, bool force_header_sec, bool force_header_ded);
 
 /*
-  Gets the number of memory parity errors. This is the sum of the number of parity errors in the router and niu memories (if enabled in noc_ecc_cfg()). This register indicates a fatal error in the system.
+  Gets the number of memory parity errors. This is the sum of the number of parity errors in the router and niu memories
+  (if enabled in noc_ecc_cfg()). This register indicates a fatal error in the system.
 */
 uint32_t noc_ecc_get_num_mem_parity_errs();
 
 /*
-  Gets the number of single errors that were corrected in the header. This register should be treated as a warning of system instability.
+  Gets the number of single errors that were corrected in the header. This register should be treated as a warning of
+  system instability.
 */
 uint32_t noc_ecc_get_num_header_sec();
 
@@ -388,4 +422,4 @@ uint32_t noc_ecc_get_num_header_ded();
 
 //////
 
-#endif //ndef _NOC_H_
+#endif  // ndef _NOC_H_

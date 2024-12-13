@@ -10,6 +10,8 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
+
 
 namespace ttnn::operations::data_movement {
 
@@ -24,22 +26,36 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::Shape& shape
+               const ttnn::Shape& shape,
+               const std::optional<MemoryConfig> &memory_config,
+                const uint8_t queue_id,
+                const std::optional<PadValue> &pad_value
                ) -> ttnn::Tensor {
                 return self(input_tensor, shape);
             },
             py::arg("input_tensor"),
             py::arg("shape"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = 0,
+            py::arg("pad_value") = std::nullopt
             },
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int32_t> shape
+               const ttnn::SmallVector<int32_t> shape,
+               const std::optional<MemoryConfig> &memory_config,
+               const uint8_t queue_id,
+               const std::optional<PadValue> &pad_value
                ) -> ttnn::Tensor {
                 return self(input_tensor, shape);
             },
             py::arg("input_tensor"),
             py::arg("shape"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = 0,
+            py::arg("pad_value") = std::nullopt
             }
         );
 }
@@ -61,6 +77,11 @@ void py_bind_reshape_view(pybind11::module& module) {
         Args:
             * input_tensor: Input Tensor.
             * new_shape: New shape of tensor.
+
+        Keyword Args:
+            * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
+            * :attr:`queue_id`: command queue id. Default is 0.
+            * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
 
         Returns:
             ttnn.Tensor: the output tensor with the new shape.

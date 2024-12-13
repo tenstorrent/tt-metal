@@ -82,10 +82,10 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
         all_cores,
         cb_data_format,
         {
-            {tt::CBIndex::c_0, in0_t},              // input
-            {tt::CBIndex::c_1, in1_t},              // zero
+            {tt::CBIndex::c_0, in0_t},         // input
+            {tt::CBIndex::c_1, in1_t},         // zero
             {tt::CBIndex::c_24, intermed0_t},  // accumulated sum
-            {tt::CBIndex::c_16, out0_t},            // output
+            {tt::CBIndex::c_16, out0_t},       // output
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -97,10 +97,8 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
         "ttnn/cpp/ttnn/operations/moreh/moreh_cumsum/device/kernels/reader_moreh_cumsum_nc.cpp";
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_cumsum/device/kernels/writer_moreh_cumsum_nc.cpp";
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

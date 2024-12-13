@@ -89,10 +89,10 @@ struct MorehGetItemOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
         const std::vector<Tensor>& index_tensors,
-        const ttnn::SmallVector<uint32_t> index_dims,
+        const ttnn::SmallVector<uint32_t>& index_dims,
         const std::optional<Tensor>& output,
         // const CoreRange core_range,
-        const std::optional<MemoryConfig> memory_config);
+        const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_getitem
 

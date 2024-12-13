@@ -290,12 +290,14 @@ void MAIN {
             if (block < num_blocks - 2) {
                 cb_pop_front(mm_partials_cb_id, out_block_num_tiles);
             }
-            if (spill and block == num_blocks - 2)
+            if (spill and block == num_blocks - 2) {
                 enable_reload = true;  // reload when last iteration
+            }
 #endif
 #else
-            if (spill)
+            if (spill) {
                 enable_reload = true;
+            }
 #endif
 
             cb_pop_front(in0_cb_id, in0_block_num_tiles);

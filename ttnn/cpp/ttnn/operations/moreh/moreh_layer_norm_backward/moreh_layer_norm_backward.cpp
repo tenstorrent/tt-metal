@@ -88,8 +88,14 @@ OptionalTensors MorehLayerNormBackward::create_async_optional_output_tensors(
     const auto return_gamma_grad = gamma_grad.has_value();
     const auto return_beta_grad = beta_grad.has_value();
     return {
-        return_input_grad ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma})) : std::nullopt,
-        return_gamma_grad ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma})) : std::nullopt,
-        return_beta_grad ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma})) : std::nullopt};
+        return_input_grad
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))
+            : std::nullopt,
+        return_gamma_grad
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))
+            : std::nullopt,
+        return_beta_grad
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))
+            : std::nullopt};
 }
 }  // namespace ttnn::operations::moreh::moreh_layer_norm_backward

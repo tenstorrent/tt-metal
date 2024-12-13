@@ -5,9 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-
 void kernel_main() {
-
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_dst_stick_id = get_arg_val<uint32_t>(1);
     const uint32_t dst_N = get_arg_val<uint32_t>(2);
@@ -17,10 +15,7 @@ void kernel_main() {
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
-    const InterleavedAddrGen<dst_is_dram> s0 = {
-        .bank_base_address = dst_addr,
-        .page_size = data_size_bytes
-    };
+    const InterleavedAddrGen<dst_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = data_size_bytes};
 
     uint32_t dst_stick_id = start_dst_stick_id;
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; row_idx++) {
@@ -34,5 +29,4 @@ void kernel_main() {
             cb_pop_front(cb_id, 1);
         }
     }
-
 }

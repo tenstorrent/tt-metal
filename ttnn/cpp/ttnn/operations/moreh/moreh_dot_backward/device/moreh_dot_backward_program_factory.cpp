@@ -63,9 +63,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     bool has_other_grad = other_grad.has_value();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)is_dram(src0_buffer),
-        (std::uint32_t)is_dram(src1_buffer),
-        (std::uint32_t)is_dram(src2_buffer)};
+        (std::uint32_t)is_dram(src0_buffer), (std::uint32_t)is_dram(src1_buffer), (std::uint32_t)is_dram(src2_buffer)};
 
     bool dst0_is_dram = false;
     bool dst1_is_dram = false;
@@ -100,18 +98,16 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/writer_moreh_dot_backward.cpp";
 
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
     std::map<string, string> compute_defines;
 
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/moreh_dot_backward.cpp";
-    const auto compute_kernel_id = CreateComputeKernel(
-        program, compute_kernel_file, {core, core_num, compute_kernel_args}, compute_defines);
+    const auto compute_kernel_id =
+        CreateComputeKernel(program, compute_kernel_file, {core, core_num, compute_kernel_args}, compute_defines);
 
     SetRuntimeArgs(
         program,
@@ -162,10 +158,12 @@ void MorehDotBackwardOperation::SingleCore::override_runtime_arguments(
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, CoreCoord{0, 0});
-        if (input_grad_buffer.has_value())
+        if (input_grad_buffer.has_value()) {
             runtime_args[2] = input_grad_buffer.value().buffer()->address();
-        if (other_grad_buffer.has_value())
+        }
+        if (other_grad_buffer.has_value()) {
             runtime_args[3] = other_grad_buffer.value().buffer()->address();
+        }
     }
 }
 

@@ -7,5 +7,5 @@
 #include "pybind11/pybind_fwd.hpp"
 
 namespace ttnn::operations::sliding_window {
-    void py_bind_sliding_window(pybind11::module& module);
+void py_bind_sliding_window(pybind11::module& module);
 }

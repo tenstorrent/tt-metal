@@ -26,3 +26,4 @@
 #include "llk_math_eltwise_unary_sfpu_unary_comp.h"
 #include "llk_math_eltwise_unary_sfpu_fill.h"
 #include "llk_math_eltwise_unary_sfpu_prelu.h"
+#include "llk_math_eltwise_unary_sfpu_i1.h"

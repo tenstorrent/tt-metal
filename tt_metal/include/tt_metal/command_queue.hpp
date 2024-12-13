@@ -10,8 +10,7 @@
 //                COMMAND QUEUE OPERATIONS
 //==================================================
 
-
-namespace tt::tt_metal{
+namespace tt::tt_metal {
 namespace v1 {
 
 /**
@@ -39,11 +38,7 @@ CommandQueueHandle GetDefaultCommandQueue(DeviceHandle device);
  * @param dst Pointer to the destination memory where data will be stored.
  * @param blocking Indicates whether the operation is blocking.
  */
-void EnqueueReadBuffer(
-    CommandQueueHandle cq,
-    BufferHandle buffer,
-    std::byte *dst,
-    bool blocking);
+void EnqueueReadBuffer(CommandQueueHandle cq, const BufferHandle& buffer, std::byte* dst, bool blocking);
 
 /**
  * @brief Writes data to a buffer on the device.
@@ -53,12 +48,7 @@ void EnqueueReadBuffer(
  * @param src Source data vector to write to the device.
  * @param blocking Indicates whether the operation is blocking.
  */
-void EnqueueWriteBuffer(
-    CommandQueueHandle cq,
-    BufferHandle buffer,
-    const std::byte *src,
-    bool blocking);
-
+void EnqueueWriteBuffer(CommandQueueHandle cq, const BufferHandle& buffer, const std::byte* src, bool blocking);
 
 /**
  * @brief Writes a program to the device and launches it.
@@ -67,7 +57,7 @@ void EnqueueWriteBuffer(
  * @param program The program to execute on the device.
  * @param blocking Indicates whether the operation is blocking.
  */
-void EnqueueProgram(CommandQueueHandle cq, ProgramHandle &program, bool blocking);
+void EnqueueProgram(CommandQueueHandle cq, ProgramHandle& program, bool blocking);
 
 /**
  * @brief Blocks until all previously dispatched commands on the device have completed.
@@ -77,14 +67,12 @@ void EnqueueProgram(CommandQueueHandle cq, ProgramHandle &program, bool blocking
  */
 void Finish(CommandQueueHandle cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-
 /**
  * @brief Sets the command queue mode to lazy or immediate.
  *
  * @param lazy If true, sets the command queue to lazy mode.
  */
 void SetLazyCommandQueueMode(bool lazy);
-
 
 /**
  * @brief Retrieves the device associated with the command queue.
@@ -102,5 +90,5 @@ DeviceHandle GetDevice(CommandQueueHandle cq);
  */
 std::uint8_t GetId(CommandQueueHandle cq);
 
-} // namespace v1
-} // namespace tt::tt_metal
+}  // namespace v1
+}  // namespace tt::tt_metal

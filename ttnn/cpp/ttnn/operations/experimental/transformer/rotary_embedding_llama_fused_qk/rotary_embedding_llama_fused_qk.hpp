@@ -11,7 +11,7 @@
 namespace ttnn {
 namespace operations::experimental::transformer {
 
- struct RotaryEmbeddingLlamaFusedQKOperation {
+struct RotaryEmbeddingLlamaFusedQKOperation {
     static std::tuple<ttnn::Tensor, ttnn::Tensor> invoke(
         const Tensor& q_input_tensor,
         const Tensor& k_input_tensor,
@@ -19,9 +19,9 @@ namespace operations::experimental::transformer {
         const Tensor& sin_cache,
         const Tensor& trans_mat,
         const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
- };
+};
 
-}  // namespace operations::::experimental::transformer
+}  // namespace operations::experimental::transformer
 
 namespace experimental {
 

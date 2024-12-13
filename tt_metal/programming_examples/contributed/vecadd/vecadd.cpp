@@ -20,14 +20,12 @@ using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 constexpr uint32_t TILE_WIDTH = 32;
 constexpr uint32_t TILE_HEIGHT = 32;
 
-std::shared_ptr<Buffer> MakeBuffer(Device *device, uint32_t size, uint32_t page_size, bool sram)
-{
+std::shared_ptr<Buffer> MakeBuffer(Device* device, uint32_t size, uint32_t page_size, bool sram) {
     InterleavedBufferConfig config{
-        .device= device,
+        .device = device,
         .size = size,
         .page_size = page_size,
-        .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)
-    };
+        .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
     return CreateBuffer(config);
 }
 
@@ -37,23 +35,16 @@ std::shared_ptr<Buffer> MakeBuffer(Device *device, uint32_t size, uint32_t page_
 // @param device: The device to allocate the buffer on.
 // @param n_tiles: The number of tiles to allocate.
 // @param sram: If true, allocate the buffer on SRAM, otherwise allocate it on DRAM.
-std::shared_ptr<Buffer> MakeBufferBFP16(Device *device, uint32_t n_tiles, bool sram)
-{
+std::shared_ptr<Buffer> MakeBufferBFP16(Device* device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;
     return MakeBuffer(device, tile_size * n_tiles, page_tiles * tile_size, sram);
 }
 
-CBHandle MakeCircularBuffer(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t size, uint32_t page_size, tt::DataFormat format)
-{
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(
-        size,
-        {{
-            cb,
-            format
-    }})
-    .set_page_size(cb, page_size);
+CBHandle MakeCircularBuffer(
+    Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t size, uint32_t page_size, tt::DataFormat format) {
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(size, {{cb, format}}).set_page_size(cb, page_size);
     return CreateCircularBuffer(program, core, cb_src0_config);
 }
 
@@ -64,23 +55,20 @@ CBHandle MakeCircularBuffer(Program& program, const CoreSpec& core, tt::CBIndex 
 // @param core: The core to create the circular buffer on.
 // @param cb: Which circular buffer to create (c_in0, c_in1, c_out0, c_out1, etc..). This is just an ID
 // @param n_tiles: The number of tiles the circular buffer can hold.
-CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles)
-{
+CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     return MakeCircularBuffer(program, core, cb, n_tiles * tile_size, tile_size, tt::DataFormat::Float16_b);
 }
 
-std::string next_arg(int& i, int argc, char **argv)
-{
-    if(i + 1 >= argc) {
+std::string next_arg(int& i, int argc, char** argv) {
+    if (i + 1 >= argc) {
         std::cerr << "Expected argument after " << argv[i] << std::endl;
         exit(1);
     }
     return argv[++i];
 }
 
-void help(std::string_view program_name)
-{
+void help(std::string_view program_name) {
     std::cout << "Usage: " << program_name << " [options]\n";
     std::cout << "This program demonstrates how to add two vectors using tt-Metalium.\n";
     std::cout << "\n";
@@ -90,31 +78,27 @@ void help(std::string_view program_name)
     exit(0);
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char** argv) {
     int seed = std::random_device{}();
     int device_id = 0;
 
     // Quick and dirty argument parsing.
-    for(int i = 1; i < argc; i++) {
+    for (int i = 1; i < argc; i++) {
         std::string_view arg = argv[i];
-        if(arg == "--device" || arg == "-d") {
+        if (arg == "--device" || arg == "-d") {
             device_id = std::stoi(next_arg(i, argc, argv));
-        }
-        else if(arg == "--seed" || arg == "-s") {
+        } else if (arg == "--seed" || arg == "-s") {
             seed = std::stoi(next_arg(i, argc, argv));
-        }
-        else if(arg == "--help" || arg == "-h") {
+        } else if (arg == "--help" || arg == "-h") {
             help(argv[0]);
             return 0;
-        }
-        else {
+        } else {
             std::cout << "Unknown argument: " << arg << std::endl;
             help(argv[0]);
         }
     }
 
-    Device *device = CreateDevice(device_id);
+    Device* device = CreateDevice(device_id);
 
     Program program = CreateProgram();
     // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
@@ -123,7 +107,8 @@ int main(int argc, char **argv)
     CommandQueue& cq = device->command_queue();
     const uint32_t n_tiles = 64;
     const uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
-    // Create 3 buffers on DRAM. These will hold the input and output data. A and B are the input buffers, C is the output buffer.
+    // Create 3 buffers on DRAM. These will hold the input and output data. A and B are the input buffers, C is the
+    // output buffer.
     auto a = MakeBufferBFP16(device, n_tiles, false);
     auto b = MakeBufferBFP16(device, n_tiles, false);
     auto c = MakeBufferBFP16(device, n_tiles, false);
@@ -133,7 +118,8 @@ int main(int argc, char **argv)
     std::vector<uint32_t> b_data = create_random_vector_of_bfloat16(tile_size * n_tiles * 2, 10, rng());
 
     const uint32_t tiles_per_cb = 4;
-    // Create 3 circular buffers. These will be used by the data movement kernels to stream data into the compute cores and for the compute cores to stream data out.
+    // Create 3 circular buffers. These will be used by the data movement kernels to stream data into the compute cores
+    // and for the compute cores to stream data out.
     CBHandle cb_a = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_0, tiles_per_cb);
     CBHandle cb_b = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
     CBHandle cb_c = MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
@@ -141,52 +127,38 @@ int main(int argc, char **argv)
     EnqueueWriteBuffer(cq, a, a_data, false);
     EnqueueWriteBuffer(cq, b, b_data, false);
 
-    // A Tensix core is made up with 5 processors. 2 data movement processors, and 3 compute processors. The 2 data movement
-    // processors act independent to other cores. And the 3 compute processors act together (hence 1 kerenl for compute).
-    // There is no need to explicitly parallelize the compute kernels. Unlike traditional CPU/GPU style SPMD programming,
-    // the 3 compute processors moves data from SRAM into the FPU(tensor engine)/SFPU(SIMD engine), operates on the data, and
-    // move it back to SRAM. The data movement processors moves data from the NoC, or in our case, the DRAM, into the SRAM.
+    // A Tensix core is made up with 5 processors. 2 data movement processors, and 3 compute processors. The 2 data
+    // movement processors act independent to other cores. And the 3 compute processors act together (hence 1 kerenl for
+    // compute). There is no need to explicitly parallelize the compute kernels. Unlike traditional CPU/GPU style SPMD
+    // programming, the 3 compute processors moves data from SRAM into the FPU(tensor engine)/SFPU(SIMD engine),
+    // operates on the data, and move it back to SRAM. The data movement processors moves data from the NoC, or in our
+    // case, the DRAM, into the SRAM.
     //
     // The vector add example consists of 3 kernels. `interleaved_tile_read` reads tiles from the input buffers A and B
-    // into 2 circular buffers. `add` reads tiles from the circular buffers, adds them together, and dumps the result into
-    // a third circular buffer. `tile_write` reads tiles from the third circular buffer and writes them to the output buffer C.
+    // into 2 circular buffers. `add` reads tiles from the circular buffers, adds them together, and dumps the result
+    // into a third circular buffer. `tile_write` reads tiles from the third circular buffer and writes them to the
+    // output buffer C.
     auto reader = CreateKernel(
         program,
         "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
         core,
-        DataMovementConfig {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     auto writer = CreateKernel(
         program,
         "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
         core,
-        DataMovementConfig {.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     auto compute = CreateKernel(
         program,
         "tt_metal/programming_examples/contributed/vecadd/kernels/add.cpp",
         core,
-        ComputeConfig{
-            .math_approx_mode = false,
-            .compile_args = {},
-            .defines = {}
-        }
-    );
+        ComputeConfig{.math_approx_mode = false, .compile_args = {}, .defines = {}});
 
     // Set the runtime arguments for the kernels. This also registers
     // the kernels with the program.
-    SetRuntimeArgs(program, reader, core, {
-        a->address(),
-        b->address(),
-        n_tiles
-    });
-    SetRuntimeArgs(program, writer, core, {
-        c->address(),
-        n_tiles
-    });
-    SetRuntimeArgs(program, compute, core, {
-        n_tiles
-    });
+    SetRuntimeArgs(program, reader, core, {a->address(), b->address(), n_tiles});
+    SetRuntimeArgs(program, writer, core, {c->address(), n_tiles});
+    SetRuntimeArgs(program, compute, core, {n_tiles});
 
     // We have setup the program. Now we can queue the kernel for execution.
     // The last argument to EnqueueProgram is a boolean that specifies whether
@@ -209,8 +181,10 @@ int main(int argc, char **argv)
     bfloat16* a_bf16 = reinterpret_cast<bfloat16*>(a_data.data());
     bfloat16* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
     bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(c_data.data());
-    for(int i = 0; i < n; i++)
-        std::cout << "  " << a_bf16[i].to_float() << " + " << b_bf16[i].to_float() << " = " << c_bf16[i].to_float() << "\n";
+    for (int i = 0; i < n; i++) {
+        std::cout << "  " << a_bf16[i].to_float() << " + " << b_bf16[i].to_float() << " = " << c_bf16[i].to_float()
+                  << "\n";
+    }
     std::cout << std::flush;
 
     // Finally, we close the device.

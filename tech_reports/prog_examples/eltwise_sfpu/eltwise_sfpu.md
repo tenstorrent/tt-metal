@@ -77,8 +77,7 @@ SetRuntimeArgs(
     core,
     {
         dst_dram_buffer.address(),
-        static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().x),
-        static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().y),
+        dst_bank_id,
         num_tiles
     }
 );

@@ -55,4 +55,7 @@ while IFS= read -r line1 && IFS= read -r line2 <&3; do
     line_count=$((line_count+1))
 done < "$LOG_FILE1" 3< "$LOG_FILE2"
 
+echo "### Raw golden log ###"
+cat $LOG_FILE2
+
 exit $exit_code

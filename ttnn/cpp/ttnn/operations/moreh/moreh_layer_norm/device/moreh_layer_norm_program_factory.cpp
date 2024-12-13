@@ -173,16 +173,16 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
         all_cores,
         cb_data_format,
         {
-            {tt::CBIndex::c_0, in0_t},                            // input
-            {tt::CBIndex::c_1, in1_t},                            // scaler
-            {tt::CBIndex::c_2, in2_t},                            // epsilon
-            {tt::CBIndex::c_3, in3_t},                            // gamma
-            {tt::CBIndex::c_4, in4_t},                            // beta
-            {tt::CBIndex::c_5, in5_t},                            // mask_h
-            {tt::CBIndex::c_6, in6_t},                            // mask_w
-            {tt::CBIndex::c_16, out0_t},                          // output
-            {tt::CBIndex::c_17, out1_t},                          // mean
-            {tt::CBIndex::c_18, out2_t},                          // rstd
+            {tt::CBIndex::c_0, in0_t},                       // input
+            {tt::CBIndex::c_1, in1_t},                       // scaler
+            {tt::CBIndex::c_2, in2_t},                       // epsilon
+            {tt::CBIndex::c_3, in3_t},                       // gamma
+            {tt::CBIndex::c_4, in4_t},                       // beta
+            {tt::CBIndex::c_5, in5_t},                       // mask_h
+            {tt::CBIndex::c_6, in6_t},                       // mask_w
+            {tt::CBIndex::c_16, out0_t},                     // output
+            {tt::CBIndex::c_17, out1_t},                     // mean
+            {tt::CBIndex::c_18, out2_t},                     // rstd
             {tt::CBIndex::c_24, im0_t, intermed_cb_format},  // E[x]
             {tt::CBIndex::c_25, im1_t, intermed_cb_format},  // x - E[x]
             {tt::CBIndex::c_26, im2_t, intermed_cb_format},  // (x - E[x])^2
@@ -242,10 +242,9 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/writer_moreh_layer_norm.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernels_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,

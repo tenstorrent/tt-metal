@@ -111,7 +111,8 @@ TEST_F(DeviceFixture, PingAllLegalDramChannels) {
 TEST_F(DeviceFixture, PingIllegalDramChannels) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto num_channels = devices_.at(id)->num_dram_channels() + 1;
-        size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::DRAM);;
+        size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::DRAM);
+        ;
         ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(devices_.at(id), 4, start_byte_address, num_channels));
     }
 }
@@ -218,14 +219,14 @@ TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
     std::unordered_map<chip_id_t, std::set<chip_id_t>> mmio_device_to_device_group;
     for (unsigned int dev_id = 0; dev_id < num_devices_; dev_id++) {
         chip_id_t assoc_mmio_dev_id = tt::Cluster::instance().get_associated_mmio_device(dev_id);
-        std::set<chip_id_t> &device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
+        std::set<chip_id_t>& device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
         device_ids.insert(dev_id);
     }
 
     for (const auto& [mmio_dev_id, device_group] : mmio_device_to_device_group) {
         EXPECT_EQ(tt::Cluster::instance().get_num_host_channels(mmio_dev_id), device_group.size());
         std::unordered_set<uint16_t> channels;
-        for (const chip_id_t &device_id : device_group) {
+        for (const chip_id_t& device_id : device_group) {
             channels.insert(tt::Cluster::instance().get_assigned_channel_for_device(device_id));
         }
         EXPECT_EQ(channels.size(), device_group.size());
@@ -235,14 +236,15 @@ TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
 TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     tt_metal::Program program = tt_metal::CreateProgram();
-    Device *device = this->devices_.at(0);
+    Device* device = this->devices_.at(0);
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);
 
     uint32_t base_l1_src_address = device->get_base_allocator_addr(HalMemType::L1) + hal.get_alignment(HalMemType::L1);
     // This is a slow dispatch test dispatch core type is needed to query dispatch_constants
     uint32_t base_pcie_dst_address =
-        dispatch_constants::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) + hal.get_alignment(HalMemType::L1);
+        dispatch_constants::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
+        hal.get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;
     std::vector<uint32_t> src = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));
@@ -258,13 +260,11 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}
-        }
-    );
+            .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}});
 
     tt_metal::detail::LaunchProgram(device, program);
 
-    std::vector<uint32_t> result(size_bytes/sizeof(uint32_t));
+    std::vector<uint32_t> result(size_bytes / sizeof(uint32_t));
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     tt::Cluster::instance().read_sysmem(result.data(), size_bytes, base_pcie_dst_address, mmio_device_id, channel);

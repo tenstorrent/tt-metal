@@ -15,8 +15,9 @@ void MorehClipGradNormStep2Operation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     check_tensor(tensor_args.tmp_pow_sum, "moreh_clip_grad_norm_step2", "tmp_pow_sum");
 
-    if (tensor_args.total_norm.has_value())
+    if (tensor_args.total_norm.has_value()) {
         check_tensor(tensor_args.total_norm, "moreh_clip_grad_norm_step2", "total_norm");
+    }
 };
 
 MorehClipGradNormStep2Operation::program_factory_t MorehClipGradNormStep2Operation::select_program_factory(
@@ -36,7 +37,8 @@ void MorehClipGradNormStep2Operation::validate_on_program_cache_hit(
 
 MorehClipGradNormStep2Operation::shape_return_value_t MorehClipGradNormStep2Operation::compute_output_shapes(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return SimpleShape{tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+    // output total_norm 1 element
+    return SimpleShape{1, 1};
 };
 
 MorehClipGradNormStep2Operation::tensor_return_value_t MorehClipGradNormStep2Operation::create_output_tensors(

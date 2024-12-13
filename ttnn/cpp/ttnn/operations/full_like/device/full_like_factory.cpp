@@ -67,7 +67,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         default: break;
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) cb_fill_value_id};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id};
 
     auto writer_id = CreateKernel(
         program,

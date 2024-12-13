@@ -10,12 +10,12 @@ void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
     cb_reserve_back(cb_id, 1);
 
 #if defined FP32_DEST_ACC_EN
-    auto ptr = reinterpret_cast<uint32_t *>(get_write_ptr(cb_id));
+    auto ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
     for (int j = 0; j < 1024; j++) {
         ptr[j] = value;
     }
 #else
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
+    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
     for (int j = 0; j < 1024; j++) {
         ptr[j] = uint16_t(value >> 16);
     }

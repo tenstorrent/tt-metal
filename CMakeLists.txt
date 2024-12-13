@@ -24,14 +24,18 @@ else()
     FIND_AND_SET_CLANG17()
 endif()
 
+list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(version)
+ParseGitDescribe()
 project(
     Metalium
-    VERSION 0.50.0
+    VERSION ${VERSION_NUMERIC}
     DESCRIPTION "Tenstorrent Metalium"
     HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
     LANGUAGES
         CXX
 )
+message(STATUS "Metalium version: ${PROJECT_VERSION}")
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(
@@ -39,8 +43,6 @@ if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
         "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!"
     )
 endif()
-
-list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 include(project_options)
 include(unity)
@@ -255,18 +257,6 @@ if(ENABLE_TRACY)
     add_compile_definitions(TRACY_ENABLE)
     add_compile_options(-fno-omit-frame-pointer)
     add_link_options(-rdynamic)
-endif()
-
-if(WITH_PYTHON_BINDINGS)
-    # Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
-    add_library(pch_pybinds INTERFACE)
-    target_precompile_headers(
-        pch_pybinds
-        INTERFACE
-            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
-            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
-            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
-    )
 endif()
 
 ############################################################################################################################

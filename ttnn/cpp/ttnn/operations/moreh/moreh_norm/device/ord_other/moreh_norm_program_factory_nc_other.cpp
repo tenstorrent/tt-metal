@@ -112,8 +112,9 @@ MorehNormOperation::ProgramFactoryNCOther::cached_program_t MorehNormOperation::
     if (p == 0.0) {
         compute_defines["IS_ZERO"] = "1";
     } else {
-        if (p == -std::numeric_limits<float>::infinity())
+        if (p == -std::numeric_limits<float>::infinity()) {
             compute_defines["MINUS_INF"] = "1";
+        }
     }
 
     const auto compute_kernel_file =

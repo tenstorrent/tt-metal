@@ -51,10 +51,10 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
         all_cores,
         data_format,
         {
-            {tt::CBIndex::c_0, 2},                              // input
-            {tt::CBIndex::c_1, 1},                              // mask
-            {tt::CBIndex::c_2, 1},                              // scaler
-            {tt::CBIndex::c_16, 2},                             // output
+            {tt::CBIndex::c_0, 2},                         // input
+            {tt::CBIndex::c_1, 1},                         // mask
+            {tt::CBIndex::c_2, 1},                         // scaler
+            {tt::CBIndex::c_16, 2},                        // output
             {tt::CBIndex::c_24, 2, intermed_data_format},  // exp(x)
             {tt::CBIndex::c_25, 1, intermed_data_format},  // reduce
             {tt::CBIndex::c_26, 1, intermed_data_format},  // syn
@@ -83,10 +83,11 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
         writer_defines);
 
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX)
+    if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
-    else
+    } else {
         compute_defines["SOFTMIN"] = "1";
+    }
 
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["LOG"] = "1";
@@ -126,8 +127,9 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
 
         float scaler = 1.0f;
         uint32_t mask_w = shape.without_padding()[-1] % tt::constants::TILE_WIDTH;
-        if (mask_w == 0)
+        if (mask_w == 0) {
             mask_w = tt::constants::TILE_WIDTH;
+        }
         std::vector<uint32_t> reader_args = {
             input.buffer()->address(),
             num_tiles_per_core,

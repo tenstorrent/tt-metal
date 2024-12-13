@@ -85,16 +85,15 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
         all_cores,
         cb_data_format,
         {
-            {tt::CBIndex::c_0, in0_t},              // input
-            {tt::CBIndex::c_1, in1_t},              // mask
+            {tt::CBIndex::c_0, in0_t},         // input
+            {tt::CBIndex::c_1, in1_t},         // mask
             {tt::CBIndex::c_24, intermed0_t},  // accumalated sum
-            {tt::CBIndex::c_16, out0_t},            // output
+            {tt::CBIndex::c_16, out0_t},       // output
         });
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input)), Ht, Wt};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input)), Ht, Wt};
     std::map<string, string> reader_defines{};
     if (do_mask_h) {
         reader_defines["DO_MASK_H"] = "1";
@@ -104,10 +103,9 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/reader_moreh_int_sum_h.cpp"};
     const auto writer_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/writer_moreh_int_sum_h.cpp"};
-    const auto reader_kernel_id{CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines)};
-    const auto writer_kernel_id{
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args)};
+    const auto reader_kernel_id{
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines)};
+    const auto writer_kernel_id{CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args)};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

@@ -6,7 +6,6 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t pad_addr = get_arg_val<uint32_t>(1);
     const uint32_t start_src_stick_id = get_arg_val<uint32_t>(2);
@@ -19,14 +18,8 @@ void kernel_main() {
     constexpr bool pad_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
-    const InterleavedAddrGen<src_is_dram> s0 = {
-        .bank_base_address = src_addr,
-        .page_size = data_size_bytes
-    };
-    const InterleavedAddrGen<pad_is_dram> s1 = {
-        .bank_base_address = pad_addr,
-        .page_size = data_size_bytes
-    };
+    const InterleavedAddrGen<src_is_dram> s0 = {.bank_base_address = src_addr, .page_size = data_size_bytes};
+    const InterleavedAddrGen<pad_is_dram> s1 = {.bank_base_address = pad_addr, .page_size = data_size_bytes};
 
     // pad based on page
     uint32_t src_stick_id = start_src_stick_id;
@@ -40,8 +33,7 @@ void kernel_main() {
                 // add pad value to cb
                 uint64_t pad_noc_addr = get_noc_addr(0, s1);
                 noc_async_read(pad_noc_addr, l1_addr, data_size_bytes);
-            }
-            else {
+            } else {
                 // add original src data to cb
                 uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
                 noc_async_read(src_noc_addr, l1_addr, data_size_bytes);

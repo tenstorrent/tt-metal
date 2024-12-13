@@ -53,16 +53,20 @@ void kernel_main() {
                 for (uint32_t pw = 0; pw < kernel_size_w; ++pw) {
                     uint32_t lhsh = h - ph * dilation_h + padding_h;
                     uint32_t lwsw = w - pw * dilation_w + padding_w;
-                    if (lhsh % stride_h != 0)
+                    if (lhsh % stride_h != 0) {
                         continue;
-                    if (lwsw % stride_w != 0)
+                    }
+                    if (lwsw % stride_w != 0) {
                         continue;
+                    }
                     uint32_t lh = lhsh / stride_h;
                     uint32_t lw = lwsw / stride_w;
-                    if (lh < 0 || LH <= lh)
+                    if (lh < 0 || LH <= lh) {
                         continue;
-                    if (lw < 0 || LW <= lw)
+                    }
+                    if (lw < 0 || LW <= lw) {
                         continue;
+                    }
 
                     // Input size is {N, C * kernel_size_h * kernel_size_w, LH * LW} or {C * kernel_size_h *
                     // kernel_size_w, LH * LW}
@@ -77,27 +81,27 @@ void kernel_main() {
 
                     cb_wait_front(input_cb_id, onetile);
 #ifdef DTYPE_BFLOAT16
-                    uint16_t *input_cb_ptr_uint16 = reinterpret_cast<uint16_t *>(get_read_ptr(input_cb_id));
+                    uint16_t* input_cb_ptr_uint16 = reinterpret_cast<uint16_t*>(get_read_ptr(input_cb_id));
                     uint16_t bfloat16_value = input_cb_ptr_uint16[lh * LW + lw];
                     uint32_t float_value_as_int = static_cast<uint32_t>(bfloat16_value) << 16;
-                    auto tmp = reinterpret_cast<float *>(&float_value_as_int);
+                    auto tmp = reinterpret_cast<float*>(&float_value_as_int);
                     float value_as_float = *tmp;
                     sum += value_as_float;
 #endif
 #ifdef DTYPE_FLOAT32
-                    auto input_cb_ptr_float = reinterpret_cast<float *>(get_read_ptr(input_cb_id));
+                    auto input_cb_ptr_float = reinterpret_cast<float*>(get_read_ptr(input_cb_id));
                     sum += input_cb_ptr_float[lh * LW + lw];
 #endif
                     cb_pop_front(input_cb_id, onetile);
                 }
             }
 #ifdef DTYPE_BFLOAT16
-            uint16_t *output_cb_write_ptr = reinterpret_cast<uint16_t *>(get_write_ptr(output_cb_id));
-            auto sum_ptr = reinterpret_cast<uint16_t *>(&sum) + 1;
+            uint16_t* output_cb_write_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(output_cb_id));
+            auto sum_ptr = reinterpret_cast<uint16_t*>(&sum) + 1;
             output_cb_write_ptr[w] = *sum_ptr;
 #endif
 #ifdef DTYPE_FLOAT32
-            float *output_cb_write_ptr = reinterpret_cast<float *>(get_write_ptr(output_cb_id));
+            float* output_cb_write_ptr = reinterpret_cast<float*>(get_write_ptr(output_cb_id));
             output_cb_write_ptr[w] = sum;
 #endif
         }

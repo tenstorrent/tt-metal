@@ -58,7 +58,9 @@ OptionalTensors MorehSgd::create_async_optional_output_tensors(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
         std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad}, {momentum_buffer_in})),
-        (momentum != 0.0f) ? std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad}, {momentum_buffer_in})) : std::nullopt};
+        (momentum != 0.0f)
+            ? std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad}, {momentum_buffer_in}))
+            : std::nullopt};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_sgd

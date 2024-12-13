@@ -100,8 +100,9 @@ void MAIN {
                 in0_index_subblock_offset += in0_subblock_num_tiles;
             }
 
-            if (spill)
+            if (spill) {
                 enable_reload = true;
+            }
 
             cb_pop_front(tt::CBIndex::c_0, in0_block_num_tiles);
             cb_pop_front(tt::CBIndex::c_1, in1_block_num_tiles);

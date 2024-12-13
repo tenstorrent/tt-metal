@@ -34,7 +34,7 @@ std::string tt::get_alias(tt::ARCH arch) {
     }
 }
 
-tt::ARCH tt::get_arch_from_string(const std::string &arch_str) {
+tt::ARCH tt::get_arch_from_string(const std::string& arch_str) {
     tt::ARCH arch;
     if ((arch_str == "grayskull") || (arch_str == "GRAYSKULL")) {
         arch = tt::ARCH::GRAYSKULL;
@@ -51,7 +51,7 @@ tt::ARCH tt::get_arch_from_string(const std::string &arch_str) {
     return arch;
 }
 
-auto fmt::formatter<tt::DataFormat>::format(tt::DataFormat df, format_context &ctx) const -> format_context::iterator {
+auto fmt::formatter<tt::DataFormat>::format(tt::DataFormat df, format_context& ctx) const -> format_context::iterator {
     const auto name = magic_enum::enum_name(df);
 
     if (name.empty()) {

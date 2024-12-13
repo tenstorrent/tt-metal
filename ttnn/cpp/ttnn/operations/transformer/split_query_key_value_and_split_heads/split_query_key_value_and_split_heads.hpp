@@ -26,5 +26,5 @@ constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation_
     "ttnn::transformer::split_query_key_value_and_split_heads",
     ttnn::operations::transformer::SplitQueryKeyValueAndSplitHeadsOperation>();
 
-} // namespace transformer
-} // namespace ttnn
+}  // namespace transformer
+}  // namespace ttnn

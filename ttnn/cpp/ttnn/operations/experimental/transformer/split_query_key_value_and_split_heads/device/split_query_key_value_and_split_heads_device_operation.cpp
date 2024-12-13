@@ -10,12 +10,14 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::transformer {
 
-void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>& input_tensors,
-                                                                            const std::vector<std::optional<Tensor>>& output_tensors) const {
+void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.get_legacy_shape()[0];
     // TODO: See issue #1744
-    TT_FATAL((input_tensor.get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 1, 384, 3072})), "Unsupported input shape");
+    TT_FATAL(
+        (input_tensor.get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 1, 384, 3072})),
+        "Unsupported input shape");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
@@ -29,18 +31,19 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(con
         auto bbox = input_tensor.shard_spec().value().grid.bounding_box();
         TT_FATAL(
             (bbox.end_coord.x < this->compute_with_storage_grid_size.x &&
-             bbox.end_coord.y < this->compute_with_storage_grid_size.y), "Error");
+             bbox.end_coord.y < this->compute_with_storage_grid_size.y),
+            "Error");
         TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");
         TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
     }
 
     if (!output_tensors.empty()) {
-        TT_FATAL(
-            output_tensors.size() == 3, "Must have 3 output tensors");
+        TT_FATAL(output_tensors.size() == 3, "Must have 3 output tensors");
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.get_legacy_shape()[0];
     uint32_t num_heads = this->num_heads;
@@ -56,7 +59,8 @@ std::vector<tt::tt_metal::LegacyShape> SplitFusedQKVAndSplitHeadsDeviceOperation
 std::vector<Tensor> SplitFusedQKVAndSplitHeadsDeviceOperation::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (output_tensors.size() == 3 && output_tensors[0].has_value() && output_tensors[1].has_value() && output_tensors[2].has_value()) {
+    if (output_tensors.size() == 3 && output_tensors[0].has_value() && output_tensors[1].has_value() &&
+        output_tensors[2].has_value()) {
         return {output_tensors.at(0).value(), output_tensors.at(1).value(), output_tensors.at(2).value()};
     }
     if (input_tensor.is_sharded()) {
@@ -70,7 +74,8 @@ std::vector<Tensor> SplitFusedQKVAndSplitHeadsDeviceOperation::create_output_ten
         CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
         ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
         auto bbox = all_cores.bounding_box();
-        uint32_t num_M_cores = shard_orientation == ShardOrientation::ROW_MAJOR ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
+        uint32_t num_M_cores =
+            shard_orientation == ShardOrientation::ROW_MAJOR ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
         // shard spec
         uint32_t per_core_M_qv = (num_heads / num_M_cores) * M;  // 768
         uint32_t per_core_N_qv = K;                              // 64
@@ -90,7 +95,11 @@ std::vector<Tensor> SplitFusedQKVAndSplitHeadsDeviceOperation::create_output_ten
             input_tensor.device(),
             mem_config_qv);
         auto out_tensor_k = create_device_tensor(
-            tt::tt_metal::LegacyShape{batch, num_heads, K, M}, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
+            tt::tt_metal::LegacyShape{batch, num_heads, K, M},
+            input_tensor.get_dtype(),
+            Layout::TILE,
+            input_tensor.device(),
+            mem_config_k);
         auto out_tensor_v = create_device_tensor(
             tt::tt_metal::LegacyShape{batch, num_heads, M, K},
             input_tensor.get_dtype(),

@@ -20,7 +20,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     auto output = output_tensor;
 
     auto memory_config = operation_attributes.memory_config;
-    const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
+    const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::ReduceOpMath reduce_op = tt::tt_metal::ReduceOpMath::SUM;
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::H;

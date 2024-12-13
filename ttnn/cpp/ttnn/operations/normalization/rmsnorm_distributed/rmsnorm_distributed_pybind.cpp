@@ -17,7 +17,6 @@ namespace ttnn::operations::normalization::detail {
 namespace py = pybind11;
 
 void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
-
     ttnn::bind_registered_operation(
         module,
         ttnn::rms_norm_pre_all_gather,
@@ -34,7 +33,6 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
 }
 
 void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
-
     ttnn::bind_registered_operation(
         module,
         ttnn::rms_norm_post_all_gather,

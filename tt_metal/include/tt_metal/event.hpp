@@ -10,7 +10,7 @@
 //                  EVENT MANAGEMENT
 //==================================================
 
-namespace tt::tt_metal{
+namespace tt::tt_metal {
 namespace v1 {
 
 /**
@@ -27,14 +27,14 @@ EventHandle EnqueueRecordEvent(CommandQueueHandle cq);
  * @param cq The command queue that will wait for the event.
  * @param event Handle to the Event object to wait on.
  */
-void EnqueueWaitForEvent(CommandQueueHandle cq, EventHandle event);
+void EnqueueWaitForEvent(CommandQueueHandle cq, const EventHandle& event);
 
 /**
  * @brief Blocks the host until the specified event has completed on the device.
  *
  * @param event Handle to the Event object to synchronize.
  */
-void EventSynchronize(EventHandle event);
+void EventSynchronize(const EventHandle& event);
 
 /**
  * @brief Queries the completion status of an event on the device.
@@ -42,8 +42,7 @@ void EventSynchronize(EventHandle event);
  * @param event Handle to the Event object to query.
  * @return True if the event is completed; otherwise, false.
  */
-bool EventQuery(EventHandle event);
-
+bool EventQuery(const EventHandle& event);
 
 /**
  * @brief Synchronizes the device with the host by waiting for all operations to complete.
@@ -52,7 +51,6 @@ bool EventQuery(EventHandle event);
  */
 void DeviceSynchronize(DeviceHandle device);
 
-
 /**
  * @brief Synchronizes the command queue with the host by waiting for all operations to complete.
  *
@@ -60,6 +58,5 @@ void DeviceSynchronize(DeviceHandle device);
  */
 void CommandQueueSynchronize(CommandQueueHandle cq);
 
-
-} // namespace v1
-} // namespace tt::tt_metal
+}  // namespace v1
+}  // namespace tt::tt_metal

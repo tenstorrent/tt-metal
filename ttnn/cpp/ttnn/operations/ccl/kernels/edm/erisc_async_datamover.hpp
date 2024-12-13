@@ -21,7 +21,10 @@ using ttnn::ccl::EriscDataMoverWorkerSignal;
 namespace erisc {
 namespace datamover {
 
-template <EriscDataMoverBufferSharingMode buffer_sharing_mode, EriscDataMoverTerminationMode termination_mode, uint8_t num_buffers_per_channel>
+template <
+    EriscDataMoverBufferSharingMode buffer_sharing_mode,
+    EriscDataMoverTerminationMode termination_mode,
+    uint8_t num_buffers_per_channel>
 struct EriscDatamoverConfig {
     static constexpr EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE = buffer_sharing_mode;
     static constexpr EriscDataMoverTerminationMode TERMINATION_MODE = termination_mode;
@@ -54,7 +57,7 @@ class ChannelBuffer final {
             BUFFER_SHARING_MODE == EriscDataMoverBufferSharingMode::ROUND_ROBIN,
         "The only BufferSharding modes supported are NOT_SHARED and ROUND_ROBIN");
 
-   public:
+public:
     enum STATE : uint8_t {
         DONE = 0,
 
@@ -101,8 +104,8 @@ class ChannelBuffer final {
         uint32_t worker_semaphore_l1_address,
         uint32_t num_workers,
         uint32_t total_num_messages_to_move,
-        volatile tt_l1_ptr uint32_t *const local_semaphore_address,
-        tt_l1_ptr const WorkerXY *worker_coords,
+        volatile tt_l1_ptr uint32_t* const local_semaphore_address,
+        tt_l1_ptr const WorkerXY* worker_coords,
         bool is_sender_side) :
         eth_transaction_channel(eth_transaction_channel),
         local_semaphore_address(local_semaphore_address),
@@ -129,8 +132,10 @@ class ChannelBuffer final {
             this->addresses[i] = address + i * (this->size_in_bytes);
 
             uint32_t channel_sync_addr = this->addresses[i] + payload_size_in_bytes;
-            volatile uint32_t* bytes_sent_addr = &(reinterpret_cast<eth_channel_sync_t *>(channel_sync_addr)->bytes_sent);
-            volatile uint32_t* bytes_acked_addr = &(reinterpret_cast<eth_channel_sync_t *>(channel_sync_addr)->receiver_ack);
+            volatile uint32_t* bytes_sent_addr =
+                &(reinterpret_cast<eth_channel_sync_t*>(channel_sync_addr)->bytes_sent);
+            volatile uint32_t* bytes_acked_addr =
+                &(reinterpret_cast<eth_channel_sync_t*>(channel_sync_addr)->receiver_ack);
             channel_bytes_sent_addresses[i] = bytes_sent_addr;
             channel_bytes_acked_addresses[i] = bytes_acked_addr;
 
@@ -139,7 +144,8 @@ class ChannelBuffer final {
             *(channel_bytes_acked_addresses[i]) = 0;
         }
 
-        if (TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED || total_num_messages_to_move != 0) {
+        if (TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED ||
+            total_num_messages_to_move != 0) {
             if (is_sender_side) {
                 // Tell the sender side workers that we're ready to accept data on this channel
                 increment_worker_semaphores();
@@ -150,9 +156,7 @@ class ChannelBuffer final {
         }
     }
     // Resets the semaphore in local L1, which workers write to remotely.
-    FORCE_INLINE void clear_local_semaphore() {
-        noc_semaphore_set(local_semaphore_address, 0);
-    }
+    FORCE_INLINE void clear_local_semaphore() { noc_semaphore_set(local_semaphore_address, 0); }
 
     // Increment the semaphore in the remote L1s of every worker associated with this ChannelBuffer
     FORCE_INLINE void increment_worker_semaphores() {
@@ -210,14 +214,11 @@ class ChannelBuffer final {
     }
     [[nodiscard]] FORCE_INLINE bool is_done() const { return this->state == STATE::DONE; }
 
-    [[nodiscard]] FORCE_INLINE uint32_t get_eth_transaction_channel() const {
-        return this->eth_transaction_channel;
-    }
+    [[nodiscard]] FORCE_INLINE uint32_t get_eth_transaction_channel() const { return this->eth_transaction_channel; }
     [[nodiscard]] FORCE_INLINE std::size_t get_size_in_bytes() const { return this->size_in_bytes; }
     [[nodiscard]] FORCE_INLINE std::size_t get_current_payload_size() const { return this->get_size_in_bytes(); }
 
-    [[nodiscard]] FORCE_INLINE std::size_t get_buffer_address() const {
-        return this->addresses[buffer_index]; }
+    [[nodiscard]] FORCE_INLINE std::size_t get_buffer_address() const { return this->addresses[buffer_index]; }
 
     [[nodiscard]] FORCE_INLINE std::size_t get_remote_eth_buffer_address() const { return this->get_buffer_address(); }
     FORCE_INLINE uint32_t get_messages_moved() { return this->num_messages_moved; }
@@ -232,13 +233,15 @@ class ChannelBuffer final {
 
     FORCE_INLINE bool eth_is_receiver_channel_send_done() const {
         ASSERT(buffer_index < EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL);
-        return *(this->channel_bytes_sent_addresses[buffer_index]) == 0; }
+        return *(this->channel_bytes_sent_addresses[buffer_index]) == 0;
+    }
     FORCE_INLINE bool eth_bytes_are_available_on_channel() const {
         ASSERT(buffer_index < EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL);
         return *(this->channel_bytes_sent_addresses[buffer_index]) != 0;
     }
     FORCE_INLINE bool eth_is_receiver_channel_send_acked() const {
-        return *(this->channel_bytes_acked_addresses[buffer_index]) != 0; }
+        return *(this->channel_bytes_acked_addresses[buffer_index]) != 0;
+    }
     FORCE_INLINE void eth_clear_sender_channel_ack() const { *(this->channel_bytes_acked_addresses[buffer_index]) = 0; }
 
     /*
@@ -289,21 +292,25 @@ class ChannelBuffer final {
         ASSERT(this->buffer_index < EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL);
     }
 
-    volatile tt_l1_ptr uint32_t *const get_channel_bytes_sent_address() { return this->channel_bytes_sent_addresses[buffer_index]; }
-    volatile tt_l1_ptr uint32_t *const get_channel_bytes_acked_address() { return this->channel_bytes_acked_addresses[buffer_index]; }
+    volatile tt_l1_ptr uint32_t* const get_channel_bytes_sent_address() {
+        return this->channel_bytes_sent_addresses[buffer_index];
+    }
+    volatile tt_l1_ptr uint32_t* const get_channel_bytes_acked_address() {
+        return this->channel_bytes_acked_addresses[buffer_index];
+    }
 
-   public:
+public:
     uint32_t eth_transaction_channel;  //
-    volatile tt_l1_ptr uint32_t *const local_semaphore_address;
-    WorkerXY const *const worker_coords;
+    volatile tt_l1_ptr uint32_t* const local_semaphore_address;
+    WorkerXY const* const worker_coords;
     std::array<std::size_t, EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL> addresses;
     std::size_t const size_in_bytes;
     // Even for multiple workers, this address will be the same
     std::size_t const worker_semaphore_l1_address;
     uint32_t const num_workers;
     uint32_t num_messages_moved;
-    std::array<volatile tt_l1_ptr uint32_t *, EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL> channel_bytes_sent_addresses;
-    std::array<volatile tt_l1_ptr uint32_t *, EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL> channel_bytes_acked_addresses;
+    std::array<volatile tt_l1_ptr uint32_t*, EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL> channel_bytes_sent_addresses;
+    std::array<volatile tt_l1_ptr uint32_t*, EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL> channel_bytes_acked_addresses;
     const uint32_t total_num_messages_to_move;
     STATE state;
     edm_worker_index<BUFFER_SHARING_MODE> worker_index;
@@ -314,7 +321,7 @@ class ChannelBuffer final {
 
 template <typename T = uint8_t>
 class QueueIndexPointer {
-   public:
+public:
     QueueIndexPointer(uint8_t queue_size) : ptr(0), size(queue_size), wrap_around(queue_size * 2) {
         // FWASSERT(queue_size < 128);
     }
@@ -348,10 +355,10 @@ class QueueIndexPointer {
         return QueueIndexPointer(this->next_pointer(), this->size);
     }
     // Compares indices since the raw index is not visible to the user
-    inline bool operator==(const QueueIndexPointer &other) const { return this->ptr == other.ptr; }
-    inline bool operator!=(const QueueIndexPointer &other) const { return this->ptr != other.ptr; }
+    inline bool operator==(const QueueIndexPointer& other) const { return this->ptr == other.ptr; }
+    inline bool operator!=(const QueueIndexPointer& other) const { return this->ptr != other.ptr; }
 
-   private:
+private:
     inline T next_pointer() {
         T next_ptr = (this->ptr + 1);
         next_ptr = next_ptr == wrap_around ? 0 : next_ptr;
@@ -363,15 +370,12 @@ class QueueIndexPointer {
     uint8_t wrap_around;
 };
 
-
-
-
 template <uint32_t NUM_CHANNELS>
 FORCE_INLINE void initialize_transaction_buffer_addresses(
     uint32_t max_concurrent_transactions,
     uint32_t first_buffer_base_address,
     uint32_t num_bytes_per_send,
-    std::array<uint32_t, NUM_CHANNELS> &transaction_channel_buffer_addresses) {
+    std::array<uint32_t, NUM_CHANNELS>& transaction_channel_buffer_addresses) {
     uint32_t buffer_address = first_buffer_base_address;
     for (uint32_t i = 0; i < max_concurrent_transactions; i++) {
         transaction_channel_buffer_addresses[i] = buffer_address;
@@ -383,14 +387,16 @@ FORCE_INLINE void initialize_transaction_buffer_addresses(
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
 template <typename EDM_CONFIG>
-FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<EDM_CONFIG> &sender_buffer_channel) {
+FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<EDM_CONFIG>& sender_buffer_channel) {
     bool did_something = false;
     if (sender_buffer_channel.eth_is_receiver_channel_send_done()) {
         bool need_to_send_completion = sender_buffer_channel.is_send_completion_pending();
         if (!eth_txq_is_busy()) {
             static constexpr std::size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
-            ASSERT((uint32_t)sender_buffer_channel.get_channel_bytes_sent_address() ==
-                ((uint32_t)sender_buffer_channel.get_buffer_address() + (uint32_t)sender_buffer_channel.get_current_payload_size() - (uint32_t)sizeof(eth_channel_sync_t)));
+            ASSERT(
+                (uint32_t)sender_buffer_channel.get_channel_bytes_sent_address() ==
+                ((uint32_t)sender_buffer_channel.get_buffer_address() +
+                 (uint32_t)sender_buffer_channel.get_current_payload_size() - (uint32_t)sizeof(eth_channel_sync_t)));
             *sender_buffer_channel.get_channel_bytes_sent_address() = sender_buffer_channel.get_current_payload_size();
             *sender_buffer_channel.get_channel_bytes_acked_address() = 0;
 
@@ -412,8 +418,7 @@ FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<EDM_CONFIG> &sende
 
 template <typename EDM_CONFIG>
 FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
-    ChannelBuffer<EDM_CONFIG> &sender_buffer_channel, uint32_t &num_senders_complete) {
-
+    ChannelBuffer<EDM_CONFIG>& sender_buffer_channel, uint32_t& num_senders_complete) {
     bool channel_done = false;
     if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
         channel_done = sender_buffer_channel.all_messages_moved();
@@ -438,7 +443,7 @@ FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
 
 template <typename EDM_CONFIG>
 FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(
-    ChannelBuffer<EDM_CONFIG> &sender_buffer_channel, uint32_t &num_senders_complete) {
+    ChannelBuffer<EDM_CONFIG>& sender_buffer_channel, uint32_t& num_senders_complete) {
     bool did_something = false;
 
     bool transimission_acked_by_receiver = sender_buffer_channel.eth_is_receiver_channel_send_acked() ||
@@ -456,10 +461,9 @@ FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(
     return did_something;
 }
 
-
 template <typename EDM_CONFIG>
 FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
-    ChannelBuffer<EDM_CONFIG> &sender_channel_buffer, uint32_t &num_senders_complete) {
+    ChannelBuffer<EDM_CONFIG>& sender_channel_buffer, uint32_t& num_senders_complete) {
     bool did_something = false;
 
     if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
@@ -480,7 +484,6 @@ FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
     }
 
     return did_something;
-
 }
 
 /////////////////////////////////////////////
@@ -491,7 +494,7 @@ FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
  *
  */
 template <typename EDM_CONFIG>
-FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(ChannelBuffer<EDM_CONFIG> &buffer_channel) {
+FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(ChannelBuffer<EDM_CONFIG>& buffer_channel) {
     buffer_channel.clear_local_semaphore();
     uint32_t worker_semaphore_address = buffer_channel.worker_semaphore_l1_address;
     buffer_channel.increment_worker_semaphores();
@@ -506,8 +509,8 @@ FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(Channel
  */
 template <typename EDM_CONFIG>
 FORCE_INLINE bool receiver_eth_accept_payload_sequence(
-    ChannelBuffer<EDM_CONFIG> &buffer_channel,
-    uint32_t &num_receivers_complete,
+    ChannelBuffer<EDM_CONFIG>& buffer_channel,
+    uint32_t& num_receivers_complete,
     uint32_t eth_transaction_ack_word_addr) {
     bool did_something = false;
 
@@ -527,7 +530,6 @@ FORCE_INLINE bool receiver_eth_accept_payload_sequence(
     return did_something;
 }
 
-
 /*
  * Does something if we are waiting for workers to complete their read and the read is complete:
  * - increment messages moved (that transfer is done)
@@ -536,8 +538,7 @@ FORCE_INLINE bool receiver_eth_accept_payload_sequence(
  */
 template <typename EDM_CONFIG>
 FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
-    ChannelBuffer<EDM_CONFIG> &buffer_channel,
-    uint32_t &num_receivers_complete) {
+    ChannelBuffer<EDM_CONFIG>& buffer_channel, uint32_t& num_receivers_complete) {
     bool did_something = false;
 
     bool workers_are_finished_reading = buffer_channel.is_local_semaphore_full();
@@ -561,7 +562,8 @@ FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
             if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
                 channel_done = buffer_channel.all_messages_moved();
             } else if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
-                channel_done = (*buffer_channel.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+                channel_done =
+                    (*buffer_channel.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
             } else {
                 ASSERT(false);
             }
@@ -578,8 +580,6 @@ FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
 
     return did_something;
 }
-
-
 
 };  // namespace datamover
 };  // namespace erisc

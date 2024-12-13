@@ -19,14 +19,15 @@ uint32_t get_noc_offset_in_tile(uint32_t stick_h, uint32_t stick_w, uint32_t til
 
     const uint32_t stick_bytes = FACE_WIDTH * element_size;
 
-    if (stick_h < FACE_WIDTH && is_even)
+    if (stick_h < FACE_WIDTH && is_even) {
         noc_offset += stick_h * stick_bytes;
-    else if (stick_h < FACE_WIDTH && is_odd)
+    } else if (stick_h < FACE_WIDTH && is_odd) {
         noc_offset += (16 + stick_h) * stick_bytes;
-    else if (stick_h >= FACE_WIDTH && is_even)
+    } else if (stick_h >= FACE_WIDTH && is_even) {
         noc_offset += (16 + stick_h) * stick_bytes;
-    else if (stick_h >= FACE_WIDTH && is_odd)
+    } else if (stick_h >= FACE_WIDTH && is_odd) {
         noc_offset += (32 + stick_h) * stick_bytes;
+    }
 
     return noc_offset;
 }

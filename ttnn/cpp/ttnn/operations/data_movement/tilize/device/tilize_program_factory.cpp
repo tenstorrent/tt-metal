@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <math.h>
 
 #include "ttnn/operations/cb_utils.hpp"
@@ -105,7 +104,8 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
+        "reader_unary_stick_layout_split_rows_interleaved.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -176,8 +176,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 
     create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, ntiles_per_block, input_cb_data_format);
 
-    auto [output_cb_index, _] =
-        create_cb(tt::CBIndex::c_16, program, all_cores, output_single_tile_size, ntiles_per_block, output_cb_data_format);
+    auto [output_cb_index, _] = create_cb(
+        tt::CBIndex::c_16, program, all_cores, output_single_tile_size, ntiles_per_block, output_cb_data_format);
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -191,7 +191,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     std::vector<uint32_t> reader_ct_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
+        "reader_unary_stick_layout_split_rows_interleaved.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
@@ -371,7 +372,8 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {uint32_t(num_tiles_per_shard / num_tiles_per_row), uint32_t(num_tiles_per_row)};
+    std::vector<uint32_t> compute_args = {
+        uint32_t(num_tiles_per_shard / num_tiles_per_row), uint32_t(num_tiles_per_row)};
 
     auto untilize_kernel_id = tt::tt_metal::CreateKernel(
         program,

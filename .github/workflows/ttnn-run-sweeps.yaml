@@ -12,7 +12,9 @@ on:
           - ALL SWEEPS (Nightly)
           - add
           - tilize
+          - tilize_with_val_padding
           - untilize
+          - untilize_with_unpadding
           - ccl.line_all_gather
           - ccl.all_gather_n300
           - ccl.all_gather_n300_focused
@@ -42,9 +44,11 @@ on:
           - eltwise.unary.rsqrt.rsqrt_pytorch2
           - eltwise.unary.rdiv.rdiv
           - eltwise.unary.frac.frac
+          - eltwise.unary.frac.frac_sharded
           - eltwise.unary.ceil.ceil
           - eltwise.unary.ceil.ceil_pytorch2
           - eltwise.unary.trunc.trunc
+          - eltwise.unary.trunc.trunc_sharded
           - eltwise.unary.floor.floor
           - eltwise.unary.floor.floor_pytorch2
           - eltwise.unary.clone.clone
@@ -110,6 +114,8 @@ on:
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
+          - eltwise.unary.selu.selu
+          - eltwise.unary.softshrink.softshrink_sharded
           - eltwise.unary_backward.fill_zero_bw
           - eltwise.unary_backward.log_sigmoid_bw
           - eltwise.unary_backward.logit_bw
@@ -172,15 +178,24 @@ on:
           - eltwise.binary_complex.add_bw.add_bw
           - eltwise.binary_complex.sub_bw.sub_bw
           - eltwise.binary_complex.mul_bw.mul_bw
-          - eltwise.unary.lgamma
-          - eltwise.unary.logit
-          - eltwise.unary.mish
-          - eltwise.unary.multigammaln
-          - eltwise.unary.isfinite
-          - eltwise.unary.isinf
-          - eltwise.unary.isnan
-          - eltwise.unary.isneginf
-          - eltwise.unary.isposinf
+          - eltwise.unary.lgamma.lgamma
+          - eltwise.unary.lgamma.lgamma_sharded
+          - eltwise.unary.logit.logit
+          - eltwise.unary.logit.logit_sharded
+          - eltwise.unary.mish.mish
+          - eltwise.unary.mish.mish_sharded
+          - eltwise.unary.multigammaln.multigammaln
+          - eltwise.unary.multigammaln.multigammaln_sharded
+          - eltwise.unary.isfinite.isfinite
+          - eltwise.unary.isfinite.isfinite_sharded
+          - eltwise.unary.isinf.isinf
+          - eltwise.unary.isinf.isinf_sharded
+          - eltwise.unary.isnan.isnan
+          - eltwise.unary.isnan.isnan_sharded
+          - eltwise.unary.isneginf.isneginf
+          - eltwise.unary.isneginf.isneginf_sharded
+          - eltwise.unary.isposinf.isposinf
+          - eltwise.unary.isposinf.isposinf_sharded
           - eltwise.binary.add.add_all_pytorch2
           - eltwise.binary.add.add_set2_pytorch2
           - eltwise.binary.add.add_different_memory_configs
@@ -320,6 +335,7 @@ on:
           - data_movement.repeat_interleave.repeat_interleave
           - data_movement.nonzero.nonzero
           - data_movement.backward.concat_bw.concat_bw
+          - conv_transpose2d.short.conv_transpose2d_short_sweep
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding
           - conv2d.full.conv2d_sliding_window
@@ -334,6 +350,7 @@ on:
           - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads_kv_input
           - transformer.attention_softmax.attention_softmax
           - transformer.attention_softmax.attention_softmax_
+          - transformer.rotary_embedding.rotary_embedding
           - data_movement.stack.stack_pytorch2
           - data_movement.repeat.repeat_pytorch2
           - data_movement.split.split_pytorch2
@@ -341,6 +358,7 @@ on:
           - data_movement.squeeze.squeeze_pytorch2
           - data_movement.embedding.embedding_pytorch2
           - data_movement.view.view_pytorch2
+          - data_movement.view.view_tt_torch
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 

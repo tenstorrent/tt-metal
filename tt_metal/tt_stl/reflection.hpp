@@ -6,7 +6,10 @@
 
 #include <fmt/core.h>
 
+#include <algorithm>
+#include <array>
 #include <experimental/type_traits>
+#include <map>
 #include <optional>
 #include <ostream>
 #include <reflect>
@@ -14,12 +17,13 @@
 #include <sstream>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 #include <filesystem>
 
 #include "concepts.hpp"
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 #include <magic_enum.hpp>
 #include "type_name.hpp"
 #include "tt_metal/common/logger.hpp"
@@ -109,7 +113,7 @@ T from_json(const nlohmann::json& json_object) {
 
 namespace reflection {
 
-template<std::size_t Start, std::size_t End, class T, std::size_t Size>
+template <std::size_t Start, std::size_t End, class T, std::size_t Size>
 consteval auto fixed_string_substring(reflect::fixed_string<T, Size> string) {
     constexpr auto new_size = End - Start;
     T new_data[new_size];
@@ -119,7 +123,7 @@ consteval auto fixed_string_substring(reflect::fixed_string<T, Size> string) {
     return reflect::fixed_string<T, new_size>{new_data};
 }
 
-template<class T1, std::size_t Size1, class T2, std::size_t Size2>
+template <class T1, std::size_t Size1, class T2, std::size_t Size2>
 consteval auto fixed_string_equals(reflect::fixed_string<T1, Size1> string1, reflect::fixed_string<T2, Size2> string2) {
     if constexpr (string1.size() != string2.size()) {
         return false;
@@ -236,7 +240,7 @@ struct Attribute final {
 
     ~Attribute() { this->destruct(); }
 
-   private:
+private:
     alignas(ALIGNMENT) void* pointer = nullptr;
     alignas(ALIGNMENT) storage_t type_erased_storage;
 
@@ -448,6 +452,32 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
     return os;
 }
 
+template <typename K, typename V>
+std::ostream& operator<<(std::ostream& os, const std::map<K, V>& map) {
+    os << "{";
+    for (auto it = map.begin(); it != map.end(); ++it) {
+        os << it->first << ": " << it->second;
+        if (it != map.end()) {
+            os << ", ";
+        }
+    }
+    os << "}";
+    return os;
+}
+
+template <typename K, typename V>
+std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V>& map) {
+    os << "{";
+    for (auto it = map.begin(); it != map.end(); ++it) {
+        os << it->first << ": " << it->second;
+        if (it != map.end()) {
+            os << ", ";
+        }
+    }
+    os << "}";
+    return os;
+}
+
 template <typename T>
     requires(tt::stl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value))
 std::ostream& operator<<(std::ostream& os, const T& object) {
@@ -471,41 +501,42 @@ template <typename T>
 struct visit_object_of_type_t;
 
 template <typename object_t, typename T>
-void visit_object_of_type(auto&& callback, T&& object) { visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object); }
+void visit_object_of_type(auto&& callback, T&& object) {
+    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+}
 
-template<typename T>
-requires (not tt::stl::concepts::Reflectable<std::decay_t<T>>) and (not  requires { std::decay_t<T>::attribute_names; })
+template <typename T>
+    requires(not tt::stl::concepts::Reflectable<std::decay_t<T>>) and
+            (not requires { std::decay_t<T>::attribute_names; })
 struct visit_object_of_type_t<T> {
-
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     void operator()(auto&& callback, T&& value) const {
         callback(value);
     }
 
-    template<typename object_t>
-    requires (not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& callback, T&& value) const {
         TT_THROW("Unsupported visit of object of type: {}", get_type_name<T>());
     }
 
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     void operator()(auto&& callback, const T& value) const {
         callback(value);
     }
 
-    template<typename object_t>
-    requires (not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& callback, const T& value) const {
         TT_THROW("Unsupported visit of object of type: {}", get_type_name<T>());
     }
 };
 
-template<typename T>
+template <typename T>
 struct visit_object_of_type_t<std::optional<T>> {
-
-    template<typename object_t>
+    template <typename object_t>
     void operator()(auto&& callback, const std::optional<T>& value) const {
         if (value.has_value()) {
             visit_object_of_type<object_t>(callback, value.value());
@@ -513,10 +544,9 @@ struct visit_object_of_type_t<std::optional<T>> {
     }
 };
 
-template<typename T>
+template <typename T>
 struct visit_object_of_type_t<std::vector<T>> {
-
-    template<typename object_t>
+    template <typename object_t>
     void operator()(auto&& callback, const std::vector<T>& value) const {
         for (auto& tensor : value) {
             visit_object_of_type<object_t>(callback, tensor);
@@ -524,10 +554,9 @@ struct visit_object_of_type_t<std::vector<T>> {
     }
 };
 
-template<typename T, auto N>
+template <typename T, auto N>
 struct visit_object_of_type_t<std::array<T, N>> {
-
-    template<typename object_t>
+    template <typename object_t>
     void operator()(auto&& callback, const std::array<T, N>& value) const {
         for (auto& tensor : value) {
             visit_object_of_type<object_t>(callback, tensor);
@@ -535,10 +564,9 @@ struct visit_object_of_type_t<std::array<T, N>> {
     }
 };
 
-template<typename... Ts>
+template <typename... Ts>
 struct visit_object_of_type_t<std::tuple<Ts...>> {
-
-    template<typename object_t>
+    template <typename object_t>
     void operator()(auto&& callback, const std::tuple<Ts...>& value) const {
         [&callback, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
             (visit_object_of_type<object_t>(callback, std::get<Ns>(value)), ...);
@@ -546,65 +574,65 @@ struct visit_object_of_type_t<std::tuple<Ts...>> {
     }
 };
 
-template<typename T>
-requires requires { std::decay_t<T>::attribute_names; }
+template <typename T>
+    requires requires { std::decay_t<T>::attribute_names; }
 struct visit_object_of_type_t<T> {
-
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     void operator()(auto&& callback, T&& value) const {
         callback(value);
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& callback, T&& object) const {
         constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
         visit_object_of_type<object_t>(callback, object.attribute_values());
     }
 
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     void operator()(auto&& callback, const T& value) const {
         callback(value);
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& callback, const T& object) const {
         constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
         visit_object_of_type<object_t>(callback, object.attribute_values());
     }
 };
 
-template<typename T>
-requires tt::stl::concepts::Reflectable<std::decay_t<T>>
+template <typename T>
+    requires tt::stl::concepts::Reflectable<std::decay_t<T>>
 struct visit_object_of_type_t<T> {
-
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     void operator()(auto&& callback, T&& value) const {
         callback(value);
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& callback, T&& object) const {
         reflect::for_each(
-            [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); }, object);
+            [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); },
+            object);
     }
 
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     void operator()(auto&& callback, const T& value) const {
         callback(value);
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& callback, const T& object) const {
         reflect::for_each(
-            [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); }, object);
+            [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); },
+            object);
     }
 };
 
@@ -612,43 +640,44 @@ template <typename T>
 struct transform_object_of_type_t;
 
 template <typename object_t, typename T>
-auto transform_object_of_type(auto&& callback, T&& object) { return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object); }
+auto transform_object_of_type(auto&& callback, T&& object) {
+    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+}
 
-template<typename T>
-requires (not tt::stl::concepts::Reflectable<std::decay_t<T>>) and (not  requires { std::decay_t<T>::attribute_names; })
+template <typename T>
+    requires(not tt::stl::concepts::Reflectable<std::decay_t<T>>) and
+            (not requires { std::decay_t<T>::attribute_names; })
 struct transform_object_of_type_t<T> {
-
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     T operator()(auto&& callback, T&& value) const {
         return callback(value);
     }
 
-    template<typename object_t>
-    requires (not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, T&& value) const {
         log_debug("Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
 
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     T operator()(auto&& callback, const T& value) const {
         return callback(value);
     }
 
-    template<typename object_t>
-    requires (not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, const T& value) const {
         log_debug("Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
 };
 
-template<typename T>
+template <typename T>
 struct transform_object_of_type_t<std::optional<T>> {
-
-    template<typename object_t>
+    template <typename object_t>
     std::optional<T> operator()(auto&& callback, const std::optional<T>& value) const {
         if (value.has_value()) {
             return transform_object_of_type<object_t>(callback, value.value());
@@ -657,10 +686,9 @@ struct transform_object_of_type_t<std::optional<T>> {
     }
 };
 
-template<typename T>
+template <typename T>
 struct transform_object_of_type_t<std::vector<T>> {
-
-    template<typename object_t>
+    template <typename object_t>
     std::vector<T> operator()(auto&& callback, const std::vector<T>& value) const {
         std::vector<T> return_value;
         for (auto& tensor : value) {
@@ -670,10 +698,9 @@ struct transform_object_of_type_t<std::vector<T>> {
     }
 };
 
-template<typename T, auto N>
+template <typename T, auto N>
 struct transform_object_of_type_t<std::array<T, N>> {
-
-    template<typename object_t>
+    template <typename object_t>
     std::array<T, N> operator()(auto&& callback, const std::array<T, N>& value) const {
         std::array<T, N> return_value;
         for (auto index = 0; index < value.size(); index++) {
@@ -683,10 +710,9 @@ struct transform_object_of_type_t<std::array<T, N>> {
     }
 };
 
-template<typename... Ts>
+template <typename... Ts>
 struct transform_object_of_type_t<std::tuple<Ts...>> {
-
-    template<typename object_t>
+    template <typename object_t>
     std::tuple<Ts...> operator()(auto&& callback, const std::tuple<Ts...>& value) const {
         return std::apply(
             [&callback]<typename... args_t>(args_t&&... args) {
@@ -696,47 +722,45 @@ struct transform_object_of_type_t<std::tuple<Ts...>> {
     }
 };
 
-template<typename T>
-requires requires { std::decay_t<T>::attribute_names; }
+template <typename T>
+    requires requires { std::decay_t<T>::attribute_names; }
 struct transform_object_of_type_t<T> {
-
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     T operator()(auto&& callback, T&& value) const {
         return callback(value);
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, T&& object) const {
         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported transform of object of type");
     }
 
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     T operator()(auto&& callback, const T& value) const {
         return callback(value);
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, const T& object) const {
         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported transform of object of type");
     }
 };
 
-template<typename T>
-requires tt::stl::concepts::Reflectable<std::decay_t<T>>
+template <typename T>
+    requires tt::stl::concepts::Reflectable<std::decay_t<T>>
 struct transform_object_of_type_t<T> {
-
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     T operator()(auto&& callback, T&& value) const {
         return callback(value);
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, T&& object) const {
         return std::apply(
             [&callback](auto&&... args) {
@@ -745,14 +769,14 @@ struct transform_object_of_type_t<T> {
             reflect::to<std::tuple>(object));
     }
 
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     T operator()(auto&& callback, const T& value) const {
         return callback(value);
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, const T& object) const {
         return std::apply(
             [&callback](auto&&... args) {
@@ -762,35 +786,34 @@ struct transform_object_of_type_t<T> {
     }
 };
 
-template<typename T>
+template <typename T>
 struct get_first_object_of_type_t;
 
-template<typename object_t, typename T>
+template <typename object_t, typename T>
 auto get_first_object_of_type(const T& value) {
     return get_first_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(value);
 }
 
-template<typename T>
-requires (not tt::stl::concepts::Reflectable<std::decay_t<T>>) and (not  requires { std::decay_t<T>::attribute_names; })
+template <typename T>
+    requires(not tt::stl::concepts::Reflectable<std::decay_t<T>>) and
+            (not requires { std::decay_t<T>::attribute_names; })
 struct get_first_object_of_type_t<T> {
-
-    template<typename object_t>
-    requires std::same_as<std::decay_t<T>, object_t>
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
     const auto operator()(const T& value) const {
         return value;
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     const auto operator()(const T& value) const {
         TT_THROW("Unsupported get first object of type: {}", get_type_name<T>());
     }
 };
 
-template<typename T>
+template <typename T>
 struct get_first_object_of_type_t<std::optional<T>> {
-
-    template<typename object_t>
+    template <typename object_t>
     const auto operator()(const std::optional<T>& value) const {
         if (value.has_value()) {
             const auto& tensor = value.value();
@@ -799,10 +822,9 @@ struct get_first_object_of_type_t<std::optional<T>> {
     }
 };
 
-template<typename T>
+template <typename T>
 struct get_first_object_of_type_t<std::vector<T>> {
-
-    template<typename object_t>
+    template <typename object_t>
     const auto operator()(const std::vector<T>& value) const {
         for (auto& tensor : value) {
             return get_first_object_of_type<object_t>(tensor);
@@ -811,10 +833,9 @@ struct get_first_object_of_type_t<std::vector<T>> {
     }
 };
 
-template<typename T, auto N>
+template <typename T, auto N>
 struct get_first_object_of_type_t<std::array<T, N>> {
-
-    template<typename object_t>
+    template <typename object_t>
     const auto operator()(const std::array<T, N>& value) const {
         for (auto& tensor : value) {
             return get_first_object_of_type<object_t>(tensor);
@@ -822,45 +843,42 @@ struct get_first_object_of_type_t<std::array<T, N>> {
     }
 };
 
-template<typename... Ts>
+template <typename... Ts>
 struct get_first_object_of_type_t<std::tuple<Ts...>> {
-
-    template<typename object_t>
+    template <typename object_t>
     const auto operator()(const std::tuple<Ts...>& value) const {
         return get_first_object_of_type<object_t>(std::get<0>(value));
     }
 };
 
-template<typename T>
-requires requires { std::decay_t<T>::attribute_names; }
+template <typename T>
+    requires requires { std::decay_t<T>::attribute_names; }
 struct get_first_object_of_type_t<T> {
-
-    template<typename object_t>
-    requires(std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(std::same_as<std::decay_t<T>, object_t>)
     const auto operator()(const T& object) const {
         return object;
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     const auto operator()(const T& object) const {
         constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
         return get_first_object_of_type<object_t>(object.attribute_values());
     }
 };
 
-template<typename T>
-requires tt::stl::concepts::Reflectable<std::decay_t<T>>
+template <typename T>
+    requires tt::stl::concepts::Reflectable<std::decay_t<T>>
 struct get_first_object_of_type_t<T> {
-
-    template<typename object_t>
-    requires(std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(std::same_as<std::decay_t<T>, object_t>)
     const auto operator()(const T& object) const {
         return object;
     }
 
-    template<typename object_t>
-    requires(not std::same_as<std::decay_t<T>, object_t>)
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
     const auto operator()(const T& object) const {
         return get_first_object_of_type<object_t>(reflect::get<0>(object));
     }
@@ -990,6 +1008,30 @@ struct fmt::formatter<std::set<T>> {
     }
 };
 
+template <typename K, typename V>
+struct fmt::formatter<std::map<K, V>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::map<K, V>& map, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << map;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+template <typename K, typename V>
+struct fmt::formatter<std::unordered_map<K, V>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::unordered_map<K, V>& map, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << map;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
 template <typename T>
     requires(
         tt::stl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value or
@@ -1075,7 +1117,7 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing struct {} using compile-time attributes: {}\n", get_type_name<T>(), object);
         }
         constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
-        std::size_t hash = 0;
+        hash_t hash = 0;
         const auto attribute_values = object.attribute_values();
         [&object, &hash, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
@@ -1086,11 +1128,26 @@ inline hash_t hash_object(const T& object) noexcept {
                 ...);
         }(std::make_index_sequence<num_attributes>{});
         return hash;
+    } else if constexpr (is_specialization_v<T, std::tuple>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::tuple of type {}: {}\n", get_type_name<T>(), object);
+        }
+        constexpr auto num_elements = std::tuple_size_v<T>;
+        hash_t hash = 0;
+        [&object, &hash]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&object, &hash] {
+                    const auto& element = std::get<Ns>(object);
+                    hash = hash_objects(hash, element);
+                }(),
+                ...);
+        }(std::make_index_sequence<num_elements>{});
+        return hash;
     } else if constexpr (is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
         }
-        auto hash = 0;
+        hash_t hash = 0;
         for (const auto& element : object) {
             hash = hash_objects(hash, element);
         }
@@ -1099,9 +1156,35 @@ inline hash_t hash_object(const T& object) noexcept {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::set of type {}: {}\n", get_type_name<T>(), object);
         }
-        auto hash = 0;
+        hash_t hash = 0;
         for (const auto& element : object) {
             hash = hash_objects(hash, element);
+        }
+        return hash;
+    } else if constexpr (is_specialization_v<T, std::map>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::map of type {}: {}\n", get_type_name<T>(), object);
+        }
+        hash_t hash = 0;
+        for (const auto& [key, value] : object) {
+            hash = hash_objects(hash, key, value);
+        }
+        return hash;
+    } else if constexpr (is_specialization_v<T, std::unordered_map>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::unordered_map of type {}: {}\n", get_type_name<T>(), object);
+        }
+        // Sort the unordered map by key to make the hash order invariant
+        std::vector<typename T::const_iterator> iterators;
+        iterators.reserve(object.size());
+        for (auto it = object.begin(); it != object.end(); ++it) {
+            iterators.push_back(it);
+        }
+        std::sort(iterators.begin(), iterators.end(), [](const auto& a, const auto& b) { return a->first < b->first; });
+
+        hash_t hash = 0;
+        for (const auto& it : iterators) {
+            hash = hash_objects(hash, it->first, it->second);
         }
         return hash;
     } else if constexpr (is_specialization_v<T, std::optional>) {
@@ -1117,7 +1200,7 @@ inline hash_t hash_object(const T& object) noexcept {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
         }
-        std::size_t hash = 0;
+        hash_t hash = 0;
         reflect::for_each([&hash, &object](auto I) { hash = hash_objects(hash, reflect::get<I>(object)); }, object);
         return hash;
     } else {
@@ -1254,11 +1337,12 @@ struct to_json_t<std::variant<Ts...>> {
 namespace detail {
 template <class variant_t, std::size_t I = 0>
 variant_t variant_from_index(std::size_t index, const nlohmann::json& json_object) {
-    if constexpr (I >= std::variant_size_v<variant_t>)
+    if constexpr (I >= std::variant_size_v<variant_t>) {
         throw std::runtime_error{"Variant index " + std::to_string(I + index) + " out of bounds"};
-    else
+    } else {
         return index == 0 ? from_json<std::variant_alternative_t<I, variant_t>>(json_object)
                           : variant_from_index<variant_t, I + 1>(index - 1, json_object);
+    }
 }
 }  // namespace detail
 
@@ -1346,7 +1430,7 @@ struct to_json_t<std::map<K, V>> {
     nlohmann::json operator()(const std::map<K, V>& object) {
         nlohmann::json json_object = nlohmann::json::object();
         for (const auto& [key, value] : object) {
-            json_object[to_json(key)] = to_json(value);
+            json_object[to_json(key).dump()] = to_json(value);
         }
         return json_object;
     }
@@ -1357,7 +1441,29 @@ struct from_json_t<std::map<K, V>> {
     std::map<K, V> operator()(const nlohmann::json& json_object) {
         std::map<K, V> object;
         for (const auto& [key, value] : json_object.items()) {
-            object[from_json<K>(key)] = from_json<V>(value);
+            object[from_json<K>(nlohmann::json::parse(key))] = from_json<V>(value);
+        }
+        return object;
+    }
+};
+
+template <typename K, typename V>
+struct to_json_t<std::unordered_map<K, V>> {
+    nlohmann::json operator()(const std::unordered_map<K, V>& object) {
+        nlohmann::json json_object = nlohmann::json::object();
+        for (const auto& [key, value] : object) {
+            json_object[to_json(key).dump()] = to_json(value);
+        }
+        return json_object;
+    }
+};
+
+template <typename K, typename V>
+struct from_json_t<std::unordered_map<K, V>> {
+    std::map<K, V> operator()(const nlohmann::json& json_object) {
+        std::unordered_map<K, V> object;
+        for (const auto& [key, value] : json_object.items()) {
+            object[from_json<K>(nlohmann::json::parse(key))] = from_json<V>(value);
         }
         return object;
     }

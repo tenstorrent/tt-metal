@@ -3,32 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
-*
-* Type ids shared between the debug print server and on-device debug prints.
-*
-*/
+ *
+ * Type ids shared between the debug print server and on-device debug prints.
+ *
+ */
 
 #pragma once
-
-#include "core_config.h"
 
 // DataFormat comes from tt_backend_api_types.hpp for SW, and tensix_types.h for HW...
 // But wait there's more, SW also includes tensix_types.h so there's both tt::DataFormat and DataFormat there. Use a
 // different name here so that this header can be included in both.
-#if !defined(KERNEL_BUILD) && !defined(FW_BUILD) // SW
+#if !defined(KERNEL_BUILD) && !defined(FW_BUILD)  // SW
 #include "common/tt_backend_api_types.hpp"
 typedef tt::DataFormat CommonDataFormat;
-#else // HW already includes tensix_types.h
+#else  // HW already includes tensix_types.h
+#include "core_config.h"
 typedef DataFormat CommonDataFormat;
 #endif
 
-
 #include <cstddef>
 
-constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204; // per thread
+constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204;  // per thread
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there
-#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
 #else
 constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
@@ -36,12 +34,12 @@ constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
 
 // Used to index into the DPRINT buffers. Erisc is separate because it only has one buffer.
 enum DebugPrintHartIndex : unsigned int {
-    DPRINT_RISCV_INDEX_NC  = 0,
+    DPRINT_RISCV_INDEX_NC = 0,
     DPRINT_RISCV_INDEX_TR0 = 1,
     DPRINT_RISCV_INDEX_TR1 = 2,
     DPRINT_RISCV_INDEX_TR2 = 3,
-    DPRINT_RISCV_INDEX_BR  = 4,
-    DPRINT_RISCV_INDEX_ER  = 0,
+    DPRINT_RISCV_INDEX_BR = 4,
+    DPRINT_RISCV_INDEX_ER = 0,
     DPRINT_RISCV_INDEX_ER1 = 1,
 };
 #define DPRINT_NRISCVS 5
@@ -51,32 +49,33 @@ enum DebugPrintHartIndex : unsigned int {
 #define DPRINT_NRISCVS_ETH 1
 #endif
 
-#define DPRINT_TYPES                 \
-    DPRINT_PREFIX(CSTR)              \
-    DPRINT_PREFIX(ENDL)              \
-    DPRINT_PREFIX(SETW)              \
-    DPRINT_PREFIX(UINT8)             \
-    DPRINT_PREFIX(UINT16)            \
-    DPRINT_PREFIX(UINT32)            \
-    DPRINT_PREFIX(UINT64)            \
-    DPRINT_PREFIX(INT8)              \
-    DPRINT_PREFIX(INT16)             \
-    DPRINT_PREFIX(INT32)             \
-    DPRINT_PREFIX(INT64)             \
-    DPRINT_PREFIX(FLOAT32)           \
-    DPRINT_PREFIX(CHAR)              \
-    DPRINT_PREFIX(RAISE)             \
-    DPRINT_PREFIX(WAIT)              \
-    DPRINT_PREFIX(BFLOAT16)          \
-    DPRINT_PREFIX(SETPRECISION)      \
-    DPRINT_PREFIX(FIXED)             \
-    DPRINT_PREFIX(DEFAULTFLOAT)      \
-    DPRINT_PREFIX(HEX)               \
-    DPRINT_PREFIX(OCT)               \
-    DPRINT_PREFIX(DEC)               \
-    DPRINT_PREFIX(TILESLICE)         \
-    DPRINT_PREFIX(U32_ARRAY)         \
-    DPRINT_PREFIX(TYPED_U32_ARRAY)   // Same as U32_ARRAY, but with the last element indicating the type of array elements
+#define DPRINT_TYPES            \
+    DPRINT_PREFIX(CSTR)         \
+    DPRINT_PREFIX(ENDL)         \
+    DPRINT_PREFIX(SETW)         \
+    DPRINT_PREFIX(UINT8)        \
+    DPRINT_PREFIX(UINT16)       \
+    DPRINT_PREFIX(UINT32)       \
+    DPRINT_PREFIX(UINT64)       \
+    DPRINT_PREFIX(INT8)         \
+    DPRINT_PREFIX(INT16)        \
+    DPRINT_PREFIX(INT32)        \
+    DPRINT_PREFIX(INT64)        \
+    DPRINT_PREFIX(FLOAT32)      \
+    DPRINT_PREFIX(CHAR)         \
+    DPRINT_PREFIX(RAISE)        \
+    DPRINT_PREFIX(WAIT)         \
+    DPRINT_PREFIX(BFLOAT16)     \
+    DPRINT_PREFIX(SETPRECISION) \
+    DPRINT_PREFIX(FIXED)        \
+    DPRINT_PREFIX(DEFAULTFLOAT) \
+    DPRINT_PREFIX(HEX)          \
+    DPRINT_PREFIX(OCT)          \
+    DPRINT_PREFIX(DEC)          \
+    DPRINT_PREFIX(TILESLICE)    \
+    DPRINT_PREFIX(U32_ARRAY)    \
+    DPRINT_PREFIX(              \
+        TYPED_U32_ARRAY)  // Same as U32_ARRAY, but with the last element indicating the type of array elements
 
 enum DPrintTypeID : uint8_t {
 // clang-format off
@@ -84,10 +83,9 @@ enum DPrintTypeID : uint8_t {
     DPRINT_TYPES
 #undef DPRINT_PREFIX
     DPrintTypeID_Count,
-// clang-format on
+    // clang-format on
 };
 static_assert(DPrintTypeID_Count < 64, "Exceeded number of dprint types");
-
 
 // We need to set the wpos, rpos pointers to 0 in the beginning of the kernel startup
 // Because there's no mechanism (known to me) to initialize values at fixed mem locations in kernel code,
@@ -100,10 +98,6 @@ static_assert(DPrintTypeID_Count < 64, "Exceeded number of dprint types");
 constexpr uint32_t DEBUG_PRINT_SERVER_STARTING_MAGIC = 0x98989898;
 constexpr uint32_t DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0xf8f8f8f8;
 
-// In case a single argument to operator << (such as a string) is larger than the buffer size
-// (making it impossible to print) we will instead print this message.
-constexpr const char* debug_print_overflow_error_message = "*** INTERNAL DEBUG PRINT BUFFER OVERFLOW ***\n\n";
-
 #define ATTR_PACK __attribute__((packed))
 
 struct DebugPrintMemLayout {
@@ -114,7 +108,7 @@ struct DebugPrintMemLayout {
         uint16_t core_x;
         uint16_t core_y;
     } aux ATTR_PACK;
-    uint8_t data[DPRINT_BUFFER_SIZE-sizeof(Aux)];
+    uint8_t data[DPRINT_BUFFER_SIZE - sizeof(Aux)];
 
     static size_t rpos_offs() { return offsetof(DebugPrintMemLayout::Aux, rpos) + offsetof(DebugPrintMemLayout, aux); }
 
@@ -125,22 +119,24 @@ struct SliceRange {
     // This is only used with DPRINT for TileSlice object
     uint8_t h0, h1, hs, w0, w1, ws;
     // [0:32:16, 0:32:16]
-    static inline SliceRange hw0_32_16() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16 }; }
+    static inline SliceRange hw0_32_16() {
+        return SliceRange{.h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16};
+    }
     // [0:32:8, 0:32:8]
-    static inline SliceRange hw0_32_8() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8 }; }
+    static inline SliceRange hw0_32_8() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8}; }
     // [0:32:4, 0:32:4]
-    static inline SliceRange hw0_32_4() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 4, .w0 = 0, .w1 = 32, .ws = 4 }; }
+    static inline SliceRange hw0_32_4() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 4, .w0 = 0, .w1 = 32, .ws = 4}; }
     // [0, 0:32]
-    static inline SliceRange h0_w0_32() { return SliceRange{ .h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1 }; }
+    static inline SliceRange h0_w0_32() { return SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}; }
     // [0:32, 0]
-    static inline SliceRange h0_32_w0() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 }; }
+    static inline SliceRange h0_32_w0() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1}; }
     // [0:32:1, 1]
-    static inline SliceRange h0_32_w1() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 1, .w1 = 2, .ws = 1 }; }
+    static inline SliceRange h0_32_w1() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 1, .w1 = 2, .ws = 1}; }
     // [0:4:1, 0:4:1]
     static inline SliceRange hw041() { return SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1}; }
 } ATTR_PACK;
 
-template <int MAX_BYTES=0>
+template <int MAX_BYTES = 0>
 struct TileSliceHostDev {
     uint32_t cb_ptr;
     struct SliceRange slice_range;
@@ -164,8 +160,8 @@ enum dprint_tileslice_return_code_enum {
 enum TypedU32_ARRAY_Format {
     TypedU32_ARRAY_Format_INVALID,
 
-    TypedU32_ARRAY_Format_Raw,                                     // A raw uint32_t array
-    TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, // Array of numbers with format specified in subtype
+    TypedU32_ARRAY_Format_Raw,                                      // A raw uint32_t array
+    TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type,  // Array of numbers with format specified in subtype
 
     TypedU32_ARRAY_Format_COUNT,
 };
@@ -182,7 +178,7 @@ static inline constexpr uint32_t dprint_datum_size(const CommonDataFormat& forma
         case CommonDataFormat::Bfp4:
         case CommonDataFormat::Bfp4_b:
         case CommonDataFormat::Bfp8:
-        case CommonDataFormat::Bfp8_b: return 1; // Round up to 1 byte
+        case CommonDataFormat::Bfp8_b: return 1;  // Round up to 1 byte
         case CommonDataFormat::Float16:
         case CommonDataFormat::Float16_b: return 2;
         case CommonDataFormat::Float32: return 4;
@@ -192,8 +188,8 @@ static inline constexpr uint32_t dprint_datum_size(const CommonDataFormat& forma
         case CommonDataFormat::UInt16: return 2;
         case CommonDataFormat::UInt32: return 4;
         case CommonDataFormat::Int32: return 4;
-        case CommonDataFormat::Invalid: return 0; // Invalid
-        default: return 0; // Unknown
+        case CommonDataFormat::Invalid: return 0;  // Invalid
+        default: return 0;                         // Unknown
     }
 }
 
