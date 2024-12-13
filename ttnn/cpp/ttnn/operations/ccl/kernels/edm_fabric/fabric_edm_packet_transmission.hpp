@@ -18,6 +18,8 @@ static constexpr size_t LAST_MCAST_DESTINATION = 1;
 
 
 void write_unicast_blocking(uint32_t local_address, uint64_t dest_address, uint32_t size_bytes) {
+    // TODO - PERF: noc_async_write<NOC_MAX_BURST_SIZE>
+    // Don't do it yet because we want to sweep perf on buffer size
     noc_async_write(local_address, dest_address, size_bytes);
     noc_async_writes_flushed();
 }
@@ -66,7 +68,8 @@ void print_pkt_header(volatile tt::fabric::PacketHeader *const packet_start) {
     auto const& header = *packet_start;
     DPRINT << "PKT: cmd_t:" << (uint32_t) packet_start->command_type <<
         ", csnd_t:" << (uint32_t) packet_start->chip_send_type <<
-        ", nsnd_t:" << (uint32_t) packet_start->noc_send_type << "\n";
+        ", nsnd_t:" << (uint32_t) packet_start->noc_send_type <<
+        ", src_chip:" << (uint32_t) packet_start->reserved2 << "\n";
     print_pkt_hdr_routing_fields(packet_start);
     print_pkt_header_noc_fields(packet_start);
 }

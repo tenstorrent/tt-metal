@@ -110,17 +110,17 @@ struct source_tensor_addrgen<TensorMemoryLayout::INTERLEAVED, buffer_type, tt::t
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen<TensorMemoryLayout::WIDTH_SHARDED, buffer_type, page_layout> {
     static constexpr char name[] = "WidthSharded";
-    using type = tt::tt_metal::address_generators::DefaultWidthShardedAddressGenerator;
+    using type = tt::tt_metal::address_generators::DefaultVirtualCoordWidthShardedAddressGenerator;
 };
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen<TensorMemoryLayout::HEIGHT_SHARDED, buffer_type, page_layout> {
     static constexpr char name[] = "HeightSharded";
-    using type = tt::tt_metal::address_generators::DefaultHeightShardedAddressGenerator;
+    using type = tt::tt_metal::address_generators::DefaultVirtualCoordHeightShardedAddressGenerator;
 };
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen<TensorMemoryLayout::BLOCK_SHARDED, buffer_type, page_layout> {
     static constexpr char name[] = "BlockSharded";
-    using type = tt::tt_metal::address_generators::DefaultBlockShardedAddressGenerator;
+    using type = tt::tt_metal::address_generators::DefaultVirtualCoordBlockShardedAddressGenerator;
 };
 
 constexpr bool is_sharded_tensor_layout(tt::tt_metal::TensorMemoryLayout tensor_layout) {

@@ -73,6 +73,7 @@ struct AllGatherV2 {
         attrs.emplace_back("ring_index", ring_index);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
+        attrs.emplace_back("semaphore_handle", semaphore_handle);
 
         return attrs;
     }

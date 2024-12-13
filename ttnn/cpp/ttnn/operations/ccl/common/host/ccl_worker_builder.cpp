@@ -752,7 +752,8 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
     std::vector<Tensor const*> const& tensors,
     CoreRangeSet const& worker_core_range,
     DataMovementConfig datamovement_kernel_config,
-    const size_t num_command_streams) {
+    const size_t num_command_streams,
+    std::optional<chip_id_t> my_chip_id) {
     TT_FATAL(cb_indices.size() == tensors.size(), "Number of CB indices must match number of tensors");
     TT_FATAL(
         num_command_streams > 0 && num_command_streams <= 2,
@@ -792,7 +793,7 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
         TT_FATAL(
             i != tt::CB::c_in7 && i != tt::CB::c_in6,
             "Command processor kernel reserves cb in7 for use but user specified CBs included it. Please choose "
-            "another CBv besides c_in6 and c_in7.");
+            "another CB besides c_in6 and c_in7.");
     }
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
@@ -817,8 +818,7 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
     auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, worker_core_range, cb_config);
 
     {  // CT ARGS
-        std::vector<uint32_t> ct_args;
-        ct_args.push_back(reserved_packet_header_CB_index);
+        std::vector<uint32_t> ct_args = {my_chip_id.value_or(0xFFFF), reserved_packet_header_CB_index};
         for (size_t i = 0; i < tensors.size(); i++) {
             std::ranges::copy(
                 std::array<uint32_t, 4>{

@@ -175,7 +175,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
             {&input_tensor},
             sender_worker_core_range,
             tt::tt_metal::ReaderDataMovementConfig{},
-            1  // num_command_streams
+            1,  // num_command_streams
+            device->id()
         );
 
     KernelHandle worker_sender_writer_kernel_id =
@@ -185,7 +186,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_new(
             {&output_tensor},
             sender_worker_core_range,
             tt::tt_metal::WriterDataMovementConfig{},
-            1  // num_command_streams
+            1,  // num_command_streams
+            device->id()
         );
 
     const size_t forward_direction_distance_to_end_of_line =

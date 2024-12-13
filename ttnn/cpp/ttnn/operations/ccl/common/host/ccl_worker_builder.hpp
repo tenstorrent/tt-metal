@@ -99,7 +99,8 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
     std::vector<Tensor const*> const& tensors,
     CoreRangeSet const& worker_core_range,
     DataMovementConfig datamovement_kernel_config,
-    const size_t num_command_streams = 2);
+    const size_t num_command_streams = 2,
+    std::optional<chip_id_t> my_chip_id = std::nullopt);
 
 // Maybe not the right place for this - re-evaluate
 // Generates the kernel that allows async-tensor-mode CCLs to run in synchronous mode such that

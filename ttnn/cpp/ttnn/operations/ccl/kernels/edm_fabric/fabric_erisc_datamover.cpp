@@ -258,7 +258,7 @@ enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_LOCAL_AND_REMOTE = 0x3
 };
 
-static constexpr uint32_t SWITCH_INTERVAL = 40000;
+static constexpr uint32_t SWITCH_INTERVAL = 0;
 static constexpr size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
 static constexpr size_t NUM_SENDER_CHANNELS = 2;
 static constexpr size_t num_workers_ctor = 1;
@@ -752,9 +752,10 @@ void kernel_main() {
     *reinterpret_cast<volatile uint32_t*>(handshake_addr) = 0;
     auto eth_transaction_ack_word_addr = handshake_addr + sizeof(eth_channel_sync_t);
 
+    static constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = 0;
     if constexpr (is_handshake_sender) {
         // DPRINT << "EDM Starting handshake as sender\n";
-        erisc::datamover::handshake::sender_side_start(handshake_addr);
+        erisc::datamover::handshake::sender_side_start(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
     } else {
         // DPRINT << "EDM Starting handshake as receiver\n";
         erisc::datamover::handshake::receiver_side_start(handshake_addr);
@@ -923,15 +924,17 @@ void kernel_main() {
     DPRINT << "connection_live_semaphore_ptr[0]: " << (uint32_t)local_sender_connection_live_semaphore_addresses[0] << "\n";
     DPRINT << "connection_live_semaphore_ptr[1]: " << (uint32_t)local_sender_connection_live_semaphore_addresses[1] << "\n";
     DPRINT << "termination_signal_ptr: " << (uint32_t)termination_signal_ptr << "\n";
+    DPRINT << "local_sender_flow_control_semaphores[0]: " << (uint32_t)local_sender_flow_control_semaphores[0] << "\n";
+    DPRINT << "local_sender_flow_control_semaphores[1]: " << (uint32_t)local_sender_flow_control_semaphores[1] << "\n";
 
     if (has_downstream_edm_buffer_connection) {
         downstream_edm_noc_interface.open();
     }
 
     if constexpr (is_handshake_sender) {
-        erisc::datamover::handshake::sender_side_finish(handshake_addr);
+        erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
     } else {
-        erisc::datamover::handshake::receiver_side_finish(handshake_addr);
+        erisc::datamover::handshake::receiver_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
     }
     DPRINT << "EDM Core y|x " << (uint32_t)((my_y[0] << 16) | my_x[0]) << "\n";
 

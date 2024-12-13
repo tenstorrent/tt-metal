@@ -43,6 +43,26 @@ struct WorkerToNocCoordLookup {
 };
 
 
+struct VirtualCoordWormholeWorkerToNocLookup
+    : address_generators::WorkerToNocCoordLookup<VirtualCoordWormholeWorkerToNocLookup> {
+    VirtualCoordWormholeWorkerToNocLookup() : address_generators::WorkerToNocCoordLookup<VirtualCoordWormholeWorkerToNocLookup>() {}
+    noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
+        return worker_x
+        #if defined(KERNEL_BUILD)
+        + VIRTUAL_TENSIX_START_X
+        #endif
+        ;
+    }
+
+    noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) const {
+        return worker_y
+        #if defined(KERNEL_BUILD)
+        + VIRTUAL_TENSIX_START_Y
+        #endif
+        ;
+    }
+};
+
 /* A worker coord to noc coord lookup
  * It is marked "Harvested" in the type name because a non-harvested Wormhole part has a
  * fixed coordinate mapping, whereas the harvested part has potentially unique mapping per device
@@ -585,6 +605,10 @@ struct DeviceShardSpecTypeGetter<TensorMemoryLayout::BLOCK_SHARDED> {
 using DefaultWidthShardedAddressGenerator = WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec>;
 using DefaultHeightShardedAddressGenerator = HeightShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceHeightShardSpec>;
 using DefaultBlockShardedAddressGenerator = BlockShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceBlockShardSpec>;
+
+using DefaultVirtualCoordWidthShardedAddressGenerator = WidthShardedAddressGenerator<VirtualCoordWormholeWorkerToNocLookup, DeviceWidthShardSpec>;
+using DefaultVirtualCoordHeightShardedAddressGenerator = HeightShardedAddressGenerator<VirtualCoordWormholeWorkerToNocLookup, DeviceHeightShardSpec>;
+using DefaultVirtualCoordBlockShardedAddressGenerator = BlockShardedAddressGenerator<VirtualCoordWormholeWorkerToNocLookup, DeviceBlockShardSpec>;
 
 
 }  // namespace address_generators
