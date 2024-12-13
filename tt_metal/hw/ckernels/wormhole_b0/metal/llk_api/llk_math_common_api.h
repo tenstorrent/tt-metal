@@ -14,6 +14,7 @@
 #include "llk_operands.h"
 #include "llk_param_structs.h"
 #include "debug/waypoint.h"
+#include "debug/dprint.h"
 
 // Need to revisit why we even need this
 #define EPS 1.19209e-07  // std::numeric_limits::epsilon() for FP32
@@ -38,6 +39,7 @@ inline void llk_math_wait_for_dest_available() {
 
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_dest_section_done() {
+    DPRINT << "llk_math_dest_section_done, " << static_cast<uint32_t>(DST_SYNC_MODE) << ", " << static_cast<uint32_t>(is_fp32_dest_acc_en) << ENDL();
     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
