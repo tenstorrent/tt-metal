@@ -42,9 +42,118 @@ FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
     LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
     return local_cb.fifo_rd_ptr;
 }
-FORCE_INLINE void set_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
+
+FORCE_INLINE void update_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
     LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
     local_cb.fifo_rd_ptr = val;
+}
+
+FORCE_INLINE uint32_t get_local_cb_start_addr(uint32_t cb_id) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    uint32_t fifo_size = local_cb.fifo_size;
+    uint32_t fifo_limit = local_cb.fifo_limit;
+    uint32_t fifo_start_addr = fifo_limit - fifo_size;
+    return fifo_start_addr;
+}
+
+FORCE_INLINE bool is_tensor_split(uint32_t cb_id, uint32_t tensor_size_bytes) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    uint32_t fifo_rd_ptr = local_cb.fifo_rd_ptr;
+    uint32_t fifo_limit = local_cb.fifo_limit;
+    bool split = (fifo_limit - fifo_rd_ptr) < tensor_size_bytes / L1_ALIGNMENT;
+    // UNPACK(( DPRINT << "is_tensor_split " <<ENDL() ));
+    // UNPACK(( DPRINT << "fifo_rd_ptr " <<  (uint)fifo_rd_ptr <<ENDL() ));
+    UNPACK((DPRINT << "fifo_limit " << (uint)fifo_limit << ENDL()));
+    // UNPACK(( DPRINT << "tensor_size_bytes " <<  (uint)tensor_size_bytes <<ENDL() ));
+    return split;
+}
+
+FORCE_INLINE void calculate_next_block_index_and_update_rd_ptr(
+    uint32_t cb_id,
+    uint32_t num_blocks,
+    uint32_t block_size_bytes,
+    uint32_t curr_block_index,
+    uint32_t cb_start_addr,
+    uint32_t rd_ptr_start_addr,
+    bool tensor_split,
+    uint32_t* updated_block_index,
+    uint32_t* updated_rd_ptr) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    uint32_t next_block_index = curr_block_index + 1;
+    uint32_t next_fifo_rd_ptr = local_cb.fifo_rd_ptr;
+    uint32_t block_size_bytes_aligned = block_size_bytes / L1_ALIGNMENT;
+    bool reach_limit = local_cb.fifo_rd_ptr == local_cb.fifo_limit;
+    bool last_block = curr_block_index == (num_blocks - 1);
+    UNPACK((DPRINT << "tensor_split " << (uint)tensor_split << ENDL()));
+    if (tensor_split) {
+        // UNPACK(( DPRINT << "local_cb.fifo_rd_ptr " <<  (uint)local_cb.fifo_rd_ptr <<ENDL() ));
+        // UNPACK(( DPRINT << "local_cb.fifo_limit " <<  (uint)local_cb.fifo_limit <<ENDL() ));
+        // UNPACK(( DPRINT << "reach_limit " <<  (uint)reach_limit <<ENDL() ));
+        UNPACK((DPRINT << "block_index " << (uint)curr_block_index << ENDL()));
+        UNPACK((DPRINT << "last_block " << (uint)last_block << ENDL()));
+        UNPACK((DPRINT << "reach_limit " << (uint)reach_limit << ENDL()));
+        if (reach_limit) {
+            local_cb.fifo_rd_ptr = cb_start_addr;
+            if (last_block) {
+                next_block_index = 0;
+                next_fifo_rd_ptr = rd_ptr_start_addr;
+            } else {
+                next_fifo_rd_ptr = cb_start_addr + block_size_bytes_aligned;
+            }
+        } else {
+            if (last_block) {
+                // UNPACK(( DPRINT << "block_index " <<  (uint)curr_block_index <<ENDL() ));
+                // UNPACK(( DPRINT << "last_block " <<  (uint)last_block <<ENDL() ));
+                // UNPACK(( DPRINT << "rd_ptr_start_addr " <<  (rd_ptr_start_addr) <<ENDL() ));
+                next_block_index = 0;
+                next_fifo_rd_ptr = rd_ptr_start_addr;
+            } else {
+                next_fifo_rd_ptr += block_size_bytes_aligned;
+            }
+        }
+    } else {
+        // UNPACK(( DPRINT << "local_cb.fifo_rd_ptr " <<  (uint)local_cb.fifo_rd_ptr <<ENDL() ));
+        // UNPACK(( DPRINT << "local_cb.fifo_limit " <<  (uint)local_cb.fifo_limit <<ENDL() ));
+        // UNPACK(( DPRINT << "reach_limit " <<  (uint)reach_limit <<ENDL() ));
+        // UNPACK(( DPRINT << "last_block " <<  (uint)last_block <<ENDL() ));
+        if (last_block) {
+            next_block_index = 0;
+            next_fifo_rd_ptr = rd_ptr_start_addr;
+        } else {
+            next_fifo_rd_ptr += block_size_bytes_aligned;
+        }
+    }
+    *updated_block_index = next_block_index;
+    *updated_rd_ptr = next_fifo_rd_ptr;
+}
+
+FORCE_INLINE void update_rd_ptr_to_ring_index(
+    uint32_t cb_id, uint32_t block_size_bytes, uint32_t ring_index, bool tensor_split) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+
+    if (tensor_split) {
+        if ((local_cb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT) >= local_cb.fifo_limit) {
+            uint32_t fifo_size = local_cb.fifo_size;
+            uint32_t fifo_limit = local_cb.fifo_limit;
+            uint32_t fifo_start_addr = fifo_limit - fifo_size;
+            uint32_t fifo_size_skip_bytes = local_cb.fifo_rd_ptr - fifo_start_addr;
+            local_cb.fifo_rd_ptr =
+                fifo_start_addr +
+                (fifo_size_skip_bytes + ring_index * block_size_bytes / L1_ALIGNMENT) % local_cb.fifo_size;
+
+            UNPACK((DPRINT << "fifo_start_addr " << (uint)fifo_start_addr << ENDL()));
+            UNPACK((DPRINT << "fifo_size_skip_bytes " << (uint)fifo_size_skip_bytes << ENDL()));
+            UNPACK(
+                (DPRINT << "mod "
+                        << (fifo_size_skip_bytes + ring_index * block_size_bytes / L1_ALIGNMENT) % local_cb.fifo_size
+                        << ENDL()));
+
+        } else {
+            local_cb.fifo_rd_ptr = local_cb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT;
+        }
+    } else {
+        local_cb.fifo_rd_ptr = local_cb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT;
+    }
 }
 
 void MAIN {
@@ -69,6 +178,7 @@ void MAIN {
     constexpr uint32_t batch = get_compile_time_arg_val(11);                   // batch dim
     constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(12);     // number of tiles in out_block
     constexpr bool untilize_out = get_compile_time_arg_val(13);                // untilize output
+    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(14);
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
@@ -80,8 +190,9 @@ void MAIN {
 
     constexpr uint32_t mm_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
-    constexpr uint32_t remote_cb_id = 31;
+    // constexpr uint32_t remote_cb_id = 31;
     constexpr uint32_t sync_cb = 5;
+    constexpr uint32_t sync_cb2 = 6;
     // UNPACK(( LocalCBInterface& local_cb = get_local_cb_interface(in1_cb_id) ));
     // UNPACK(( local_cb.fifo_rd_ptr = 1236992 ));
     // UNPACK(( set_local_cb_rd_ptr(in1_cb_id, 1236992) ));
@@ -91,6 +202,29 @@ void MAIN {
     // UNPACK(( experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {in1_cb_id}) ));
     // UNPACK(( DPRINT << "compute " << get_local_cb_rd_ptr(in1_cb_id) <<ENDL() ));
     // for (volatile int i=0; i<100000;++i) {};
+    uint32_t in1_cb_start_addr = 0;
+    uint32_t in1_rd_ptr_start_addr = 0;
+    uint32_t curr_in1_block_index = 0;
+    bool in1_tensor_split = 0;
+    uint32_t next_in1_block_index;
+    uint32_t next_in1_rd_ptr_addr;
+
+    UNPACK((in1_cb_start_addr = get_local_cb_start_addr(in1_cb_id)));
+    UNPACK((in1_rd_ptr_start_addr = get_local_cb_rd_ptr(in1_cb_id)));
+    UNPACK((curr_in1_block_index = ring_idx));
+    UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_block_num_tiles * num_blocks * in1_tile_size)));
+
+    UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_num_tiles * in1_tile_size, ring_idx, in1_tensor_split)));
+
+    // UNPACK(( DPRINT << "in1_block_num_tiles " <<  (uint)in1_block_num_tiles <<ENDL() ));
+    // UNPACK(( DPRINT << "num_blocks " <<  (uint)num_blocks <<ENDL() ));
+    // UNPACK(( DPRINT << "in1_tile_size " <<  (uint)in1_tile_size <<ENDL() ));
+
+    UNPACK((DPRINT << "in1_cb_start_addr " << (uint)in1_cb_start_addr << ENDL()));
+    UNPACK((DPRINT << "local_cb_rd_ptr " << (uint)get_local_cb_rd_ptr(in1_cb_id) << ENDL()));
+    // UNPACK(( DPRINT << "in1_rd_ptr_start_addr " <<  (uint)in1_rd_ptr_start_addr <<ENDL() ));
+    // UNPACK(( DPRINT << "curr_in1_block_index " <<  (uint)curr_in1_block_index <<ENDL() ));
+    // UNPACK(( DPRINT << "in1_tensor_split " <<  (uint)in1_tensor_split <<ENDL() ));
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -121,7 +255,9 @@ void MAIN {
             PACK((pack_reconfig_data_format(mm_partials_cb_id)));
         }
 
-        cb_wait_front(in1_cb_id, in1_block_num_tiles * num_blocks);
+        // cb_wait_front(in1_cb_id, in1_block_num_tiles * num_blocks);
+        cb_wait_front(sync_cb2, 1);
+        cb_pop_front(sync_cb2, 1);
         // UNPACK (( DPRINT  << in1_block_num_tiles <<ENDL()));
         // UNPACK (( DPRINT  << num_blocks <<ENDL()));
         // for (uint i=0; i<(uint)(in1_block_num_tiles * num_blocks);i++){
@@ -158,9 +294,23 @@ void MAIN {
             //     }
             // }
 
+            UNPACK((DPRINT << "curr_in1_block_index " << (uint)curr_in1_block_index << ENDL()));
+            UNPACK((calculate_next_block_index_and_update_rd_ptr(
+                in1_cb_id,
+                num_blocks,
+                in1_block_num_tiles * in1_tile_size,
+                curr_in1_block_index,
+                in1_cb_start_addr,
+                in1_rd_ptr_start_addr,
+                in1_tensor_split,
+                &next_in1_block_index,
+                &next_in1_rd_ptr_addr)));
+
+            UNPACK((DPRINT << "local_cb_rd_ptr " << (uint)get_local_cb_rd_ptr(in1_cb_id) << ENDL()));
+
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                int in1_index_subblock_offset = in1_block_num_tiles * ((ring_idx + block) % num_blocks);
+                int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
                     if (enable_reload) {
@@ -281,10 +431,14 @@ void MAIN {
 #endif
 
             cb_pop_front(input0_cb_id, in0_block_num_tiles);
+            curr_in1_block_index = next_in1_block_index;
+            UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
 
-            cb_reserve_back(sync_cb, 1);
-            cb_push_back(sync_cb, 1);
+            // cb_reserve_back(sync_cb, 1);
+            // cb_push_back(sync_cb, 1);
         }
+        cb_reserve_back(sync_cb, 1);
+        cb_push_back(sync_cb, 1);
         cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
 
         if constexpr (batch > 1) {
@@ -296,6 +450,6 @@ void MAIN {
         }
     }
 
-    DPRINT << "COMPUTE DONE" << ENDL();
+    // DPRINT << "COMPUTE DONE" << ENDL();
 }
 }  // namespace NAMESPACE
