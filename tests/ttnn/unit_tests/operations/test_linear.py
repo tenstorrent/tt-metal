@@ -262,3 +262,150 @@ def test_bloom_ff2_linear(device):
     )
 
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9992
+
+
+@pytest.mark.parametrize("use_bias", [True])
+@pytest.mark.parametrize(
+    "batch_sizes, m_size, k_size, n_size",
+    (
+        (1, 1, 320, 1280),
+        (1, 1, 1280, 1280),
+        (1, 1, 2816, 1280),
+        (1, 1, 1280, 320),
+        (1, 1, 1280, 640),
+        (1, 4096, 640, 640),
+        (1, 4096, 640, 640),
+        (
+            1,
+            77,
+            2048,
+            640,
+        ),
+        (1, 4096, 640, 5120),
+        (1, 4096, 2560, 640),
+        (1, 1024, 1280, 1280),
+        (1, 1024, 1280, 1280),
+        (1, 77, 2048, 1280),
+        (1, 1024, 1280, 10240),
+        (1, 1024, 5120, 1280),
+    ),
+)
+def test_sdlx_turbo_linear_1024x1024(
+    batch_sizes,
+    m_size,
+    k_size,
+    n_size,
+    use_bias,
+    *,
+    device,
+):
+    input_shape_a = (batch_sizes, m_size, k_size)
+    input_shape_b = (k_size, n_size)
+    torch_input_tensor_a = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.float32)
+    torch_input_tensor_b = torch_random(input_shape_b, -0.1, 0.1, dtype=torch.float32)
+    if use_bias:
+        torch_bias = torch_random((n_size,), -0.1, 0.1, dtype=torch.float32)
+    else:
+        torch_bias = None
+    torch_output_tensor = torch.nn.functional.linear(
+        torch_input_tensor_a, torch_input_tensor_b.T.contiguous(), bias=torch_bias
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    if use_bias:
+        bias = ttnn.from_torch(
+            torch_bias.reshape((1, n_size)),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        bias = None
+    output_tensor = ttnn.linear(
+        input_tensor_a,
+        input_tensor_b,
+        bias=bias,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+
+
+@pytest.mark.parametrize("use_bias", [True])
+@pytest.mark.parametrize(
+    "batch_sizes, m_size, k_size, n_size",
+    (
+        (1, 1, 320, 1280),
+        (1, 1, 1280, 1280),
+        (1, 1, 2816, 1280),
+        (1, 1, 1280, 320),
+        (1, 1, 1280, 640),
+        (1, 1024, 640, 640),
+        (1, 1024, 640, 640),
+        (1, 77, 2048, 640),
+        (1, 1024, 640, 5120),
+        (1, 1024, 2560, 640),
+        (1, 256, 1280, 1280),
+        (1, 256, 1280, 1280),
+        (1, 77, 2048, 1280),
+        (1, 256, 1280, 10240),
+        (1, 256, 5120, 1280),
+    ),
+)
+def test_sdlx_turbo_linear_512x512(
+    batch_sizes,
+    m_size,
+    k_size,
+    n_size,
+    use_bias,
+    *,
+    device,
+):
+    input_shape_a = (batch_sizes, m_size, k_size)
+    input_shape_b = (k_size, n_size)
+    torch_input_tensor_a = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.float32)
+    torch_input_tensor_b = torch_random(input_shape_b, -0.1, 0.1, dtype=torch.float32)
+    if use_bias:
+        torch_bias = torch_random((n_size,), -0.1, 0.1, dtype=torch.float32)
+    else:
+        torch_bias = None
+    torch_output_tensor = torch.nn.functional.linear(
+        torch_input_tensor_a, torch_input_tensor_b.T.contiguous(), bias=torch_bias
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    if use_bias:
+        bias = ttnn.from_torch(
+            torch_bias.reshape((1, n_size)),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        bias = None
+    output_tensor = ttnn.linear(
+        input_tensor_a,
+        input_tensor_b,
+        bias=bias,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
