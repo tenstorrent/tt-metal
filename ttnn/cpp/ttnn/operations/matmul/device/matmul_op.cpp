@@ -306,8 +306,6 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
         .in0_block_w = k_tiles_per_core,
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
-        .out_block_h = batch_and_m_tiles_per_core,
-        .out_block_w = n_tiles_per_core,
         .per_core_M = batch_and_m_tiles_per_core,
         .per_core_N = n_tiles_per_core,
         .fuse_batch = true,
@@ -359,8 +357,6 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
         .in0_block_w = in0_block_w,
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
-        .out_block_h = per_core_M,
-        .out_block_w = per_core_N,
         .per_core_M = per_core_M,
         .per_core_N = per_core_N,
         .fuse_batch = fuse_batch,
@@ -705,8 +701,6 @@ MatmulProgramConfig get_matmul_program_config(
                 .in0_block_w = in0_block_w,
                 .out_subblock_h = out_subblock_h,
                 .out_subblock_w = out_subblock_w,
-                .out_block_h = per_core_M,
-                .out_block_w = per_core_N,
                 .per_core_M = per_core_M,
                 .per_core_N = per_core_N,
                 .fuse_batch = true,
@@ -1188,26 +1182,6 @@ void Matmul::validate(
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core or single row/col
             // We can uplift these variants to skip mcasting to support single core (1D) or single row/col (2D)
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                TT_FATAL(
-                    program_config.per_core_M % program_config.out_block_h == 0,
-                    "Error: incompatible values {} and {}",
-                    program_config.per_core_M,
-                    program_config.out_block_h);
-                TT_FATAL(
-                    program_config.per_core_N % program_config.out_block_w == 0,
-                    "Error: incompatible values {} and {}",
-                    program_config.per_core_N,
-                    program_config.out_block_w);
-                TT_FATAL(
-                    program_config.out_block_h % program_config.out_subblock_h == 0,
-                    "Error: incompatible values {} and {}",
-                    program_config.out_block_h,
-                    program_config.out_subblock_h);
-                TT_FATAL(
-                    program_config.out_block_w % program_config.out_subblock_w == 0,
-                    "Error: incompatible values {} and {}",
-                    program_config.out_block_w,
-                    program_config.out_subblock_w);
                 TT_FATAL(
                     !(program_config.mcast_in0 && program_config.gather_in0),
                     "Matmul1D does not support mcast_in0 and gather_in0 at the same time.");
@@ -1812,8 +1786,6 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.in0_block_w,
                     program_config.out_subblock_h,
                     program_config.out_subblock_w,
-                    program_config.out_block_h,
-                    program_config.out_block_w,
                     program_config.per_core_M,
                     program_config.per_core_N,
                     program_config.fuse_batch,
