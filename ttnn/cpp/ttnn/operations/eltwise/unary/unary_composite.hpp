@@ -12,69 +12,6 @@ namespace ttnn {
 namespace operations {
 namespace unary {
 
-/**
- * @brief Performs element-wise power operation on the input with the exponent.
- * When exponent is Tensor, the supported dtypes are float32 and bfloat16.
- * The tested range for the input is (-30,30) and for the exponent is (-20, 20).
- *
- * @param input The input tensor, i.e the base.
- * @param exponent The exponent
- * @return The result tensor
- */
-struct ExecutePower {
-    static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        uint32_t exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        uint32_t exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        float exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        uint8_t queue_id,
-        float input_a,
-        const Tensor& exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        float input_a,
-        const Tensor& exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        const Tensor& exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const Tensor& exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-};
-
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOp {
     static Tensor invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
@@ -235,7 +172,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
 
 constexpr auto rdiv = ttnn::register_operation_with_auto_launch_op<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
 
-constexpr auto pow = ttnn::register_operation_with_auto_launch_op<"ttnn::pow", operations::unary::ExecutePower>();
 constexpr auto tanhshrink = ttnn::register_operation_with_auto_launch_op<
     "ttnn::tanhshrink",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>();

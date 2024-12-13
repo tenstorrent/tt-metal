@@ -186,27 +186,24 @@ void AllGather::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<ttnn::SimpleShape> AllGather::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto shape = input_tensors[0].get_padded_shape();  // TODO: Replace with get_logical_shape()
-    shape[this->dim] *= this->ring_size;
-    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
+std::vector<ttnn::TensorSpec> AllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    auto output_shape = input_tensors[0].get_padded_shape();  // TODO: Replace with get_logical_shape()
+    output_shape[this->dim] *= this->ring_size;
+
+    const auto& input_tensor = input_tensors[0];
+    TensorSpec spec(
+        output_shape,
+        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config));
+    if (this->output_mem_config.is_sharded()) {
+        return {TensorSpec(
+            output_shape,
+            TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
+    }
+    return std::vector<TensorSpec>(input_tensors.size(), spec);
 }
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors[0];
-    auto tile = input_tensor.get_tensor_spec().tile();
-    if (this->output_mem_config.is_sharded()) {
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            input_tensor.get_dtype(),
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            this->output_mem_config,
-            tile)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, tile);
-    }
+    return operation::default_create_output_tensors(*this, input_tensors, {});
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(
