@@ -47,10 +47,8 @@ Shape SlidingWindowConfig::get_output_shape() const {
 
     uint32_t output_h;
     uint32_t output_w;
-    float eff_size_h =
-        (float)(input_hw.first + 2 * pad_hw.first - window_hw.first + (dilation_hw.first - 1) * (window_hw.first - 1));
-    float eff_size_w = (float)(input_hw.second + 2 * pad_hw.second - window_hw.second +
-                               (dilation_hw.second - 1) * (window_hw.second - 1));
+    float eff_size_h = (float)(input_hw.first + 2 * pad_hw.first - dilation_hw.first * (window_hw.first - 1) - 1);
+    float eff_size_w = (float)(input_hw.second + 2 * pad_hw.second - dilation_hw.second * (window_hw.second - 1) - 1);
     if (ceil_mode) {
         output_h = std::ceil(eff_size_h / stride_hw.first) + 1;
         output_w = std::ceil(eff_size_w / stride_hw.second) + 1;
@@ -180,6 +178,12 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
 
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
     Shape output_shape = config.get_output_shape();
+    printf(
+        "generate_op_trace_metadata output_shape: %d %d %d %d\n",
+        output_shape[0],
+        output_shape[1],
+        output_shape[2],
+        output_shape[3]);
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
 
@@ -200,12 +204,18 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
     } else {
         uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first;
         uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
+        printf("padded_input_h: %d, padded_input_w: %d\n", padded_input_h, padded_input_w);
+        printf(
+            "config.stride_hw.first: %d, config.stride_hw.second: %d\n",
+            config.stride_hw.first,
+            config.stride_hw.second);
         uint32_t i = 0;
         for (uint32_t b = 0; b < output_shape[0]; ++b) {
             for (uint32_t h = 0; h < output_shape[1]; ++h) {
                 for (uint32_t w = 0; w < output_shape[2]; ++w) {
                     uint32_t input_index = b * padded_input_h * padded_input_w +
                                            h * config.stride_hw.first * padded_input_w + w * config.stride_hw.second;
+                    printf("input_index: %d, b: %d, h: %d, w: %d\n", input_index, b, h, w);
                     op_trace_metadata[i++] = input_index;
                 }
             }
@@ -221,6 +231,7 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
     uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
     uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
     uint32_t max_index = op_trace_metadata.size();
+    printf("max_index: %d\n", max_index);
     if (config.is_transpose) {
         padded_input_w = config.get_transposed_full_input_shape()[2];
     }
@@ -228,6 +239,8 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
     uint32_t dilated_window_w =
         config.window_hw.second + (config.dilation_hw.second - 1) * (config.window_hw.second - 1);
     uint32_t halo_with_pad_len = (dilated_window_h - 1) * padded_input_w + dilated_window_w - 1;
+
+    printf("halo_with_pad_len: %d\n", halo_with_pad_len);
 
     if (config.is_bilinear) {
         halo_with_pad_len = (config.window_hw.first) * padded_input_w;
@@ -351,8 +364,18 @@ generate_halo_kernel_config_tensors(
             uint32_t dst_core_id = core_id;
             uint32_t local_idx = global_idx - input_start;
             auto [is_pad_stick, src_idx] = tensor_metadata[global_idx];
+            if (global_idx >= tensor_metadata.size()) {
+                // printf("core_id: %d, shard_boundaries size: %ld\n", core_id, shard_boundaries.size());
+                // printf("input_start: %d, input_end: %d, global_idx: %d\n", input_start, input_end, global_idx);
+            }
             auto [src_core_id, src_local_idx] = src_idx;
-            TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
+            bool check = local_idx < pad_local && src_local_idx < pad_local;
+            if (!check) {
+                // printf("tensor_metadata size: %ld, global_idx: %d\n", tensor_metadata.size(), global_idx);
+                // printf("local_idx: %d, pad_local: %d, src_local_idx: %d, pad_local: %d\n", local_idx, pad_local,
+                // src_local_idx, pad_local);
+            }
+            TT_ASSERT(check, "Index overflow");
             if (is_pad_stick) {
                 TT_ASSERT(src_local_idx == 0);
                 src_core_id = pad_local;

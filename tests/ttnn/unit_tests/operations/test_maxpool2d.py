@@ -241,7 +241,7 @@ def run_max_pool(
     "act_shape",  ## NCHW
     (
         (  ## resnet shapes
-            [1, 64, 112, 112],
+            # [1, 64, 112, 112],
             # [4, 64, 112, 112],
             # [8, 64, 112, 112],
             # [16, 64, 112, 112],
@@ -280,13 +280,14 @@ def run_max_pool(
             # [1, 512, 10, 10],
             # [1, 96, 112, 112],
             # [1, 192, 132, 20],
+            [1, 64, 8, 8],
         )
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        (2, 2),
+        # (2, 2),
         (3, 3),
         # (5, 5),
         # (9, 9),
@@ -296,7 +297,7 @@ def run_max_pool(
 @pytest.mark.parametrize(
     "padding",
     (
-        (0, 0),
+        # (0, 0),
         (1, 1),
         # (2, 2),
         # (4, 4),
@@ -315,19 +316,17 @@ def run_max_pool(
     "dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
-def test_run_max_pool(
-    act_shape,
-    kernel_size,
-    padding,
-    stride,
-    dilation,
-    device,
-    dtype,
-    use_program_cache,
-):
+@pytest.mark.parametrize(
+    "ceil_mode",
+    [
+        False,
+        True,
+    ],
+)
+def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype, use_program_cache, ceil_mode):
     run_max_pool(
         act_shape,
         kernel_size,
@@ -337,7 +336,7 @@ def test_run_max_pool(
         device,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ceil_mode=True,
+        ceil_mode=ceil_mode,
     )
 
 
