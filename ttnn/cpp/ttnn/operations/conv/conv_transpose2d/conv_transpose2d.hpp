@@ -5,7 +5,6 @@
 #pragma once
 #include <cstdint>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 

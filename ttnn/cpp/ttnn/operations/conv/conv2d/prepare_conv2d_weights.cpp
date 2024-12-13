@@ -2,16 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
-
-#include "tt_metal/common/work_split.hpp"
-
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "prepare_conv2d_weights.hpp"
+#include "conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include <sys/types.h>
+#include <cstdint>
 
 using namespace tt;
 namespace ttnn {
@@ -60,7 +55,7 @@ void validate_weights_format(const std::string& weights_format) {
 }
 
 template <typename T>
-static OptimizedConvBlockConfig get_opt_block_config(
+OptimizedConvBlockConfig get_opt_block_config(
     bool mm_conv,
     uint32_t in_channels,
     uint32_t out_channels,
