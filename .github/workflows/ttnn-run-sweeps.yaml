@@ -107,7 +107,9 @@ on:
           - eltwise.unary.hardshrink.hardshrink
           - eltwise.unary.softmax.softmax
           - eltwise.unary.identity.identity
+          - eltwise.unary.identity.identity_sharded
           - eltwise.unary.neg.neg
+          - eltwise.unary.neg.neg_sharded
           - eltwise.unary.sinh.sinh
           - eltwise.unary.asinh.asinh
           - eltwise.unary.cosh.cosh
@@ -115,6 +117,7 @@ on:
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
           - eltwise.unary.selu.selu
+          - eltwise.unary.selu.selu_sharded
           - eltwise.unary.softshrink.softshrink_sharded
           - eltwise.unary_backward.fill_zero_bw
           - eltwise.unary_backward.log_sigmoid_bw
