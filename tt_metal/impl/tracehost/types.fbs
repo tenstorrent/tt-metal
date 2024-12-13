@@ -1,0 +1,211 @@
+namespace tt.tt_metal.flatbuffer;
+
+enum Arch: uint {
+  Grayskull = 0,
+  Wormhole_b0 = 1,
+  Blackhole = 2,
+}
+
+enum BufferType: ushort {
+  DRAM = 0,
+  L1 = 1,
+  SystemMemory = 2,
+  L1Small = 3,
+  Trace = 4,
+}
+
+enum TensorMemoryLayout: ushort {
+  None = 0,
+  Interleaved = 1,
+  SingleBank = 2,
+  HeightSharded = 3,
+  WidthSharded = 4,
+  BlockSharded = 5,
+}
+
+table InterleavedBufferConfig {
+    device_id: int; // Device *device;
+    size: int; // Size in bytes
+    page_size: int; // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    buffer_type: BufferType;
+    buffer_layout: TensorMemoryLayout;
+}
+
+
+// Core Types //////////////////
+
+table CoreCoord {
+    x: int;
+    y: int;
+}
+
+table CoreRange {
+    start: CoreCoord;
+    end: CoreCoord;
+}
+
+table CoreRangeSet {
+    ranges: [CoreRange];
+}
+
+union CoreSpec {
+  CoreCoord,
+  CoreRange,
+  CoreRangeSet
+}
+
+enum DataMovementProcessor : byte {
+    RISCV_0,
+    RISCV_1
+}
+
+enum NOC : byte {
+    NOC_0,
+    NOC_1
+}
+
+enum NOC_MODE : byte {
+    DM_DEDICATED_NOC,
+    DM_DYNAMIC_NOC
+}
+
+enum Eth : ubyte {
+    SENDER = 0,
+    RECEIVER = 1,
+    IDLE = 2
+}
+
+enum MathFidelity : ubyte {
+    LoFi = 0,
+    HiFi2 = 2,
+    HiFi3 = 3,
+    HiFi4 = 4,
+    Invalid = 255
+}
+
+enum UnpackToDestMode : byte {
+    Default,
+    UnpackToDestFp32
+}
+
+table DefineEntry {
+    key: string;
+    value: string;
+}
+
+// Kernel Configurations //////////////////
+
+table DataMovementConfig {
+    processor: DataMovementProcessor;
+    noc: NOC;
+    noc_mode: NOC_MODE;
+    compile_args: [uint32]; // Array of compile arguments
+    defines: [DefineEntry]; // Key-value pair map for defines
+}
+
+table ComputeConfig {
+    math_fidelity: MathFidelity;
+    fp32_dest_acc_en: bool;
+    dst_full_sync_en: bool;
+    unpack_to_dest_mode: [UnpackToDestMode]; // Array of unpack modes
+    bfp8_pack_precise: bool;
+    math_approx_mode: bool;
+    compile_args: [uint32]; // Array of compile arguments
+    defines: [DefineEntry]; // Key-value pair map for defines
+}
+
+table EthernetConfig {
+    eth_mode: Eth;
+    noc: NOC;
+    processor: DataMovementProcessor;
+    compile_args: [uint32]; // Array of compile arguments
+    defines: [DefineEntry]; // Key-value pair map for defines
+}
+
+// Union to include multiple configurations
+union KernelConfig {
+    DataMovementConfig,
+    ComputeConfig,
+    EthernetConfig
+}
+
+
+table Tile {
+  tile_shape: [uint32]; // Shape of the tile (e.g., height, width)
+  face_shape: [uint32]; // Shape of the face
+  tile_hw: uint32;      // Tile hardware size
+  face_hw: uint32;      // Face hardware size
+  num_faces: uint32;    // Number of faces
+  partial_face: uint32; // Indicates if this is a partial face
+  narrow_tile: uint32;  // Indicates if this is a narrow tile
+  transpose_within_face: bool; // Transpose within each face
+  transpose_of_faces: bool;    // Transpose face order
+}
+
+struct CBConfigPageSize {
+  index: uint32;  // The index in the array
+  size: uint32;   // The page-size value for this index
+}
+
+enum DataFormat : uint8 {
+  Float32 = 0,
+  Float16 = 1,
+  Bfp8 = 2,
+  Bfp4 = 3,
+  Bfp2 = 11,
+  Float16_b = 5,
+  Bfp8_b = 6,
+  Bfp4_b = 7,
+  Bfp2_b = 15,
+  Lf8 = 10,
+  Fp8_e4m3 = 26, // 0x1A in decimal
+  Int8 = 14,
+  Tf32 = 4,
+  UInt8 = 30,
+  UInt16 = 9,
+  Int32 = 8,
+  UInt32 = 24,
+  RawUInt8 = 240, // 0xf0 in decimal
+  RawUInt16 = 241, // 0xf1 in decimal
+  RawUInt32 = 242, // 0xf2 in decimal
+  Invalid = 255
+}
+
+struct CBConfigDataFormat {
+  index: uint32;  // The index in the array
+  format: DataFormat; // The data format for this index
+}
+
+table CircularBufferConfig {
+  total_size: uint32;
+  globally_allocated_address: uint32; // Optional behavior can be handled with a default value (or union)
+  data_formats: [CBConfigDataFormat]; // Optional arrays are naturally nullable in FlatBuffers
+  page_sizes: [CBConfigPageSize]; // Mimic optional array in C++ by using KV map.
+  tiles: [Tile];
+  shadow_buf_global_id: uint32;
+  buffer_indices: [uint8];
+  local_buffer_indices: [uint8];
+  remote_buffer_indices: [uint8];
+  dynamic_cb: bool;
+  max_size: uint32;
+  buffer_size: uint32;
+}
+
+// Runtime Args
+
+table UInt32Value {
+    value: uint32;
+}
+
+table BufferGlobalId {
+    id: uint32;
+}
+
+union RuntimeArgValue {
+    UInt32Value,
+    BufferGlobalId,
+}
+
+table RuntimeArg {
+    value: RuntimeArgValue;
+}
