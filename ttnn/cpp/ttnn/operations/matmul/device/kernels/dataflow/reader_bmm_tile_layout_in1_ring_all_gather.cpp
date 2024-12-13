@@ -111,7 +111,7 @@ void kernel_main() {
     uint32_t fifo_start_address = get_fifo_start_address(cb_id_in1);
     uint32_t fifo_start_size = get_fifo_start_size(cb_id_in1);
 
-    // DPRINT << "fifo_start_address " << fifo_start_address << ENDL();
+    // DPRINT << "shard_size_in_tiles " << shard_size_in_tiles << ENDL();
     // DPRINT << "fifo_start_size " << fifo_start_size << ENDL();
 
     // uint32_t fifo_remote_start_address = get_remote_fifo_start_address(remote_cb_id);
@@ -127,6 +127,7 @@ void kernel_main() {
     // noc_index); experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {cb_id_in1});
 
     constexpr uint32_t sync_cb = 5;
+    constexpr uint32_t sync_cb2 = 6;
     // cb_reserve_back(sync_cb, 1);
     // cb_push_back(sync_cb, 1);
 
@@ -135,13 +136,15 @@ void kernel_main() {
 #endif
     // DPRINT << "in1 num_blocks " << num_blocks << ENDL();
     for (uint32_t b = 0; b < batch; ++b) {
-        cb_reserve_back(cb_id_in1, shard_size_in_tiles);
+        cb_reserve_back(sync_cb2, 1);
 #ifdef ENABLE_GLOBAL_CB
         experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
 #endif
         // DPRINT << get_remote_cb_rd_ptr(remote_cb_id) << ENDL();
         LocalCBInterface& local_cb = get_local_cb_interface(cb_id_in1);
-        // DPRINT << "reader " << get_tile_size(cb_id_in1) << ENDL();
+
+        // DPRINT << "fifo_limit " << local_cb.fifo_limit << ENDL();
+        // DPRINT << "fifo_wr_ptr " << local_cb.fifo_wr_ptr << ENDL();
         // DPRINT << "reader " << in1_block_num_tiles << ENDL();
         // DPRINT << "reader " << local_cb.fifo_size << ENDL();
         // DPRINT << "reader " << local_cb.fifo_limit << ENDL();
@@ -163,18 +166,23 @@ void kernel_main() {
 
         // DPRINT << "get_local_cb_rd_ptr " << get_local_cb_rd_ptr(cb_id_in1) << ENDL();
 
-        cb_push_back(cb_id_in1, shard_size_in_tiles);
+        cb_push_back(sync_cb2, 1);
+
+        // for (volatile int i=0;i<10000;++i) {};
 
 #ifdef ENABLE_GLOBAL_CB
         // cb_reserve_back(cb_id_in1, in1_num_blocks_wait);
         // in1_num_blocks_wait += in1_block_num_tiles;
-        for (uint32_t block = 0; block < num_blocks; block++) {
-            // cb_reserve_back(cb_id_in1, in1_num_blocks_wait);
-            // in1_num_blocks_wait += in1_block_num_tiles;
-            cb_wait_front(sync_cb, 1);
-            experimental::remote_cb_pop_front(remote_cb_id, 1);
-            cb_pop_front(sync_cb, 1);
-        }
+        // for (uint32_t block = 0; block < num_blocks; block++) {
+        //     // cb_reserve_back(cb_id_in1, in1_num_blocks_wait);
+        //     // in1_num_blocks_wait += in1_block_num_tiles;
+        //     cb_wait_front(sync_cb, 1);
+        //     // experimental::remote_cb_pop_front(remote_cb_id, 1);
+        //     cb_pop_front(sync_cb, 1);
+        // }
+        cb_wait_front(sync_cb, 1);
+        experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
+        cb_pop_front(sync_cb, 1);
 
 #endif
 
@@ -188,5 +196,5 @@ void kernel_main() {
     // experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {cb_id_in1});
     // DPRINT << "get_local_cb_rd_ptr " << get_local_cb_rd_ptr(cb_id_in1) << ENDL();
 
-    DPRINT << "in1 DONE" << ENDL();
+    // DPRINT << "in1 DONE" << ENDL();
 }
