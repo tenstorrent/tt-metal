@@ -4,6 +4,8 @@
 
 #include "sdpa_decode.hpp"
 
+#include <utility>
+
 #include "device/sdpa_decode_op.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
@@ -107,7 +109,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
         cur_pos_tensor,
         scale,
         memory_config,
-        program_config,
+        std::move(program_config),
         compute_kernel_config);
 }
 
@@ -188,7 +190,7 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
         cur_pos_tensor,
         scale,
         memory_config,
-        program_config,
+        std::move(program_config),
         compute_kernel_config);
 }
 

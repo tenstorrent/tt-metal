@@ -35,7 +35,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
                ScaledDotProductAttention{
                    .scale = scale,
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = program_config,
+                   .program_config = std::move(program_config),
                    .is_causal = is_causal,
                    .chunk_start_idx = std::nullopt,
                    .compute_kernel_config = kernel_config_val},
@@ -65,7 +65,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
         is_causal,
         scale,
         memory_config,
-        program_config,
+        std::move(program_config),
         compute_kernel_config);
 }
 
@@ -90,7 +90,7 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
                ScaledDotProductAttention{
                    .scale = scale,
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = program_config,
+                   .program_config = std::move(program_config),
                    .is_causal = true,  // Always causal for chunked version
                    .chunk_start_idx = chunk_start_idx,
                    .compute_kernel_config = kernel_config_val},
@@ -120,7 +120,7 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
         chunk_start_idx,
         scale,
         memory_config,
-        program_config,
+        std::move(program_config),
         compute_kernel_config);
 }
 
