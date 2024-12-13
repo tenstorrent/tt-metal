@@ -299,8 +299,7 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
             auto entry = factors.find(multiple);
             bool add = true;
             if (entry != factors.end()) {
-                uint32_t existing_m = std::get<0>(entry->second);
-                uint32_t existing_n = std::get<1>(entry->second);
+                auto [existing_m, existing_n] = entry->second;
                 float existing_ratio =
                     (float)std::max(existing_m, existing_n) / (float)std::min(existing_m, existing_n);
                 if (existing_ratio < ratio) {
