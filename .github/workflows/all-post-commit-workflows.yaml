@@ -191,6 +191,10 @@ jobs:
     needs: [build-artifact, build-docker-image-2204]
     uses: ./.github/workflows/build.yaml
     secrets: inherit
+  t3000-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow
   # build-and-test-measure-perf:
