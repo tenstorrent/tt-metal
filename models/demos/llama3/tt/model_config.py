@@ -97,6 +97,7 @@ class TtModelArgs:
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
         self.tile_size = 32
+        self.is_70b = False
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
