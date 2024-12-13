@@ -229,11 +229,11 @@ def test_pad_rm_sharded_stickwise(
     assert_with_pcc(torch_padded_tensor, torch_output_tensor, 0.99)
 
 
-@pytest.mark.parametrize("n", [1])
-@pytest.mark.parametrize("c", [1])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [64])
-@pytest.mark.parametrize("padding,torch_padding", [(((0, 0), (0, 0), (0, 0), (0, 0)), (0, 0, 0, 0, 0, 0, 0, 0))])
+@pytest.mark.parametrize("n", [20])
+@pytest.mark.parametrize("c", [3])
+@pytest.mark.parametrize("h", [224])
+@pytest.mark.parametrize("w", [256])
+@pytest.mark.parametrize("padding,torch_padding", [(((1, 1), (2, 32), (0, 0)), (0, 0, 2, 32, 1, 1))])
 @pytest.mark.parametrize("value", [8])
 @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR])
 def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, use_program_cache):
