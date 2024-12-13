@@ -522,6 +522,30 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
     return cores;
 }
 
+// Noop cores are appended at the end with no guarantees on ordering
+std::vector<CoreCoord> grid_to_cores_with_noop(
+    const CoreRangeSet& used_cores, const CoreRangeSet& all_cores, const bool row_wise) {
+    ZoneScoped;
+    TT_ASSERT(all_cores.contains(used_cores));
+    // Most likely a lot of optimizations to do here
+    // Implemented this way for simplicity for now
+    std::vector<CoreCoord> cores;
+    cores.reserve(all_cores.num_cores());
+    cores = corerange_to_cores(used_cores, std::nullopt, row_wise);
+    std::vector<CoreCoord> all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_wise);
+    auto sorted_used_cores = cores;
+    std::sort(sorted_used_cores.begin(), sorted_used_cores.end());
+    std::sort(all_cores_vec.begin(), all_cores_vec.end());
+    std::set_difference(
+        all_cores_vec.begin(),
+        all_cores_vec.end(),
+        sorted_used_cores.begin(),
+        sorted_used_cores.end(),
+        std::back_inserter(cores));
+
+    return cores;
+}
+
 std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet& crs, std::optional<uint32_t> max_cores, bool row_wise) {
     std::vector<CoreCoord> all_cores;
     auto num_cores = crs.num_cores();
