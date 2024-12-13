@@ -235,15 +235,15 @@ def run_llama3_demo(
 
     if llama_model_name == "3.2-1B":
         assert (
-            max_seq_len <= 64 * 1024
-        ), "Llama3.2-1B only supports a max context length of 64k tokens across all architectures"
+            max_seq_len <= 128 * 1024
+        ), "Llama3.2-1B supports the official max context length of 128k tokens across all architectures"
     if llama_model_name == "3.2-3B":
         if tt_device_name == "N150":
             assert max_seq_len <= 32 * 1024, "N150 only supports a max context length of 32k tokens for Llama3.2-3B"
-        elif tt_device_name == "N300":
-            assert max_seq_len <= 64 * 1024, "N300 only supports a max context length of 64k tokens for Llama3.2-3B"
-        else:  # T3K and TG
-            assert max_seq_len <= 64 * 1024, "T3K only supports a max context length of 64k tokens for Llama3.2-3B"
+        else:  # N300, T3K and TG
+            assert (
+                max_seq_len <= 128 * 1024
+            ), "N300, T3K and TG support the official max context length of 128k tokens for Llama3.2-3B"
     if llama_model_name in ["3.1-8B", "3.2-11B"]:
         if tt_device_name == "N150":
             assert (
@@ -259,7 +259,12 @@ def run_llama3_demo(
             ), "T3K only supports a max context length of 128k tokens for Llama3.1-8B and Llama3.2-11B"
     if llama_model_name == "3.1-70B":
         assert tt_device_name in ["T3K", "TG"], "Llama3.1-70B is only supported on T3K or TG"
-        assert max_seq_len <= 64 * 1024, "T3K only supports a max context length of 64k tokens for Llama3.1-70B"
+        if tt_device_name == "T3K":
+            assert max_seq_len <= 64 * 1024, "T3K only supports a max context length of 64k tokens for Llama3.1-70B"
+        else:  # TG
+            assert (
+                max_seq_len <= 128 * 1024
+            ), "TG supports the official max context length of 128k tokens for Llama3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
