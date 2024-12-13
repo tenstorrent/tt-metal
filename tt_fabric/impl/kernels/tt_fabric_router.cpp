@@ -67,6 +67,7 @@ void kernel_main() {
     }
 
     uint32_t my_chip_xy = (*(volatile uint32_t*)0x1108);
+    uint64_t start_timestamp = get_timestamp();
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
     uint32_t loop_count = 0;
@@ -144,6 +145,9 @@ void kernel_main() {
 
         fvc_producer_state.update_remote_rdptr_sent();
         if (fvc_producer_state.get_curr_packet_valid()) {
+            if (total_words_procesed == 0) {
+                start_timestamp = get_timestamp();
+            }
             total_words_procesed += fvc_producer_state.process_inbound_packet();
             loop_count = 0;
         } else if (fvc_producer_state.packet_corrupted) {
@@ -165,12 +169,12 @@ void kernel_main() {
             switch_counter = SWITCH_THRESHOLD;
         }
     }
+    uint64_t cycles_elapsed = fvc_producer_state.packet_timestamp - start_timestamp;
+
     DPRINT << "Router words processed " << total_words_procesed << ENDL();
-    uint64_t start_timestamp = get_timestamp();
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
 
-    uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
 
     set_64b_result(kernel_status, cycles_elapsed, PQ_TEST_CYCLES_INDEX);

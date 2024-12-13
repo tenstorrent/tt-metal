@@ -239,19 +239,24 @@ int main(int argc, char** argv) {
         }
 
         std::map<chip_id_t, tt_metal::Device*> device_map;
-        // for (uint32_t i = 4; i < num_devices; i++) {
         device_map[7] = tt_metal::CreateDevice(7);
+        device_map[8] = tt_metal::CreateDevice(8);
+        device_map[9] = tt_metal::CreateDevice(9);
         device_map[10] = tt_metal::CreateDevice(10);
         device_map[11] = tt_metal::CreateDevice(11);
+        device_map[12] = tt_metal::CreateDevice(12);
+        device_map[13] = tt_metal::CreateDevice(13);
         device_map[4] = tt_metal::CreateDevice(4);
 
         std::map<chip_id_t, tt_metal::Program> program_map;
         program_map[4] = tt_metal::CreateProgram();
         program_map[7] = tt_metal::CreateProgram();
+        program_map[8] = tt_metal::CreateProgram();
+        program_map[9] = tt_metal::CreateProgram();
         program_map[10] = tt_metal::CreateProgram();
         program_map[11] = tt_metal::CreateProgram();
-
-        //}
+        program_map[12] = tt_metal::CreateProgram();
+        program_map[13] = tt_metal::CreateProgram();
 
         auto const& device_active_eth_cores = device_map[test_device_id_l]->get_active_ethernet_cores();
 
@@ -260,10 +265,9 @@ int main(int argc, char** argv) {
                 LogTest,
                 "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
                 test_device_id_l);
-            tt_metal::CloseDevice(device_map[4]);
-            tt_metal::CloseDevice(device_map[7]);
-            tt_metal::CloseDevice(device_map[10]);
-            tt_metal::CloseDevice(device_map[11]);
+            for (auto dev : device_map) {
+                tt_metal::CloseDevice(dev.second);
+            }
 
             throw std::runtime_error("Test cannot run on specified device.");
         }
@@ -298,8 +302,8 @@ int main(int argc, char** argv) {
                         router_phys_core = device.second->ethernet_core_from_logical_core(router_logical_core);
                         router_core_found = true;
                     }
-                    auto router_logical_cores = device.second->get_ethernet_sockets(neighbor);
-                    for (auto router_logical_core : router_logical_cores) {
+                    auto connected_logical_cores = device.second->get_ethernet_sockets(neighbor);
+                    for (auto logical_core : connected_logical_cores) {
                         std::vector<uint32_t> router_compile_args = {
                             (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
                             tunneler_test_results_addr,        // 1: test_results_addr
@@ -310,7 +314,7 @@ int main(int argc, char** argv) {
                         auto router_kernel = tt_metal::CreateKernel(
                             program_map[device.first],
                             "tt_fabric/impl/kernels/tt_fabric_router.cpp",
-                            router_logical_core,
+                            logical_core,
                             tt_metal::EthernetConfig{
                                 .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = defines});
                         log_info(
@@ -318,7 +322,7 @@ int main(int argc, char** argv) {
                             "Device {} router added for Neighbor Device {} on physical core {}",
                             device.first,
                             neighbor,
-                            device.second->ethernet_core_from_logical_core(router_logical_core));
+                            device.second->ethernet_core_from_logical_core(logical_core));
                     }
                 } else {
                     log_info(

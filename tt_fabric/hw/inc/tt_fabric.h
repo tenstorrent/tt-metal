@@ -24,6 +24,12 @@ extern volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table;
 uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
 bool tt_fabric_is_header_valid(packet_header_t* p_header);
 
+inline uint64_t get_timestamp() {
+    uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    return (((uint64_t)timestamp_high) << 32) | timestamp_low;
+}
+
 typedef struct fvc_consumer_state {
     volatile chan_payload_ptr remote_rdptr;
     uint32_t remote_ptr_update_addr;
@@ -275,6 +281,7 @@ typedef struct fvc_producer_state {
     uint32_t words_to_forward;
     bool curr_packet_valid;
     bool packet_corrupted;
+    uint64_t packet_timestamp;
     uint64_t packet_dest;
     packet_header_t current_packet_header;
 
@@ -547,6 +554,7 @@ typedef struct fvc_producer_state {
                     } else {
                         packet_in_progress = 0;
                         curr_packet_valid = false;
+                        packet_timestamp = get_timestamp();
                     }
                 }
             } else if (current_packet_header.routing.flags == INLINE_FORWARD) {
@@ -568,6 +576,7 @@ typedef struct fvc_producer_state {
                 fvc_pull_rdptr = fvc_out_rdptr;
                 update_remote_rdptr_cleared<fvc_mode>();
                 curr_packet_valid = false;
+                packet_timestamp = get_timestamp();
             }
         } else {
             words_processed = pull_data_from_fvc_buffer<fvc_mode>();
@@ -591,12 +600,6 @@ typedef struct router_state {
     uint32_t padding_out[3];
     uint32_t scratch[4];
 } router_state_t;
-
-inline uint64_t get_timestamp() {
-    uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
-    return (((uint64_t)timestamp_high) << 32) | timestamp_low;
-}
 
 inline uint64_t get_timestamp_32b() { return reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L); }
 
