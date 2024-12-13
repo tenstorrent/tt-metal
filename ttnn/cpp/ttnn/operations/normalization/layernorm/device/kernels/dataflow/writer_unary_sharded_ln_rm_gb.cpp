@@ -59,8 +59,8 @@ void kernel_main() {
         const InterleavedAddrGen<gamma_is_dram> gamma = {.bank_base_address = gamma_addr, .page_size = page_size};
 #endif
 
-        uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
-        uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
+        constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
+        constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
         uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
         cb_reserve_back(cb_gamma, block_w);
