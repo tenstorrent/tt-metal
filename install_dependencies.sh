@@ -122,7 +122,7 @@ install()
         prep_ubuntu
 
         echo "Installing packages..."
-        DEBIAN_FRONTEND=$DEBIAN_FRONTEND apt-get install -y --no-install-recommends "${UB_LIST[@]}"
+        apt-get install -y --no-install-recommends "${UB_LIST[@]}"
     fi
 }
 
