@@ -68,7 +68,9 @@ inline __attribute__((always_inline)) void notify_brisc_and_wait() {
 #ifdef NCRISC_HAS_IRAM
     notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
 #else
-    while (*ncrisc_run != RUN_SYNC_MSG_GO);
+    while (*ncrisc_run != RUN_SYNC_MSG_GO) {
+        invalidate_l1_cache();
+    }
 #endif
 }
 
