@@ -344,6 +344,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             self.configuration.max_seq_len,
             self.mesh_device,
             seq_len=S,
+            rope_theta=self.configuration.rope_theta,
             scale_factor=self.configuration.rope_scaling_factor,
         )
 

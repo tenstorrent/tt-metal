@@ -44,12 +44,33 @@ def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None
     return begin_of_text + system_prompt + user_prompt + assistant_reply
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float = 8):
+def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
+    """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
+    chat = []
+    if system_prompt_text:
+        chat.append({"role": "system", "content": system_prompt_text})
+    if prompt_text:
+        chat.append({"role": "user", "content": prompt_text})
+    return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
+
+
+def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
+    """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
+    chat = []
+    if system_prompt_text:
+        chat.append({"role": "system", "content": system_prompt_text})
+    if prompt_text:
+        chat.append({"role": "user", "content": prompt_text})
+    return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
+
+
+def apply_scaling(freqs: torch.Tensor, scale_factor: float):
     # Llama-3.x specific scaling
     # Values obtained from grid search
     low_freq_factor = 1
     high_freq_factor = 4
     old_context_len = 8192  # original llama3 length
+    assert False, "FIXME: need to take this from the model config"
 
     low_freq_wavelen = old_context_len / low_freq_factor
     high_freq_wavelen = old_context_len / high_freq_factor
@@ -67,7 +88,7 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float = 8):
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-def precompute_freqs(dim: int, end: int, theta: float = 500000.0, use_scaled: bool = True, scale_factor: float = 8):
+def precompute_freqs(dim: int, end: int, theta, scale_factor):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -81,7 +102,7 @@ def precompute_freqs(dim: int, end: int, theta: float = 500000.0, use_scaled: bo
     """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
-    if use_scaled:
+    if scale_factor is not None:
         freqs = apply_scaling(freqs, scale_factor)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
@@ -112,8 +133,8 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(head_dim, max_seq_len, mesh_device, seq_len, scale_factor, start_pos=0):
-    cos, sin = precompute_freqs(head_dim, max_seq_len * 2, scale_factor=scale_factor)
+def get_prefill_rot_mat(head_dim, max_seq_len, mesh_device, seq_len, theta, scale_factor, start_pos=0):
+    cos, sin = precompute_freqs(head_dim, max_seq_len * 2, theta, scale_factor=scale_factor)
     cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
     assert cos_gathered.size() == (1, 1, seq_len, head_dim)
     assert sin_gathered.size() == (1, 1, seq_len, head_dim)
@@ -376,3 +397,37 @@ def get_max_prefill_chunk_size(seq_len, max_prefill_seq_len):
             return chunk_size
 
     raise ValueError("No valid chunk size found")
+
+
+def nearest_multiple(x, multiple_of):
+    return math.ceil(x / multiple_of) * multiple_of
+
+
+def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
+    """
+    Pads the specified dimension of the input tensor with zeros
+
+    :param x: Input PyTorch Tensor
+    :param dim: The dimension to pad
+    :param size: The size to pad to
+    :return: Padded PyTorch Tensor
+    """
+    assert isinstance(x, torch.Tensor), "Input must be a torch.Tensor"
+    assert -x.dim() <= dim < x.dim(), f"Dimension out of range (expected between {-x.dim()} and {x.dim()-1})"
+    dim = x.dim() + dim if dim < 0 else dim
+
+    current_size = x.size(dim)
+    pad_size = size - current_size
+
+    if pad_size == 0:
+        return x  # No padding needed
+
+    # Prepare the padding configuration for F.pad
+    # F.pad expects padding in the form (pad_last_dim_left, pad_last_dim_right, ..., pad_dim_left, pad_dim_right)
+    # We only pad on the "end" side of the specified dimension
+    pad = [0] * (2 * x.dim())  # Initialize padding for all dimensions
+    pad_index = 2 * (x.dim() - dim - 1)
+    pad[pad_index + 1] = pad_size  # Pad on the "right" side of the specified dimension
+
+    padded_x = torch.nn.functional.pad(x, pad, mode="constant", value=0)
+    return padded_x

@@ -49,10 +49,12 @@ class RMSNorm(LightweightModule):
         eps: float = 1e-05,
         sharded_program_config=None,
         sharded_output_config=None,
+        ccl_topology=ttnn.Topology.Ring,
     ):
         super().__init__()
         self.eps = eps
         self.is_distributed = is_distributed
+        self.ccl_topology = ccl_topology
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -144,6 +146,7 @@ class RMSNorm(LightweightModule):
             tt_stats,
             dim=3,
             num_links=1,
+            topology=self.ccl_topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # Run distributed rmsnorm part 2

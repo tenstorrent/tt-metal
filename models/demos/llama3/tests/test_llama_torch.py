@@ -4,10 +4,7 @@
 import torch
 
 # import ttnn
-from models.demos.llama3.tt.llama_common import HostEmbedding
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 from loguru import logger
 
@@ -18,16 +15,16 @@ def test_llama_torch_inference(ensure_gc):
 
     model_args = TtModelArgs(mesh_device=None)
     state_dict = model_args.load_state_dict()
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.tokenizer
 
     prompts = ["1 2 3 4 "] * model_args.max_batch_size
-    encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+    encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
-    reference_model = Transformer(model_args)
+    reference_model = model_args.reference_transformer()
     reference_model.load_state_dict(state_dict)
 
     # Embedding on host
-    embd = HostEmbedding(model_args)
+    embd = model_args.reference_embedding()
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
@@ -66,4 +63,4 @@ def test_llama_torch_inference(ensure_gc):
             all_outputs_ref.append(pt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of ref outputs
 
         # TODO print all 32 users
-        logger.info("[User 0] Ref generation: ", "".join(tokenizer.decode(all_outputs_ref)))
+        logger.info("[User 0] Ref generation: '" + "".join(tokenizer.decode(all_outputs_ref)) + "'")

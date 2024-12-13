@@ -11,11 +11,6 @@ from models.demos.llama3.tt.llama_common import (
 )
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
 from models.utility_functions import skip_for_grayskull
 
 
@@ -43,7 +38,7 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = TransformerBlock(layer_id=0, args=model_args)
+    reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0

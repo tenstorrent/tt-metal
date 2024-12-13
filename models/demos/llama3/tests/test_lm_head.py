@@ -9,7 +9,6 @@ import os
 import ttnn
 from models.demos.llama3.tt.lm_head import LMHead
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import ColumnParallelLinear
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -52,7 +51,7 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
     }
 
     model_args.WEIGHTS_DTYPE = dtype
-    reference_model = ColumnParallelLinear(model_args.dim, model_args.vocab_size, bias=False, init_method=lambda x: x)
+    reference_model = model_args.reference_lm_head()
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = LMHead(
