@@ -96,7 +96,14 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
     "batch_size",
     (1,),
 )
-def test_tt_model_accuracy(
+@pytest.mark.parametrize(
+    "use_reference_file",
+    [
+        pytest.param(True, id="reference_file"),
+        pytest.param(False, id="reference_text"),
+    ],
+)
+def test_tt_model_acc(
     prefill_len,
     decode_len,
     max_seq_len,
@@ -105,10 +112,15 @@ def test_tt_model_accuracy(
     page_params,
     optimizations,
     mesh_device,
+    use_reference_file,
     use_program_cache,
     reset_seeds,
     ensure_gc,
+    is_ci_env,
 ):
+    if is_ci_env and not use_reference_file:
+        pytest.skip("CI test only runs vs reference file")
+
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)
@@ -127,14 +139,27 @@ def test_tt_model_accuracy(
 
     # Load the reference data
     model_size = model_args.model_name.split("-")[1].lower()  # e.g., "1b", "3b", "8b", "70b"
-    reference_data_file = f"models/demos/llama3/tests/reference_outputs/{model_size}.refpt"
-    logger.info(f"Loading reference data from {reference_data_file}")
-    assert os.path.exists(
-        reference_data_file
-    ), f"Reference data file {reference_data_file} does not exist, generate it with generate_reference_outputs.sh"
-    reference_data = torch.load(reference_data_file)
-    reference_tokens = reference_data["reference_tokens"]
-    top5_tokens = reference_data["top5_tokens"]
+
+    if use_reference_file:
+        # Existing reference file loading logic
+        reference_data_file = f"models/demos/llama3/tests/reference_outputs/{model_size}.refpt"
+        logger.info(f"Loading reference data from {reference_data_file}")
+        assert os.path.exists(reference_data_file)
+        reference_data = torch.load(reference_data_file)
+        reference_tokens = reference_data["reference_tokens"]
+        top5_tokens = reference_data["top5_tokens"]
+    else:
+        # Load and encode the reference text
+        current_file_path = os.path.dirname(os.path.abspath(__file__))
+        prompt_file = os.path.join(current_file_path, "tale-of-two-cities.txt.bz2")
+        with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
+            text = f.read()
+
+        # Encode text to tokens
+        encoded_tokens = tokenizer.encode(text, bos=True, eos=False)
+        total_length = prefill_len + decode_len + 1
+        reference_tokens = torch.tensor(encoded_tokens[:total_length]).unsqueeze(0)
+        top5_tokens = None  # Will be computed during inference
 
     N = prefill_len + decode_len
     input_ids = reference_tokens[:, : N + 1]  # Shape [1, N+1]
@@ -202,7 +227,11 @@ def test_tt_model_accuracy(
 
         # Pre-compute the rotational embedding matrix and send to device
         rot_mats_prefill = get_prefill_rot_mat(
-            model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_lens[0]
+            model_args.head_dim,
+            model_args.max_seq_len,
+            mesh_device,
+            seq_len=prefill_lens[0],
+            scale_factor=model_args.rope_scaling_factor,
         )
 
         prefill_input = model_args.prepare_residual_tensor_prefill(
@@ -242,8 +271,11 @@ def test_tt_model_accuracy(
     rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
     # Print table header
-    logger.info(f"{'Progress':<15}{'Correct':<8}{'True':<15}{'Actual':<15}{'Top 5 Predictions':<75}")
-    logger.info("-" * 128)
+    if use_reference_file:
+        logger.info(f"{'Progress':<15}{'Correct':<8}{'True':<15}{'Actual':<15}{'Top 5 Predictions':<75}")
+    else:
+        logger.info(f"{'Progress':<15}{'Correct':<8}{'True':<15}{'Top 5 Predictions':<75}")
+    logger.info("-" * 113)
 
     top1_correct = []
     top5_correct = []
@@ -294,30 +326,47 @@ def test_tt_model_accuracy(
             dim=3,
             use_multicore=True if model_args.max_batch_size == 1 else False,
         )
+        if not use_reference_file:
+            tt_logits = ttnn.to_torch(tt_out_rm, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[0, 0, 0, :]
+        ttnn.deallocate(tt_out_rm)
+
         tt_argmax_token = ttnn.to_torch(tt_out_tok, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
             0, 0, 0, 0
         ]
-        ttnn.deallocate(tt_out_rm)
+
         ttnn.plus_one(current_pos_tensor)
 
         # Update rot_mats for next iteration
         current_pos += 1
         rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
-        # Get reference top5 tokens and probabilities for this position
-        ref_top5_tokens = top5_tokens[prefill_len + i]
+        # Modify the accuracy checking section when using reference text
+        if not use_reference_file:
+            # Get probabilities from model output
+            probs = torch.softmax(tt_logits, dim=-1)
+            _, tt_top5_tokens = torch.topk(probs, k=5, dim=-1)
+
+            # Check against actual next token
+            true_token = input_ids[0, prefill_len + i + 1].item()
+            top1_match = tt_argmax_token.item() == true_token
+            top5_match = true_token in tt_top5_tokens
+            ref_top5_text = [tokenizer.decode([t]) for t in tt_top5_tokens]
+        else:
+            # Existing logic for reference file comparison
+            ref_top5_tokens = top5_tokens[prefill_len + i]
+            top1_match = tt_argmax_token.item() == ref_top5_tokens[0].item()
+            top5_match = tt_argmax_token in ref_top5_tokens
+            ref_top5_text = [tokenizer.decode([t]) for t in ref_top5_tokens]
 
         # Check top-1 and top-5 accuracy
-        top1_match = tt_argmax_token.item() == ref_top5_tokens[0].item()
         top1_correct.append(top1_match)
-        top5_match = tt_argmax_token in ref_top5_tokens
         top5_correct.append(top5_match)
         true_match = (
             tt_argmax_token.item() == input_ids[0, prefill_len + i + 1].item() if i < generation_length - 1 else False
         )
 
-        # Store error information if top5 is incorrect
-        if not top5_match:
+        # Store error information vs reference model if top5 is incorrect
+        if use_reference_file and not top5_match:
             context_start = max(0, prefill_len + i - 9)
             context_tokens = input_ids[0, context_start : prefill_len + i + 1]
             context_text = tokenizer.decode(context_tokens.tolist())
@@ -334,13 +383,13 @@ def test_tt_model_accuracy(
                 }
             )
 
+        sanitize = lambda x: repr(x)[1:-1]  # Use repr() and remove the outer quotes
+
         # Decode tokens to text
         tt_argmax_text = tokenizer.decode([tt_argmax_token])
         true_text = tokenizer.decode([true_token]) if true_token is not None else "N/A"
-        ref_top5_text = [tokenizer.decode([t]) for t in ref_top5_tokens]
 
         # Prepare table row
-        sanitize = lambda x: repr(x)[1:-1]  # Use repr() and remove the outer quotes
         progress_str = f"{i+1}/{generation_length}"
         correct = "x" if top1_match else ("-" if top5_match else ("!" if true_match else " "))
         tt_argmax_text = sanitize(tt_argmax_text)
@@ -348,7 +397,10 @@ def test_tt_model_accuracy(
         ref_top5_str = " ".join(f"{sanitize(t):<14}" for t in ref_top5_text)
 
         # Print table row
-        logger.info(f"{progress_str:<15}{correct:<8}{true_text:<15}{tt_argmax_text:<15}{ref_top5_str}")
+        if use_reference_file:
+            logger.info(f"{progress_str:<15}{correct:<8}{true_text:<15}{tt_argmax_text:<15}{ref_top5_str}")
+        else:
+            logger.info(f"{progress_str:<15}{correct:<8}{true_text:<15}{ref_top5_str}")
 
     # Compute accuracies over every 100 tokens
     num_tokens = len(top1_correct)
@@ -370,17 +422,19 @@ def test_tt_model_accuracy(
         f"Total tokens {num_tokens}: Top-1 accuracy: {total_top1_acc:3.0f} %, Top-5 accuracy: {total_top5_acc:3.0f} %"
     )
 
-    logger.info("\nError Summary (only showing errors where reference top-1 matches true token):")
-    logger.info("-" * 120)
-    for error in errors:
-        true_token = input_ids[0, error["position"] + 1].item()
-        if error["expected_ids"][0] == true_token:
-            sanitize = lambda x: repr(x)[1:-1]  # Use repr() and remove the outer quotes
-            context = sanitize(error["context"])
-            incorrect = sanitize(error["incorrect"])
-            expected = " | ".join(sanitize(t) for t in error["expected"])
-            true_word = sanitize(tokenizer.decode([true_token]))
-            logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
+    # Only show error summary when using reference files
+    if use_reference_file:
+        logger.info("\nError Summary (only showing errors where reference top-1 matches true token):")
+        logger.info("-" * 120)
+        for error in errors:
+            true_token = input_ids[0, error["position"] + 1].item()
+            if error["expected_ids"][0] == true_token:
+                sanitize = lambda x: repr(x)[1:-1]  # Use repr() and remove the outer quotes
+                context = sanitize(error["context"])
+                incorrect = sanitize(error["incorrect"])
+                expected = " | ".join(sanitize(t) for t in error["expected"])
+                true_word = sanitize(tokenizer.decode([true_token]))
+                logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
 
     # Get accuracy thresholds from PERF.md
     min_top1_acc, min_top5_acc = get_accuracy_thresholds(

@@ -7,7 +7,6 @@ from loguru import logger
 import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
-    precompute_freqs,
     sample_host,
     encode_prompt_llama_instruct,
     HostEmbedding,
