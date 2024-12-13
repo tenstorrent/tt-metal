@@ -100,7 +100,12 @@ void py_module(py::module& module) {
             "get_device",
             py::overload_cast<size_t, size_t>(&MeshDevice::get_device, py::const_),
             py::return_value_policy::reference)
-        .def("get_devices", &MeshDevice::get_devices, py::return_value_policy::reference, R"doc(
+        .def(
+            "get_devices",
+            &MeshDevice::get_devices,
+            py::return_value_policy::reference,
+            py::arg("type") = py::none(),
+            R"doc(
             Get the devices in the device mesh.
 
             Returns:

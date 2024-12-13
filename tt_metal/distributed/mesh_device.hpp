@@ -48,6 +48,7 @@ struct MeshDeviceConfig {
 
 // SystemMesh creates a virtualization over the physical devices in the system.
 // It creates a logical 2D-mesh of devices and manages the mapping between logical and physical device coordinates.
+// It serves as a query interface between the logical 2D coordinates to physical device IDs.
 class SystemMesh {
    private:
     friend class MeshDevice;
@@ -70,6 +71,9 @@ public:
     const MeshShape& get_shape() const;
     size_t get_num_devices() const;
 
+    // Gets the physical device ID for a given logical row and column index
+    chip_id_t get_physical_device_id(size_t logical_row_idx, size_t logical_col_idx) const;
+
     // Get the physical device IDs mapped to a MeshDevice
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig &config) const;
 };
@@ -79,7 +83,7 @@ private:
     MeshDeviceID mesh_id;
     MeshShape mesh_device_shape;
     MeshType type;
-    std::shared_ptr<MeshDeviceView> primary_view;
+    std::unique_ptr<MeshDeviceView> view;
     std::map<chip_id_t, Device*> opened_devices;
     std::vector<Device*> devices;
     std::vector<std::shared_ptr<MeshDevice>> submeshes;  // Parent owns submeshes and responsible fortheir destruction
@@ -105,7 +109,10 @@ public:
     MeshDevice(MeshDevice&&) = delete;
     MeshDevice& operator=(MeshDevice&&) = delete;
 
-    std::vector<Device*> get_devices() const;
+    // A MeshDevice is a collection of devices arranged in a 2D grid.
+    // The type parameter allows the caller to specify how to linearize the devices in the mesh.
+    // If type is not provided, the default behavior is to return the devices based on the MeshType of the MeshDevice.
+    std::vector<Device*> get_devices(const std::optional<MeshType>& type = std::nullopt) const;
     Device* get_device_index(size_t logical_device_id) const;
     Device* get_device(chip_id_t physical_device_id) const;
     Device* get_device(size_t row_idx, size_t col_idx) const;
@@ -117,9 +124,25 @@ public:
     size_t num_cols() const;
     MeshShape shape() const;
 
+    // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
+    // Reshaping Rules:
+    // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
+    // 2. Line-to-Line Reshaping (when either dimension is 1):
+    //    - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1
+    // 3. Grid-to-Grid Reshaping:
+    //    - Only possible if the devices can form a connected physical mesh in the new shape
+    //    - Must maintain physical connectivity between adjacent devices
+    // 4. Line-to-Grid Reshaping:
+    //    - Only possible if the physical devices can form a connected physical mesh in the new shape
+    //    - Example: 1x8 -> 2x4 is possible only if physical mesh permits a 2x4 configuration
+    //
+    // @throws std::runtime_error if any of the following constraints are not met:
+    // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
+    // 2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
+    void reshape(const MeshShape& new_shape);
+
     void close_devices();
-    std::shared_ptr<const MeshDeviceView> get_view() const;
-    std::shared_ptr<MeshDeviceView> get_view();
+    const MeshDeviceView& get_view() const;
 
     std::string to_string() const;
     MeshDeviceID get_mesh_id() const;
