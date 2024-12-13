@@ -20,6 +20,7 @@ target_link_libraries(
         span
         Metalium::Metal::STL
         Metalium::Metal::LLRT
+        Taskflow
         umd::Firmware
 )
 
