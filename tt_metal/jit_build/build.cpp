@@ -52,7 +52,10 @@ void JitBuildEnv::init(
     uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     this->root_ = llrt::RunTimeOptions::get_instance().get_root_dir();
-    this->out_root_ = this->root_ + "built/";
+    this->out_root_ = llrt::RunTimeOptions::get_instance().is_built_dir_specified()
+                          ? llrt::RunTimeOptions::get_instance().get_built_dir()
+                          : (this->root_ + "built/");
+
     this->arch_ = arch;
     this->arch_name_ = get_string_lowercase(arch);
     this->aliased_arch_name_ = get_string_aliased_arch_lowercase(arch);
