@@ -22,3 +22,4 @@ cargo
 ninja-build
 patchelf
 graphviz
+bc
