@@ -36,12 +36,6 @@ FORCE_INLINE void resize_local_cb_interface(
     uint32_t fifo_num_pages = fifo_size_page_aligned / page_size;
 
     uint32_t next_fifo_wr_ptr = fifo_start_addr + align(fifo_wr_ptr - fifo_start_addr, page_size);
-    // DPRINT << "fifo_wr_ptr " <<fifo_wr_ptr <<ENDL();
-    // DPRINT << "fifo_start_addr " <<fifo_start_addr <<ENDL();
-    // DPRINT << "page_size " <<page_size <<ENDL();
-    // DPRINT << "next_fifo_wr_ptr " <<next_fifo_wr_ptr <<ENDL();
-    // DPRINT << "fifo_limit_page_aligned " <<fifo_limit_page_aligned <<ENDL();
-    // DPRINT <<ENDL();
     if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
         next_fifo_wr_ptr = fifo_start_addr;
     }
@@ -55,10 +49,6 @@ FORCE_INLINE void resize_local_cb_interface(
     local_cb.fifo_page_size = page_size;
     local_cb.fifo_wr_ptr = next_fifo_wr_ptr;
     local_cb.fifo_rd_ptr = next_fifo_rd_ptr;
-
-    // DPRINT << "fifo_num_pages " <<fifo_num_pages <<ENDL();
-
-    // DPRINT << "local_cb.fifo_wr_ptr " << local_cb.fifo_wr_ptr -fifo_start_addr<<ENDL();
 }
 
 FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id, uint32_t fifo_start_addr) {
@@ -105,15 +95,6 @@ void kernel_main() {
             uint32_t curr_block_num_pages = block_num_pages[t];
             uint32_t curr_block_num_tiles = block_num_tiles[t];
             uint32_t curr_block_size_bytes = curr_block_num_pages * curr_page_size;
-
-            // resize_local_cb_interface(cb_id, curr_block_size_bytes, fifo_start_address, fifo_start_size);
-            //
-            // DPRINT << "curr_page_size " << curr_page_size <<ENDL();
-            // DPRINT << "curr_block_num_pages " << curr_block_num_pages <<ENDL();
-            // DPRINT << "curr_block_num_tiles " << curr_block_num_tiles <<ENDL();
-            // DPRINT << "curr_block_size_bytes " << curr_block_size_bytes <<ENDL();
-
-            // DPRINT << "get_local_cb_wr_ptr " << get_local_cb_wr_ptr(cb_id, fifo_start_address) << ENDL();
 
             // Address setup
             uint32_t tensor_base_address = tensor_addrs_l1[t * num_layers + layer];  // tensor_addrs_l1[t][layer];
