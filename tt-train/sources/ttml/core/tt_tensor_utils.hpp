@@ -59,7 +59,7 @@ template <class T = float>
     auto vec = to_vector<T>(tensor);
     const auto& shape = tensor.get_shape().logical_shape();
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
-    return xt::adapt(vec.data(), vec.size(), xt::acquire_ownership(), shape_vec);
+    return xt::adapt(std::move(vec), shape_vec);
 }
 
 template <class T = float>
