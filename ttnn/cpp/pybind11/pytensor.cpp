@@ -484,10 +484,10 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
 std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(const Tensor& tt_tensor) {
     TT_ASSERT(tt_tensor.storage_type() == StorageType::OWNED or tt_tensor.storage_type() == StorageType::BORROWED);
 
-    using ReturnType = std::variant<OwnedBuffer, BorrowedBuffer>;
+    using RetType = std::variant<OwnedBuffer, BorrowedBuffer>;
     return std::visit(
         tt::stl::overloaded{
-            [&tt_tensor](const OwnedStorage& storage) -> ReturnType {
+            [&tt_tensor](const OwnedStorage& storage) -> RetType {
                 const auto& tensor_spec = tt_tensor.get_tensor_spec();
                 const auto tt_dtype = tensor_spec.data_type();
                 switch (tt_dtype) {
@@ -533,8 +533,8 @@ std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(const Tens
                     }
                 }
             },
-            [](const BorrowedStorage& borrowed_storage) -> ReturnType { return borrowed_storage.buffer; },
-            [&tt_tensor](auto&&) -> ReturnType {
+            [](const BorrowedStorage& borrowed_storage) -> RetType { return borrowed_storage.buffer; },
+            [&tt_tensor](auto&&) -> RetType {
                 TT_THROW(
                     "Tensor with {} cannot be converted to torch",
                     tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
@@ -553,6 +553,9 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor) {
 
     py::object torch_dtype = std::visit(
         [&torch](auto&& owned_or_borrowed_buffer) -> py::object {
+            // Peel off outer variant type.
+            using BufferType = std::decay_t<decltype(owned_or_borrowed_buffer)>;
+            static_assert(std::is_same_v<BufferType, OwnedBuffer> or std::is_same_v<BufferType, BorrowedBuffer>);
             return std::visit(
                 [&torch](auto&& b) -> py::object {
                     using T = typename std::decay_t<decltype(b)>::value_type;
@@ -607,6 +610,9 @@ py::object convert_tt_tensor_to_numpy_tensor(const Tensor& tt_tensor) {
 
     py::object np_dtype = std::visit(
         [&np](auto&& owned_or_borrowed_buffer) -> py::object {
+            // Peel off outer variant type.
+            using BufferType = std::decay_t<decltype(owned_or_borrowed_buffer)>;
+            static_assert(std::is_same_v<BufferType, OwnedBuffer> or std::is_same_v<BufferType, BorrowedBuffer>);
             return std::visit(
                 [&np](auto&& b) -> py::object {
                     using T = typename std::decay_t<decltype(b)>::value_type;
