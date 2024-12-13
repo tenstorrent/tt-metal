@@ -75,8 +75,7 @@ private:
         uint64_t timestamp);
 
     // Helper function for reading risc profile results
-    void readRiscProfilerResults(
-        int device_id, const std::vector<std::uint32_t>& profile_buffer, const CoreCoord& worker_core);
+    void readRiscProfilerResults(int device_id, const CoreCoord& worker_core);
 
     // Push device results to tracy
     void pushTracyDeviceResults();
@@ -112,6 +111,9 @@ public:
     double freqScale = 1.0;
 
     uint32_t my_device_id = 0;
+
+    // DRAM Vector
+    std::vector<uint32_t> profile_buffer;
 
     // Freshen device logs
     void freshDeviceLog();

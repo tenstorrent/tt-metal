@@ -1,0 +1,69 @@
+diff --git a/tt_metal/tools/profiler/profiler.cpp b/tt_metal/tools/profiler/profiler.cpp
+index 6993d212e4..57b10c6b5b 100644
+--- a/tt_metal/tools/profiler/profiler.cpp
++++ b/tt_metal/tools/profiler/profiler.cpp
+@@ -26,8 +26,7 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
+     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
+ }
+
+-void DeviceProfiler::readRiscProfilerResults(
+-    int device_id, const std::vector<std::uint32_t>& profile_buffer, const CoreCoord& worker_core) {
++void DeviceProfiler::readRiscProfilerResults(int device_id, const CoreCoord& worker_core) {
+     ZoneScoped;
+
+     my_device_id = device_id;
+@@ -397,8 +396,6 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
+     generateZoneSourceLocationsHashes();
+
+     if (output_dram_buffer != nullptr) {
+-        std::vector<uint32_t> profile_buffer(output_dram_buffer->size() / sizeof(uint32_t), 0);
+-
+         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+         if (USE_FAST_DISPATCH) {
+             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
+@@ -415,7 +412,7 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
+         }
+
+         for (const auto& worker_core : worker_cores) {
+-            readRiscProfilerResults(device_id, profile_buffer, worker_core);
++            readRiscProfilerResults(device_id, worker_core);
+         }
+     } else {
+         log_warning("DRAM profiler buffer is not initialized");
+diff --git a/tt_metal/tools/profiler/profiler.hpp b/tt_metal/tools/profiler/profiler.hpp
+index b088258920..d08a4f9b67 100644
+--- a/tt_metal/tools/profiler/profiler.hpp
++++ b/tt_metal/tools/profiler/profiler.hpp
+@@ -74,8 +74,7 @@ private:
+         uint64_t timestamp);
+
+     // Helper function for reading risc profile results
+-    void readRiscProfilerResults(
+-        int device_id, const std::vector<std::uint32_t>& profile_buffer, const CoreCoord& worker_core);
++    void readRiscProfilerResults(int device_id, const CoreCoord& worker_core);
+
+     // Push device results to tracy
+     void pushTracyDeviceResults();
+@@ -112,6 +111,9 @@ public:
+
+     uint32_t my_device_id = 0;
+
++    // DRAM Vector
++    std::vector<uint32_t> profile_buffer;
++
+     // Freshen device logs
+     void freshDeviceLog();
+
+diff --git a/tt_metal/tools/profiler/tt_metal_profiler.cpp b/tt_metal/tools/profiler/tt_metal_profiler.cpp
+index 4beddc39db..f25e151574 100644
+--- a/tt_metal/tools/profiler/tt_metal_profiler.cpp
++++ b/tt_metal/tools/profiler/tt_metal_profiler.cpp
+@@ -547,6 +547,8 @@ void InitDeviceProfiler(Device* device) {
+                 .page_size = pageSize,
+                 .buffer_type = tt::tt_metal::BufferType::DRAM};
+             tt_metal_device_profiler_map.at(device_id).output_dram_buffer = tt_metal::CreateBuffer(dram_config);
++            tt_metal_device_profiler_map.at(device_id).profile_buffer.resize(
++                tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size() / sizeof(uint32_t));
+         }
+
+         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);

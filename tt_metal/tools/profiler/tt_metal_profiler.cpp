@@ -295,7 +295,7 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
     ZoneScopedC(tracy::Color::Tomato4);
     std::string zoneName = fmt::format("sync_device_device_{}->{}", device_id_sender, device_id_receiver);
     ZoneName(zoneName.c_str(), zoneName.size());
-    if (!tt::llrt::OptionsG.get_profiler_sync_enabled()) {
+    if (!tt::llrt::RunTimeOptions::get_instance().get_profiler_sync_enabled()) {
         return;
     }
 
@@ -371,11 +371,11 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
 
         CoreCoord sender_core = {eth_sender_core.x, eth_sender_core.y};
         std::vector<CoreCoord> sender_cores = {
-            device_sender->physical_core_from_logical_core(sender_core, CoreType::ETH)};
+            device_sender->virtual_core_from_logical_core(sender_core, CoreType::ETH)};
 
         CoreCoord receiver_core = {eth_receiver_core.x, eth_receiver_core.y};
         std::vector<CoreCoord> receiver_cores = {
-            device_receiver->physical_core_from_logical_core(receiver_core, CoreType::ETH)};
+            device_receiver->virtual_core_from_logical_core(receiver_core, CoreType::ETH)};
 
         peekDeviceData(device_sender, sender_cores);
         peekDeviceData(device_receiver, receiver_cores);
@@ -443,12 +443,13 @@ void ProfilerSync(ProfilerSyncState state) {
                 bool doSync = true;
                 for (auto& sender_eth_core : active_eth_cores) {
                     doSync = false;
+                    std::tie(receiver_device_id, receiver_eth_core) =
+                        sender_device->get_connected_ethernet_core(sender_eth_core);
+
                     // std::cout << sender_device_id << ":" << sender_eth_core.x << "," << sender_eth_core.y;
-                    // std::tie(receiver_device_id, receiver_eth_core) =
-                    // sender_device->get_connected_ethernet_core(sender_eth_core);
-                    // std::cout << "->" << receiver_device_id << ":" << receiver_eth_core.x << "," <<
-                    // receiver_eth_core.y
-                    //<< std::endl;
+                    // std::cout << "->" << receiver_device_id << ":" << receiver_eth_core.x << ",";
+                    // std::cout << receiver_eth_core.y << std::endl;
+
                     if (visited_devices.find(sender_device_id) == visited_devices.end() or
                         visited_devices.find(receiver_device_id) == visited_devices.end()) {
                         visited_devices.insert(sender_device_id);
@@ -576,6 +577,8 @@ void InitDeviceProfiler(Device* device) {
                 .page_size = pageSize,
                 .buffer_type = tt::tt_metal::BufferType::DRAM};
             tt_metal_device_profiler_map.at(device_id).output_dram_buffer = tt_metal::CreateBuffer(dram_config);
+            tt_metal_device_profiler_map.at(device_id).profile_buffer.resize(
+                tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size() / sizeof(uint32_t));
         }
 
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
