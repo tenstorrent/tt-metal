@@ -1125,6 +1125,12 @@ void Matmul::validate(
         TT_FATAL(
             optional_output_tensor_shape == output_tensor_spec.logical_shape(),
             "Shape of Optional Output Tensor should match Output Tensor");
+        TT_FATAL(
+            optional_output_tensor_c->get_dtype() == this->output_dtype.value(),
+            "Type mismatch between optional output tensor & output tensor");
+        TT_FATAL(
+            optional_output_tensor_c->memory_config() == this->output_mem_config,
+            "Memory config mismatch between optional output tensor & output tensor");
     }
 
     TT_FATAL(this->bcast_batch.has_value(), "Error: bcast_batch field should have been automatically populated");

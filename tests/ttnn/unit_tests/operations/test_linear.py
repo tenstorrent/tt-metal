@@ -286,8 +286,16 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
     torch_opt_output_tensor = torch.zeros_like(torch_output_tensor)
     optional_output_tensor = ttnn.from_torch(torch_opt_output_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    pre_execution_optional_output_tensor = optional_output_tensor
     output_tensor = ttnn.linear(
+        input_tensor_a,
+        input_tensor_b,
+        activation=activation,
+        core_grid=device.core_grid,
+    )
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    ttnn.linear(
         input_tensor_a,
         input_tensor_b,
         activation=activation,
@@ -295,11 +303,10 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
         core_grid=device.core_grid,
     )
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    optional_output_tensor = ttnn.to_torch(optional_output_tensor)
+
+    assert len(output_tensor.shape) == len(torch_output_tensor.shape) == len(optional_output_tensor.shape)
+    assert output_tensor.shape == torch_output_tensor.shape == optional_output_tensor.shape
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
-    assert len(output_tensor.shape) == len(torch_output_tensor.shape)
-    assert output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(ttnn.to_torch(optional_output_tensor), output_tensor, 0.997)
-    assert (
-        optional_output_tensor is pre_execution_optional_output_tensor
-    ), "optional_output_tensor & pre_execution_optional_output_tensor are not same object anymore!"
+    assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.997)
+    assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
