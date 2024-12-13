@@ -1590,7 +1590,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
 
     const bool is_optional_output_tensor = !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
 
-    if (optional_output_tensors.empty()) {
+    if (is_optional_output_tensor) {
         return {optional_output_tensors.at(0)->get_tensor_spec()};
     }
 
