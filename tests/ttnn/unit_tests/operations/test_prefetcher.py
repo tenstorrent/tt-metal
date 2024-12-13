@@ -367,7 +367,7 @@ def test_run_prefetcher(
         tt_tensor = ttnn.as_tensor(
             pt_tensors[tid * num_layers],  # Add a loop for num_layers
             device=device,
-            dtype=dtype,
+            dtype=ttnn.bfloat4_b if (tid % 2) == 0 else ttnn.bfloat8_b,
             memory_config=input_sharded_mem_config,
             layout=ttnn.TILE_LAYOUT,
         )
@@ -573,6 +573,13 @@ def test_run_prefetcher(
         print(tt_out)
         print(pt_out)
         logger.info("Using prefetched weights")
+
+        if dtype == ttnn.bfloat4_b:
+            pcc_threshold = 0.99
+        elif dtype == ttnn.bfloat8_b:
+            pcc_threshold = 0.999
+        elif dtype == ttnn.bfloat16_b:
+            pcc_threshold = 0.9999
 
         passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
         logger.info(output)
