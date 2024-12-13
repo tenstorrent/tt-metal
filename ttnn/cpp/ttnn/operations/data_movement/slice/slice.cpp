@@ -135,7 +135,7 @@ ttnn::Tensor SliceOperation::invoke(
             input_tensor.storage_type() == StorageType::DEVICE,
             "Host tensor slice cannot return a scalar or empty tensor");
         return ttnn::empty(
-            output_shape,
+            ttnn::Shape(actual_shape, actual_shape),
             input_tensor.dtype(),
             input_tensor.layout(),
             input_tensor.device(),
