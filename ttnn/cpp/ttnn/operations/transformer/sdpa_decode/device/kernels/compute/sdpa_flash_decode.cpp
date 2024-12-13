@@ -79,6 +79,7 @@ void MAIN {
 
     uint32_t arg_idx = 0;
     const bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const bool apply_mask_at_last_chunk = do_reduce && is_causal;
     const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
@@ -170,7 +171,7 @@ void MAIN {
             cb_exp_max_diff,
             cb_out_o,
             cb_out_m,
-            cb_out_l>(k_chunk_start, k_chunk_end, do_reduce, qk_chunk_tiles, out_chunk_tiles);
+            cb_out_l>(k_chunk_start, k_chunk_end, do_reduce, apply_mask_at_last_chunk, qk_chunk_tiles, out_chunk_tiles);
 
         // do reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
