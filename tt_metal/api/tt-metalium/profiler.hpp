@@ -76,7 +76,7 @@ private:
 
     // Helper function for reading risc profile results
     void readRiscProfilerResults(
-        IDevice* device, const std::vector<std::uint32_t>& profile_buffer, CoreCoord& worker_core);
+        IDevice* device, CoreCoord& worker_core);
 
     // Push device results to tracy
     void pushTracyDeviceResults();
@@ -97,6 +97,9 @@ public:
 
     // Device-core Syncdata
     std::map<CoreCoord, std::tuple<double, double, double>> device_core_sync_info;
+
+    // DRAM Vector
+    std::vector<uint32_t> profile_buffer;
 
     // Freshen device logs
     void freshDeviceLog();
