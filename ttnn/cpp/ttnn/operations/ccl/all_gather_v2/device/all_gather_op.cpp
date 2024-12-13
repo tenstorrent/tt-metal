@@ -159,7 +159,6 @@ Tensor all_gather_v2(
     const ttnn::ccl::Topology topology,
     std::unordered_map<chip_id_t, SubDeviceId> sub_device_id_map,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle) {
-    tt::log_info(tt::LogOp, "DEBUG: all_gather is called");
 
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
@@ -194,7 +193,7 @@ Tensor all_gather_v2(
     if (!persistent_fabric_mode) {
         for (const auto& device : devices) {
             auto handle = GlobalSemaphore::create(device, core_grid, 0);
-            tt::log_info(
+            tt::log_trace(
                 tt::LogOp, "Created semaphore handle at address {} for device {}", handle->address(), device->id());
             semaphore_handles.push_back(std::move(*handle));
         }

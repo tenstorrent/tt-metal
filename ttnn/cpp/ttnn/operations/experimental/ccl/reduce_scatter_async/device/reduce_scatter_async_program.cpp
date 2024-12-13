@@ -2047,12 +2047,13 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     std::optional<size_t> num_links_preferred,
     tt::tt_metal::GlobalSemaphore const& from_remote_sem,
     tt::tt_metal::GlobalSemaphore const& teardown_sem,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) {
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle_) {
     auto program = tt::tt_metal::Program();
 
     bool persistent_fabric = true;
     Device* device = input_tensor.device();
 
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = fabric_handle_;
     fabric_lifetime_mode fabric_mode =
         fabric_handle.has_value() ? fabric_lifetime_mode::PERSISTENT : fabric_lifetime_mode::TRANSIENT;
     // We only build the local chip's part of the fabric

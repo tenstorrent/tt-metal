@@ -567,7 +567,7 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
                     cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
-
+                    DPRINT << "mcastF: " << (uint32_t)mcast_args.num_targets_forward_direction << "\n";
                     cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                         cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
                 }
@@ -579,9 +579,11 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
                     cmd_ctx.fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                     cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
                         cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                    DPRINT << "mcastB: " << (uint32_t)mcast_args.num_targets_backward_direction << "\n";
                 }
 
                 uint64_t dest_noc_addr = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
+                DPRINT << "nsi2: " << (uint64_t)dest_noc_addr << ", val: " << (uint32_t)value << "\n";
                 if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
                     noc_semaphore_inc(dest_noc_addr, value);
                 } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES) {
@@ -597,6 +599,7 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
 
     } else {
         const uint64_t dest_noc_addr = get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
+        DPRINT << "nsi: " << (uint64_t)dest_noc_addr << ", val: " << (uint32_t)value << "\n";
         if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
             noc_semaphore_inc(dest_noc_addr, value);
         } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES) {

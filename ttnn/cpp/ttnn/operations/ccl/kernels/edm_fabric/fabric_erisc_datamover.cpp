@@ -920,6 +920,10 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(connection_live_semaphore_ptr));
     }
 
+    DPRINT << "connection_live_semaphore_ptr[0]: " << (uint32_t)local_sender_connection_live_semaphore_addresses[0] << "\n";
+    DPRINT << "connection_live_semaphore_ptr[1]: " << (uint32_t)local_sender_connection_live_semaphore_addresses[1] << "\n";
+    DPRINT << "termination_signal_ptr: " << (uint32_t)termination_signal_ptr << "\n";
+
     if (has_downstream_edm_buffer_connection) {
         downstream_edm_noc_interface.open();
     }
