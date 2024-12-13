@@ -196,7 +196,7 @@ Tensor reduce_scatter(
         topology == ttnn::ccl::Topology::Linear,
         "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     int16_t rank = input_tensor.get_logical_shape().rank();
 
@@ -227,7 +227,7 @@ Tensor reduce_scatter(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
 
-            const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
+            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
             const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
             const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
 
@@ -238,7 +238,7 @@ Tensor reduce_scatter(
                 } else {
                     new_coord.col = line_index % num_devices;
                 }
-                return mesh_view->find_device_id(new_coord);
+                return mesh_view.find_device_id(new_coord);
             };
 
             bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
