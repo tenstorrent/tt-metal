@@ -496,7 +496,7 @@ class TtLlamaAttention_optimized:
 
         seq_len = query_layer.shape[2]
         q_chunk_size = 128 if seq_len % 128 == 0 else 32
-        k_chunk_size = q_chunk_size
+        k_chunk_size = 512 if seq_len % 512 == 0 else 128 if seq_len % 128 == 0 else 32
 
         pc_sdpa = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=[8, 7],
