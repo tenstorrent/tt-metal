@@ -825,8 +825,8 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
     # Define command shortcuts
     command_shortcuts = {
-        "accuracy": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k 'performance and file'",
-        "accuracy-acc": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k 'accuracy and file'",
+        "accuracy": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k 'attention-performance and file'",
+        "accuracy-acc": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k 'attention-acc and file'",
         "demo": "pytest models/demos/llama3/demo/demo.py -k performance-batch-1",
         "demo-acc": "pytest models/demos/llama3/demo/demo.py -k accuracy-batch-1",
         "demo-32": "pytest models/demos/llama3/demo/demo.py -k performance-batch-32",
