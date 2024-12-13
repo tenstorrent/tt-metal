@@ -23,8 +23,7 @@ void kernel_main() {
     uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t next_core_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t next_core_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-    // uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t noc = noc_index;
+    uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
 
     volatile tt_l1_ptr uint32_t* l1_signal_sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
@@ -71,5 +70,4 @@ void kernel_main() {
             }
         }
     }
-    DPRINT << "in0  DONE" << ENDL();
 }
