@@ -71,7 +71,7 @@ def test_llama_rms_norm_inference(
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args)
+    tt_model = DistributedNorm(tt_inner_norm, model_args, TG=model_args.is_galaxy)
 
     # Create reference model (unchanged)
     partial_state_dict = {
@@ -89,7 +89,7 @@ def test_llama_rms_norm_inference(
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
         memory_config=model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
         if mode == "decode"
         else ttnn.DRAM_MEMORY_CONFIG,
@@ -98,9 +98,12 @@ def test_llama_rms_norm_inference(
     tt_output = tt_model(tt_input, mode=mode)
 
     # DistributedNorm outputs are replicated across devices
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
-        :1, :, :
-    ].squeeze(0)
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(0, 3) if model_args.is_galaxy else (3, 0), mesh_shape=model_args.cluster_shape
+        ),
+    )[:1, :, :, :]
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 

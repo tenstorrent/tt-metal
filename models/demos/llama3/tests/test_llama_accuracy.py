@@ -36,8 +36,8 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
     # Parse the table and find the row for our model and device
     rows = [
         line.split("|")[1:]  # Each row starts with a separator
-        for line in target_section.split("\n")
-        if f"| {model_size} | {device_name} |" in line
+        for line in target_section.replace(" ", "").split("\n")
+        if f"|{model_size}|{device_name}|" in line
     ]
     if not rows:
         raise ValueError(
@@ -159,7 +159,11 @@ def test_tt_model_accuracy(
             device=mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, -2) if batch_size > 1 else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
         )
 
     # Initialize TT model
@@ -227,7 +231,11 @@ def test_tt_model_accuracy(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            mesh_shape=model_args.cluster_shape,
+        ),
     )
 
     # Get cos/sin matrices for the current position of each user
@@ -265,7 +273,17 @@ def test_tt_model_accuracy(
         )
 
         if tt_model.args.num_devices > 1:
-            tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+            if tt_model.args.is_galaxy:
+                tt_out_gathered = ttnn.all_gather(
+                    tt_out,
+                    dim=3,
+                    num_links=tt_model.args.num_all_gather_links,
+                    cluster_axis=0,
+                    mesh_device=mesh_device,
+                    topology=tt_model.args.ccl_topology(),
+                )
+            else:
+                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out
@@ -372,5 +390,9 @@ def test_tt_model_accuracy(
     )
 
     logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
-    assert total_top1_acc > min_top1_acc, f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >{min_top1_acc}%)"
-    assert total_top5_acc > min_top5_acc, f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >{min_top5_acc}%)"
+    assert (
+        total_top1_acc >= min_top1_acc
+    ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+    assert (
+        total_top5_acc >= min_top5_acc
+    ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
