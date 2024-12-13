@@ -49,17 +49,10 @@ using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
 // Return a reference to a potentially shared binary image.
-// The images are cached by path name, which is never erased.
-// TODO: Remove core_type_idx, processor_class_idx,
-// processor_type_idx -- the information they provide can be
-// obtained directly from the binary image.
+// The images are cached by path name.
 ll_api::memory const& get_risc_binary(
     string const& path,
-    uint32_t core_type_idx,
-    uint32_t processor_class_idx,
-    uint32_t processor_type_idx,
-    ll_api::memory::PackSpans span_type = ll_api::memory::PackSpans::NO_PACK,
-    ll_api::memory::Relocate relo_type = ll_api::memory::Relocate::NONE);
+    ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 

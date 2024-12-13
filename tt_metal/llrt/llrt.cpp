@@ -47,33 +47,20 @@ using std::uint64_t;
 
 ll_api::memory const& get_risc_binary(
     string const& path,
-    uint32_t core_type_idx,
-    uint32_t processor_class_idx,
-    uint32_t processor_type_idx,
-    ll_api::memory::PackSpans span_type,
-    ll_api::memory::Relocate relo_type) {
+    ll_api::memory::Loading loading) {
     static struct {
-      std::unordered_map<std::string, std::unique_ptr<ll_api::memory>> map;
+      std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
       std::condition_variable cvar;
     } cache;
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(path);
+    ll_api::memory const* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      auto *ptr = new ll_api::memory(path, relo_type);
-
-      // TODO: pass pack_spans into reader, generate text/data sizes
-      // from segment sizes and pack there
-      if (span_type == ll_api::memory::PackSpans::PACK) {
-          uint64_t data_start = tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::LOCAL);
-          uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
-              0 :
-              tt::tt_metal::hal.get_base_firmware_addr(core_type_idx, processor_class_idx, processor_type_idx);
-          ptr->pack_data_into_text(text_start, data_start);
-      }
+      ptr = new ll_api::memory(path, loading);
 
       lock.lock();
       // maps have iterator stability, so SLOT is still valid.
@@ -81,12 +68,16 @@ ll_api::memory const& get_risc_binary(
       // We can't wake just those waiting on this slot, so wake them
       // all. Should be a rare event anyway.
       cache.cvar.notify_all();
-    } else if (!slot->second) {
-        // Someone else is creating the initial entry, wait for them.
-        cache.cvar.wait(lock, [=] { return bool(slot->second); });
+    } else {
+        if (!slot->second) {
+            // Someone else is creating the initial entry, wait for them.
+            cache.cvar.wait(lock, [=] { return bool(slot->second); });
+        }
+        ptr = slot->second.get();
+        TT_ASSERT(ptr->get_loading() == loading);
     }
 
-    return *slot->second.get();
+    return *ptr;
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
