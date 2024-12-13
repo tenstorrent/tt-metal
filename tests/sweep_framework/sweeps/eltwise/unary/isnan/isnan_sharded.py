@@ -12,7 +12,7 @@ import ttnn
 import math
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
 from tests.sweep_framework.sweep_utils.sharding_utils import (
-    gen_sharded_spec_unary_2,
+    gen_sharded_spec_unary,
     parse_sharding_spec,
     invalidate_vector_sharding,
     roundup,
@@ -35,7 +35,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary_2(16),
+        "input_spec": gen_sharded_spec_unary(16),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
@@ -45,23 +45,13 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    input_spec = parse_sharding_spec(test_vector["input_spec"])
-    (
-        input_shape,
-        core_grid_size,
-        x,
-        y,
-        sharding_strategy,
-        tensor_hw_as_shard_shape,
-        input_layout,
-        shard_height_mul_of_32,
-    ) = input_spec
-    invlidated, output_str = invalidate_vector_sharding(*input_spec)
+    input_layout = test_vector["input_spec"]["input_layout"]
+    sharding_invalidated, output_str = invalidate_vector_sharding(test_vector["input_spec"])
 
-    if input_layout == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+    if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is only supported on tiled layout"
-    if invlidated:
-        return invlidated, output_str
+    if sharding_invalidated:
+        return sharding_invalidated, output_str
 
     return False, None
 
@@ -81,19 +71,17 @@ def run(
 
     (
         input_shape,
-        x,
-        y,
+        core_grid,
         sharding_strategy,
         shard_orientation,
         tensor_hw_as_shard_shape,
         input_layout,
         shard_height_mul_of_32,
     ) = parse_sharding_spec(input_spec)
-    device_grid_size = ttnn.CoreGrid(y=y, x=x)
 
     sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,
-        core_grid=device_grid_size,
+        core_grid=core_grid,
         strategy=sharding_strategy,
         orientation=shard_orientation,
         use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
