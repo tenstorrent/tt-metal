@@ -540,8 +540,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     num_blocks_x = (Nt - 1) / per_core_N + 1;
 
     // MatmulMultiCoreProgramConfig does not support sharded output.
-    // Reduce in0_block_w if necessary to choose other configs.
-    if (Kt % in0_block_w != 0) {
+    // Reduce in0_block_w if necessary or might benefit from mcast due to size to choose other configs.
+    if ((mem_config.is_sharded() or num_blocks_y > 1 or num_blocks_x > 1) and Kt % in0_block_w != 0) {
         in0_block_w = 1;
     }
 
