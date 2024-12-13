@@ -274,10 +274,10 @@ ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shape, c
         (shape[-1]%tile_first_dim!=0 || shape.rank()==1 || shape[-2]%tile_second_dim!=0 ))
     {
         //Correct the output shape to add padding metadata before reshape (view)
-        return ttnn::experimental::unsafe_view(tensor, tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
+        return ttnn::experimental::view(tensor, tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
     }
     //Perform a reshape (view)
-    return ttnn::experimental::unsafe_view(tensor, shape);
+    return ttnn::experimental::view(tensor, shape);
 }
 
 ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
@@ -361,7 +361,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
           tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
     if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE))) {
             // This case has been allowed in the past though it means introducing padding values to the data
-            return ttnn::experimental::unsafe_view(tensor, shape);
+            return ttnn::experimental::view(tensor, shape);
         }
 
     if (this_is_view) {
@@ -378,7 +378,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
 
         if (tile_tensor_view_reshape_possible) {
             // This case has been allowed in the past though it means introducing padding values to the data
-            return ttnn::experimental::unsafe_view(tensor, shape);
+            return ttnn::experimental::view(tensor, shape);
         }
         //This is a completely incorrect test but it is due to issue 15558
         TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");

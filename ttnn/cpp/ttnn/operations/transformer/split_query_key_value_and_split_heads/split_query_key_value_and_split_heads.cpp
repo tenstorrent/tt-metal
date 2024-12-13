@@ -105,7 +105,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             head_size,
             padded_head_size);
 
-        const auto input_4d = ttnn::experimental::unsafe_view(
+        const auto input_4d = ttnn::experimental::view(
             input_tensor,
             ttnn::SimpleShape{
                 input_shape.with_tile_padding()[0],
@@ -171,7 +171,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             "Invalid operation: KV tensor should not be provided when the input tensor is sharded. Please ensure that "
             "the KV tensor is only used in non-sharded configurations.");
 
-        const auto input_tensor_4d = ttnn::experimental::unsafe_view(
+        const auto input_tensor_4d = ttnn::experimental::view(
             input_tensor,
             ttnn::SimpleShape{
                 input_shape.with_tile_padding()[0],
@@ -189,7 +189,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             sequence_size_padded,
             transpose_key);
     } else {
-        const auto input_tensor_4d = ttnn::experimental::unsafe_view(
+        const auto input_tensor_4d = ttnn::experimental::view(
             input_tensor,
             ttnn::SimpleShape{
                 input_shape.with_tile_padding()[0],
@@ -199,7 +199,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
         std::optional<Tensor> input_tensor_kv_4d = std::nullopt;
         if (input_tensor_kv.has_value()) {
             auto padded_input_shape_kv = input_tensor_kv.value().get_shape().with_tile_padding();
-            input_tensor_kv_4d = ttnn::experimental::unsafe_view(
+            input_tensor_kv_4d = ttnn::experimental::view(
                 input_tensor_kv.value(),
                 ttnn::SimpleShape{padded_input_shape_kv[0], 1, padded_input_shape_kv[1], padded_input_shape_kv[2]});
         }

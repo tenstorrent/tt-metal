@@ -107,7 +107,7 @@ ttnn::Tensor DeviceStorageVisit(auto&& storage, const ttnn::Tensor& input_tensor
 
 ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape& new_shape) {
     ZoneScoped;
-    GraphTracker::instance().track_function_start("ttnn::experimental::unsafe_view", input_tensor, new_shape);
+    GraphTracker::instance().track_function_start("ttnn::experimental::view", input_tensor, new_shape);
     const auto& new_padded_shape = new_shape.padded_shape();
 
     TT_ASSERT(
@@ -120,7 +120,7 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
         TT_ASSERT(
             new_padded_shape[-2] % tile.get_tile_shape()[0] == 0 &&
             new_padded_shape[-1] % tile.get_tile_shape()[1] == 0 &&
-            "Expected a multiple of 32 for H, W (or -1 evaluating to such) in ttnn::experimental::unsafe_view()!");
+            "Expected a multiple of 32 for H, W (or -1 evaluating to such) in ttnn::experimental::view()!");
     }
     auto output = std::visit(
         [&input_tensor, &new_shape](auto&& storage) -> Tensor {
@@ -150,13 +150,11 @@ ttnn::Tensor tensor_reshape(const ttnn::Tensor& input_tensor, const ttnn::Shape&
     return output;
 }
 
-
-
-ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
+ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
     return tensor_reshape(tensor, ttnn::Shape(shape.view()));
 }
 
-ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     return tensor_reshape(tensor, shape);
 }
 

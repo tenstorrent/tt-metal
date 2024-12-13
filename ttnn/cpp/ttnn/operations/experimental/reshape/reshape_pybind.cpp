@@ -19,7 +19,7 @@
 namespace ttnn::operations::experimental::reshape::detail {
 namespace py = pybind11;
 
-void py_bind_unsafe_view(py::module& module) {
+void py_bind_view(py::module& module) {
     auto doc = R"doc(
 
         Note:
@@ -40,20 +40,15 @@ void py_bind_unsafe_view(py::module& module) {
         Example:
 
             >>> tensor = ttnn.from_torch(torch.tensor((2, 1, 4), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.experimental.unsafe_view(tensor, (2, 1, 1, 4))
+            >>> output = ttnn.experimental.view(tensor, (2, 1, 1, 4))
 
         )doc";
     bind_registered_operation(
         module,
-        ttnn::experimental::unsafe_view,
+        ttnn::experimental::view,
         doc,
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::experimental::unsafe_view)& self,
-               ttnn::Tensor& input_tensor,
-               int N,
-               int C,
-               int H,
-               int W) {
+            [](const decltype(ttnn::experimental::view)& self, ttnn::Tensor& input_tensor, int N, int C, int H, int W) {
                 return self(input_tensor, infer_dims_for_reshape(input_tensor, ttnn::SmallVector<int>{N, C, H, W}));
             },
             py::arg("input_tensor"),
@@ -64,14 +59,14 @@ void py_bind_unsafe_view(py::module& module) {
         },
 
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::experimental::unsafe_view)& self,
-               ttnn::Tensor& input_tensor,
-               const ttnn::Shape& shape) { return self(input_tensor, shape); },
+            [](const decltype(ttnn::experimental::view)& self, ttnn::Tensor& input_tensor, const ttnn::Shape& shape) {
+                return self(input_tensor, shape);
+            },
             py::arg("input_tensor"),
             py::arg("shape"),
         },
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::experimental::unsafe_view)& self,
+            [](const decltype(ttnn::experimental::view)& self,
                ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int32_t>& shape) {
                 return self(input_tensor, infer_dims_for_reshape(input_tensor, shape));

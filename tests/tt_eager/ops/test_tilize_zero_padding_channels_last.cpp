@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
         ttnn::SimpleShape shape{1, 32, 61, 32};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a =
-            ttnn::experimental::unsafe_view(ttnn::arange(/*start=*/0, /*stop=*/shape.volume(), /*step=*/1, DataType::BFLOAT16), shape).to(device);
+            ttnn::experimental::view(ttnn::arange(/*start=*/0, /*stop=*/shape.volume(), /*step=*/1, DataType::BFLOAT16), shape).to(device);
         Tensor b = ttnn::tilize_with_zero_padding(a);
         Tensor c = b.cpu();
         ////////////////////////////////////////////////////////////////////////////
