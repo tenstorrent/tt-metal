@@ -17,7 +17,18 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
-TEST(TrivialTnnFixedTest, TestMaxNegativeOne_BROKEN) {
+class TrivialTnnFixedTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne_BROKEN) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::vector<float> data(24, -1.F);
@@ -35,7 +46,7 @@ TEST(TrivialTnnFixedTest, TestMaxNegativeOne_BROKEN) {
     EXPECT_FALSE(all_equal);
 }
 
-TEST(TrivialTnnFixedTest, TestMaxNegativeBatch_BROKEN) {
+TEST_F(TrivialTnnFixedTest, TestMaxNegativeBatch_BROKEN) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     auto shape = ttml::core::create_shape({4, 1, 1, 4});
@@ -58,7 +69,7 @@ TEST(TrivialTnnFixedTest, TestMaxNegativeBatch_BROKEN) {
     EXPECT_FALSE(all_equal);
 }
 
-TEST(TrivialTnnFixedTest, TestStableSoftmax_0) {
+TEST_F(TrivialTnnFixedTest, TestStableSoftmax_0) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     const size_t batch_size = 1U;
@@ -79,7 +90,7 @@ TEST(TrivialTnnFixedTest, TestStableSoftmax_0) {
     EXPECT_NEAR(res_vector[1], 0.7311F, 2e-2);
 }
 
-TEST(TrivialTnnFixedTest, TestOriginalStableSoftmax_AllNegative) {
+TEST_F(TrivialTnnFixedTest, TestOriginalStableSoftmax_AllNegative) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     const size_t batch_size = 1U;
@@ -105,7 +116,7 @@ TEST(TrivialTnnFixedTest, TestOriginalStableSoftmax_AllNegative) {
     EXPECT_NEAR(res_vector[1], 0.7311F, 2e-2);
 }
 
-TEST(TrivialTnnFixedTest, TestStableSoftmax_2) {
+TEST_F(TrivialTnnFixedTest, TestStableSoftmax_2) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     const size_t batch_size = 1U;
@@ -131,7 +142,7 @@ TEST(TrivialTnnFixedTest, TestStableSoftmax_2) {
     }
 }
 
-TEST(TrivialTnnFixedTest, TestSumOverBatch_0) {
+TEST_F(TrivialTnnFixedTest, TestSumOverBatch_0) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     const size_t batch_size = 10U;
@@ -156,7 +167,7 @@ TEST(TrivialTnnFixedTest, TestSumOverBatch_0) {
     EXPECT_EQ(result_shape[3], features);
 }
 
-TEST(TrivialTnnFixedTest, TestDivide) {
+TEST_F(TrivialTnnFixedTest, TestDivide) {
     auto* device = &ttml::autograd::ctx().get_device();
     const size_t batch_size = 2U;
     const size_t features = 64U;
@@ -187,7 +198,7 @@ TEST(TrivialTnnFixedTest, TestDivide) {
     }
 }
 
-TEST(TrivialTnnFixedTest, TestSumOverBatch_1) {
+TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     const size_t batch_size = 2U;

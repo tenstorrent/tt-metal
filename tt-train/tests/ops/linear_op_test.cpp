@@ -11,6 +11,17 @@
 #include "core/tt_tensor_utils.hpp"
 #include "init/tensor_initializers.hpp"
 
+class LinearOpTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
 void compare_tensors(const ttnn::Tensor& t1, const ttnn::Tensor& t2, float eps) {
     ASSERT_EQ(t1.get_shape(), t2.get_shape());
     auto t1_vec = ttml::core::to_vector(t1);
@@ -42,7 +53,7 @@ bool compare_tensors_for_broken(const ttnn::Tensor& t1, const ttnn::Tensor& t2, 
     return all_equals;
 }
 
-TEST(LinearOpTest, TTNNBackwardGoodShape) {
+TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto tensor = ttml::autograd::create_tensor();
     ttml::init::uniform_init(tensor, ttml::core::create_shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
@@ -78,7 +89,7 @@ TEST(LinearOpTest, TTNNBackwardGoodShape) {
 
 // Currently raises SEGFAULT
 
-// TEST(LinearOpTest, TTNNBackwardBadShape_BROKEN) {
+// TEST_F(LinearOpTest, TTNNBackwardBadShape_BROKEN) {
 //     auto* device = &ttml::autograd::ctx().get_device();
 //     auto tensor = ttml::autograd::create_tensor();
 //     ttml::init::uniform_init(tensor, ttml::core::create_shape({128, 1, 1, 128}), ttml::init::UniformRange{-0.1F,

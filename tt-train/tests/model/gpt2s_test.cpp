@@ -24,8 +24,19 @@ struct MatmulTest {
     ExpectedResult expected_result;
 };
 
+class GPT2SBatch64Test : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
 // Matmul tests are based on GPT2-S model with batch size 64
-TEST(GPT2SBatch64Test, Matmul) {
+TEST_F(GPT2SBatch64Test, Matmul) {
     std::vector<MatmulTest> tests = {
         {{{64, 12, 64, 1024}, {64, 12, 1024, 64}, false, false}, ExpectedResult::OK},
         {{{64, 12, 1024, 64}, {64, 12, 1024, 64}, false, true}, ExpectedResult::OK},
@@ -78,7 +89,6 @@ TEST(GPT2SBatch64Test, Matmul) {
             /* core_grid */ ttnn::CoreGrid{7, 8},
             /* output_tile */ std::nullopt);
     };
-
     for (const auto& [input, expected_result] : tests) {
         auto [shape_a, shape_b, transpose_a, transpose_b] = input;
 
