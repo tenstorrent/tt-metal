@@ -126,6 +126,8 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_SKIP_DELETING_BUILT_CACHE")) {
         this->skip_deleting_built_cache = true;
     }
+
+    this->enable_hw_cache_invalidation = (std::getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION") != nullptr);
 }
 
 const std::string& RunTimeOptions::get_root_dir() {

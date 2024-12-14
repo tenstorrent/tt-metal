@@ -125,6 +125,10 @@ class RunTimeOptions {
 
     bool enable_dispatch_data_collection = false;
 
+    // HW can clear Blackhole's L1 data cache psuedo-randomly once every 128 transactions
+    // This option will enable this feature to help flush out whether there is a missing cache invalidation
+    bool enable_hw_cache_invalidation = false;
+
     tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
 
     bool skip_deleting_built_cache = false;
@@ -296,6 +300,8 @@ public:
 
     inline bool get_dispatch_data_collection_enabled() { return enable_dispatch_data_collection; }
     inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
+
+    inline bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
     inline tt_metal::DispatchCoreConfig get_dispatch_core_config() { return dispatch_core_config; }
 

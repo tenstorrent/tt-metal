@@ -102,7 +102,7 @@ inline void wait_slave_eriscs(uint32_t &heartbeat) {
 }
 
 int main() {
-    conditionally_disable_l1_cache();
+    configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
     do_crt1((uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
