@@ -1414,6 +1414,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     }
 
     auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(sub_device_id);
+    std::cout << "worker_launch_message_buffer_state.get_unicast_wptr() "
+              << worker_launch_message_buffer_state.get_unicast_wptr() << std::endl;
     auto command = EnqueueProgramCommand(
         this->id,
         this->device,

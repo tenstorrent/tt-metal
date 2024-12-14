@@ -177,6 +177,7 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
+    // DPRINT << "dispatch s: process_go_signal_mcast_cmd" << ENDL();
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
     volatile tt_l1_ptr uint32_t* sync_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -219,6 +220,7 @@ void process_go_signal_mcast_cmd() {
 
 FORCE_INLINE
 void process_dispatch_s_wait_cmd() {
+    // DPRINT << "dispatch s: process_dispatch_s_wait_cmd" << ENDL();
     static constexpr uint32_t worker_sem_max_addr = worker_sem_base_addr + (max_num_worker_sems - 1) * L1_ALIGNMENT;
 
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
@@ -244,6 +246,7 @@ void process_dispatch_s_wait_cmd() {
 
 FORCE_INLINE
 void set_num_worker_sems() {
+    // DPRINT << "dispatch s: set_num_worker_sems" << ENDL();
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     num_worker_sems = cmd->set_num_worker_sems.num_worker_sems;
     ASSERT(num_worker_sems <= max_num_worker_sems);
@@ -252,6 +255,7 @@ void set_num_worker_sems() {
 
 FORCE_INLINE
 void set_go_signal_noc_data() {
+    // DPRINT << "dispatch s: set_go_signal_noc_data" << ENDL();
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t num_words = cmd->set_go_signal_noc_data.num_words;
     ASSERT(num_words <= max_num_go_signal_noc_data_entries);

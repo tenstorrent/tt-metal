@@ -25,8 +25,8 @@ void assert_and_hang(uint32_t line_num) {
     go_message_ptr->signal = RUN_MSG_DONE;
 
     // This exits to base FW
-    internal_::disable_erisc_app();
-    erisc_exit();
+    // internal_::disable_erisc_app();
+    // erisc_exit();
 #endif
 
     while (1) {

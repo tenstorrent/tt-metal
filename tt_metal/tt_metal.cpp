@@ -693,6 +693,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                 go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
                 msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
+                std::cout << "core " << logical_core.str() << " go msg signal " << std::hex
+                          << (uint32_t)(go_msg->signal) << std::dec << std::endl;
+
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
                 tt::llrt::write_launch_msg_to_core(
@@ -751,6 +754,8 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootl
         for (const auto& logical_core : logical_cores) {
             KernelGroup* kernel_group = program.kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+
+            std::cout << "configuring kernel group on core " << physical_core.str() << std::endl;
             ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {

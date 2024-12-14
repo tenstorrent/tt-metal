@@ -834,7 +834,7 @@ void Cluster::initialize_blackhole_eth_connectivity() {
 
                 // TODO: find a better way to map board and asic location to chip
                 chip_id_t connected_chip_id;
-                std::cout << "chip to location size " << this->chip_to_location.size() << std::endl;
+                // std::cout << "chip to location size " << this->chip_to_location.size() << std::endl;
                 for (connected_chip_id = 0; connected_chip_id < this->chip_to_location.size(); connected_chip_id++) {
                     const auto& chip_identifier = this->chip_to_location[connected_chip_id];
                     if (chip_identifier.chip_location == remote_asic_location and

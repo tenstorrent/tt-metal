@@ -6,8 +6,6 @@
 #include <cstdint>
 
 #include "risc_common.h"
-#include "tensix.h"
-#include "tensix_types.h"
 #include "noc.h"
 #include "noc_overlay_parameters.h"
 #include "ckernel_structs.h"
@@ -22,6 +20,8 @@
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "dataflow_api.h"
+#include "ethernet/dataflow_api.h"
+#include "ethernet/tunneling.h"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -52,7 +52,7 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 // c_tensix_core core;
 
-tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
+// tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
@@ -103,27 +103,32 @@ int main() {
 
     debug_addr_ptr[0] = 0xFACEFACE;
 
-    DPRINT << "Active erisc is done" << ENDL();
     mailboxes->go_message.signal = RUN_MSG_DONE;
-    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr   to 0
-    // Cleanup profiler buffer incase we never get the go message
+    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
     while (1) {
         init_sync_registers();
         // Wait...
+        go_msg_t* go_msg_address = &(mailboxes->go_message);
+        DPRINT << "Waiting for go signal at " << (uint32_t)go_msg_address << ENDL();
+        debug_addr_ptr[0] = 0x1234ABCD;
         WAYPOINT("GW");
         while (mailboxes->go_message.signal != RUN_MSG_GO) {
-            debug_addr_ptr[0] = 0x1234ABCD;
-            // RISC_POST_HEARTBEAT(heartbeat);
-        };
+            invalidate_l1_cache();
+        }
+        DPRINT << "Done waiting for go signal" << ENDL();
         WAYPOINT("GD");
 
         {
-            // Idle ERISC Kernels aren't given go-signals corresponding to empty launch messages. Always profile this
-            // iteration, since it's guaranteed to be valid.
+            // Only include this iteration in the device profile if the launch message is valid. This is because all
+            // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
+            // "invalid" iterations.
             DeviceZoneScopedMainN("ACTIVE-ERISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+
+            DPRINT << "launch msg address " << (uint32_t)launch_msg_address << ENDL();
+
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -133,14 +138,16 @@ int main() {
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
-            uint32_t kernel_config_base =
-                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
-            uint32_t tt_l1_ptr* cb_l1_base =
-                (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.cb_offset);
+            DPRINT << "in aerisc enables is " << HEX() << uint32_t(enables) << DEC() << ENDL();
 
             // Run the ERISC kernel
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+                DPRINT << "about to run the kernel" << ENDL();
                 WAYPOINT("R");
+                uint32_t kernel_config_base =
+                    firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+                uint32_t tt_l1_ptr* cb_l1_base =
+                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.cb_offset);
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
                     kernel_config_base +
@@ -148,6 +155,8 @@ int main() {
                 (*kernel_address)((uint32_t)kernel_address);
                 RECORD_STACK_USAGE();
                 WAYPOINT("D");
+            } else {
+                DPRINT << "not running the kernel" << ENDL();
             }
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
@@ -157,26 +166,17 @@ int main() {
                 launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr = NOC_XY_ADDR(
                     NOC_X(mailboxes->go_message.master_x),
-                    NOC_Y(mailboxes->go_message.master_x),
-                    DISPATCH_MESSAGE_ADDR);
-                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                    NOC_Y(mailboxes->go_message.master_y),
+                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                // dispatch addr 95056
+                // DPRINT << "dispatch core: " << (uint32_t)NOC_X(mailboxes->go_message.master_x) << " " <<
+                // (uint32_t)NOC_Y(mailboxes->go_message.master_y) << ENDL();
+                DPRINT << "dispatch addr " << DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset
+                       << ENDL();
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                noc_fast_atomic_increment(
-                    noc_index,
-                    NCRISC_AT_CMD_BUF,
-                    dispatch_addr,
-                    NOC_UNICAST_WRITE_VC,
-                    1,
-                    31 /*wrap*/,
-                    false /*linked*/);
+                internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
-
-#ifndef ARCH_BLACKHOLE
-            while (1) {
-                RISC_POST_HEARTBEAT(heartbeat);
-            }
-#endif
         }
     }
 
