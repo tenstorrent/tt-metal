@@ -24,6 +24,7 @@ public:
     explicit ShapeBase(const std::array<uint32_t, N>& arr) : value_(arr.begin(), arr.end()) {
         init();
     }
+    explicit ShapeBase(std::span<const uint32_t> span) : value_(span.begin(), span.end()) { init(); }
 
     template <std::size_t N>
     bool operator==(const std::array<uint32_t, N>& other) const {
