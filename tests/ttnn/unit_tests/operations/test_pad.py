@@ -166,9 +166,9 @@ def to_torch_padding(padspec):
             {"core_grid": ttnn.CoreGrid(x=1, y=1), "strategy": ttnn.ShardStrategy.HEIGHT},
         ],
         [
-            # test case for UNet
-            (1, 1, 2 * 1056 * 160, 4),
-            (1, 1, 2 * 1056 * 160, 16),
+            # width padding across large core grid, 4 sticks per core
+            (1, 1, 3 * 64, 4),
+            (1, 1, 3 * 64, 16),
             (0, 0, 0, 0),
             0.0,
             {"core_grid": ttnn.CoreGrid(x=8, y=8), "strategy": ttnn.ShardStrategy.HEIGHT},
