@@ -7,28 +7,27 @@ The current version supports the following Llama3 models:
 - Llama3.2-3B
 - Llama3.1-8B
 - Llama3.2-11B
-- Llama3.1-70B (T3000-only)
+- Llama3.1-70B (T3000 and TG-only)
 
 All the above llama models (with the exception of 70B due to its large size) are compatible and tested on the following Tenstorrent hardware:
 - N150 (1-chip)
 - N300 (2-chips)
 - T3000 (8-chips)
+- TG (32-chips)
 
 Below is an updated table with max prefill context-length support for our demo. These were tested on both accuracy and performance mode.
 
-The main reason for a long context length not fitting on device is lack of memory memory. Any exceptions are marked in the table.
+The main reason for a long context length not fitting on device is lack of memory memory. Any exceptions are marked in the table in appendix.
 
-|              |      N150     |       N300      |      T3K      |      TG     |
-|--------------|---------------|-----------------|---------------|-------------|
-| Llama3.2-1B  | 64k tokens    | 64k tokens     | 64k tokens [1] | TBD         |
-| Llama3.2-3B  | 32k tokens    | 64k tokens     | 64k tokens [1] | TBD         |
-| Llama3.1-8B  | 16k tokens    | 64k tokens     | 128k tokens    | TBD         |
-| Llama3.2-11B | 16k tokens    | 64k tokens     | 128k tokens    | TBD         |
-| Llama3.1-70B | Not supported | Not supported  | 64k tokens [2] | 128k tokens |
+|              |      N150     |      N300     |      T3K       |      TG     |
+|--------------|---------------|---------------|----------------|-------------|
+| Llama3.2-1B  | 128k tokens   | 128k tokens   | 128k tokens    | 128k tokens |
+| Llama3.2-3B  | 32k tokens    | 128k tokens   | 128k tokens    | 128k tokens |
+| Llama3.1-8B  | 16k tokens    | 64k tokens    | 128k tokens    | 128k tokens |
+| Llama3.2-11B | 16k tokens    | 64k tokens    | 128k tokens    | 128k tokens |
+| Llama3.1-70B | Not supported | Not supported | 64k tokens [1] | 128k tokens |
 
-[1] For these configurations, running context lengths greater than those specified on the table will generate a bad repetitive output.
-
-[2] Although longer prefill context-lengths are not supported due to model size and available memory, you can still decode (generate) tokens up to a maximum of 128k tokens.
+[1] Although longer prefill context-lengths are not supported due to model size and available memory, you can still decode (generate) tokens up to a maximum of 128k tokens.
 
 
 ## How to Run
@@ -79,6 +78,7 @@ These cache files only need to be created once for each model and each weight (i
 $LLAMA_DIR/N150  # For N150
 $LLAMA_DIR/N300  # For N300
 $LLAMA_DIR/T3K   # For T3000
+$LLAMA_DIR/TG   # For TG
 ```
 
 

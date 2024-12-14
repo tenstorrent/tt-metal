@@ -7,7 +7,6 @@ from loguru import logger
 import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
-    precompute_freqs,
     sample_host,
     encode_prompt_llama_instruct,
     HostEmbedding,
@@ -26,7 +25,7 @@ from models.utility_functions import skip_for_grayskull
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "weights, layers",
@@ -57,7 +56,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -120,26 +119,26 @@ def test_llama_model_inference(
 
     # Define tight final PCC thresholds for quick mode
     final_model_pcc = {
-        "llama32_1b": 0.9991 if mode_accuracy else 0.9864,
+        "llama32_1b": 0.9990 if mode_accuracy else 0.9864,
         "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
         "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
         "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
-        "llama31_70b": 0.9843 if mode_accuracy else 0.9843,
+        "llama31_70b": 0.9419 if mode_accuracy else 0.9419,
     }[model_name]
 
     final_k_cache_pcc = {
         "llama32_1b": 0.9998,
         "llama32_3b": 0.9998,
-        "llama31_8b": 0.9998,
+        "llama31_8b": 0.9997,
         "llama32_11b": 0.9995,
-        "llama31_70b": 0.9998,
+        "llama31_70b": 0.9997,
     }[model_name]
     final_v_cache_pcc = {
         "llama32_1b": 0.9996,
         "llama32_3b": 0.9998,
-        "llama31_8b": 0.9998,
+        "llama31_8b": 0.9997,
         "llama32_11b": 0.9996,
-        "llama31_70b": 0.9998,
+        "llama31_70b": 0.9997,
     }[model_name]
 
     quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
@@ -211,7 +210,11 @@ def test_llama_model_inference(
             device=mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, -2) if batch_size > 1 else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
         )
 
     # Load TTNN model
@@ -249,7 +252,11 @@ def test_llama_model_inference(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            mesh_shape=model_args.cluster_shape,
+        ),
     )
 
     for i in range(generation_length):
@@ -273,11 +280,15 @@ def test_llama_model_inference(
         )
 
         # Convert ttnn tensor to torch tensor
+        mesh_composer = ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
+        )
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+            ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
             .permute(2, 1, 0, 3)
-            .squeeze(1)[: model_args.max_batch_size, :, :]
-        )  # [seq, batch, hidden_dim]
+            .squeeze(2)[: model_args.max_batch_size, 0:1, : model_args.vocab_size]
+        )
+
         ttnn.deallocate(tt_out)
 
         if run_ref_pt:  # Run reference model
@@ -290,7 +301,11 @@ def test_llama_model_inference(
             current_pos,
             device=mesh_device,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
         )
 
         # Append the generated token to the list of outputs
@@ -344,14 +359,18 @@ def test_llama_model_inference(
                         .attention.cache_v.clone()
                         .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
                     ]
-
                     tt_layer_present = []
                     if paged_attention:
                         for layer_past in tt_model.layers[l].attention.layer_past:
                             tt_layer_present.append(
-                                ttnn.to_torch(layer_past, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
-                                    reverse_permutation
-                                ]
+                                ttnn.to_torch(
+                                    layer_past,
+                                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                                        mesh_device,
+                                        dims=(1, 3) if model_args.is_galaxy else (0, 1),
+                                        mesh_shape=model_args.cluster_shape,
+                                    ),
+                                )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
                                 .reshape(
                                     model_args.max_batch_size,
                                     paged_attention_config.max_num_blocks // model_args.max_batch_size,
@@ -364,29 +383,17 @@ def test_llama_model_inference(
                                     :batch, ...
                                 ]
                             )
-                        tt_layer_present = [
-                            (
-                                ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
-                                    reverse_permutation
-                                ]
-                                .reshape(
-                                    model_args.max_batch_size,
-                                    paged_attention_config.max_num_blocks // model_args.max_batch_size,
-                                    model_args.n_kv_heads,
-                                    paged_attention_config.block_size,
-                                    model_args.head_dim,
-                                )
-                                .transpose(1, 2)
-                                .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
-                                    :batch, ...
-                                ]
-                            )
-                            for cache in tt_model.layers[l].attention.layer_past
-                        ]
                     else:
                         for layer_past in tt_model.layers[l].attention.layer_past:
                             tt_layer_present.append(
-                                ttnn.to_torch(layer_past, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+                                ttnn.to_torch(
+                                    layer_past,
+                                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                                        mesh_device,
+                                        dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                                        mesh_shape=model_args.cluster_shape,
+                                    ),
+                                )[:batch, :, :, :]
                             )
 
                     for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):

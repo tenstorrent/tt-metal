@@ -49,10 +49,6 @@ from models.utility_functions import skip_for_grayskull
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    (1,),
-)
-@pytest.mark.parametrize(
     "max_seq_len",
     (
         2048,
@@ -62,7 +58,6 @@ from models.utility_functions import skip_for_grayskull
 )
 def test_llama_attention_inference(
     max_seq_len,
-    batch_size,
     paged_attention,
     page_params,
     mesh_device,
@@ -72,6 +67,7 @@ def test_llama_attention_inference(
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
+    batch_size = 1  # For prefill we only support batch_size = 1
 
     mesh_device.enable_async(True)
 
@@ -88,7 +84,13 @@ def test_llama_attention_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=max_seq_len)
+    rot_mats = get_prefill_rot_mat(
+        model_args.head_dim,
+        model_args.max_seq_len,
+        mesh_device,
+        seq_len=max_seq_len,
+        scale_factor=model_args.rope_scaling_factor,
+    )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
@@ -143,7 +145,7 @@ def test_llama_attention_inference(
     tt_attention_input = pt_attention_input.clone()
     attention_input = model_args.prepare_residual_tensor_prefill(
         tt_attention_input,
-        force_replicated=True,
+        force_replicated=False if model_args.is_galaxy else True,
     )
 
     tt_out = tt_model(
@@ -154,15 +156,17 @@ def test_llama_attention_inference(
         mode="prefill",
         page_table=page_table_tt,
     )
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
-        0, :, :, : model_args.dim
-    ].view(
-        batch_size, max_seq_len, -1
-    )  # [ batch_size, seq, dim]
-
+    tt_out = ttnn.to_torch(
+        tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape)
+    )
+    tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, max_seq_len, -1)  # [ batch, seq, hidden_dim]
     positions = torch.LongTensor(range(max_seq_len))
     freqs_cis_i = precompute_freqs_cis(
-        model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_theta, model_args.use_scaled_rope
+        model_args.head_dim,
+        model_args.max_seq_len * 2,
+        model_args.rope_theta,
+        model_args.use_scaled_rope,
+        model_args.rope_scaling_factor,
     )[positions]
     attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
     attn_mask_torch = torch.triu(attn_mask, diagonal=1)
@@ -189,7 +193,14 @@ def test_llama_attention_inference(
         if paged_attention:
             tt_layer_present = [
                 (
-                    ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[reverse_permutation]
+                    ttnn.to_torch(
+                        cache,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            mesh_device,
+                            dims=(1, 3) if model_args.is_galaxy else (0, 1),
+                            mesh_shape=model_args.cluster_shape,
+                        ),
+                    )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
                     .reshape(
                         model_args.max_batch_size,
                         paged_attention_config.max_num_blocks // model_args.max_batch_size,
@@ -206,7 +217,14 @@ def test_llama_attention_inference(
             ]
         else:
             tt_layer_present = [
-                ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+                ttnn.to_torch(
+                    cache,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device,
+                        dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                        mesh_shape=model_args.cluster_shape,
+                    ),
+                )[:batch_size, :, :, :]
                 for cache in tt_model.layer_past
             ]
 

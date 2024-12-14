@@ -110,8 +110,14 @@ Result conv_transpose2d(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config ) {
         Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-        DeviceComputeKernelConfig compute_config = compute_config_.value_or(DeviceComputeKernelConfig());
-
+        DeviceComputeKernelConfig compute_config = compute_config_.value_or(init_device_compute_kernel_config(
+            device->arch(),
+            std::nullopt,
+            MathFidelity::HiFi4,
+            true,
+            false,
+            false
+        ));
 
         //Inverse of sliding_window.get_output_shape()
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig{

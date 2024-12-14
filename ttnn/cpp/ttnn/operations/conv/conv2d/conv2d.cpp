@@ -86,7 +86,7 @@ Result conv2d(
         (conv_config.weights_dtype == DataType::BFLOAT8_B || conv_config.weights_dtype == DataType::BFLOAT16) &&
         conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size * in_channels) % (16 * num_cores_c)) == 0;
 
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or( init_device_compute_kernel_config(
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(init_device_compute_kernel_config(
             device->arch(),
             std::nullopt,
             MathFidelity::HiFi4,
