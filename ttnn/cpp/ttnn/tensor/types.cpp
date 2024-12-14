@@ -260,7 +260,7 @@ MemoryConfig load_memory_config(std::ifstream& input_stream) {
     BufferType buffer_type;
     bool has_shard_spec;
     input_stream.read(reinterpret_cast<char*>(&version_id), sizeof(std::uint8_t));
-    if (version_id != VERSION_ID) {
+    if (version_id < 3) {
         throw std::runtime_error(fmt::format("Unsupported version_id: {}", version_id));
     }
     input_stream.read(reinterpret_cast<char*>(&memory_layout), sizeof(TensorMemoryLayout));
