@@ -21,7 +21,7 @@
   - [4. End to end model performance](#4-end-to-end-model-performance)
     - [4.1 Performance sheet](#41-performance-sheet)
     - [4.2 Visualizer](#42-visualizer--)
-    - [4.4 Trace and 2cq](#44-trace-and-2cq)
+    - [4.3 Trace and 2cq](#44-trace-and-2cq)
   - [5. Conclusion](#5-conclusion)
 
 
@@ -117,4 +117,7 @@ The diagram below illustrates the corresponding Downsample1 module:
   - You may consider a naive TTNN implementation by taking the example of [YOLO-v4 basic demo](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/demo/demo.py). Then consider studying [the demo implementated using trace and 2 command quueues available in TTNN](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py). Expect more dive deep and documentation on trace and 2cq comming soon. 
 
 
-______________________________________________-
+## 5. Conclusion
+
+  - This document walks you through a systematic approach to bringing up new models in TTNN library using existing implementations as examples. It aims at enabling you to ramp up quicky on an intial bring up phase and then guiding you though knobs and tools available for performace analysis and optimizations. 
+  - Please note, this is an inital draft and it will be enhanced to include more details on memory visualizer and trace and 2cq concepts. 
