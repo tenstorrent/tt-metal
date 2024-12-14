@@ -108,7 +108,13 @@ The diagram below illustrates the corresponding Downsample1 module:
   - Another approach to improve utilization is by applying sharding techniques to eliminate the need for data movement inter-tensix-cores between the consecutive OPs. you may checkout the example here in [yolov4 tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/YoloV4-TTNN/yolov4.md#21-sharding-on-all-relevant-ops)
 
 
+### 4.2 Visualizer
 
+  - COMING SOON
+
+
+### 4.3 Trace and 2cq
+  - You may consider a naive TTNN implementation by taking the example of [YOLO-v4 basic demo](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/demo/demo.py). Then consider studying [the demo implementated using trace and 2 command quueues available in TTNN](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py). Expect more dive deep and documentation on trace and 2cq comming soon. 
 
 
 ______________________________________________-
