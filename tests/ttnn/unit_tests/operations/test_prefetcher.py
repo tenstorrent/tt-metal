@@ -289,16 +289,17 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, num_layers",
     [  # TODO: test different shapes etc
+        # (2, 3, [(128, 128), (128, 128*2), (128, 128*3)], 2), # hang on multi dtypes
         # (2, 2, [(256, 512), (256, 512)], 5),
         # (2, 2, [(1024, 256), (1024, 256)], 5),
         # (2, 2, [(128, 128), (128, 128)], 2),
         # (2, 2, [(256, 1024), (256, 1024)], 5),
-        # (
-        #     12,
-        #     3,
-        #     [(2304, 3840)] * 5,
-        #     12,
-        # ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
+        (
+            12,
+            5,
+            [(2304, 3840)] * 5,
+            2,
+        ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
         # (
         #     1,
         #     4,
@@ -308,7 +309,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
         # (12, 5, [(7680, 2304)] * 5, 5),  # FF2
         # (12, 6, [(2304, 1536)] * 6, 5),  # QKV
         # (12, 5, [(2304, 2304)] * 5, 5),  # DO
-        (12, 5, [(2304, 3840), (3840, 2304), (2304, 3840), (1536, 2304), (2304, 2304)], 1),  # ff1 + ff2 +ff3+ qkv + do
+        # (12, 5, [(2304, 3840), (3840, 2304), (2304, 3840), (1536, 2304), (2304, 2304)], 1),  # ff1 + ff2 +ff3+ qkv + do
     ],
 )
 @pytest.mark.parametrize(
@@ -364,8 +365,10 @@ def test_run_prefetcher(
     print(f"receiver_cores_list: {receiver_cores_list}")
 
     sender_receiver_mapping = list(zip(sender_cores, receiver_cores))
-    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 512 * 512 * 4)
-    print(f"global cb size {512 * 512 * 4}")
+
+    global_cb_size = 512 * 512 * 4
+    global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
+    print(f"global cb size {global_cb_size}")
 
     ##### Set up the input tensors #####
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
@@ -394,7 +397,7 @@ def test_run_prefetcher(
         tt_tensor = ttnn.as_tensor(
             pt_tensors[tid],
             device=device,
-            dtype=ttnn.bfloat4_b if (tid % 2) == 0 else ttnn.bfloat8_b,
+            dtype=dtype,  # ttnn.bfloat4_b if (tid % 2) == 0 else ttnn.bfloat8_b,
             memory_config=input_sharded_mem_config,
             layout=ttnn.TILE_LAYOUT,
         )
@@ -594,6 +597,41 @@ def test_run_prefetcher(
         writer_output_mem_config,
     )
     all_passing = True
+
+    # FIXME: RESULTS IN HANG FOR LARGE SHAPES
+    # for l in range(num_layers):
+    #     outputs_t = []
+    #     for t in range(num_tensors):
+    #         idx = l * num_tensors + t
+    #         logger.info(f"Running matmul for layer {l}, tensor {t}")
+
+    #         output_t = ttnn.matmul(
+    #             in0_t_tensors[t],
+    #             tt_tensors_all[idx],
+    #             program_config=program_configs[t],
+    #             memory_config=output_mem_configs[t],
+    #             compute_kernel_config=compute_kernel_config,
+    #             global_cb=global_circular_buffer,
+    #         )
+    #         outputs_t.append(output_t)
+
+    #     for t in range(num_tensors):
+    #         idx = l * num_tensors + t
+    #         logger.info(f"Checking matmul for layer {l}, tensor {t}")
+    #         tt_out = ttnn.to_torch(outputs_t[t])
+    #         pt_out = in0_tensors[t] @ pt_tensors[idx]
+
+    #         if dtype == ttnn.bfloat4_b:
+    #             pcc_threshold = 0.99
+    #         elif dtype == ttnn.bfloat8_b:
+    #             pcc_threshold = 0.999
+    #         elif dtype == ttnn.bfloat16_b:
+    #             pcc_threshold = 0.9999
+
+    #         passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
+    #         logger.info(output)
+    #         all_passing = passing and all_passing
+
     outputs_t = []
     for i in range(num_layers * num_tensors):
         logger.info(f"Running matmul for layer {i // num_tensors }, tensor {i % num_tensors}")

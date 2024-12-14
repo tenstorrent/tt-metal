@@ -166,7 +166,10 @@ void kernel_main() {
     uint32_t noc = noc_index;
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
+        DeviceZoneScopedN("layers");
         for (uint32_t t = 0; t < num_tensors; t++) {
+            DeviceZoneScopedN("tensors");
+
             uint32_t curr_coalesced_page_size = coalesced_page_sizes[t];
             uint32_t curr_coalesced_num_pages = coalesced_num_pages[t];
             uint32_t curr_block_num_tiles = block_num_tiles[t];
@@ -176,10 +179,13 @@ void kernel_main() {
             uint32_t curr_block_size_per_receiver = curr_block_size / num_receivers;
 
             resize_remote_sender_cb_interface_<true>(remote_cb_id, curr_block_size_per_receiver, noc);
-
-            experimental::remote_cb_reserve_back(remote_cb_id, num_blocks);
+            {
+                DeviceZoneScopedN("reserve_back");
+                experimental::remote_cb_reserve_back(remote_cb_id, num_blocks);
+            }
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
+                // DeviceZoneScopedN("writer_block");
                 cb_wait_front(local_cb_id, max_block_num_tiles);
 
                 uint32_t local_cb_addr = get_read_ptr(local_cb_id);
