@@ -116,7 +116,6 @@ class TtFalconLayernorm:
                             1024,
                         ],
                         ttnn.ShardOrientation.ROW_MAJOR,
-                        False,
                     ),
                 ),
                 program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(

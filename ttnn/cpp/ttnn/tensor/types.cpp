@@ -282,6 +282,11 @@ MemoryConfig load_memory_config(std::ifstream& input_stream) {
         }
         input_stream.read(reinterpret_cast<char*>(&shape), sizeof(std::array<uint32_t, 2>));
         input_stream.read(reinterpret_cast<char*>(&orientation), sizeof(ShardOrientation));
+        if (version_id <= 3) {
+            bool halo = false;
+            // Read the halo value for backword compatibility.
+            input_stream.read(reinterpret_cast<char*>(&halo), sizeof(bool));
+        }
         shard_spec = {CoreRangeSet{core_ranges}, shape, orientation};
     }
     return MemoryConfig{memory_layout, buffer_type, shard_spec};

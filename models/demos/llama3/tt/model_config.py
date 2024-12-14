@@ -580,7 +580,6 @@ class TtModelArgs:
                         nearest_32(56),
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
 
@@ -1392,7 +1391,6 @@ def set_tg_attention_config(model_config, dim):
                     32,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     )
