@@ -202,6 +202,12 @@ def to_torch_padding(padspec):
 def test_pad_rm_sharded_stickwise(
     device, input_shape, pad_to_shape, input_tensor_start, pad_value, input_sharded_memory_config_args
 ):
+    core_grid_x_ok = device.core_grid.x >= input_sharded_memory_config_args["core_grid"].x
+    core_grid_y_ok = device.core_grid.y >= input_sharded_memory_config_args["core_grid"].y
+    device_core_grid_ok = core_grid_x_ok and core_grid_y_ok
+    if not device_core_grid_ok:
+        pytest.skip("core grid for this test is not compatible with the device")
+
     input_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
 
     torch_input_tensor = torch.ones(input_shape, dtype=torch.float32)
