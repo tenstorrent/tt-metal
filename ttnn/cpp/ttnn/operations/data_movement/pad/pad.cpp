@@ -15,16 +15,6 @@ namespace ttnn::operations::data_movement {
 namespace {
 
 template <typename ArrayType>
-ttnn::SmallVector<uint32_t> array_to_vec(const ArrayType& arr) {
-    return ttnn::SmallVector<uint32_t>(arr.begin(), arr.end());
-}
-
-template <typename ArrayType>
-ttnn::SimpleShape array_to_simple_shape(const ArrayType& arr) {
-    return ttnn::SimpleShape(array_to_vec(arr));
-}
-
-template <typename ArrayType>
 bool eq_spans(const ArrayType& a, const ArrayType& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end());
 }
@@ -44,7 +34,7 @@ static ttnn::Tensor pad_impl(
             return input_tensor;
         } else {
             return input_tensor.pad(
-                tt::tt_metal::LegacyShape(output_padded_shape), array_to_simple_shape(input_tensor_start), value);
+                tt::tt_metal::LegacyShape(output_padded_shape), ttnn::SimpleShape{input_tensor_start}, value);
         }
     }
 
@@ -142,7 +132,7 @@ static ttnn::Tensor pad_impl(
 
         auto output_tensor = operation::run(
                                  Pad{output_padded_legacy_shape,
-                                     array_to_simple_shape(input_tensor_start),
+                                     ttnn::SimpleShape{input_tensor_start},
                                      value,
                                      output_memory_config,
                                      use_multicore},
@@ -227,13 +217,14 @@ ttnn::Tensor ExecutePad::invoke(
     ttnn::Tensor output_tensor =
         pad_impl(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg);
     // output_tensor is currently 4D. We have to squeeze back to the original rank
-    auto shape = array_to_vec(output_tensor.get_shape().value);
-    auto padded_shape = array_to_vec(output_tensor.get_shape().with_tile_padding().value);
-    if (auto rank_diff = shape.size() - original_rank; rank_diff) {
-        auto remove_first_elements = [](auto& source, size_t n) { source.erase(source.begin(), source.begin() + n); };
-        remove_first_elements(shape, rank_diff);
-        remove_first_elements(padded_shape, rank_diff);
-        auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(shape, padded_shape));
+    auto to_vec = [](const auto& arr) { return ttnn::SmallVector<uint32_t>{arr.begin(), arr.end()}; };
+    auto output_shape = to_vec(output_tensor.get_shape().value);
+    auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value);
+    if (const auto rank_diff = output_shape.size() - original_rank; rank_diff) {
+        auto remove_prefix = [](auto& source, size_t n) { source.erase(source.begin(), source.begin() + n); };
+        remove_prefix(output_shape, rank_diff);
+        remove_prefix(padded_shape, rank_diff);
+        auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padded_shape));
         output_tensor = ttnn::reshape(output_tensor, squeezedShape);
     }
 
