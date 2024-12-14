@@ -10,7 +10,7 @@ void kernel_main() {
     const std::uint32_t weight_buffer_src_addr = get_arg_val<uint32_t>(1);
     const std::uint32_t batch_offset = get_arg_val<uint32_t>(2);
     const std::uint32_t weights_offset = get_arg_val<uint32_t>(3);
-    const std::uint32_t num_blocks = get_arg_val<uint32_t>(4);
+    const std::uint32_t num_rows = get_arg_val<uint32_t>(4);
 
     const std::uint32_t index_idx = get_arg_val<uint32_t>(5);
 
@@ -40,7 +40,7 @@ void kernel_main() {
     uint32_t index = index_idx;
 
     bool read_indices = true;
-    for (uint32_t i = 0; i < num_blocks; ++i) {
+    for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
             uint64_t noc_input_src_addr = get_noc_addr(curr_row, input) + offset;
             noc_async_read(noc_input_src_addr, input_l1_addr, input_block_size_bytes);
