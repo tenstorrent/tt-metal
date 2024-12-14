@@ -69,9 +69,10 @@ std::array<uint32_t, 2> compute_block_sharded_shard_shape(const std::array<uint3
     }
 
     auto [tensor_height, tensor_width] = squeezed_tensor_hw;
-    auto tensor_height_padded_to_tile = layout == tt::tt_metal::Layout::TILE
-                                        ? tt::round_up(tensor_height, adjusted_grid_size.y * tt::constants::TILE_HEIGHT) 
-                                        : tensor_height;
+    auto tensor_height_padded_to_tile =
+        layout == tt::tt_metal::Layout::TILE
+            ? tt::round_up(tensor_height, adjusted_grid_size.y * tt::constants::TILE_HEIGHT)
+            : tensor_height;
     std::array<uint32_t, 2> shard_shape = {tt::div_up(tensor_height_padded_to_tile, adjusted_grid_size.y),
                                            tt::div_up(tensor_width, adjusted_grid_size.x)};
 
