@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     const std::uint32_t input_dram_buffer_src_addr = get_arg_val<uint32_t>(0);
@@ -91,6 +92,30 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         uint64_t src_noc_addr;
         uint32_t token = input_l1_ptr[token_idx];
+        DPRINT << "Token: " << token << ENDL();
+
+        for (int r_f = 0; r_f < 2; r_f++) {
+            for (int i = 0; i < 105; i++) {
+                DPRINT << "_";
+            }
+            uint32_t r_f_offset = r_f * 2 * 16 * 16;
+            for (int r = 0; r < 16; c++) {
+                uint32_t r_offset = r * 16;
+                DPRINT << "[";
+                for (int i = 0; i < 16; i++) {
+                    DPRINT << input_l1_ptr[i + r_f_offset + r_offset] << ", ";
+                }
+                DPRINT << "] | ";
+                DPRINT << "[";
+                for (int i = 0; i < 16; i++) {
+                    DPRINT << input_l1_ptr[i + r_f_offset + r_offset + (16 * 16)] << ", ";
+                }
+                DPRINT << "]" << ENDL();
+            }
+            for (int i = 0; i < 105; i++) {
+                DPRINT << "_";
+            }
+        }
 #if defined PADDED
         if (token == pad_token) {
             src_noc_addr = pad_noc_addr;
@@ -132,6 +157,7 @@ void kernel_main() {
             noc_async_read_barrier();
             read_indices = false;
         }
+        DPRINT << "index: " << index << ENDL();
         read_block(index, weight_stick_size);
         index++;
         if (index == rows_per_block) {
