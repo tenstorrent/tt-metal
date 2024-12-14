@@ -77,8 +77,8 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
         ttnn.CoreCoord(4, 0),
         ttnn.CoreCoord(4, 9),
         ttnn.CoreCoord(4, 1),
-        ttnn.CoreCoord(4, 8),
-        ttnn.CoreCoord(4, 3),
+        ttnn.CoreCoord(4, 7),
+        ttnn.CoreCoord(4, 6),
         ttnn.CoreCoord(4, 2),
         ttnn.CoreCoord(4, 4),
         ttnn.CoreCoord(4, 5),
@@ -99,10 +99,10 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             (6, 9),
             (5, 1),
             (6, 1),
-            (5, 8),
-            (6, 8),
-            (5, 3),
-            (6, 3),
+            (5, 7),
+            (6, 7),
+            (5, 6),
+            (6, 6),
             (5, 2),
             (6, 2),
             (5, 4),
@@ -126,10 +126,10 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             # (6, 9),
             (5, 1),
             # (6, 1),
-            (5, 8),
-            # (6, 8),
-            (5, 3),
-            # (6, 3),
+            (5, 7),
+            # (6, 7),
+            (5, 6),
+            # (6, 6),
             (5, 2),
             # (6, 2),
             (5, 4),
@@ -197,16 +197,16 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
         ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(
-                    ttnn.CoreCoord(5, 8),
-                    ttnn.CoreCoord(6, 8) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 8),
+                    ttnn.CoreCoord(5, 7),
+                    ttnn.CoreCoord(6, 7) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 7),
                 ),
             ]
         ),
         ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(
-                    ttnn.CoreCoord(5, 3),
-                    ttnn.CoreCoord(6, 3) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 3),
+                    ttnn.CoreCoord(5, 6),
+                    ttnn.CoreCoord(6, 6) if num_global_cb_receivers == 2 else ttnn.CoreCoord(5, 6),
                 ),
             ]
         ),
@@ -243,27 +243,61 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
         ]
     )
 
+    mm_optimised_ring_cores = [
+        (6, 9),
+        (6, 7),
+        (6, 6),
+        (6, 5),
+        (6, 4),
+        (6, 2),
+        (6, 1),
+        (6, 0),
+        (5, 0),
+        (5, 1),
+        (5, 2),
+        (5, 4),
+        (5, 5),
+        (5, 6),
+        (5, 7),
+        (5, 9),
+        (2, 9),
+        (2, 5),
+        (2, 4),
+        (2, 0),
+        (1, 0),
+        (1, 4),
+        (1, 5),
+        (1, 9),
+    ]
+
     dram_cores = all_dram_cores[:num_reader_cores]
     sender_cores = all_sender_cores[:num_reader_cores]
     receiver_cores_list = all_receiver_cores_list[: num_reader_cores * num_global_cb_receivers]
     # receiver_cores_list = all_receiver_cores_list[:num_reader_cores]
     receiver_cores = all_receiver_cores[:num_reader_cores]
 
-    return dram_cores, sender_cores, receiver_cores_list, receiver_cores, worker_cores_range_set
+    return (
+        dram_cores,
+        sender_cores,
+        receiver_cores_list,
+        receiver_cores,
+        worker_cores_range_set,
+        mm_optimised_ring_cores,
+    )
 
 
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, num_layers",
     [  # TODO: test different shapes etc
-        (2, 2, [(256, 512), (256, 512)], 1),
-        (2, 2, [(1024, 256), (1024, 256)], 1),
-        (2, 2, [(128, 128), (128, 128)], 1),
-        (2, 2, [(256, 1024), (256, 1024)], 1),
+        (2, 2, [(256, 512), (256, 512)], 5),
+        (2, 2, [(1024, 256), (1024, 256)], 5),
+        (2, 2, [(128, 128), (128, 128)], 2),
+        (2, 2, [(256, 1024), (256, 1024)], 5),
         (
             12,
-            3,
-            [(2304, 3840)] * 3,
-            1,
+            5,
+            [(2304, 3840)] * 5,
+            12,
         ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
         (
             1,
@@ -271,9 +305,9 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             [(192, 320), (192, 320), (192, 320), (192, 320)],
             1,
         ),
-        (12, 5, [(7680, 2304)] * 5, 1),  # FF2
-        (12, 6, [(2304, 1536)] * 6, 1),  # QKV
-        (12, 5, [(2304, 2304)] * 5, 1),  # DO
+        (12, 5, [(7680, 2304)] * 5, 5),  # FF2
+        (12, 6, [(2304, 1536)] * 6, 5),  # QKV
+        (12, 5, [(2304, 2304)] * 5, 5),  # DO
         (12, 5, [(2304, 3840), (3840, 2304), (2304, 3840), (1536, 2304), (2304, 2304)], 1),  # ff1 + ff2 +ff3+ qkv + do
     ],
 )
@@ -303,9 +337,17 @@ def test_run_prefetcher(
 
     K, N = input_shapes[0]
 
-    dram_cores, sender_cores, receiver_cores_list, receiver_cores, worker_cores_range_set = get_core_ranges(
-        num_reader_cores, num_global_cb_receivers
-    )
+    (
+        dram_cores,
+        sender_cores,
+        receiver_cores_list,
+        receiver_cores,
+        worker_cores_range_set,
+        mm_optimised_ring_cores,
+    ) = get_core_ranges(num_reader_cores, num_global_cb_receivers)
+
+    if num_reader_cores != 12:
+        mm_optimised_ring_cores = receiver_cores_list
 
     receiver_core_range_set = ttnn.CoreRangeSet(
         [
@@ -322,10 +364,6 @@ def test_run_prefetcher(
     print(f"receiver_cores_list: {receiver_cores_list}")
 
     sender_receiver_mapping = list(zip(sender_cores, receiver_cores))
-    # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 2048 * (576))
-    # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 1088 * (360))
-    # global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 576 * (800))
-
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 512 * 512 * 4)
     print(f"global cb size {512 * 512 * 4}")
 
@@ -333,26 +371,15 @@ def test_run_prefetcher(
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
-    # pt_tensors = [torch.ones(input_shapes[tid]) for tid in range(num_tensors) for _ in range(num_layers)]
     pt_tensors = []
-    for tid in range(num_tensors):
-        if tid == 0:
-            tensor = torch.randn(input_shapes[tid])
-            # shape = input_shapes[tid]
-            # rows, cols = shape
-            # tensor = torch.arange(1, rows + 1).unsqueeze(1).expand(rows, cols).float()
-        elif tid == 1:
-            tensor = torch.randn(input_shapes[tid])
-        elif tid == 2:
-            tensor = torch.randn(input_shapes[tid])
-        else:
-            tensor = torch.randn(input_shapes[tid])
-        pt_tensors.append(tensor)
+    for l in range(num_layers):
+        for t in range(num_tensors):
+            pt_tensors.append(torch.randn(input_shapes[t]))
 
-    tt_tensors = []
+    tt_tensors_all = []
 
-    for tid in range(num_tensors):
-        K, N = input_shapes[tid]
+    for tid in range(num_tensors * num_layers):
+        K, N = input_shapes[tid % num_tensors]
         input_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
@@ -365,16 +392,18 @@ def test_run_prefetcher(
         )
 
         tt_tensor = ttnn.as_tensor(
-            pt_tensors[tid * num_layers],  # Add a loop for num_layers
+            pt_tensors[tid],
             device=device,
             dtype=ttnn.bfloat4_b if (tid % 2) == 0 else ttnn.bfloat8_b,
             memory_config=input_sharded_mem_config,
             layout=ttnn.TILE_LAYOUT,
         )
-        tt_tensors.append(tt_tensor)
+        tt_tensors_all.append(tt_tensor)
+    tt_tensors = tt_tensors_all[:num_tensors]
 
     # Set up the tensor addrs
-    tensor_addrs = torch.tensor([x.buffer_address() for x in tt_tensors])
+    # TODO: Fix when greater than a tile size
+    tensor_addrs = torch.tensor([x.buffer_address() for x in tt_tensors_all])
     tensor_addrs = tensor_addrs.repeat(len(dram_cores), 1)
     tensor_addrs_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -397,7 +426,7 @@ def test_run_prefetcher(
         ttnn.ShardSpec(
             sender_core_range_set,
             [
-                K * num_tensors * num_layers,
+                K * num_tensors,
                 N // len(sender_cores),
             ],  # Assuming all tensors have the same shape TODO: extend to different shapes
             ttnn.ShardOrientation.ROW_MAJOR,
@@ -421,6 +450,7 @@ def test_run_prefetcher(
     worker_sub_device = ttnn.SubDevice([worker_cores_range_set])
     sub_device_manager = device.create_sub_device_manager([prefetcher_sub_device, worker_sub_device], 0)
     device.load_sub_device_manager(sub_device_manager)
+    worker_sub_device_id = 1  # Can we parameterize this?
 
     max_dst_tiles = 8
     grid = receiver_cores_list
@@ -462,7 +492,17 @@ def test_run_prefetcher(
     else:
         CORE_RANGE = grid
 
-    core_range_set = ttnn.CoreRangeSet(
+    input_core_range_set = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(x, y),
+                ttnn.CoreCoord(x, y),
+            )
+            for x, y in mm_optimised_ring_cores
+        ]
+    )
+
+    output_core_range_set = ttnn.CoreRangeSet(
         [
             ttnn.CoreRange(
                 ttnn.CoreCoord(x, y),
@@ -482,7 +522,7 @@ def test_run_prefetcher(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                core_range_set,
+                output_core_range_set,
                 [M, N // num_cores],
                 ttnn.ShardOrientation.ROW_MAJOR,
                 False,
@@ -502,7 +542,7 @@ def test_run_prefetcher(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                core_range_set,
+                input_core_range_set,
                 [M, K // num_cores],
                 ttnn.ShardOrientation.ROW_MAJOR,
                 False,
@@ -537,7 +577,7 @@ def test_run_prefetcher(
         program_configs.append(program_config)
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -554,7 +594,8 @@ def test_run_prefetcher(
     )
     all_passing = True
     outputs_t = []
-    for i in range(num_tensors):
+    for i in range(num_layers * num_tensors):
+        logger.info(f"Running matmul for layer {i // num_tensors }, tensor {i % num_tensors}")
         output_t = ttnn.matmul(
             in0_t_tensors[i],
             tt_tensors[i],
@@ -565,21 +606,23 @@ def test_run_prefetcher(
         )
         outputs_t.append(output_t)
 
-    for i in range(num_tensors):
-        tt_out = ttnn.to_torch(outputs_t[i])
-        pt_out = in0_tensors[i] @ pt_tensors[i]
-        logger.info("Using prefetched weights")
+    for l in range(num_layers):
+        for t in range(num_tensors):
+            idx = l * num_tensors + t
+            tt_out = ttnn.to_torch(outputs_t[idx])
+            pt_out = in0_tensors[idx] @ pt_tensors[idx]
+            logger.info("Using prefetched weights")
 
-        if dtype == ttnn.bfloat4_b:
-            pcc_threshold = 0.99
-        elif dtype == ttnn.bfloat8_b:
-            pcc_threshold = 0.999
-        elif dtype == ttnn.bfloat16_b:
-            pcc_threshold = 0.9999
+            if dtype == ttnn.bfloat4_b:
+                pcc_threshold = 0.99
+            elif dtype == ttnn.bfloat8_b:
+                pcc_threshold = 0.999
+            elif dtype == ttnn.bfloat16_b:
+                pcc_threshold = 0.9999
 
-        passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
-        logger.info(output)
-        all_passing = passing and all_passing
+            passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
+            logger.info(output)
+            all_passing = passing and all_passing
 
     assert all_passing
 
