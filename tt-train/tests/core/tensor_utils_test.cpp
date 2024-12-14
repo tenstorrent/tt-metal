@@ -246,7 +246,7 @@ TEST_F(TensorUtilsTest, TestFloatXtensor) {
     auto shape = ttml::core::create_shape({1, 1, 1, 3});
 
     xt::xarray<float> xtensor =
-        ttml::core::span_to_xtensor(std::span<float>{test_data.data(), test_data.size()}, shape.logical_shape());
+        ttml::core::span_to_xtensor_view(std::span<float>{test_data.data(), test_data.size()}, shape.logical_shape());
     auto tensor = ttml::core::from_xtensor(xtensor, device);
 
     auto xtensor_back = ttml::core::to_xtensor(tensor);
@@ -259,8 +259,8 @@ TEST_F(TensorUtilsTest, TestUint32XTensor) {
     std::vector<uint32_t> test_data = {30, 20, 2};
 
     auto shape = ttml::core::create_shape({1, 1, 1, 3});
-    xt::xarray<uint32_t> xtensor =
-        ttml::core::span_to_xtensor(std::span<uint32_t>{test_data.data(), test_data.size()}, shape.logical_shape());
+    xt::xarray<uint32_t> xtensor = ttml::core::span_to_xtensor_view(
+        std::span<uint32_t>{test_data.data(), test_data.size()}, shape.logical_shape());
     auto tensor = ttml::core::from_xtensor<uint32_t, DataType::UINT32>(xtensor, device);
 
     auto xtensor_back = ttml::core::to_xtensor<uint32_t>(tensor);
