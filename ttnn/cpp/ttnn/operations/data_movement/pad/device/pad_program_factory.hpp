@@ -48,11 +48,18 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     const ttnn::SimpleShape& input_tensor_start,
     const float pad_value);
 
-operation::ProgramWithCallbacks pad_rm_sharded(
+operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     const Tensor& a,
     Tensor& output,
     const tt::tt_metal::LegacyShape& output_tensor_shape,
     const ttnn::SimpleShape& input_tensor_start,
     const float pad_value);
+
+operation::ProgramWithCallbacks pad_rm_sharded_width_only(
+    const Tensor& a,
+    Tensor& output,
+    const tt::tt_metal::LegacyShape& output_tensor_shape,
+    const ttnn::SimpleShape& input_tensor_start,
+    float pad_value);
 
 }  // namespace ttnn::operations::data_movement::detail
