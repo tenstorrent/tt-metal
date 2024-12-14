@@ -62,6 +62,7 @@ std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::
     // Output shape is the same as the input shape, but the height is multiplied by the number of input tensors
     auto input_shape = input_tensors.at(0).get_legacy_shape();
     return {
+        ttnn::SimpleShape{32, 32 * input_tensors.size()},
         ttnn::SimpleShape{input_shape[0] * input_tensors.size(), input_shape[1]},
         ttnn::SimpleShape{input_shape[0] * input_tensors.size(), input_shape[1]}};
 }

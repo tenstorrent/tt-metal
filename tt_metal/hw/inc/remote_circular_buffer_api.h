@@ -75,7 +75,6 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(uint32_t cb_id, uint32_t p
     uint32_t prev_fifo_limit_page_aligned = receiver_cb_interface.fifo_limit_page_aligned;
 
     uint32_t next_fifo_rd_ptr = fifo_start_addr + align(fifo_rd_ptr - fifo_start_addr, page_size);
-    // DPRINT << "next_fifo_rd_ptr " << next_fifo_rd_ptr/16 << ENDL();
     if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
         next_fifo_rd_ptr = fifo_start_addr;
     } else {
@@ -136,7 +135,6 @@ FORCE_INLINE void remote_cb_pop_front(uint32_t cb_id, uint32_t num_pages, uint8_
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_acked_ptr);
 
     *pages_acked_ptr += num_aligned_pages;
-    // DPRINT << "num_aligned_pages sent back " << num_aligned_pages << ENDL();
     remote_cb.fifo_rd_ptr += len_bytes;
     uint32_t cb_size = remote_cb.fifo_limit_page_aligned - remote_cb.fifo_start_addr;
 
@@ -212,8 +210,6 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
 
         noc_async_write_one_packet_set_state(dest_noc_addr, coalesced_page_size, noc);
 
-        DPRINT << "num_rows " << ENDL();
-
         for (uint32_t h = 0; h < num_rows; ++h) {
             uint32_t prev_src_addr = src_addr;
             for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
@@ -253,7 +249,6 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
 
         uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
         noc_semaphore_inc(remote_sent_ptr_addr, pages_sent, noc);
-        // DPRINT << "remote_cb_push_back_and_write_pages pages_sent " << pages_sent <<ENDL();
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         remote_noc_xy_ptr += 2;
     }
