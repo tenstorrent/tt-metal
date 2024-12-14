@@ -9,7 +9,7 @@
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(this->device->id(), 0, 0)
 // TODO: Just to make match with previous implementation, remove later
-#define UNUSED_LOGICAL_CORE_ADJUSTED tt_cxy_pair(this->device->id() + tt::Cluster::instance().number_of_pci_devices(), 0, 0)
+#define UNUSED_LOGICAL_CORE_ADJUSTED tt_cxy_pair(servicing_device_id, 0, 0)
 #define UNUSED_SEM_ID 0
 
 static std::vector<string> dispatch_kernel_file_names = {
@@ -32,7 +32,50 @@ static std::vector<string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",  // PACKET_ROUTER_DEMUX
     "" // COUNT
 };
-// static_assert(dispatch_kernel_file_names.size() == DispatchWorkerType::COUNT);
+
+// Helper function to get upstream device in the tunnel from current device
+chip_id_t GetUpstreamDeviceId(chip_id_t device_id) {
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+        for (int idx = 0; idx < tunnel.size(); idx++) {
+            if (tunnel[idx] == device_id) {
+                // MMIO device doesn't have an upsream, just return itself
+                return (idx == 0)? device_id : tunnel[idx - 1];
+            }
+        }
+    }
+    TT_ASSERT(false, "Could not find upstream device of Device {}", device_id);
+    return device_id;
+}
+
+// Same thing for downstream, is ambiuous for mmio device though if it drives more than one tunnel
+chip_id_t GetDownstreamDeviceId(chip_id_t device_id) {
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+        for (int idx = 0; idx < tunnel.size(); idx++) {
+            if (tunnel[idx] == device_id) {
+                // End of tunnel doesn't have downstream, just return itself
+                return (idx == tunnel.size() - 1)? device_id : tunnel[idx + 1];
+            }
+        }
+    }
+    TT_ASSERT(false, "Could not find downstream device of Device {}", device_id);
+    return device_id;
+}
+
+// Helper function to get the tunnel stop of current device
+uint32_t GetTunnelStop(chip_id_t device_id) {
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+        for (uint32_t idx = 0; idx < tunnel.size(); idx++) {
+            if (tunnel[idx] == device_id) {
+                return idx;
+            }
+        }
+    }
+    TT_ASSERT(false, "Could not find tunnel stop of Device {}", device_id);
+    return 0;
+}
 
 FDKernel *FDKernel::Generate(int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection, DispatchWorkerType type) {
     switch (type) {
@@ -85,6 +128,7 @@ void FDKernel::configure_kernel_variant(
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
+        {"DEVICE_ID", std::to_string(device_id)},
     };
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
@@ -188,14 +232,15 @@ void PrefetchKernel::GenerateStaticConfigs() {
         this->config.dispatch_s_buffer_size = my_dispatch_constants.dispatch_s_buffer_size();
         this->config.dispatch_s_cb_log_page_size = dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
     } else if (this->config.is_h_variant.value()) {
-        channel++; // TODO
+        // PREFETCH_H services a remote chip, and so has a different channel
+        channel = tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
 
-        this->logical_core = dispatch_core_manager::instance().prefetcher_core(device->id() + tt::Cluster::instance().number_of_pci_devices(), channel, cq_id); // TODO
+        this->logical_core = dispatch_core_manager::instance().prefetcher_core(servicing_device_id, channel, cq_id);
 
         this->config.downstream_cb_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         this->config.downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(device->num_hw_cqs());
@@ -344,7 +389,8 @@ void DispatchKernel::GenerateStaticConfigs() {
         this->config.dev_completion_q_rd_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     } else if (this->config.is_h_variant.value()) {
-        channel++; // TODO
+        // DISPATCH_H services a remote chip, and so has a different channel
+        channel = tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id, cq_size);
@@ -353,7 +399,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
         uint32_t completion_queue_size = device->sysmem_manager().get_completion_queue_size(cq_id);
 
-        this->logical_core = dispatch_core_manager::instance().dispatcher_core(device->id() + tt::Cluster::instance().number_of_pci_devices(), channel, cq_id); // TODO
+        this->logical_core = dispatch_core_manager::instance().dispatcher_core(servicing_device_id, channel, cq_id);
         this->config.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
         this->config.dispatch_cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         this->config.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
@@ -414,8 +460,11 @@ void DispatchKernel::GenerateStaticConfigs() {
         this->config.prefetch_h_local_downstream_sem_addr = 1;
         this->config.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device->num_hw_cqs());
 
-        this->config.packed_write_max_unicast_sub_cmds =
-            device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+        // To match with previous implementation, need to use grid size from mmio device. TODO: that doesn't seem correct though?
+        auto mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(mmio_device_id);
+        CoreCoord remote_grid_size = tt::get_compute_grid_size(mmio_device_id, device->num_hw_cqs(), dispatch_core_config);
+        this->config.packed_write_max_unicast_sub_cmds = remote_grid_size.x * remote_grid_size.y;
         this->config.dispatch_s_sync_sem_base_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
         this->config.max_num_worker_sems = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
@@ -476,15 +525,14 @@ void DispatchSKernel::GenerateStaticConfigs() {
 void MuxKernel::GenerateStaticConfigs() {
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
     this->logical_core = dispatch_core_manager::instance().mux_d_core(this->device->id(), channel, this->cq_id);
-    this->config.vc_count = upstream_kernels.size() + 1; // TODO: update for deeper tunnels?
     auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
     this->config.reserved = 0;
     this->config.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
     this->config.rx_queue_size_words = ((1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                         my_dispatch_constants.mux_buffer_pages(device->num_hw_cqs())) >>
                                        4;
+    this->config.mux_fan_in = this->upstream_kernels.size();
     for (int idx = 0; idx < this->upstream_kernels.size(); idx++) {
-        this->config.remote_rx_queue_id[idx] = 1;
         this->config.remote_rx_network_type[idx] = DispatchRemoteNetworkType::NOC0;
     }
 
@@ -496,16 +544,17 @@ void MuxKernel::GenerateStaticConfigs() {
     this->config.output_depacketize_info = 0x0;
 
     for (int idx = 0; idx < this->upstream_kernels.size(); idx++) {
-        this->config.input_packetize[idx] = 0x1;
-        this->config.input_packetize_local_sem[idx] =
-            tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType());
+        // Only connected dispatchers need a semaphore. TODO: can initialize anyways, but this matches previous implementation
+        if (dynamic_cast<DispatchKernel *>(this->upstream_kernels[idx])) {
+            this->config.input_packetize_local_sem[idx] =
+                tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType());
+        }
     }
 }
 
 void DemuxKernel::GenerateStaticConfigs() {
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id() + tt::Cluster::instance().number_of_pci_devices()); // TODO: this is the downstream
-    this->logical_core = dispatch_core_manager::instance().demux_core(this->device->id() + tt::Cluster::instance().number_of_pci_devices(), channel, this->cq_id);
-    this->config.vc_count = downstream_kernels.size() + 1; // TODO: update for deeper tunnels?
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->servicing_device_id); // TODO: this can be mmio
+    this->logical_core = dispatch_core_manager::instance().demux_core(this->servicing_device_id, channel, this->placement_cq_id);
     this->config.endpoint_id_start_index = 0xD1;
     this->config.rx_queue_start_addr_words = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED) >> 4;
     this->config.rx_queue_size_words = 0x10000 >> 4;
@@ -515,7 +564,6 @@ void DemuxKernel::GenerateStaticConfigs() {
     this->config.test_results_buf_addr_arg = 0;
     this->config.test_results_buf_size_bytes = 0;
     this->config.timeout_cycles = 0;
-    this->config.output_depacketize = 0;
 
     // TODO: Do we need an upstream sem here?
     for (int idx = 0; idx < this->downstream_kernels.size(); idx++) {
@@ -523,17 +571,23 @@ void DemuxKernel::GenerateStaticConfigs() {
         this->config.remote_tx_queue_id[idx] = 0;
         this->config.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
         this->config.output_depacketize_cb_log_page_size[idx] = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
-        this->config.output_depacketize_local_sem_id[idx] =
-            tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType());
+        // Only connected dispatchers need a semaphore. TODO: can initialize anyways, but this matches previous implementation
+        if (dynamic_cast<DispatchKernel *>(k)) {
+            this->config.output_depacketize_local_sem_id[idx] =
+                tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType());
+        }
         this->config.output_depacketize_remove_header[idx] = 1;
     }
 }
 
 void EthTunnelerKernel::GenerateStaticConfigs() {
-    this->downstream_device_id = device->id() + tt::Cluster::instance().number_of_pci_devices(); // TODO: update for galaxy...
+    chip_id_t downstream_device_id = GetDownstreamDeviceId(device_id);
+    // For MMIO devices, the above function just gets one of the possible downstream devices, we've populated this specific case with servicing_device_id
+    if (device->is_mmio_capable())
+        downstream_device_id = servicing_device_id;
     if (this->IsRemote()) {
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(downstream_device_id.value());
-        this->logical_core = dispatch_core_manager::instance().tunneler_core(device->id(), downstream_device_id.value(), channel, cq_id);
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(downstream_device_id);
+        this->logical_core = dispatch_core_manager::instance().tunneler_core(device->id(), downstream_device_id, channel, cq_id);
     } else {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
         this->logical_core = dispatch_core_manager::instance().us_tunneler_core_local(device->id(), channel, cq_id);
@@ -549,12 +603,10 @@ void EthTunnelerKernel::GenerateStaticConfigs() {
 void EthRouterKernel::GenerateStaticConfigs() {
     auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
     if (this->as_mux) {
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id() + tt::Cluster::instance().number_of_pci_devices()); // TODO: this is the downstream
-        this->logical_core = dispatch_core_manager::instance().mux_core(device->id() + tt::Cluster::instance().number_of_pci_devices(), channel, cq_id);
-        this->config.vc_count = upstream_kernels.size() + 1;
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->servicing_device_id); // TODO: can be mmio
+        this->logical_core = dispatch_core_manager::instance().mux_core(this->servicing_device_id, channel, placement_cq_id);
         this->config.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
         this->config.rx_queue_size_words = my_dispatch_constants.mux_buffer_size(device->num_hw_cqs()) >> 4;
-        this->config.router_lanes = this->upstream_kernels.size();
 
         this->config.kernel_status_buf_addr_arg = 0;
         this->config.kernel_status_buf_size_bytes = 0;
@@ -572,14 +624,14 @@ void EthRouterKernel::GenerateStaticConfigs() {
                 tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType());
             this->config.remote_rx_queue_id[idx] = 1;
         }
+        // Mux fowrads all VCs
+        this->config.fwd_vc_count = this->config.vc_count;
     } else {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-        this->logical_core = dispatch_core_manager::instance().demux_d_core(device->id(), channel, cq_id);
-        this->config.vc_count = downstream_kernels.size() + 1;
+        this->logical_core = dispatch_core_manager::instance().demux_d_core(device->id(), channel, placement_cq_id);
         this->config.rx_queue_start_addr_words =
             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED) >> 4;
         this->config.rx_queue_size_words = 0x8000 >> 4;
-        this->config.router_lanes = this->downstream_kernels.size();
 
         this->config.kernel_status_buf_addr_arg = 0;
         this->config.kernel_status_buf_size_bytes = 0;
@@ -593,12 +645,19 @@ void EthRouterKernel::GenerateStaticConfigs() {
         this->config.input_packetize_src_endpoint = {0x0};
         this->config.input_packetize_dst_endpoint = {0x0};
 
+        this->config.fwd_vc_count = this->config.vc_count;
         for (int idx = 0; idx < this->downstream_kernels.size(); idx++) {
+            // Forwward VCs are the ones that don't connect to a prefetch
+            if (auto pk = dynamic_cast<PrefetchKernel *>(this->downstream_kernels[idx])) {
+                this->config.fwd_vc_count = this->config.fwd_vc_count.value() - 1;
+                this->config.output_depacketize_local_sem[idx] = // TODO: to match for now, init one per vc after
+                    tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType());
+            }
+        }
+
+        for (int idx = 0; idx < this->config.vc_count.value(); idx++) {
             this->config.output_depacketize_log_page_size[idx] = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-            this->config.output_depacketize_local_sem[idx] =
-                tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType());
             this->config.output_depacketize_remove_header[idx] = 0;
-            this->config.remote_rx_queue_id[idx] = this->config.vc_count.value() + idx;
         }
     }
 }
@@ -810,58 +869,70 @@ void DispatchSKernel::GenerateDependentConfigs() {
 }
 
 void MuxKernel::GenerateDependentConfigs() {
-    // Upstream
+    // Upstream, expect DISPATCH_D or TUNNELER
     TT_ASSERT(this->upstream_kernels.size() <= MAX_SWITCH_FAN_IN && this->upstream_kernels.size() > 0);
-    this->config.mux_fan_in = this->upstream_kernels.size();
+    uint32_t num_upstream_dispatchers = 0;
     for (int idx = 0; idx < this->upstream_kernels.size(); idx++) {
         FDKernel *k = this->upstream_kernels[idx];
-        auto dispatch_kernel = dynamic_cast<DispatchKernel *>(k);
-        TT_ASSERT(dispatch_kernel);
         this->config.remote_rx_x[idx] = k->GetPhysicalCore().x;
         this->config.remote_rx_y[idx] = k->GetPhysicalCore().y;
         this->config.input_packetize_log_page_size[idx] = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE; // Does this ever change?
-        this->config.input_packetize_upstream_sem[idx] = dispatch_kernel->GetConfig().my_downstream_cb_sem_id; // TODO: upstream can be tunneler as well?
+        if (auto dispatch_kernel = dynamic_cast<DispatchKernel *>(k)) {
+            this->config.input_packetize[idx] = 0x1;
+            this->config.input_packetize_upstream_sem[idx] = dispatch_kernel->GetConfig().my_downstream_cb_sem_id;
+            this->config.remote_rx_queue_id[idx] = 1;
+            num_upstream_dispatchers++;
+        } else if (auto tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(k)) {
+            // Don't need to packetize input from tunneler
+            this->config.input_packetize[idx] = 0x0;
+            this->config.input_packetize_upstream_sem[idx] = 0;
+            this->config.remote_rx_queue_id[idx] = tunneler_kernel->GetConfig().vc_count.value() * 2 - 1;
+        } else {
+            TT_FATAL(false, "Unexpected kernel type upstream of MUX");
+        }
     }
-    uint32_t src_id = 0xC1 + (this->tunnel_stop - 1) * this->upstream_kernels.size();
-    uint32_t dest_id = 0xD1 + (this->tunnel_stop - 1) * this->upstream_kernels.size();
+    uint32_t src_id = 0xC1 + (GetTunnelStop(device_id) - 1) * num_upstream_dispatchers;
+    uint32_t dest_id = 0xD1 + (GetTunnelStop(device_id) - 1) * num_upstream_dispatchers;
     this->config.input_packetize_src_endpoint = packet_switch_4B_pack(src_id, src_id + 1, src_id + 2, src_id + 3);
     this->config.input_packetize_dest_endpoint = packet_switch_4B_pack(dest_id, dest_id + 1, dest_id + 2, dest_id + 3);
 
-    // Downstream
+    // Downstream, expect TUNNELER
     TT_ASSERT(this->downstream_kernels.size() == 1);
     FDKernel *ds = this->downstream_kernels[0];
     auto tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(ds);
     TT_ASSERT(ds);
     this->config.remote_tx_queue_start_addr_words =
         tunneler_kernel->GetConfig().in_queue_start_addr_words.value() +
-        (this->config.vc_count.value() - 1) * tunneler_kernel->GetConfig().in_queue_size_words.value();
+        (tunneler_kernel->GetConfig().vc_count.value() - 1) * tunneler_kernel->GetConfig().in_queue_size_words.value();
     this->config.remote_tx_queue_size_words = tunneler_kernel->GetConfig().in_queue_size_words;
     this->config.remote_tx_x = ds->GetPhysicalCore().x;
     this->config.remote_tx_y = ds->GetPhysicalCore().y;
-    this->config.remote_tx_queue_id = this->config.vc_count.value() - 1;
+    this->config.remote_tx_queue_id = tunneler_kernel->GetConfig().vc_count.value() - 1;
 }
 
 void DemuxKernel::GenerateDependentConfigs() {
     auto &my_dispatch_constants = dispatch_constants::get(GetCoreType());
-    // Upstream, expect EthTunneler
+    // Upstream, expect EthTunneler or DEMUX
     TT_ASSERT(this->upstream_kernels.size() == 1);
-    auto us = dynamic_cast<EthTunnelerKernel *>(this->upstream_kernels[0]);
-    TT_ASSERT(us);
-
-    this->config.remote_rx_x = us->GetPhysicalCore().x;
-    this->config.remote_rx_y = us->GetPhysicalCore().y;
-    this->config.remote_rx_queue_id = this->config.vc_count.value() * 2 - 1;
-    uint32_t dest_map_array[4] = {0, 1, 2, 3};  // TODO: how to set these generically?
-    uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-    this->config.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
-    this->config.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
+    if (auto us = dynamic_cast<EthTunnelerKernel *>(this->upstream_kernels[0])) {
+        this->config.remote_rx_x = us->GetPhysicalCore().x;
+        this->config.remote_rx_y = us->GetPhysicalCore().y;
+        this->config.remote_rx_queue_id = us->GetConfig().vc_count.value() * 2 - 1;
+    } else if (auto us = dynamic_cast<DemuxKernel *>(this->upstream_kernels[0])) {
+        this->config.remote_rx_x = us->GetPhysicalCore().x;
+        this->config.remote_rx_y = us->GetPhysicalCore().y;
+        this->config.remote_rx_queue_id = us->GetDownstreamPort(this) + 1; // TODO: can this be cleaned up?
+        // TODO: why is just this one different? Just match previous implementation for now
+        if (us->GetDownstreamPort(this) == 1)
+            this->config.endpoint_id_start_index = this->config.endpoint_id_start_index.value() + 2;
+    } else {
+        TT_FATAL(false, "Unexpected kernel type upstream of DEMUX");
+    }
 
     // Downstream, expect DISPATCH_H or DEMUX
     TT_ASSERT(this->downstream_kernels.size() <= MAX_SWITCH_FAN_OUT && this->downstream_kernels.size() > 0);
     this->config.demux_fan_out = this->downstream_kernels.size();
-    this->config.output_depacketize = ((1 << MAX_SWITCH_FAN_OUT) - 1);
-    // this->config.output_depacketize = ((1 << MAX_SWITCH_FAN_OUT) - 1) >>
-    //                                   (MAX_SWITCH_FAN_OUT - this->config.demux_fan_out.value());  // 1 for each vald output.
+    this->config.output_depacketize = 0; // Populated per downstream kernel
     for (int idx = 0; idx < this->downstream_kernels.size(); idx++) {
         FDKernel *k = this->downstream_kernels[idx];
         this->config.remote_tx_x[idx] = k->GetPhysicalCore().x;
@@ -873,13 +944,21 @@ void DemuxKernel::GenerateDependentConfigs() {
                 ((1 << dispatch_kernel->GetConfig().dispatch_cb_log_page_size.value()) *
                  dispatch_kernel->GetConfig().dispatch_cb_pages.value()) >>
                 4;
+            this->config.output_depacketize = this->config.output_depacketize.value() | (1 << idx); // Only depacketize for dispatch downstream
             this->config.output_depacketize_downstream_sem_id[idx] = dispatch_kernel->GetConfig().my_dispatch_cb_sem_id;
+            uint32_t dest_map_array[4] = {0, 1, 2, 3};  // TODO: how to set these generically? Currently just matching the hard-coded previous implementation
+            uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+            this->config.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
+            this->config.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
         } else if (auto demux_kernel = dynamic_cast<DemuxKernel *>(k)) {
-            this->config.remote_tx_queue_start_addr_words[idx] =
-                my_dispatch_constants.mux_buffer_size(device->num_hw_cqs());
-            this->config.remote_tx_queue_size_words[idx] =
-                my_dispatch_constants.dispatch_buffer_base();
-            this->config.output_depacketize_downstream_sem_id[idx] = 0; // TODO: This is wrong, hard-coded on main
+            this->config.remote_tx_queue_start_addr_words[idx] = demux_kernel->GetConfig().rx_queue_start_addr_words.value();
+            this->config.remote_tx_queue_size_words[idx] = 0x1000; // TODO: hard-coded on previous implementation
+            // Match previous implementation where downstream demux has output_depacketize fields zeroed out. TODO: can remove this later
+            this->config.output_depacketize_downstream_sem_id[idx] = 0;
+            uint32_t dest_map_array[4] = {0, 0, 1, 1};
+            uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+            this->config.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
+            this->config.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
         } else {
             TT_FATAL(false, "Unexpected kernel type downstream of DEMUX");
         }
@@ -890,30 +969,38 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
     if (this->IsRemote()) {
         // For remote tunneler, we don't actually have the device constructed for the paired tunneler, so can't pull
         // info from it. Core coord can be computed without the device, and relevant fields match this tunneler.
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(downstream_device_id.value());
+        chip_id_t downstream_device_id = GetDownstreamDeviceId(device_id);
+        uint16_t downstream_channel = tt::Cluster::instance().get_assigned_channel_for_device(downstream_device_id);
         tt_cxy_pair paired_logical_core =
-            dispatch_core_manager::instance().us_tunneler_core_local(downstream_device_id.value(), channel, cq_id);
+            dispatch_core_manager::instance().us_tunneler_core_local(downstream_device_id, downstream_channel, cq_id);
         CoreCoord paired_physical_coord = tt::get_physical_core_coordinate(paired_logical_core, CoreType::ETH);
 
-        // Upstream, we expect a US_TUNNELER_LOCAL and a PACKET_ROUTER
-        TT_ASSERT(this->upstream_kernels.size() == 2);
-        auto tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->upstream_kernels[0]);
-        auto router_kernel = dynamic_cast<EthRouterKernel *>(this->upstream_kernels[1]);
-        if (!tunneler_kernel) {
-            tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->upstream_kernels[1]);
-            router_kernel = dynamic_cast<EthRouterKernel *>(this->upstream_kernels[0]);
+        // Upstream, we expect a US_TUNNELER_LOCAL and one or more PACKET_ROUTER
+        EthTunnelerKernel *tunneler_kernel = nullptr;
+        std::vector<EthRouterKernel *> router_kernels;
+        for (auto k : this->upstream_kernels) {
+            if (auto rk = dynamic_cast<EthRouterKernel *>(k)) {
+                router_kernels.push_back(rk);
+            } else if (auto tk = dynamic_cast<EthTunnelerKernel *>(k)) {
+                tunneler_kernel = tk;
+            } else {
+                TT_FATAL(false, "Unexpected kernelt tyoe downstream of TUNNELER");
+            }
         }
-        TT_ASSERT(tunneler_kernel && router_kernel);
-        TT_ASSERT(!tunneler_kernel->IsRemote());
-        this->config.vc_count = router_kernel->GetConfig().vc_count;
-        for (int idx = 0; idx < MAX_SWITCH_FAN_OUT; idx++) {
-            if (router_kernel->GetConfig().remote_tx_queue_id[idx]) {
-                this->config.remote_sender_x[idx] = router_kernel->GetPhysicalCore().x;
-                this->config.remote_sender_y[idx] = router_kernel->GetPhysicalCore().y;
-                this->config.remote_sender_queue_id[idx] = router_kernel->GetConfig().remote_tx_queue_id[idx].value() +
-                                                           router_kernel->GetConfig().vc_count.value() -
-                                                           1;  // TODO: why isn't it the same?
-                this->config.remote_sender_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+        TT_ASSERT(tunneler_kernel && !tunneler_kernel->IsRemote());
+
+        // Remote sender is the upstream packet router, one queue per router output lane.
+        int remote_idx = 0;
+        for (auto router_kernel : router_kernels) {
+            uint32_t router_vc_count = router_kernel->GetConfig().vc_count.value();
+            uint32_t router_fwd_vc_count = router_kernel->GetConfig().fwd_vc_count.value();
+            for (int idx = 0; idx < router_fwd_vc_count; idx++) {
+                this->config.remote_sender_x[remote_idx] = router_kernel->GetPhysicalCore().x;
+                this->config.remote_sender_y[remote_idx] = router_kernel->GetPhysicalCore().y;
+                // Router output lane ids start after it's input lane ids, assume after lanes that go to on-device kernels
+                this->config.remote_sender_queue_id[remote_idx] = router_vc_count + idx + router_vc_count - router_fwd_vc_count;
+                this->config.remote_sender_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+                remote_idx++;
             }
         }
         // Last upstream connection is the return path from other tunneler
@@ -926,25 +1013,34 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         // Downstream, we expect the same US_TUNNELER_LOCAL and a DEMUX (tunnel start)/MUX_D (non-tunnel start)
         TT_ASSERT(this->downstream_kernels.size() == 2);
         auto ds_tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->downstream_kernels[0]);
-        auto demux_kernel = dynamic_cast<DemuxKernel *>(this->downstream_kernels[1]);
+        auto other_ds_kernel = this->downstream_kernels[1];
         if (!ds_tunneler_kernel) {
             ds_tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->downstream_kernels[1]);
-            demux_kernel = dynamic_cast<DemuxKernel *>(this->downstream_kernels[0]);
+            auto other_ds_kernel = this->downstream_kernels[0];
         }
         TT_ASSERT(ds_tunneler_kernel == tunneler_kernel);
-        TT_ASSERT(ds_tunneler_kernel && demux_kernel);
         for (uint32_t idx = 0; idx < this->config.vc_count.value(); idx++) {
             if (idx == this->config.vc_count.value() - 1) {
-                // Last VC is the return VC
-                this->config.remote_receiver_x[idx] = demux_kernel->GetPhysicalCore().x;
-                this->config.remote_receiver_y[idx] = demux_kernel->GetPhysicalCore().y;
-                this->config.remote_receiver_queue_id[idx] = 0;
+                // Last VC is the return VC, driving a DEMUX or MUX_D
+                this->config.remote_receiver_x[idx] = other_ds_kernel->GetPhysicalCore().x;
+                this->config.remote_receiver_y[idx] = other_ds_kernel->GetPhysicalCore().y;
                 this->config.remote_receiver_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
-                this->config.remote_receiver_queue_start[idx] = demux_kernel->GetConfig().rx_queue_start_addr_words;
-                this->config.remote_receiver_queue_size[idx] = demux_kernel->GetConfig().rx_queue_size_words;
+                if (auto demux_kernel = dynamic_cast<DemuxKernel *>(other_ds_kernel)) {
+                    this->config.remote_receiver_queue_start[idx] = demux_kernel->GetConfig().rx_queue_start_addr_words;
+                    this->config.remote_receiver_queue_size[idx] = demux_kernel->GetConfig().rx_queue_size_words;
+                    this->config.remote_receiver_queue_id[idx] = 0; // DEMUX input queue id always 0
+                } else if (auto mux_kernel = dynamic_cast<MuxKernel *>(other_ds_kernel)) {
+                    this->config.remote_receiver_queue_start[idx] = mux_kernel->GetConfig().rx_queue_start_addr_words.value() + mux_kernel->GetConfig().rx_queue_size_words.value() * (mux_kernel->GetConfig().mux_fan_in.value() - 1);
+                    this->config.remote_receiver_queue_size[idx] = mux_kernel->GetConfig().rx_queue_size_words;
+                    // MUX input queue id for tunneler is the last one (counting up from 0)
+                    this->config.remote_receiver_queue_id[idx] = mux_kernel->GetConfig().mux_fan_in.value() - 1;
+                } else {
+                    TT_FATAL(false, "Unexpected kernel type downstream of ETH_TUNNELER");
+                }
             } else {
                 this->config.remote_receiver_x[idx] = paired_physical_coord.x;
                 this->config.remote_receiver_y[idx] = paired_physical_coord.y;
+                // Tunneler upstream queue ids start counting up from 0
                 this->config.remote_receiver_queue_id[idx] = idx;
                 this->config.remote_receiver_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::ETH;
                 this->config.remote_receiver_queue_start[idx] = this->config.in_queue_start_addr_words.value() +
@@ -953,7 +1049,13 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
             }
         }
     } else {
-        // Upstream, we expect a US_TUNNELER_REMOTE and a MUX_D
+        // Upstream, we expect a US_TUNNELER_REMOTE and a MUX_D. Same deal where upstream tunneler may not be populated
+        // yet since its device may not be created yet.
+        chip_id_t upstream_device_id = GetUpstreamDeviceId(device_id);
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+        tt_cxy_pair paired_logical_core = dispatch_core_manager::instance().tunneler_core(upstream_device_id, device_id, channel, cq_id);
+        CoreCoord paired_physical_coord = tt::get_physical_core_coordinate(paired_logical_core, CoreType::ETH);
+
         TT_ASSERT(this->upstream_kernels.size() == 2);
         auto tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->upstream_kernels[0]);
         auto mux_kernel = dynamic_cast<MuxKernel *>(this->upstream_kernels[1]);
@@ -963,54 +1065,65 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         }
         TT_ASSERT(tunneler_kernel && mux_kernel);
         TT_ASSERT(tunneler_kernel->IsRemote());
-        this->config.vc_count = mux_kernel->GetConfig().vc_count;
         for (uint32_t idx = 0; idx < this->config.vc_count.value(); idx++) {
             if (idx == this->config.vc_count.value() - 1) {
-                // Last VC is the return VC
+                // Last VC is the return VC, driven by the mux
                 this->config.remote_sender_x[idx] = mux_kernel->GetPhysicalCore().x;
                 this->config.remote_sender_y[idx] = mux_kernel->GetPhysicalCore().y;
-                this->config.remote_sender_queue_id[idx] = idx; // TODO: update for deeper tunnels
+                // MUX output queue id is counted after all of it's inputs
+                this->config.remote_sender_queue_id[idx] = mux_kernel->GetConfig().mux_fan_in.value();
                 this->config.remote_sender_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
             } else {
-                this->config.remote_sender_x[idx] = tunneler_kernel->GetPhysicalCore().x;
-                this->config.remote_sender_y[idx] = tunneler_kernel->GetPhysicalCore().y;
+                this->config.remote_sender_x[idx] = paired_physical_coord.x;
+                this->config.remote_sender_y[idx] = paired_physical_coord.y;
+                // Tunneler downstream queue ids start counting after the upstream ones
                 this->config.remote_sender_queue_id[idx] = this->config.vc_count.value() + idx;
                 this->config.remote_sender_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::ETH;
             }
         }
 
-        // Downstream, we expect the same US_TUNNELER_REMOTE and a VC_PACKER_ROUTER
-        TT_ASSERT(this->downstream_kernels.size() == 2);
-        auto ds_tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->downstream_kernels[0]);
-        auto router_kernel = dynamic_cast<EthRouterKernel *>(this->downstream_kernels[1]);
-        if (!ds_tunneler_kernel) {
-            ds_tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->downstream_kernels[1]);
-            router_kernel = dynamic_cast<EthRouterKernel *>(this->downstream_kernels[0]);
-        }
-        TT_ASSERT(ds_tunneler_kernel == tunneler_kernel);
-        TT_ASSERT(ds_tunneler_kernel && router_kernel);
-        for (int idx = 0; idx < MAX_SWITCH_FAN_IN; idx++) {
-            if (router_kernel->GetConfig().remote_rx_queue_id[idx]) {
-                this->config.remote_receiver_x[idx] = router_kernel->GetPhysicalCore().x;
-                this->config.remote_receiver_y[idx] = router_kernel->GetPhysicalCore().y;
-                this->config.remote_receiver_queue_id[idx] =
-                    router_kernel->GetConfig().remote_rx_queue_id[idx].value() -
-                    this->config.vc_count.value();  // TODO: why isn't this the same?
-                this->config.remote_receiver_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
-                this->config.remote_receiver_queue_start[idx] = router_kernel->GetConfig().rx_queue_start_addr_words.value() + idx * router_kernel->GetConfig().rx_queue_size_words.value();
-                this->config.remote_receiver_queue_size[idx] = router_kernel->GetConfig().rx_queue_size_words.value();
+        // Downstream, we expect the same US_TUNNELER_REMOTE and one or more VC_PACKER_ROUTER
+        EthTunnelerKernel *ds_tunneler_kernel = nullptr;
+        std::vector<EthRouterKernel *> router_kernels;
+        for (auto k : this->downstream_kernels) {
+            if (auto rk = dynamic_cast<EthRouterKernel *>(k)) {
+                router_kernels.push_back(rk);
+            } else if (auto tk = dynamic_cast<EthTunnelerKernel *>(k)) {
+                ds_tunneler_kernel = tk;
+            } else {
+                TT_FATAL(false, "Unexpected kernelt tyoe downstream of TUNNELER");
             }
         }
+        TT_ASSERT(ds_tunneler_kernel && ds_tunneler_kernel == tunneler_kernel);
+
+        // Remote receiver is the downstream router, one queue per router input lane
+        int remote_idx = 0;
+        for (auto router_kernel : router_kernels) {
+            for (int idx = 0; idx < router_kernel->GetConfig().vc_count.value(); idx++) {
+                this->config.remote_receiver_x[remote_idx] = router_kernel->GetPhysicalCore().x;
+                this->config.remote_receiver_y[remote_idx] = router_kernel->GetPhysicalCore().y;
+                this->config.remote_receiver_queue_id[remote_idx] = idx; // Queue ids start counting from 0 at input
+                this->config.remote_receiver_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+                this->config.remote_receiver_queue_start[remote_idx] = router_kernel->GetConfig().rx_queue_start_addr_words.value() + idx * router_kernel->GetConfig().rx_queue_size_words.value();
+                this->config.remote_receiver_queue_size[remote_idx] = router_kernel->GetConfig().rx_queue_size_words.value();
+                remote_idx++;
+            }
+        }
+        // Last receiver connection is the return VC, connected to the paired tunneler
         uint32_t return_vc_id = this->config.vc_count.value() - 1;
-        this->config.remote_receiver_x[return_vc_id] = tunneler_kernel->GetPhysicalCore().x;
-        this->config.remote_receiver_y[return_vc_id] = tunneler_kernel->GetPhysicalCore().y;
+        this->config.remote_receiver_x[return_vc_id] = paired_physical_coord.x;
+        this->config.remote_receiver_y[return_vc_id] = paired_physical_coord.y;
         this->config.remote_receiver_queue_id[return_vc_id] = return_vc_id;
         this->config.remote_receiver_network_type[return_vc_id] = (uint32_t)DispatchRemoteNetworkType::ETH;
         this->config.remote_receiver_queue_start[return_vc_id] =
-            tunneler_kernel->GetConfig().in_queue_start_addr_words.value() +
-            (return_vc_id)*tunneler_kernel->GetConfig().in_queue_size_words.value();
-        this->config.remote_receiver_queue_size[return_vc_id] = tunneler_kernel->GetConfig().in_queue_size_words;
-        this->config.inner_stop_mux_d_bypass = 0; // TODO: This needs to change for deeper tunnels
+            this->config.in_queue_start_addr_words.value() +
+            (return_vc_id)*this->config.in_queue_size_words.value();
+        this->config.remote_receiver_queue_size[return_vc_id] = this->config.in_queue_size_words;
+        this->config.inner_stop_mux_d_bypass = 0;
+        // For certain chips in a tunnel (between first stop and end of tunnel, not including), we do a bypass
+        if (this->config.vc_count.value() > (device->num_hw_cqs() + 1) && this->config.vc_count.value() < (4 * device->num_hw_cqs() + 1)) {
+            this->config.inner_stop_mux_d_bypass = (return_vc_id << 24) | ((tunneler_kernel->GetConfig().vc_count.value() * 2 - 3) << 16) | (paired_physical_coord.y << 8) | (paired_physical_coord.x);
+        }
     }
 }
 
@@ -1051,31 +1164,59 @@ void EthRouterKernel::GenerateDependentConfigs() {
     } else {
         // Upstream, expect US_TUNNELER_LOCAL
         TT_ASSERT(this->upstream_kernels.size() == 1);
-        auto tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->upstream_kernels[0]);
-        TT_ASSERT(tunneler_kernel);
+        auto us_tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->upstream_kernels[0]);
+        TT_ASSERT(us_tunneler_kernel);
+        // Upstream queues connect to the upstream tunneler, as many queues as we have VCs
+        for (int idx = 0; idx < config.vc_count.value(); idx++) {
+            this->config.remote_rx_x[idx] = us_tunneler_kernel->GetPhysicalCore().x;
+            this->config.remote_rx_y[idx] = us_tunneler_kernel->GetPhysicalCore().y;
+            // Queue id starts counting after the input VCs
+            this->config.remote_rx_queue_id[idx] = us_tunneler_kernel->GetRouterQueueIdOffset(this, false) + idx;
+            this->config.remote_rx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+        }
 
         // Downstream, expect PREFETCH_D/US_TUNNELER_REMOTE
         TT_ASSERT(this->downstream_kernels.size() <= MAX_SWITCH_FAN_OUT && this->downstream_kernels.size() > 0);
+        std::vector<PrefetchKernel *> prefetch_kernels;
+        EthTunnelerKernel *ds_tunneler_kernel = nullptr;
+        for (auto k : this->downstream_kernels) {
+            if (auto pk = dynamic_cast<PrefetchKernel *>(k)) {
+                prefetch_kernels.push_back(pk);
+            } else if (auto tk = dynamic_cast<EthTunnelerKernel *>(k)) {
+                ds_tunneler_kernel = tk;
+            } else {
+                TT_FATAL(false, "Unexpected kernel type downstream of ROUTER");
+            }
+        }
 
-        for (int idx = 0; idx < this->downstream_kernels.size(); idx++) {
-            auto prefetch_kernel = dynamic_cast<PrefetchKernel *>(this->downstream_kernels[idx]);
-            TT_ASSERT(prefetch_kernel);
+        // Populate remote_tx_* for prefetch kernels, assume they are connected "first"
+        uint32_t remote_idx = 0;
+        for (auto prefetch_kernel : prefetch_kernels) {
+            this->config.remote_tx_x[remote_idx] = prefetch_kernel->GetPhysicalCore().x;
+            this->config.remote_tx_y[remote_idx] = prefetch_kernel->GetPhysicalCore().y;
+            this->config.remote_tx_queue_id[remote_idx] = 0; // Prefetch queue id always 0
+            this->config.remote_tx_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+            this->config.remote_tx_queue_start_addr_words[remote_idx] = prefetch_kernel->GetConfig().cmddat_q_base.value() >> 4;
+            this->config.remote_tx_queue_size_words[remote_idx] = prefetch_kernel->GetConfig().cmddat_q_size.value() >> 4;
+            this->config.output_depacketize[remote_idx] = 1;
+            this->config.output_depacketize_downstream_sem[remote_idx] = prefetch_kernel->GetConfig().my_upstream_cb_sem_id;
+            remote_idx++;
+        }
 
-            this->config.remote_tx_x[idx] = prefetch_kernel->GetPhysicalCore().x;
-            this->config.remote_tx_y[idx] = prefetch_kernel->GetPhysicalCore().y;
-            this->config.remote_tx_queue_id[idx] = 0;
-            this->config.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
-            this->config.remote_tx_queue_start_addr_words[idx] =
-                dispatch_constants::get(GetCoreType()).dispatch_buffer_base() >> 4;
-            this->config.remote_tx_queue_size_words[idx] =
-                dispatch_constants::get(GetCoreType()).prefetch_d_buffer_size() >> 4;
-
-            this->config.remote_rx_x[idx] = tunneler_kernel->GetPhysicalCore().x;
-            this->config.remote_rx_y[idx] = tunneler_kernel->GetPhysicalCore().y;
-            this->config.remote_rx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
-
-            this->config.output_depacketize[idx] = 1;
-            this->config.output_depacketize_downstream_sem[idx] = prefetch_kernel->GetConfig().my_upstream_cb_sem_id;
+        // Populate remote_tx_* for the downstream tunneler, as many queues as we have fwd VCs
+        if (ds_tunneler_kernel) {
+            for (int idx = 0; idx < config.fwd_vc_count.value(); idx++) {
+                this->config.remote_tx_x[remote_idx] = ds_tunneler_kernel->GetPhysicalCore().x;
+                this->config.remote_tx_y[remote_idx] = ds_tunneler_kernel->GetPhysicalCore().y;
+                this->config.remote_tx_queue_id[remote_idx] = ds_tunneler_kernel->GetRouterQueueIdOffset(this, true) + idx;
+                this->config.remote_tx_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+                this->config.remote_tx_queue_start_addr_words[remote_idx] = ds_tunneler_kernel->GetConfig().in_queue_start_addr_words.value() + ds_tunneler_kernel->GetConfig().in_queue_size_words.value() * (this->config.remote_tx_queue_id[remote_idx].value());
+                this->config.remote_tx_queue_size_words[remote_idx] = ds_tunneler_kernel->GetConfig().in_queue_size_words.value();
+                // Don't depacketize when sending to tunneler
+                this->config.output_depacketize[remote_idx] = 0;
+                this->config.output_depacketize_downstream_sem[remote_idx] = 0;
+                remote_idx++;
+            }
         }
     }
 }
@@ -1273,10 +1414,13 @@ void MuxKernel::CreateKernel() {
             compile_args[4 + idx] |= (config.remote_rx_network_type[idx].value() & 0xFF) << 24;
         }
         if (config.input_packetize[idx]) {
-            compile_args[19 + idx] |= (config.input_packetize[idx].value() & 0xFF);
-            compile_args[19 + idx] |= (config.input_packetize_log_page_size[idx].value() & 0xFF) << 8;
-            compile_args[19 + idx] |= (config.input_packetize_upstream_sem[idx].value() & 0xFF) << 16;
-            compile_args[19 + idx] |= (config.input_packetize_local_sem[idx].value() & 0xFF) << 24;
+            // Zero out if input packetize not set to match previous implementation. TODO: don't have to do this
+            if (config.input_packetize[idx].value() != 0) {
+                compile_args[19 + idx] |= (config.input_packetize[idx].value() & 0xFF);
+                compile_args[19 + idx] |= (config.input_packetize_log_page_size[idx].value() & 0xFF) << 8;
+                compile_args[19 + idx] |= (config.input_packetize_upstream_sem[idx].value() & 0xFF) << 16;
+                compile_args[19 + idx] |= (config.input_packetize_local_sem[idx].value() & 0xFF) << 24;
+            }
         }
     }
     TT_ASSERT(compile_args.size() == 25);
@@ -1328,14 +1472,20 @@ void DemuxKernel::CreateKernel() {
             compile_args[9 + idx * 2] = config.remote_tx_queue_size_words[idx].value();
         }
         if (config.output_depacketize_cb_log_page_size[idx]) {
-            compile_args[26 + idx] |= (config.output_depacketize_cb_log_page_size[idx].value() & 0xFF);
-            compile_args[26 + idx] |= (config.output_depacketize_downstream_sem_id[idx].value() & 0xFF) << 8;
-            compile_args[26 + idx] |= (config.output_depacketize_local_sem_id[idx].value() & 0xFF) << 16;
-            compile_args[26 + idx] |= (config.output_depacketize_remove_header[idx].value() & 0xFF) << 24;
+            // To match previous implementation, zero these out if output_depacketize is not set. TODO: don't have to do this
+            if (config.output_depacketize.value() & (1 << idx)) {
+                compile_args[26 + idx] |= (config.output_depacketize_cb_log_page_size[idx].value() & 0xFF);
+                compile_args[26 + idx] |= (config.output_depacketize_downstream_sem_id[idx].value() & 0xFF) << 8;
+                compile_args[26 + idx] |= (config.output_depacketize_local_sem_id[idx].value() & 0xFF) << 16;
+                compile_args[26 + idx] |= (config.output_depacketize_remove_header[idx].value() & 0xFF) << 24;
+            }
         }
     }
     TT_ASSERT(compile_args.size() == 30);
     const auto& grid_size = device->grid_size();
+    CoreCoord my_phys_core = tt::get_physical_core_coordinate(this->logical_core, GetCoreType());
+    tt::log_warning("Demux {} has logical core {}, physical core {}", node_id, logical_core.str(), my_phys_core.str());
+    tt::log_warning("Noc XY={},{}", tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.x, my_phys_core.x),std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.y, my_phys_core.y)));
     std::map<string, string> defines = { // All of these unused, remove later
         {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.x, 0))},
         {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.y, 0))},
@@ -1413,7 +1563,7 @@ void EthRouterKernel::CreateKernel() {
         0, // Unused
         config.rx_queue_start_addr_words.value(),
         config.rx_queue_size_words.value(),
-        config.router_lanes.value(),
+        config.vc_count.value(),
         0, 0, 0, 0, // Populate remote_tx_* after
         0, 0, 0, 0, 0, 0, 0, 0, // Populate remote_tx_queue_* after
         0, 0, 0, 0, // Populate remote_rx_* after
@@ -1430,7 +1580,7 @@ void EthRouterKernel::CreateKernel() {
     // Some unused values, just hardcode them to match for checking purposes...
     if (!this->as_mux) {
         compile_args[0] = 0xB1;
-        compile_args[21] = 84;
+        // compile_args[21] = 84;
     }
     for (int idx = 0; idx < MAX_SWITCH_FAN_OUT; idx++) {
         if (config.remote_tx_x[idx]) {
@@ -1445,10 +1595,12 @@ void EthRouterKernel::CreateKernel() {
         }
         if (config.output_depacketize[idx]) {
             compile_args[25] |= (config.output_depacketize[idx].value() & 0x1) << idx;
-            compile_args[26 + idx] |= (config.output_depacketize_log_page_size[idx].value() & 0xFF);
-            compile_args[26 + idx] |= (config.output_depacketize_downstream_sem[idx].value() & 0xFF) << 8;
-            compile_args[26 + idx] |= (config.output_depacketize_local_sem[idx].value() & 0xFF) << 16;
-            compile_args[26 + idx] |= (config.output_depacketize_remove_header[idx].value() & 0xFF) << 24;
+            if (config.output_depacketize[idx].value() & 0x1) { // To match previous implementation
+                compile_args[26 + idx] |= (config.output_depacketize_log_page_size[idx].value() & 0xFF);
+                compile_args[26 + idx] |= (config.output_depacketize_downstream_sem[idx].value() & 0xFF) << 8;
+                compile_args[26 + idx] |= (config.output_depacketize_local_sem[idx].value() & 0xFF) << 16;
+                compile_args[26 + idx] |= (config.output_depacketize_remove_header[idx].value() & 0xFF) << 24;
+            }
         }
     }
     for (int idx = 0; idx < MAX_SWITCH_FAN_IN; idx++) {

@@ -98,20 +98,131 @@ static const std::vector<dispatch_kernel_node_t> two_card_arch_2cq = {
     {17, 1, 1, DISPATCH_D,         {15,  x,  x,  x}, {12,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 };
 
+static const std::vector<dispatch_kernel_node_t> galaxy_nine_card_arch_1cq = {
+    // For MMIO chip
+    { 0, 0, 0, PREFETCH_HD,        { x,  x,  x,  x}, { 1,  2,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    { 1, 0, 0, DISPATCH_HD,        { 0,  x,  x,  x}, { 2,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    { 2, 0, 0, DISPATCH_S,         { 0,  x,  x,  x}, { 1,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+
+    // Sevicing remote chips 1-4
+    { 3, 0, 0, PREFETCH_H,         { x,  x,  x,  x}, {11,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    { 4, 0, 0, DISPATCH_H,         {13,  x,  x,  x}, { 3,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    { 5, 0, 0, PREFETCH_H,         { x,  x,  x,  x}, {11,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    { 6, 0, 0, DISPATCH_H,         {13,  x,  x,  x}, { 5,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    { 7, 0, 0, PREFETCH_H,         { x,  x,  x,  x}, {11,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    { 8, 0, 0, DISPATCH_H,         {14,  x,  x,  x}, { 7,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    { 9, 0, 0, PREFETCH_H,         { x,  x,  x,  x}, {11,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {10, 0, 0, DISPATCH_H,         {14,  x,  x,  x}, { 9,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {11, 0, 0, PACKET_ROUTER_MUX,  { 3,  5,  7,  9}, {15,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {12, 0, 0, DEMUX,              {15,  x,  x,  x}, {13, 14,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {13, 0, 0, DEMUX,              {12,  x,  x,  x}, { 4,  6,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {14, 0, 0, DEMUX,              {12,  x,  x,  x}, { 8, 10,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {15, 0, 0, US_TUNNELER_REMOTE, {29, 11,  x,  x}, {29, 12,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    // Servicing remote chips 5-8
+    {16, 0, 0, PREFETCH_H,         { x,  x,  x,  x}, {24,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {17, 0, 0, DISPATCH_H,         {26,  x,  x,  x}, {16,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {18, 0, 0, PREFETCH_H,         { x,  x,  x,  x}, {24,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {19, 0, 0, DISPATCH_H,         {26,  x,  x,  x}, {18,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {20, 0, 0, PREFETCH_H,         { x,  x,  x,  x}, {24,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {21, 0, 0, DISPATCH_H,         {27,  x,  x,  x}, {20,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {22, 0, 0, PREFETCH_H,         { x,  x,  x,  x}, {24,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {23, 0, 0, DISPATCH_H,         {27,  x,  x,  x}, {22,  x,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {24, 0, 0, PACKET_ROUTER_MUX,  {16, 18, 20, 22}, {28,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {25, 0, 0, DEMUX,              {28,  x,  x,  x}, {26, 27,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {26, 0, 0, DEMUX,              {25,  x,  x,  x}, {17, 19,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {27, 0, 0, DEMUX,              {25,  x,  x,  x}, {21, 23,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {28, 0, 0, US_TUNNELER_REMOTE, {59, 24,  x,  x}, {59, 25,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    // Remote chip 1
+    {29, 1, 0, US_TUNNELER_LOCAL,  {15, 30,  x,  x}, {15, 31, 32,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {30, 1, 0, MUX_D,              {34, 36,  x,  x}, {29,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {31, 1, 0, PACKET_ROUTER_DEMUX,{29,  x,  x,  x}, {33, 36,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {32, 1, 0, PACKET_ROUTER_DEMUX,{29,  x,  x,  x}, {36,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {33, 1, 0, PREFETCH_D,         {31,  x,  x,  x}, {34, 35,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {34, 1, 0, DISPATCH_D,         {33,  x,  x,  x}, {35, 30,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {35, 1, 0, DISPATCH_S,         {33,  x,  x,  x}, {34,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {36, 1, 0, US_TUNNELER_REMOTE, {37, 31, 32,  x}, {37, 30,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    // Remote chip 2
+    {37, 2, 0, US_TUNNELER_LOCAL,  {36, 38,  x,  x}, {36, 39, 40,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {38, 2, 0, MUX_D,              {42, 44,  x,  x}, {37,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {39, 2, 0, PACKET_ROUTER_DEMUX,{37,  x,  x,  x}, {41, 44,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {40, 2, 0, PACKET_ROUTER_DEMUX,{37,  x,  x,  x}, {44,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {41, 2, 0, PREFETCH_D,         {39,  x,  x,  x}, {42, 43,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {42, 2, 0, DISPATCH_D,         {41,  x,  x,  x}, {43, 38,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {43, 2, 0, DISPATCH_S,         {41,  x,  x,  x}, {42,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {44, 2, 0, US_TUNNELER_REMOTE, {45, 39, 40,  x}, {45, 38,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    // Remote chip 3
+    {45, 3, 0, US_TUNNELER_LOCAL,  {44, 46,  x,  x}, {44, 47, 48,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {46, 3, 0, MUX_D,              {50, 52,  x,  x}, {45,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {47, 3, 0, PACKET_ROUTER_DEMUX,{45,  x,  x,  x}, {49, 52,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {48, 3, 0, PACKET_ROUTER_DEMUX,{45,  x,  x,  x}, {52,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {49, 3, 0, PREFETCH_D,         {47,  x,  x,  x}, {50, 51,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {50, 3, 0, DISPATCH_D,         {49,  x,  x,  x}, {51, 46,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {51, 3, 0, DISPATCH_S,         {49,  x,  x,  x}, {50,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {52, 3, 0, US_TUNNELER_REMOTE, {53, 47, 48,  x}, {53, 46,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    // Remote chip 4
+    {53, 4, 0, US_TUNNELER_LOCAL,  {52, 54,  x,  x}, {52, 55,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {54, 4, 0, MUX_D,              {57,  x,  x,  x}, {53,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {55, 4, 0, PACKET_ROUTER_DEMUX,{53,  x,  x,  x}, {56,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {56, 4, 0, PREFETCH_D,         {55,  x,  x,  x}, {57, 58,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {57, 4, 0, DISPATCH_D,         {56,  x,  x,  x}, {58, 54,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {58, 4, 0, DISPATCH_S,         {56,  x,  x,  x}, {57,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+
+    // Remote chip 1
+    {59, 5, 0, US_TUNNELER_LOCAL,  {28, 60,  x,  x}, {28, 61, 62,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {60, 5, 0, MUX_D,              {64, 66,  x,  x}, {59,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {61, 5, 0, PACKET_ROUTER_DEMUX,{59,  x,  x,  x}, {63, 66,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {62, 5, 0, PACKET_ROUTER_DEMUX,{59,  x,  x,  x}, {66,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {63, 5, 0, PREFETCH_D,         {61,  x,  x,  x}, {64, 65,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {64, 5, 0, DISPATCH_D,         {63,  x,  x,  x}, {65, 60,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {65, 5, 0, DISPATCH_S,         {63,  x,  x,  x}, {64,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {66, 5, 0, US_TUNNELER_REMOTE, {67, 61, 62,  x}, {67, 60,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    // Remote chip 2
+    {67, 6, 0, US_TUNNELER_LOCAL,  {66, 68,  x,  x}, {66, 69, 70,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {68, 6, 0, MUX_D,              {72, 74,  x,  x}, {67,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {69, 6, 0, PACKET_ROUTER_DEMUX,{67,  x,  x,  x}, {71, 74,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {70, 6, 0, PACKET_ROUTER_DEMUX,{67,  x,  x,  x}, {74,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {71, 6, 0, PREFETCH_D,         {69,  x,  x,  x}, {72, 73,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {72, 6, 0, DISPATCH_D,         {71,  x,  x,  x}, {73, 68,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {73, 6, 0, DISPATCH_S,         {71,  x,  x,  x}, {72,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {74, 6, 0, US_TUNNELER_REMOTE, {75, 69, 70,  x}, {75, 68,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    // Remote chip 3
+    {75, 7, 0, US_TUNNELER_LOCAL,  {74, 76,  x,  x}, {74, 77, 78,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {76, 7, 0, MUX_D,              {80, 82,  x,  x}, {75,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {77, 7, 0, PACKET_ROUTER_DEMUX,{75,  x,  x,  x}, {79, 82,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {78, 7, 0, PACKET_ROUTER_DEMUX,{75,  x,  x,  x}, {82,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {79, 7, 0, PREFETCH_D,         {77,  x,  x,  x}, {80, 81,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {80, 7, 0, DISPATCH_D,         {79,  x,  x,  x}, {81, 76,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {81, 7, 0, DISPATCH_S,         {79,  x,  x,  x}, {80,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {82, 7, 0, US_TUNNELER_REMOTE, {83, 77, 78,  x}, {83, 76,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    // Remote chip 4
+    {83, 8, 0, US_TUNNELER_LOCAL,  {82, 84,  x,  x}, {82, 85,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {84, 8, 0, MUX_D,              {87,  x,  x,  x}, {83,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {85, 8, 0, PACKET_ROUTER_DEMUX,{83,  x,  x,  x}, {86,  x,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {86, 8, 0, PREFETCH_D,         {85,  x,  x,  x}, {87, 88,  x,  x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {87, 8, 0, DISPATCH_D,         {86,  x,  x,  x}, {88, 84,  x,  x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {88, 8, 0, DISPATCH_S,         {86,  x,  x,  x}, {87,  x,  x,  x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+};
+
 std::vector<FDKernel *> node_id_to_kernel;
 
-// Populate node_id_to_kernel and set up kernel objects. Do this once at the beginning since they (1) don't need a valid
-// Device until fields are populated, (2) need to be connected to kernel objects for devices that aren't created yet,
-// and (3) the table to choose depends on total number of devices, not know at Device creation.
-void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_cqs) {
+// Helper function to get the nodes for this platform
+std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t> &device_ids, uint32_t num_hw_cqs) {
     // Select/generate the right input table, depends on (1) board [detected from total # of devices], and (2) number
     // of active devices. TODO: read this out of YAML instead of the structs above?
-    uint32_t total_devices = tt::Cluster::instance().number_of_user_devices();
-    TT_ASSERT(total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8, "Galaxy not implemented.");
+    uint32_t total_devices = tt::Cluster::instance().number_of_devices();
+    TT_ASSERT(total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 36, "Unexpected target.");
     uint32_t num_devices = device_ids.size();
+    tt::log_warning("FD Config: {}/{} devices, {} HW CQs", num_devices, total_devices, num_hw_cqs);
     TT_ASSERT(num_devices > 0, "Can't determine dispatch architecture with no active devices.");
     TT_ASSERT(num_devices <= total_devices);
-    tt::log_warning("FD Config: {}/{} devices, {} HW CQs", num_devices, total_devices, num_hw_cqs);
     std::vector<dispatch_kernel_node_t> nodes;
 
     std::set<chip_id_t> mmio_devices;
@@ -125,7 +236,6 @@ void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_
     }
     // Supported grid either has one remote per mmio or none
     tt::log_warning("FD Config: mmio_count={}, remote_count={}", mmio_devices.size(), remote_devices.size());
-    TT_ASSERT(mmio_devices.size() == remote_devices.size() or remote_devices.empty(), "Unexpected device grid");
 
     // Helper function to get nodes for single device
     auto populate_single_device = [&]() {
@@ -157,38 +267,66 @@ void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_
             index_offset += nodes_for_one_mmio.size();
         }
     } else {
-        // Should be paired mmio/remote devices
-        const std::vector<dispatch_kernel_node_t> *nodes_for_one_mmio = (num_hw_cqs == 1) ? &two_card_arch_1cq : &two_card_arch_2cq;
-        uint32_t index_offset = 0;
-        for (auto mmio_device_id : mmio_devices) {
-            // Find the corresponding remote chip. TODO: update for Galaxy
-            chip_id_t remote_device_id;
-            bool found_remote = false;
-            for (auto id : remote_devices) {
-                if (tt::Cluster::instance().get_associated_mmio_device(id) == mmio_device_id) {
-                    remote_device_id = id;
-                    found_remote = true;
-                    break;
+        // Need to handle N300/T3000 separately from TG/TGG since they have different templates/tunnel depths
+        if (tt::Cluster::instance().is_galaxy_cluster()) {
+            // For Galaxy, we always init all remote devices associated with an mmio device.
+            const std::vector<dispatch_kernel_node_t> *nodes_for_one_mmio = (num_hw_cqs == 1) ? &galaxy_nine_card_arch_1cq : &galaxy_nine_card_arch_1cq;
+            uint32_t index_offset = 0;
+            for (auto mmio_device_id : mmio_devices) {
+                // Need a mapping from templated device id (1-8) to actual device id (from the tunnel)
+                std::vector<chip_id_t> template_id_to_device_id;
+                template_id_to_device_id.push_back(mmio_device_id);
+                for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+                    TT_ASSERT(tunnel.size() == 5, "Galaxy expected 4-deep tunnels.");
+                    for (auto remote_device_id : tunnel) {
+                        if (remote_device_id != mmio_device_id)
+                            template_id_to_device_id.push_back(remote_device_id);
+                    }
                 }
-            }
-            TT_ASSERT(found_remote, "Couldn't find paired remote chip for device {}", mmio_device_id);
 
-            // Add dispatch kernels for the mmio/remote pair
-            for (dispatch_kernel_node_t node : *nodes_for_one_mmio) {
-                TT_ASSERT(node.device_id == 0 || node.device_id == 1);
-                if (node.device_id == 0) {
-                    node.device_id = mmio_device_id;
-                } else {
-                    node.device_id = remote_device_id;
+                // Pull nodes from the template, updating their index and device id
+                for (dispatch_kernel_node_t node : *nodes_for_one_mmio) {
+                    node.device_id = template_id_to_device_id[node.device_id];
+                    increment_node_ids(node, index_offset);
+                    nodes.push_back(node);
                 }
-                increment_node_ids(node, index_offset);
-                nodes.push_back(node);
+                index_offset += nodes_for_one_mmio->size();
             }
-            index_offset += nodes_for_one_mmio->size();
+        } else {
+            // Should be paired mmio/remote devices
+            TT_ASSERT(mmio_devices.size() == remote_devices.size() or remote_devices.empty(), "N300/T3K expects devices in mmio/remote pairs.");
+            const std::vector<dispatch_kernel_node_t> *nodes_for_one_mmio = (num_hw_cqs == 1) ? &two_card_arch_1cq : &two_card_arch_2cq;
+            uint32_t index_offset = 0;
+            for (auto mmio_device_id : mmio_devices) {
+                // Find the corresponding remote chip
+                chip_id_t remote_device_id;
+                bool found_remote = false;
+                for (auto id : remote_devices) {
+                    if (tt::Cluster::instance().get_associated_mmio_device(id) == mmio_device_id) {
+                        remote_device_id = id;
+                        found_remote = true;
+                        break;
+                    }
+                }
+                TT_ASSERT(found_remote, "Couldn't find paired remote chip for device {}", mmio_device_id);
+
+                // Add dispatch kernels for the mmio/remote pair
+                for (dispatch_kernel_node_t node : *nodes_for_one_mmio) {
+                    TT_ASSERT(node.device_id == 0 || node.device_id == 1);
+                    if (node.device_id == 0) {
+                        node.device_id = mmio_device_id;
+                    } else {
+                        node.device_id = remote_device_id;
+                    }
+                    increment_node_ids(node, index_offset);
+                    nodes.push_back(node);
+                }
+                index_offset += nodes_for_one_mmio->size();
+            }
         }
     }
 
-#if 0
+#if 1
     for (auto &node : nodes) {
         std::string upstream = "";
         for (int id : node.upstream_ids)
@@ -201,6 +339,13 @@ void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_
     }
 #endif
 
+    return nodes;
+}
+
+// Populate node_id_to_kernel and set up kernel objects. Do this once at the beginning since they (1) don't need a valid
+// Device until fields are populated, (2) need to be connected to kernel objects for devices that aren't created yet,
+// and (3) the table to choose depends on total number of devices, not know at Device creation.
+void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_cqs) {
     // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
     if (!node_id_to_kernel.empty()) {
         for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
@@ -210,7 +355,9 @@ void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_
     }
 
     // Read the input table, create configs for each node
+    std::vector<dispatch_kernel_node_t> nodes = get_nodes(device_ids, num_hw_cqs);
     for (const auto& node : nodes) {
+        TT_ASSERT(node_id_to_kernel.size() == node.id);
         node_id_to_kernel.push_back(FDKernel::Generate(
             node.id, node.device_id, node.cq_id, {node.my_noc, node.upstream_noc, node.downstream_noc}, node.kernel_type));
     }
@@ -230,6 +377,108 @@ void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_
             }
         }
     }
+
+    // For kernels on mmio chip, need to confirm which remote device each is servicing
+    std::map<chip_id_t, uint32_t> device_id_to_tunnel_stop;
+    std::map<chip_id_t, std::vector<chip_id_t>> mmio_device_id_to_serviced_devices;
+    uint32_t tunnel_depth;
+    for (auto mmio_device_id : device_ids) {
+        if (tt::Cluster::instance().get_associated_mmio_device(mmio_device_id) != mmio_device_id)
+            continue;
+
+        // Get a list of remote devices serviced by this mmio chip
+        mmio_device_id_to_serviced_devices[mmio_device_id].push_back(mmio_device_id);
+        for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+            tunnel_depth = tunnel.size();
+            for (uint32_t tunnel_stop = 0; tunnel_stop < tunnel.size(); tunnel_stop++) {
+                chip_id_t remote_device_id = tunnel[tunnel_stop];
+                device_id_to_tunnel_stop[remote_device_id] = tunnel_stop;
+                if (remote_device_id != mmio_device_id)
+                    mmio_device_id_to_serviced_devices[mmio_device_id].push_back(remote_device_id);
+            }
+        }
+    }
+
+    // Go through each mmio device, and assign the dispatch kernels on it to remote devices
+    std::map<chip_id_t, std::vector<FDKernel *>> mmio_device_id_to_kernels;
+    for (auto fd_kernel : node_id_to_kernel) {
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(fd_kernel->GetDeviceId());
+        if (fd_kernel->GetDeviceId() == mmio_device_id)
+            mmio_device_id_to_kernels[mmio_device_id].push_back(fd_kernel);
+    }
+    for (auto &mmio_device_id_and_kernels : mmio_device_id_to_kernels) {
+        chip_id_t mmio_device_id = mmio_device_id_and_kernels.first;
+        int prefetch_h_id = 0, dispatch_h_id = 0;
+        int demux_id = 0, router_id = 0, tunneler_id = 0;
+        for (auto fd_kernel : mmio_device_id_and_kernels.second) {
+            if (auto prefetch_kernel = dynamic_cast<PrefetchKernel *>(fd_kernel)) {
+                prefetch_kernel->SetServicingDeviceId(mmio_device_id_to_serviced_devices[mmio_device_id][prefetch_h_id++]);
+            } else if (auto dispatch_kernel = dynamic_cast<DispatchKernel *>(fd_kernel)) {
+                dispatch_kernel->SetServicingDeviceId(mmio_device_id_to_serviced_devices[mmio_device_id][dispatch_h_id++]);
+            } else if (auto demux_kernel = dynamic_cast<DemuxKernel *>(fd_kernel)) {
+                // TODO: this is just to match previous implementation, can use mmio_device_id going forward. Currently points to the first device in the tunnel.
+                demux_kernel->SetServicingDeviceId(mmio_device_id_to_serviced_devices[mmio_device_id][1 + (demux_id / 3) * 4]); // Galaxy has 4-deep tunnels
+                demux_kernel->SetPlacementCQID((demux_id++) % 3); // TODO: Need to fix dispatch core manager so we don't hard-code separate channels for this.
+            } else if (auto router_kernel = dynamic_cast<EthRouterKernel *>(fd_kernel)) {
+                // TODO: same deal here, it could be mmio_device_id w/ a different way to get a second router assignment
+                router_kernel->SetServicingDeviceId(mmio_device_id_to_serviced_devices[mmio_device_id][1 + (router_id++) * 4]);
+            } else if (auto tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(fd_kernel)) {
+                tunneler_kernel->SetServicingDeviceId(mmio_device_id_to_serviced_devices[mmio_device_id][1 + (tunneler_id++) * 4]);
+            }
+        }
+    }
+
+    // Write VC count to all tunnelers
+    std::map<chip_id_t, uint32_t> device_id_to_num_routers; // Need to build this first. TODO: in the future walkt the graph to populate VC counts
+    std::map<chip_id_t, uint32_t> device_id_to_remaining_routers;
+    for (auto fd_kernel : node_id_to_kernel) {
+        if (auto router_kernel = dynamic_cast<EthRouterKernel *>(fd_kernel)) {
+            chip_id_t router_device_id = router_kernel->GetDeviceId();
+            chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(router_device_id);
+            // Special case for mmio devices, they can have more than one router with the same cq, going to different tunnels
+            if (router_device_id == mmio_device_id) {
+                router_kernel->SetPlacementCQID(device_id_to_num_routers[router_device_id] / 2); // TODO: fix for multi-cq
+            } else {
+                router_kernel->SetPlacementCQID(device_id_to_num_routers[router_device_id]);
+            }
+            device_id_to_remaining_routers[router_device_id]++;
+            device_id_to_num_routers[router_device_id]++;
+        }
+    }
+    for (auto fd_kernel : node_id_to_kernel) {
+        uint32_t tunnel_stop = device_id_to_tunnel_stop[fd_kernel->GetDeviceId()];
+        if (auto tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(fd_kernel)) {
+            // Local tunneler needs to match remote tunneler on previous chip in the tunnel
+            if (!tunneler_kernel->IsRemote()) {
+                TT_ASSERT(tunnel_stop != 0);
+                tunnel_stop--;
+            }
+            // # of VCs is return VC + total VCs for tunnel (num_hw_cqs per remote) - num_hw_cqs VCs per remote stop
+            tunneler_kernel->SetVCCount(1 + (tunnel_depth - 1) * num_hw_cqs - tunnel_stop * num_hw_cqs);
+        } else if (auto router_kernel = dynamic_cast<EthRouterKernel *>(fd_kernel)) {
+            // Router has the same VCs as the remote tunneler for MMIO, same as local tunneler for remote
+            if (tunnel_stop != 0) {
+                tunnel_stop--;
+            }
+            uint32_t router_vcs_for_device = (tunnel_depth - 1) * num_hw_cqs - tunnel_stop * num_hw_cqs;
+            // Divide the VCs between routers on one device
+            uint32_t remaining_routers = device_id_to_remaining_routers[router_kernel->GetDeviceId()];
+            uint32_t num_routers = device_id_to_num_routers[router_kernel->GetDeviceId()];
+
+            // Special case for MMIO chips, can have routers servicing different tunnels
+            chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(router_kernel->GetDeviceId());
+            if (router_kernel->GetDeviceId() == mmio_device_id) {
+                uint32_t num_tunnels = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id).size();
+                num_routers /= num_tunnels;
+                uint32_t router_vcs =  (router_vcs_for_device + num_routers - 1) / num_routers;
+                router_kernel->SetVCCount(router_vcs);
+            } else {
+                uint32_t router_vcs = (router_vcs_for_device + remaining_routers - 1) / num_routers;
+                router_kernel->SetVCCount(router_vcs);
+            }
+            device_id_to_remaining_routers[router_kernel->GetDeviceId()]--;
+        }
+    }
 }
 
 std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
@@ -243,8 +492,9 @@ std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
     for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
         if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
             node_id_to_kernel[idx]->AddDeviceAndProgram(device, cq_program_ptr.get());
+            tt::log_warning("GenerateStaticConfigs for Node {}", idx);
             node_id_to_kernel[idx]->GenerateStaticConfigs();
-            // tt::log_warning("Node {} has coord: {} (phys={})", idx, node_id_to_kernel[idx]->GetLogicalCore().str(), node_id_to_kernel[idx]->GetPhysicalCore().str());
+            tt::log_warning("Node {} has coord: {} (phys={})", idx, node_id_to_kernel[idx]->GetLogicalCore().str(), node_id_to_kernel[idx]->GetPhysicalCore().str());
         }
     }
 
@@ -252,13 +502,16 @@ std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
     // for (auto &node_and_kernel : node_id_to_kernel) {
     for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
         if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
+            tt::log_warning("GenerateDependentConfigs for Node {}", idx);
             node_id_to_kernel[idx]->GenerateDependentConfigs();
+            tt::log_warning("CreateKernel for Node {}", idx);
             node_id_to_kernel[idx]->CreateKernel();
         }
     }
 
     // Compile the program and return it so Device can register it
     detail::CompileProgram(device, *cq_program_ptr, /*fd_bootloader_mode=*/true);
+    tt::log_warning("Done Compiling CQ Program for Device {}, grid size = {}", device->id(), device->compute_with_storage_grid_size().str());
     return cq_program_ptr;
 }
 

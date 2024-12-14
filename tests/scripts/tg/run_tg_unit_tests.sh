@@ -5,6 +5,7 @@ run_tg_tests() {
 
   echo "LOG_METAL: running run_tg_unit_tests"
 
+  ./tests/scripts/run_fd_init_cmp.sh
   TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*"
   ./build/test/ttnn/galaxy_unit_tests_ttnn
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"

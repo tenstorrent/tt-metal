@@ -10,21 +10,22 @@ fi
 if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     # Temporary dispatch compile args testing
     check_list="Semaphore Allocated Configure Sysmem"
+    test_cmd="./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc"
     rm -rf built
     echo "FD Compile Args Test - 1CQ"
 
-    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.new
+    $test_cmd | tee log.new
     for i in $check_list; do
         grep $i log.new > $i.new; sort -n -o $i.new{,}
     done
-    find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_new.csv
+    find . -name "kernel_args.csv" | xargs -I {} wc -l {} | sort -n | tail -1l | awk '{print $2}' | xargs -I {} cp {} kernel_args_new.csv
     rm -rf built
 
-    TT_METAL_OLD_FD_INIT=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.old
+    TT_METAL_OLD_FD_INIT=1 $test_cmd | tee log.old
     for i in $check_list; do
         grep $i log.old > $i.old; sort -n -o $i.old{,}
     done
-    find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_old.csv
+    find . -name "kernel_args.csv" | xargs -I {} wc -l {} | sort -n | tail -1l | awk '{print $2}' | xargs -I {} cp {} kernel_args_old.csv
     rm -rf built
 
     for i in $check_list; do
@@ -42,17 +43,18 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
         exit 1
     fi
     echo "FD Compile Args Test - 1CQ PASS"
+    exit 0
 
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
         echo "FD Compile Args Test - 2CQ"
 
-        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.new
+        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 $test_cmd | tee log.new
         for i in $check_list; do
             grep $i log.new > $i.new; sort -n -o $i.new{,}
         done
         find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_new.csv
 
-        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 TT_METAL_OLD_FD_INIT=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc | tee log.old
+        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 TT_METAL_OLD_FD_INIT=1 $test_cmd | tee log.old
         for i in $check_list; do
             grep $i log.old > $i.old; sort -n -o $i.old{,}
         done

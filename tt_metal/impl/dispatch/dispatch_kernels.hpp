@@ -41,6 +41,7 @@ class FDKernel {
         this->program = program;
     };
     chip_id_t GetDeviceId() { return this->device_id; } // Since this->device may not exist yet
+    void SetServicingDeviceId(chip_id_t id) { this->servicing_device_id = id; }
 
    protected:
     void configure_kernel_variant(
@@ -63,6 +64,7 @@ class FDKernel {
     Program *program = nullptr;
     tt_cxy_pair logical_core;
     chip_id_t device_id;
+    chip_id_t servicing_device_id; // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
     int node_id;
     uint8_t cq_id;
     noc_selection_t noc_selection;
@@ -183,7 +185,7 @@ typedef struct dispatch_s_config {
 
 typedef struct eth_tunneler_config {
     std::optional<uint32_t> endpoint_id_start_index;
-    std::optional<uint32_t> vc_count; // Dependent
+    std::optional<uint32_t> vc_count; // Set from arch level
     std::optional<uint32_t> in_queue_start_addr_words;
     std::optional<uint32_t> in_queue_size_words;
 
@@ -205,10 +207,10 @@ typedef struct eth_tunneler_config {
 } eth_tunneler_config_t;
 
 typedef struct eth_router_config {
-    std::optional<uint32_t> vc_count;
+    std::optional<uint32_t> vc_count; // Set from arch level
+    std::optional<uint32_t> fwd_vc_count; // # of VCs continuing on to the next chip
     std::optional<uint32_t> rx_queue_start_addr_words; // 1
     std::optional<uint32_t> rx_queue_size_words;
-    std::optional<uint32_t> router_lanes;
 
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_x; // [4:7], dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_y; // [4:7], dependent
@@ -218,7 +220,7 @@ typedef struct eth_router_config {
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_queue_size_words; // [9:2:15], dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_x; // [16:19], dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_y; // [16:19], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_queue_id; // [16:19]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_queue_id; // [16:19], dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_network_type; // [17:19], dependent
 
     std::optional<uint32_t> kernel_status_buf_addr_arg; // 22
@@ -239,15 +241,14 @@ typedef struct eth_router_config {
 } eth_router_config_t;
 
 typedef struct mux_config {
-    std::optional<uint32_t> vc_count;
     std::optional<uint32_t> reserved;
     std::optional<uint32_t> rx_queue_start_addr_words;
     std::optional<uint32_t> rx_queue_size_words;
-    std::optional<uint32_t> mux_fan_in; // Dependent
+    std::optional<uint32_t> mux_fan_in;
 
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_x; // [4:7], dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_y; // [4:7], dependent
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_queue_id; // [4:7]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_queue_id; // [4:7], dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_network_type; // [4:7]
     std::optional<uint32_t> remote_tx_queue_start_addr_words; // Dependent
     std::optional<uint32_t> remote_tx_queue_size_words; // Dependent
@@ -261,7 +262,7 @@ typedef struct mux_config {
     std::optional<uint32_t> timeout_cycles;
     std::optional<uint32_t> output_depacketize;
     std::optional<uint32_t> output_depacketize_info; // Packed, pack with above same is input?
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize;
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize; // Dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_log_page_size; // Dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_upstream_sem; // Dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_local_sem;
@@ -270,7 +271,6 @@ typedef struct mux_config {
 } mux_config_t;
 
 typedef struct demux_config {
-    std::optional<uint32_t> vc_count;
     std::optional<uint32_t> endpoint_id_start_index;
     std::optional<uint32_t> rx_queue_start_addr_words;
     std::optional<uint32_t> rx_queue_size_words;
@@ -365,9 +365,29 @@ class DemuxKernel : public FDKernel {
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
     const demux_config_t &GetConfig() { return this->config; }
+    void SetPlacementCQID(int id) { this->placement_cq_id = id; }
 
    private:
     demux_config_t config;
+    int placement_cq_id; // TODO: remove channel hard-coding for dispatch core manager
+};
+
+class EthRouterKernel : public FDKernel {
+   public:
+    EthRouterKernel(int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection, bool as_mux) :
+        FDKernel(node_id, device_id, cq_id, noc_selection), as_mux(as_mux) {}
+    void CreateKernel() override;
+    void GenerateStaticConfigs() override;
+    void GenerateDependentConfigs() override;
+    const eth_router_config_t &GetConfig() { return this->config; }
+    void SetVCCount(uint32_t vc_count) { this->config.vc_count = vc_count; }
+    void SetPlacementCQID(int id) { this->placement_cq_id = id; }
+
+   private:
+    eth_router_config_t config;
+    int placement_cq_id; // TODO: remove channel hard-coding for dispatch core manager
+    bool as_mux;
+
 };
 
 class EthTunnelerKernel : public FDKernel {
@@ -386,27 +406,24 @@ class EthTunnelerKernel : public FDKernel {
     }
     const eth_tunneler_config_t &GetConfig() { return this->config; }
     bool IsRemote() { return this->is_remote; }
+    void SetVCCount(uint32_t vc_count) { this->config.vc_count = vc_count; }
+    uint32_t GetRouterQueueIdOffset(EthRouterKernel *k, bool upstream) {
+        uint32_t queue_id = (upstream)? 0 : this->config.vc_count.value();
+        std::vector<FDKernel *> &kernels = (upstream)? upstream_kernels : downstream_kernels;
+        for (auto kernel : kernels) {
+            if (auto router_kernel = dynamic_cast<EthRouterKernel *>(kernel)) {
+                if (k == router_kernel)
+                    return queue_id;
+                queue_id += (upstream)? router_kernel->GetConfig().fwd_vc_count.value() : router_kernel->GetConfig().vc_count.value();
+            }
+        }
+        TT_ASSERT(false, "Couldn't find router kernel");
+        return queue_id;
+    }
 
    private:
     eth_tunneler_config_t config;
-    uint32_t tunnel_stop;
-    std::optional<chip_id_t> downstream_device_id; // TODO
     bool is_remote;
     bool is_tunnel_start = true;
     bool is_tunnel_end = true;
-};
-
-class EthRouterKernel : public FDKernel {
-   public:
-    EthRouterKernel(int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection, bool as_mux) :
-        FDKernel(node_id, device_id, cq_id, noc_selection), as_mux(as_mux) {}
-    void CreateKernel() override;
-    void GenerateStaticConfigs() override;
-    void GenerateDependentConfigs() override;
-    const eth_router_config_t &GetConfig() { return this->config; }
-
-   private:
-    eth_router_config_t config;
-    bool as_mux;
-
 };
