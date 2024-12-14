@@ -90,7 +90,9 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(addrs_cb_id));
 
     for (uint32_t layer = 0; layer < num_layers; layer++) {
+        DeviceZoneScopedN("layers");
         for (uint32_t t = 0; t < num_tensors; t++) {
+            DeviceZoneScopedN("tensors");
             uint32_t curr_page_size = page_sizes[t];
             uint32_t curr_block_num_pages = block_num_pages[t];
             uint32_t curr_block_num_tiles = block_num_tiles[t];
