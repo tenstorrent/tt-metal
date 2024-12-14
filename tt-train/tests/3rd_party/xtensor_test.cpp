@@ -33,7 +33,7 @@ TEST(XTensorTest, SpanToXtensor) {
     std::span<int> data_span(data.data(), data.size());
     ttnn::SimpleShape shape({2, 3});
 
-    auto result = ttml::core::span_to_xtensor(data_span, shape);
+    auto result = ttml::core::span_to_xtensor_view(data_span, shape);
 
     // Check shape
     EXPECT_EQ(result.shape().size(), 2);
