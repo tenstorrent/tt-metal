@@ -1587,16 +1587,14 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
 
     TT_ASSERT(
         output.shard_spec().has_value() and output.shard_spec()->shape[1] == output_tensor_shape[-1],
-        "output must be sharded with shard width equal to output width");
+        "ttnn.pad: pad_rm_sharded_width_only expects sharded output parameter with shard width equal to the width of "
+        "the requested output tensor. Ensure pad_impl is calling this program factory correctly.");
 
-    uint32_t W = input_tensor.shape()[3];
+    uint32_t W = input_tensor.logical_shape()[-1];
     uint32_t W_padded = output_tensor_shape[3];
 
     auto unpadded_stick_bytes = W * input_tensor.element_size();
     auto padded_stick_bytes = W_padded * input_tensor.element_size();
-
-    TT_FATAL(unpadded_stick_bytes != padded_stick_bytes,
-             "ttnn.pad: pad_rm_sharded_width_only should only be used with non-zero width padding.");
 
     Device *device = input_tensor.device();
 

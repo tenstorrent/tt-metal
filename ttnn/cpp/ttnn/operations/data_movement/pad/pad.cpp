@@ -53,7 +53,7 @@ static ttnn::Tensor pad_impl(
         auto input_tensor_shape = input_tensor.get_shape();
         const auto rank = input_tensor_shape.rank();
 
-        TT_ASSERT(rank == 4, "ttnn.pad: input tensor passed to pad_impl must have rank == 4.");
+        TT_FATAL(rank == 4, "ttnn.pad: input tensor passed to pad_impl must have rank == 4, but got rank {}.", rank);
 
         using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;
         using ShardOrientation = tt::tt_metal::ShardOrientation;

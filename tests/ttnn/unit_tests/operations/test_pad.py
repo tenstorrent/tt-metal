@@ -166,7 +166,7 @@ def to_torch_padding(padspec):
             {"core_grid": ttnn.CoreGrid(x=1, y=1), "strategy": ttnn.ShardStrategy.HEIGHT},
         ],
         [
-            # esmal's test case for UNet
+            # test case for UNet
             (1, 1, 2 * 1056 * 160, 4),
             (1, 1, 2 * 1056 * 160, 16),
             (0, 0, 0, 0),
@@ -174,7 +174,7 @@ def to_torch_padding(padspec):
             {"core_grid": ttnn.CoreGrid(x=8, y=8), "strategy": ttnn.ShardStrategy.HEIGHT},
         ],
         [
-            # borys's first test case
+            # width padding only, reduced core grid
             (1, 1, 12, 8),
             (1, 1, 12, 64),
             (0, 0, 0, 0),
@@ -182,7 +182,7 @@ def to_torch_padding(padspec):
             {"core_grid": ttnn.CoreGrid(x=2, y=6), "strategy": ttnn.ShardStrategy.HEIGHT},
         ],
         [
-            # minimized borys second test case
+            # height and width padding, small core grid
             (1, 1, 2, 4),
             (1, 1, 4, 8),
             (0, 0, 0, 0),
