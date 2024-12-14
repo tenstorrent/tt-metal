@@ -40,6 +40,9 @@ void kernel_main() {
         // optimization (upcoming as of 12/12/2024) this might be worth
         // investigating.
 
+        // paulk says that an optimized loop will still be faster.
+        // TODO(jkruer): get paul's help optimizing this.
+
         // read the input stick into the padded output stick starting after the
         // front padding
         for (uint32_t i = 0; i < unpadded_stick_bytes; i++) {

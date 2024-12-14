@@ -53,7 +53,7 @@ static ttnn::Tensor pad_impl(
         auto input_tensor_shape = input_tensor.get_shape();
         const auto rank = input_tensor_shape.rank();
 
-        TT_FATAL(rank == 4, "ttnn.pad: input tensor rank is not 4");
+        TT_ASSERT(rank == 4, "ttnn.pad: input tensor passed to pad_impl must have rank == 4.");
 
         using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;
         using ShardOrientation = tt::tt_metal::ShardOrientation;
@@ -73,24 +73,18 @@ static ttnn::Tensor pad_impl(
             auto width_distinct = [](const auto& shape, const auto& other_shape) { return shape[3] != other_shape[3]; };
 
             uint32_t input_w = input_logical_shape[3];
-
             uint32_t output_w = output_padded_shape[3];
 
             if (width_distinct(input_logical_shape, output_padded_shape)) {
-                ttnn::SmallVector<uint32_t> output_shape_width_padded{
-                    input_logical_shape.begin(), input_logical_shape.end() - 1};
-                output_shape_width_padded.push_back(output_w);
-
+                std::array<uint32_t, 4> output_shape_width_padded{
+                    input_logical_shape[0], input_logical_shape[1], input_logical_shape[2], output_w};
                 auto width_pad_memory_config = create_sharded_memory_config(
-                    ttnn::Shape{output_shape_width_padded},
+                    ttnn::SimpleShape{output_shape_width_padded},
                     input_tensor.shard_spec()->grid,  // reuse input cores for now: FIXME: can we do better?
                                                       // it's complicated because we need the input shards to be local
                                                       // to the core holding the output shard currently.
                     ShardStrategy::HEIGHT,            // stay height sharded
-                    ShardOrientation::ROW_MAJOR,
-                    false,
-                    false,
-                    Layout::ROW_MAJOR);
+                    ShardOrientation::ROW_MAJOR);
                 output_memory_config = width_pad_memory_config;
 
                 if (height_distinct(input_logical_shape, output_padded_shape)) {
@@ -119,13 +113,10 @@ static ttnn::Tensor pad_impl(
                         "infinite recursion");
 
                     auto height_pad_memory_config = create_sharded_memory_config(
-                        ttnn::Shape{output_padded_shape},
+                        ttnn::SimpleShape{output_padded_shape},
                         input_tensor.shard_spec()->grid,
                         ShardStrategy::HEIGHT,
-                        ShardOrientation::ROW_MAJOR,
-                        false,
-                        false,
-                        Layout::ROW_MAJOR);
+                        ShardOrientation::ROW_MAJOR);
 
                     // then pad height
                     auto output_tensor_height_padded = pad_impl(

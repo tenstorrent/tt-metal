@@ -56,81 +56,108 @@ ttnn::Tensor pad_to_tile_vol(
 }
 uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : index; }
 
+std::array<uint32_t, 2> compute_block_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw, 
+                                                          const tt::tt_metal::Layout& layout,
+                                                          const tt::tt_metal::CoreCoord& grid_size,
+                                                          const tt::tt_metal::ShardOrientation& orientation,
+                                                          const uint32_t total_num_cores) {
+    TT_FATAL(grid_size.y * grid_size.x == total_num_cores, "compute_block_sharded_shard_shape received a core grid shape that does not match the total number of cores");
+    auto adjusted_grid_size = grid_size;
+    if (orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+        // for col major, we partition the width of the tensor along the height of the core grid
+        std::swap(adjusted_grid_size.x, adjusted_grid_size.y); 
+    }
+
+    auto [tensor_height, tensor_width] = squeezed_tensor_hw;
+    auto tensor_height_padded_to_tile = layout == tt::tt_metal::Layout::TILE 
+                                        ? tt::round_up(tensor_height, adjusted_grid_size.y * tt::constants::TILE_HEIGHT) 
+                                        : tensor_height;
+    std::array<uint32_t, 2> shard_shape = {tt::div_up(tensor_height_padded_to_tile, adjusted_grid_size.y), 
+                                           tt::div_up(tensor_width, adjusted_grid_size.x)};
+
+    return shard_shape;
+}
+
+std::array<uint32_t, 2> compute_width_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw, 
+                                                          const uint32_t total_num_cores) {
+    return {squeezed_tensor_hw[0], tt::div_up(squeezed_tensor_hw[1], total_num_cores)};
+}
+
+std::array<uint32_t, 2> compute_height_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw, 
+                                                           const tt::tt_metal::Layout& layout,
+                                                           const uint32_t total_num_cores) {
+    auto [tensor_height, tensor_width] = squeezed_tensor_hw;
+    auto squeezed_height_padded_to_tile = layout == tt::tt_metal::Layout::TILE 
+                                                    ? tt::round_up(tensor_height, total_num_cores)
+                                                    : tensor_height;
+    return {tt::div_up(squeezed_height_padded_to_tile, total_num_cores), tensor_width};
+}
+
 ttnn::MemoryConfig create_sharded_memory_config(
-    const ttnn::Shape& shape,
+    const ttnn::SimpleShape& logical_shape,
     const tt::tt_metal::CoreRangeSet& core_grid,
     const ShardStrategy& strategy,
     const tt::tt_metal::ShardOrientation& orientation,
-    bool halo,
-    bool use_height_and_width_as_shard_shape,
-    const tt::tt_metal::Layout& layout) {
-    auto is_tile_layout = layout == tt::tt_metal::Layout::TILE;
-
-    auto rank = shape.rank();
+    std::optional<std::array<uint32_t, 2>> shard_shape,
+    const tt::tt_metal::Layout& layout,
+    bool halo) {
+    auto rank = logical_shape.rank();
     TT_FATAL(rank >= 2, "rank of tensor to shard must be at least 2.");
 
-    auto tensor_memory_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED;
-    if (strategy == ShardStrategy::WIDTH) {
+    ttnn::TensorMemoryLayout tensor_memory_layout;
+    if (strategy == ShardStrategy::BLOCK) {
+        tensor_memory_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED;
+    } else if (strategy == ShardStrategy::WIDTH) {
         tensor_memory_layout = ttnn::TensorMemoryLayout::WIDTH_SHARDED;
     } else if (strategy == ShardStrategy::HEIGHT) {
         tensor_memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED;
     }
 
-    auto shard_orientation = orientation;
-    auto shard_grid = core_grid;
+    auto height = logical_shape[-2];
+    auto width = logical_shape[-1];
+    std::array<uint32_t, 2> computed_shard_shape;
 
-    auto height = shape[-2];
-    auto width = shape[-1];
-    std::array<uint32_t, 2> shard_shape;
-
-    if (use_height_and_width_as_shard_shape) {
-        if (shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR) {
-            shard_shape = {height, width};
-        } else if (shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
-            shard_shape = {width, height};
-        } else {
-            TT_THROW("Invalid shard orientation");
-        }
+    if (shard_shape.has_value()) {
+        computed_shard_shape = shard_shape.value();
     } else {
         uint32_t batch_size = 1;
         for (int i = 0; i < rank - 2; i++) {
-            batch_size *= shape[i];
+            batch_size *= logical_shape[i];
         }
 
         auto tensor_height = batch_size * height;
         auto tensor_width = width;
-        auto total_num_cores = shard_grid.num_cores();
-        auto grid_size = shard_grid.bounding_box().grid_size();
+        std::array<uint32_t, 2> squeezed_tensor_hw{tensor_height, tensor_width};
+        auto total_num_cores = core_grid.num_cores();
+        CoreCoord grid_size = core_grid.bounding_box().grid_size();
 
-        if (tensor_memory_layout == ttnn::TensorMemoryLayout::BLOCK_SHARDED) {
-            TT_ASSERT(grid_size.y * grid_size.x == total_num_cores, "Invalid CoreRangeSet for block sharding strategy");
-
-            if (shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR) {
-                auto tensor_height_padded =
-                    is_tile_layout ? tt::round_up(tensor_height, grid_size.y * 32) : tensor_height;
-                shard_shape = {tt::div_up(tensor_height_padded, grid_size.y), tt::div_up(tensor_width, grid_size.x)};
-            } else if (shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
-                auto tensor_height_padded =
-                    is_tile_layout ? tt::round_up(tensor_height, grid_size.x * 32) : tensor_height;
-                shard_shape = {tt::div_up(tensor_height_padded, grid_size.x), tt::div_up(tensor_width, grid_size.y)};
-            } else {
-                TT_THROW("Invalid shard orientation");
-            }
-        } else if (tensor_memory_layout == ttnn::TensorMemoryLayout::HEIGHT_SHARDED) {
-            auto tensor_height_padded = is_tile_layout ? tt::round_up(tensor_height, total_num_cores) : tensor_height;
-            shard_shape = {tt::div_up(tensor_height_padded, total_num_cores), tensor_width};
-        } else if (tensor_memory_layout == ttnn::TensorMemoryLayout::WIDTH_SHARDED) {
-            shard_shape = {tensor_height, tt::div_up(tensor_width, total_num_cores)};
-        } else {
-            TT_THROW("Invalid sharding scheme");
+        switch (strategy) {
+            case ShardStrategy::BLOCK:
+                computed_shard_shape = compute_block_sharded_shard_shape(squeezed_tensor_hw, layout, grid_size, orientation, total_num_cores);
+                break;
+            case ShardStrategy::WIDTH:
+                computed_shard_shape = compute_width_sharded_shard_shape(squeezed_tensor_hw, total_num_cores);
+                break;
+            case ShardStrategy::HEIGHT:
+                computed_shard_shape = compute_height_sharded_shard_shape(squeezed_tensor_hw, layout, total_num_cores);
+                break;
+            default:
+                TT_ASSERT(false, "Invalid shard strategy");
         }
     }
 
-    if (is_tile_layout && shard_shape[0] % 32 != 0 && shard_shape[1] % 32 != 0) {
-        TT_THROW("For sharding tiled tensors, the shard shape must fit neatly into tiles.");
+    if (layout == tt::tt_metal::Layout::TILE) {
+        auto [shard_height, shard_width] = computed_shard_shape;
+        auto tile_divides_shard_height = shard_height % tt::constants::TILE_HEIGHT == 0;
+        auto tile_divides_shard_width = shard_width % tt::constants::TILE_WIDTH == 0;
+        TT_FATAL(tile_divides_shard_width && tile_divides_shard_height,
+                 "For sharding tiled tensors, the shard shape must fit neatly into tiles but "
+                 "create_sharded_memory_config got shard width {} and shard height {} while "
+                 "on this architecture we have tile width {} and tile height {}",
+                 computed_shard_shape[0], computed_shard_shape[1], tt::constants::TILE_WIDTH, tt::constants::TILE_HEIGHT);
     }
 
-    auto shard_spec = tt::tt_metal::ShardSpec(shard_grid, shard_shape, shard_orientation, halo);
+    auto shard_spec = tt::tt_metal::ShardSpec(core_grid, computed_shard_shape, orientation, halo);
     return ttnn::MemoryConfig(tensor_memory_layout, ttnn::BufferType::L1, shard_spec);
 }
 
