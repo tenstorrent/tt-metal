@@ -166,12 +166,20 @@ def to_torch_padding(padspec):
             {"core_grid": ttnn.CoreGrid(x=1, y=1), "strategy": ttnn.ShardStrategy.HEIGHT},
         ],
         [
-            # width padding across large core grid, 4 sticks per core
+            # width padding across large core grid, 3 sticks per core
             (1, 1, 3 * 64, 4),
             (1, 1, 3 * 64, 16),
             (0, 0, 0, 0),
             0.0,
             {"core_grid": ttnn.CoreGrid(x=8, y=8), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # width padding across large core grid, 3 sticks per core, n300 version
+            (1, 1, 3 * 8 * 7, 4),
+            (1, 1, 3 * 8 * 7, 16),
+            (0, 0, 0, 0),
+            0.0,
+            {"core_grid": ttnn.CoreGrid(x=8, y=7), "strategy": ttnn.ShardStrategy.HEIGHT},
         ],
         [
             # width padding only, reduced core grid
