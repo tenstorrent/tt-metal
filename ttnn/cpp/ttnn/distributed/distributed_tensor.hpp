@@ -36,7 +36,7 @@ struct Shard2dConfig {
     std::optional<int> row_dim;
     std::optional<int> col_dim;
 };
-std::unique_ptr<TensorToMesh> shard_tensor_2d_to_mesh_mapper(
+std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
     MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config);
 
 // Creates a composer that concatenates a tensor across a single dimension.
@@ -47,7 +47,7 @@ struct Concat2dConfig {
     int row_dim = -1;
     int col_dim = -1;
 };
-std::unique_ptr<MeshToTensor> concat_mesh_2d_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config);
+std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config);
 
 // Distributes a host tensor onto multi-device configuration according to the `mapper`.
 Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, TensorToMesh& mapper);

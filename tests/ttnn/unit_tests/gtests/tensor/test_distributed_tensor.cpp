@@ -7,7 +7,6 @@
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
@@ -97,18 +96,18 @@ TEST_F(TensorDistributionTest, Shard2DInvalidMeshShape) {
     ASSERT_EQ(num_cols, 4);
 
     EXPECT_ANY_THROW(
-        shard_tensor_2d_to_mesh_mapper(*mesh_device_, MeshShape{3, 1}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
+        shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{3, 1}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
 
     EXPECT_ANY_THROW(
-        shard_tensor_2d_to_mesh_mapper(*mesh_device_, MeshShape{2, 5}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
+        shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{2, 5}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
 }
 
 TEST_F(TensorDistributionTest, Shard2DInvalidShardConfig) {
-    EXPECT_ANY_THROW(shard_tensor_2d_to_mesh_mapper(*mesh_device_, MeshShape{2, 4}, Shard2dConfig{}));
+    EXPECT_ANY_THROW(shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{2, 4}, Shard2dConfig{}));
 }
 
 TEST_F(TensorDistributionTest, Concat2DInvalidConfig) {
-    EXPECT_ANY_THROW(concat_mesh_2d_to_tensor_composer(*mesh_device_, Concat2dConfig{.row_dim = 2, .col_dim = 2}));
+    EXPECT_ANY_THROW(concat_2d_mesh_to_tensor_composer(*mesh_device_, Concat2dConfig{.row_dim = 2, .col_dim = 2}));
 }
 
 TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
@@ -122,7 +121,7 @@ TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::SimpleShape{1, num_rows, num_cols, 1}, DataType::FLOAT32));
     input_tensor.print();
 
-    auto mapper = shard_tensor_2d_to_mesh_mapper(
+    auto mapper = shard_tensor_to_2d_mesh_mapper(
         *mesh_device_,
         MeshShape{num_rows, num_cols},
         Shard2dConfig{
@@ -156,7 +155,7 @@ TEST_F(TensorDistributionTest, Shard2D) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::SimpleShape{1, num_rows, num_cols, 3}, DataType::FLOAT32));
 
-    auto mapper = shard_tensor_2d_to_mesh_mapper(
+    auto mapper = shard_tensor_to_2d_mesh_mapper(
         *mesh_device_,
         MeshShape{num_rows, num_cols},
         Shard2dConfig{
@@ -171,7 +170,7 @@ TEST_F(TensorDistributionTest, Shard2D) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
 
-    auto composer = concat_mesh_2d_to_tensor_composer(
+    auto composer = concat_2d_mesh_to_tensor_composer(
         *mesh_device_,
         Concat2dConfig{
             .row_dim = 0,

@@ -143,7 +143,7 @@ TYPED_TEST(MeshOpsTest, ConcatenateSameParametersAsCompose) {
 
     std::vector<xt::xarray<TypeParam>> shards = {s1, s2, s3};
     ttml::core::ConcatMeshToXTensor<TypeParam> composer(mesh_shape, 0);
-    auto composed = ttml::core::concatenate(shards);
+    auto composed = ttml::core::concat(shards);
 
     xt::xarray<TypeParam> expected = {
         TypeParam(0), TypeParam(1), TypeParam(2), TypeParam(3), TypeParam(4), TypeParam(5)};

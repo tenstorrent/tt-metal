@@ -29,8 +29,8 @@ auto xtensor_to_span(const xt::xarray<T>& xtensor) {
 }
 
 template <typename T>
-xt::xarray<T> concatenate(const std::vector<xt::xarray<T>>& v, size_t axis = 0) {
-    return ttnn::experimental::xtensor::concatenate(v, axis);
+xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, size_t axis = 0) {
+    return ttnn::experimental::xtensor::concat(v, axis);
 }
 
 }  // namespace ttml::core

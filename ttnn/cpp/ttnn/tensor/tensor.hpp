@@ -140,9 +140,20 @@ struct Tensor {
     std::vector<Device*> get_workers(bool blocking = false) const;
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
-    // Elements are assumed to be stored in row-major order. The size of the span and the type have to match `spec`.
+    // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
+    // elements have to match `spec`.
     //
-    // TODO: tilized layouts and reduced precision types are currently not supported.
+    // The data in the buffer is copied into a tensor with an owned storage.
+    //
+    // IMPORTANT: this function supports a limited subset of types (float32, bfloat16, uint32_t, int32_t),
+    // and only row-major layout.
+    //
+    // TODO:
+    //   1. add support for returning a tensor with a borrowed storage based off the buffer.
+    //   2. add support for sharding.
+    //   3. add support for block float formats.
+    //   4. add support for tilized layouts.
+    //   5. add support for on-device tensor creation.
     template <typename T>
     static Tensor from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec);
 
@@ -152,9 +163,17 @@ struct Tensor {
         return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), spec);
     }
 
-    // Converts a `Tensor` to a buffer of elements of type `T`.
-    // Elements in the buffer will be stored in row-major order. The type of the elements has to match that of the
-    // `Tensor`.
+    // Converts a `Tensor` to a `std::vector<T>`.
+    // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
+    // the `Tensor`.
+    //
+    // If the tensor resides on a device, it will be brough back to host.
+    //
+    // IMPORTANT: this function supports a limited subset of types (float32, bfloat16, uint32_t, int32_t).
+    //
+    // TODO:
+    //   1. add support for sharding.
+    //   2. add support for block float formats.
     template <typename T>
     std::vector<T> to_vector() const;
 

@@ -172,11 +172,11 @@ public:
             auto row_end = row_start + cols;
             std::vector<xt::xarray<T>> row_tensors(row_start, row_end);
 
-            auto concatenated_row = core::concatenate(row_tensors, col_dim);
+            auto concatenated_row = core::concat(row_tensors, col_dim);
             row_concatenated.push_back(std::move(concatenated_row));
         }
 
-        auto result = core::concatenate(row_concatenated, row_dim);
+        auto result = core::concat(row_concatenated, row_dim);
         return {result};
     }
 
@@ -216,7 +216,7 @@ public:
     }
 
     std::vector<xt::xarray<T>> compose_impl(const std::vector<xt::xarray<T>>& tensors) const {
-        return {core::concatenate(tensors, m_concat_dim)};
+        return {core::concat(tensors, m_concat_dim)};
     }
 
 private:

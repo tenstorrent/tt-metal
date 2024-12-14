@@ -94,7 +94,7 @@ std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& xtensor, int num_chunks, i
 }
 
 template <typename T>
-xt::xarray<T> concatenate(const std::vector<xt::xarray<T>>& v, int dim) {
+xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim) {
     constexpr size_t MAX_TUPLE_SIZE = 64;
 
     if (v.empty()) {
@@ -112,22 +112,22 @@ xt::xarray<T> concatenate(const std::vector<xt::xarray<T>>& v, int dim) {
     }
 }
 
-template xt::xarray<double> concatenate(const std::vector<xt::xarray<double>>& v, int dim);
-template xt::xarray<float> concatenate(const std::vector<xt::xarray<float>>& v, int dim);
-template xt::xarray<uint32_t> concatenate(const std::vector<xt::xarray<uint32_t>>& v, int dim);
-template xt::xarray<int32_t> concatenate(const std::vector<xt::xarray<int32_t>>& v, int dim);
+template xt::xarray<double> concat(const std::vector<xt::xarray<double>>& v, int dim);
+template xt::xarray<float> concat(const std::vector<xt::xarray<float>>& v, int dim);
+template xt::xarray<uint32_t> concat(const std::vector<xt::xarray<uint32_t>>& v, int dim);
+template xt::xarray<int32_t> concat(const std::vector<xt::xarray<int32_t>>& v, int dim);
 
 // Adaptor APIs from xtensor to ttnn::Tensor.
 namespace adaptor {
 namespace {
 
 template <typename T>
-Tensor concatenate_impl(const std::vector<Tensor>& tensors, const TensorLayout& layout, int dim) {
+Tensor concat_impl(const std::vector<Tensor>& tensors, const TensorLayout& layout, int dim) {
     std::vector<xt::xarray<T>> xtensors;
     for (const auto& tensor : tensors) {
         xtensors.push_back(to_xtensor<T>(tensor));
     }
-    xt::xarray<T> result = concatenate(xtensors, dim);
+    xt::xarray<T> result = concat(xtensors, dim);
     return from_xtensor<T>(result, TensorSpec(get_shape_from_xarray(result), layout));
 }
 
@@ -159,14 +159,14 @@ std::vector<Tensor> chunk(const Tensor& tensor, int num_chunks, int dim) {
     }
 }
 
-Tensor concatenate(const std::vector<Tensor>& tensors, int dim) {
+Tensor concat(const std::vector<Tensor>& tensors, int dim) {
     TT_FATAL(tensors.size() > 0, "Cannot concatenate an empty list of tensors");
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
-        case DataType::BFLOAT16: return adaptor::concatenate_impl<float>(tensors, reference_layout, dim);
-        case DataType::FLOAT32: return adaptor::concatenate_impl<float>(tensors, reference_layout, dim);
-        case DataType::INT32: return adaptor::concatenate_impl<int32_t>(tensors, reference_layout, dim);
-        case DataType::UINT32: return adaptor::concatenate_impl<uint32_t>(tensors, reference_layout, dim);
+        case DataType::BFLOAT16: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
+        case DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
+        case DataType::INT32: return adaptor::concat_impl<int32_t>(tensors, reference_layout, dim);
+        case DataType::UINT32: return adaptor::concat_impl<uint32_t>(tensors, reference_layout, dim);
         default: TT_THROW("Unsupported data type: {}", reference_layout.get_data_type());
     }
 }

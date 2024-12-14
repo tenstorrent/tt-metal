@@ -46,9 +46,9 @@ private:
     int shard_dim_ = -1;
 };
 
-class Shard2dTensorToMesh : public TensorToMesh {
+class ShardTensorTo2dMesh : public TensorToMesh {
 public:
-    Shard2dTensorToMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
+    ShardTensorTo2dMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
         mesh_shape_(mesh_shape), config_(config) {}
 
     std::vector<Tensor> map(const Tensor& tensor) override {
@@ -85,7 +85,7 @@ public:
 
         TT_FATAL(
             static_cast<int>(tensor_shards.size()) == rows * cols,
-            "ShardTensor2dMesh: Sharding failed. Number of shards should match the product of the mesh "
+            "ShardTensorTo2dMesh: Sharding failed. Number of shards should match the product of the mesh "
             "dimensions. Size: {}, rows: {}, cols: {}",
             tensor_shards.size(),
             rows,
@@ -106,16 +106,16 @@ public:
     ConcatMeshToTensor(int dim) : concat_dim_(dim) {}
 
     Tensor compose(const std::vector<Tensor>& tensors) override {
-        return experimental::xtensor::concatenate(tensors, concat_dim_);
+        return experimental::xtensor::concat(tensors, concat_dim_);
     }
 
 private:
     int concat_dim_ = -1;
 };
 
-class ConcatMesh2dToTensor : public MeshToTensor {
+class Concat2dMeshToTensor : public MeshToTensor {
 public:
-    ConcatMesh2dToTensor(MeshDevice& mesh_device, const Concat2dConfig& config) :
+    Concat2dMeshToTensor(MeshDevice& mesh_device, const Concat2dConfig& config) :
         mesh_shape_(mesh_device.shape()), config_(config) {}
 
     Tensor compose(const std::vector<Tensor>& tensors) override {
@@ -128,10 +128,10 @@ public:
             auto row_start = tensors.begin() + i * cols;
             auto row_end = row_start + cols;
             std::vector<Tensor> row_tensors(row_start, row_end);
-            row_concatenated.push_back(experimental::xtensor::concatenate(row_tensors, col_dim));
+            row_concatenated.push_back(experimental::xtensor::concat(row_tensors, col_dim));
         }
 
-        return experimental::xtensor::concatenate(row_concatenated, row_dim);
+        return experimental::xtensor::concat(row_concatenated, row_dim);
     }
 
 private:
@@ -149,29 +149,29 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_devic
     return std::make_unique<ShardTensorToMesh>(mesh_device.num_devices(), dim);
 }
 
-std::unique_ptr<TensorToMesh> shard_tensor_2d_to_mesh_mapper(
+std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
     MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config) {
     TT_FATAL(
         config.row_dim.has_value() || config.col_dim.has_value(),
-        "ShardTensor2dMesh requires at least one dimension to shard");
+        "Sharding a tensor to 2D mesh requires at least one dimension to shard");
     TT_FATAL(
         mesh_shape.num_rows <= mesh_device.shape().num_rows &&  //
             mesh_shape.num_cols <= mesh_device.shape().num_cols,
-        "ShardTensor2dMesh: Device mesh shape does not match the provided mesh shape.");
-    return std::make_unique<Shard2dTensorToMesh>(mesh_shape, config);
+        "Device mesh shape does not match the provided mesh shape.");
+    return std::make_unique<ShardTensorTo2dMesh>(mesh_shape, config);
 }
 
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int dim) {
     return std::make_unique<ConcatMeshToTensor>(dim);
 }
 
-std::unique_ptr<MeshToTensor> concat_mesh_2d_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config) {
+std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config) {
     TT_FATAL(
         config.row_dim != config.col_dim,
         "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
         config.row_dim,
         config.col_dim);
-    return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
+    return std::make_unique<Concat2dMeshToTensor>(mesh_device, config);
 }
 
 Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, TensorToMesh& mapper) {

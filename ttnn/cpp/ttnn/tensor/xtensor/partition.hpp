@@ -19,9 +19,9 @@ template <typename T>
 std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& tensor, int num_chunks, int dim = 0);
 
 // Concatenates a list of tensors along the specified dimension.
-tt::tt_metal::Tensor concatenate(const std::vector<tt::tt_metal::Tensor>& tensors, int dim = 0);
+tt::tt_metal::Tensor concat(const std::vector<tt::tt_metal::Tensor>& tensors, int dim = 0);
 
 template <typename T>
-xt::xarray<T> concatenate(const std::vector<xt::xarray<T>>& v, int dim = 0);
+xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim = 0);
 
 }  // namespace ttnn::experimental::xtensor

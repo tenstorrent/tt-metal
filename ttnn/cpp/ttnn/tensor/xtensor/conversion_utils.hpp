@@ -45,6 +45,7 @@ auto xtensor_to_span(const xt::xarray<T>& xtensor) {
 }
 
 // Converts an xtensor to a Tensor.
+// IMPORTANT: this copies the data into the returned Tensor, which can be an expensive operation.
 template <typename T>
 tt::tt_metal::Tensor from_xtensor(const xt::xarray<T>& buffer, const TensorSpec& spec) {
     auto shape = get_shape_from_xarray(buffer);
@@ -54,6 +55,7 @@ tt::tt_metal::Tensor from_xtensor(const xt::xarray<T>& buffer, const TensorSpec&
 }
 
 // Converts a Tensor to an xtensor.
+// IMPORTANT: this copies the data into the returned Tensor, which can be an expensive operation.
 template <typename T>
 xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     auto vec = tensor.to_vector<T>();
