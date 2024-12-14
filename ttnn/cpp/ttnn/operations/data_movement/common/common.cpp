@@ -56,7 +56,7 @@ ttnn::Tensor pad_to_tile_vol(
 }
 uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : index; }
 
-std::array<uint32_t, 2> compute_block_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw, 
+std::array<uint32_t, 2> compute_block_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw,
                                                           const tt::tt_metal::Layout& layout,
                                                           const tt::tt_metal::CoreCoord& grid_size,
                                                           const tt::tt_metal::ShardOrientation& orientation,
@@ -65,29 +65,29 @@ std::array<uint32_t, 2> compute_block_sharded_shard_shape(const std::array<uint3
     auto adjusted_grid_size = grid_size;
     if (orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
         // for col major, we partition the width of the tensor along the height of the core grid
-        std::swap(adjusted_grid_size.x, adjusted_grid_size.y); 
+        std::swap(adjusted_grid_size.x, adjusted_grid_size.y);
     }
 
     auto [tensor_height, tensor_width] = squeezed_tensor_hw;
-    auto tensor_height_padded_to_tile = layout == tt::tt_metal::Layout::TILE 
+    auto tensor_height_padded_to_tile = layout == tt::tt_metal::Layout::TILE
                                         ? tt::round_up(tensor_height, adjusted_grid_size.y * tt::constants::TILE_HEIGHT) 
                                         : tensor_height;
-    std::array<uint32_t, 2> shard_shape = {tt::div_up(tensor_height_padded_to_tile, adjusted_grid_size.y), 
+    std::array<uint32_t, 2> shard_shape = {tt::div_up(tensor_height_padded_to_tile, adjusted_grid_size.y),
                                            tt::div_up(tensor_width, adjusted_grid_size.x)};
 
     return shard_shape;
 }
 
-std::array<uint32_t, 2> compute_width_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw, 
+std::array<uint32_t, 2> compute_width_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw,
                                                           const uint32_t total_num_cores) {
     return {squeezed_tensor_hw[0], tt::div_up(squeezed_tensor_hw[1], total_num_cores)};
 }
 
-std::array<uint32_t, 2> compute_height_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw, 
+std::array<uint32_t, 2> compute_height_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw,
                                                            const tt::tt_metal::Layout& layout,
                                                            const uint32_t total_num_cores) {
     auto [tensor_height, tensor_width] = squeezed_tensor_hw;
-    auto squeezed_height_padded_to_tile = layout == tt::tt_metal::Layout::TILE 
+    auto squeezed_height_padded_to_tile = layout == tt::tt_metal::Layout::TILE
                                                     ? tt::round_up(tensor_height, total_num_cores)
                                                     : tensor_height;
     return {tt::div_up(squeezed_height_padded_to_tile, total_num_cores), tensor_width};
