@@ -1,4 +1,4 @@
-# YOLOv4 in TT-NN
+# New model bring-up in TT-NN
 
 **Authors**: Dalar Vartanians\
 **Correspondence**: `dvartanians@tenstorrent.com`
