@@ -71,7 +71,7 @@ HalCoreInfoType create_tensix_mem_map() {
     for (std::uint8_t processor_class_idx = 0; processor_class_idx < NumTensixDispatchClasses; processor_class_idx++) {
         std::uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
         processor_types.resize(num_processors);
-        for (std::uint8_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
+        for (std::size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
             DeviceAddr fw_base, local_init;
             switch (processor_class_idx) {
                 case 0: {

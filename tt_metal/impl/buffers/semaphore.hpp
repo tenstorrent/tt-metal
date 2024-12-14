@@ -24,9 +24,9 @@ public:
 
     Semaphore& operator=(const Semaphore& other);
 
-    Semaphore(Semaphore&& other);
+    Semaphore(Semaphore&& other) noexcept;
 
-    Semaphore& operator=(Semaphore&& other);
+    Semaphore& operator=(Semaphore&& other) noexcept;
 
     uint32_t id() const { return id_; }
 

@@ -438,10 +438,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                 auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                 for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
                     ll_api::memory const& binary_mem = llrt::get_risc_binary(
-                        firmware_build_states_[riscv_id]->get_target_out_path(""),
-                        core_type_idx,
-                        processor_class,
-                        (riscv_id - build_idx));
+                        firmware_build_states_[riscv_id]->get_target_out_path(""));
                     uint32_t fw_size = binary_mem.get_text_size();
                     if (riscv_id == 1) { // TODO: clean up how brisc/ncrisc are handled
                         // In this context, ncrisc_kernel_size16 is the size of the fw
@@ -485,10 +482,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = build_idx; eriscv_id < (build_idx + num_build_states); eriscv_id++) {
                         ll_api::memory const& binary_mem = llrt::get_risc_binary(
-                            firmware_build_states_[eriscv_id]->get_target_out_path(""),
-                            core_type_idx,
-                            processor_class,
-                            (eriscv_id - build_idx));
+                            firmware_build_states_[eriscv_id]->get_target_out_path(""));
                         uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                         llrt::test_load_write_read_risc_binary(binary_mem, this->id(), virtual_core, core_type_idx, processor_class, (eriscv_id - build_idx));
@@ -3722,6 +3716,20 @@ SubDeviceManagerId Device::get_default_sub_device_manager_id() const {
 SubDeviceManagerId Device::create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto [sub_device_manager, _] = this->sub_device_managers_.insert_or_assign(this->get_next_sub_device_manager_id(), std::make_unique<detail::SubDeviceManager>(sub_devices, local_l1_size, this));
     return sub_device_manager->first;
+}
+
+std::tuple<SubDeviceManagerId, SubDeviceId> Device::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    auto fabric_sub_device = SubDevice(std::array{CoreRangeSet(), this->default_sub_device_manager_->sub_device(SubDeviceId{0}).cores(HalProgrammableCoreType::ACTIVE_ETH)});
+    auto new_sub_devices = std::vector<SubDevice>(sub_devices.begin(), sub_devices.end());
+    new_sub_devices.push_back(fabric_sub_device);
+    auto fabric_sub_device_id = SubDeviceId{static_cast<uint32_t>(new_sub_devices.size() - 1)};
+    auto sub_device_manager_id = this->create_sub_device_manager(new_sub_devices, local_l1_size);
+    this->sub_device_managers_[sub_device_manager_id]->set_fabric_sub_device_id(fabric_sub_device_id);
+    return {sub_device_manager_id, fabric_sub_device_id};
+}
+
+std::optional<SubDeviceId> Device::get_fabric_sub_device_id() const {
+    return this->active_sub_device_manager_->fabric_sub_device_id();
 }
 
 void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {

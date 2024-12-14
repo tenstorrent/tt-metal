@@ -22,12 +22,11 @@
 using std::vector;
 using namespace tt;
 
-std::string get_latest_kernel_binary_path(uint32_t mask, const std::shared_ptr<Kernel>& kernel) {
-    auto root_dir = jit_build_get_kernel_compile_outpath(mask);
+std::string get_latest_kernel_binary_path(const string& kernel_root_path, const std::shared_ptr<Kernel>& kernel) {
     TT_FATAL(kernel != nullptr, "Error");
-    TT_FATAL(std::filesystem::exists(root_dir + kernel->name()), "Error");
+    TT_FATAL(std::filesystem::exists(kernel_root_path + kernel->name()), "Error");
 
-    std::filesystem::path kernel_path{root_dir + kernel->name()};
+    std::filesystem::path kernel_path{kernel_root_path + kernel->name()};
     std::filesystem::file_time_type ftime = std::filesystem::last_write_time(*kernel_path.begin());
     std::string latest_hash;
     for (auto const& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
@@ -116,7 +115,6 @@ int main(int argc, char** argv) {
         tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, DispatchCoreConfig{});
         auto devices = tt::DevicePool::instance().get_all_active_devices();
         std::vector<Program> programs;
-        std::set<uint32_t> build_keys;
         // kernel->binaries() returns 32B aligned binaries
         std::map<uint32_t, std::vector<ll_api::memory const*>> compute_binaries;
         std::map<uint32_t, std::vector<ll_api::memory const*>> brisc_binaries;
@@ -124,7 +122,6 @@ int main(int argc, char** argv) {
 
         for (int i = 0; i < num_devices; i++) {
             auto device = devices[i];
-            build_keys.insert(device->build_key());
 
             ////////////////////////////////////////////////////////////////////////////
             //                      Application Setup
@@ -166,9 +163,9 @@ int main(int argc, char** argv) {
         int num_compiles = 3;
         for (int i = 0; i < 3; i++) {
             std::vector<string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
-            for (auto build_key : build_keys) {
+            for (int i = 0; i < num_devices; i++) {
                 for (const auto& kernel_name : kernel_names) {
-                    std::filesystem::remove_all(jit_build_get_kernel_compile_outpath(build_key) + kernel_name);
+                    std::filesystem::remove_all(devices[i]->build_env().get_out_kernel_root_path() + kernel_name);
                 }
             }
             tt_metal::detail::ClearKernelCache();
@@ -208,9 +205,9 @@ int main(int argc, char** argv) {
                             programmable_core_index,
                             dm_class_idx,
                             0,
-                            get_latest_kernel_binary_path(mask, riscv0_kernel));
-                        ll_api::memory const& brisc_binary = llrt::get_risc_binary(
-                            brisc_hex_path, 0, 0, 0, ll_api::memory::PackSpans::PACK, ll_api::memory::Relocate::XIP);
+                            get_latest_kernel_binary_path(device->build_env().get_out_kernel_root_path(), riscv0_kernel));
+                        ll_api::memory const& brisc_binary =
+                            llrt::get_risc_binary(brisc_hex_path, ll_api::memory::Loading::CONTIGUOUS_XIP);
                         TT_FATAL(
                             brisc_binary == *brisc_binaries.at(mask).at(0),
                             "Expected saved BRISC binary to be the same as binary in persistent cache");
@@ -218,14 +215,12 @@ int main(int argc, char** argv) {
                             programmable_core_index,
                             dm_class_idx,
                             1,
-                            get_latest_kernel_binary_path(mask, riscv1_kernel));
-                        ll_api::memory::Relocate relo_type =
+                            get_latest_kernel_binary_path(device->build_env().get_out_kernel_root_path(), riscv1_kernel));
+                        auto load_type =
                             (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0)
-                                ? ll_api::memory::Relocate::NONE
-                                : ll_api::memory::Relocate::XIP;
-
-                        ll_api::memory const& ncrisc_binary =
-                            llrt::get_risc_binary(ncrisc_hex_path, 0, 1, 0, ll_api::memory::PackSpans::PACK, relo_type);
+                                ? ll_api::memory::Loading::CONTIGUOUS
+                                : ll_api::memory::Loading::CONTIGUOUS_XIP;
+                        ll_api::memory const& ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, load_type);
                         TT_FATAL(
                             ncrisc_binary == *ncrisc_binaries.at(mask).at(0),
                             "Expected saved NCRISC binary to be the same as binary in persistent cache");
@@ -235,14 +230,9 @@ int main(int argc, char** argv) {
                                 programmable_core_index,
                                 compute_class_idx,
                                 trisc_id,
-                                get_latest_kernel_binary_path(mask, compute_kernel));
-                            ll_api::memory const& trisc_binary = llrt::get_risc_binary(
-                                trisc_hex_path,
-                                0,
-                                2,
-                                trisc_id,
-                                ll_api::memory::PackSpans::PACK,
-                                ll_api::memory::Relocate::XIP);
+                                get_latest_kernel_binary_path(device->build_env().get_out_kernel_root_path(), compute_kernel));
+                            ll_api::memory const& trisc_binary =
+                                llrt::get_risc_binary(trisc_hex_path, ll_api::memory::Loading::CONTIGUOUS_XIP);
                             TT_FATAL(
                                 trisc_binary == *compute_binaries.at(mask).at(trisc_id),
                                 "Expected saved TRISC binary for {} to be the same as binary in persistent cache",
