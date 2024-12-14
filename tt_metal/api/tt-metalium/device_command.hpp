@@ -578,6 +578,7 @@ public:
         const uint32_t offset_idx = 0,
         const bool no_stride = false,
         uint32_t write_offset_index = 0) {
+        std::cout << "calling adwp" << std::endl;
         static_assert(
             std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
             std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
@@ -606,6 +607,8 @@ public:
             write_packed_cmd->write_packed.write_offset_index = write_offset_index;
             write_packed_cmd->write_packed.addr = common_addr;
             write_packed_cmd->write_packed.size = packed_data_sizeB;
+            std::cout << "\t\tDWP 592: " << write_packed_cmd->write_packed.write_offset_index << " "
+                      << write_packed_cmd->write_packed.addr << " " << write_packed_cmd->write_packed.size << std::endl;
         };
         CQDispatchCmd* write_packed_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
 
@@ -679,6 +682,8 @@ public:
             write_packed_cmd->write_packed.write_offset_index = write_offset_index;
             write_packed_cmd->write_packed.addr = common_addr;
             write_packed_cmd->write_packed.size = packed_data_sizeB;
+            std::cout << "\t\tDWP 667: " << write_packed_cmd->write_packed.write_offset_index
+                      << write_packed_cmd->write_packed.addr << write_packed_cmd->write_packed.size << std::endl;
         };
         CQDispatchCmd* write_packed_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
 

@@ -161,6 +161,8 @@ class Cluster {
     // Returns set of logical active ethernet coordinates on chip
     // If skip_reserved_tunnel_cores is true, will return cores that dispatch is not using,
     // intended for users to grab available eth cores for testing
+    // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
+    // tunneling
     std::unordered_set<CoreCoord> get_active_ethernet_cores(
         chip_id_t chip_id, bool skip_reserved_tunnel_cores = false) const;
 

@@ -527,6 +527,7 @@ int main() {
 #endif
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
+            DPRINT << "Brisc done" << ENDL();
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {

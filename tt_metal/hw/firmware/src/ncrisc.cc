@@ -77,6 +77,7 @@ inline __attribute__((always_inline)) void notify_brisc_and_wait() {
 inline __attribute__((always_inline)) void signal_ncrisc_completion() {
 #ifndef NCRISC_HAS_IRAM
     *ncrisc_run = RUN_SYNC_MSG_DONE;
+    DPRINT << "nrisc done" << ENDL();
 #endif
 }
 

@@ -811,23 +811,24 @@ void Device::initialize_and_launch_firmware() {
             this->id(), virtual_core, zero_vec_erisc_init, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
     }
 
+    bool init_aerisc = std::getenv("TT_METAL_INIT_AERISC") != nullptr;
+
     // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
     std::unordered_set<CoreCoord> bh_active_eth_cores;
-    for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        // if (eth_core.y == 5 or eth_core.y == 6 or eth_core.y == 7 or eth_core.y == 8) {
-        //     continue;
-        // }
-        std::cout << "Loading fw on active eth core " << eth_core.str() << std::endl;
+    for (const auto& eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
-        // this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
-        // if (this->arch() == ARCH::BLACKHOLE) {
-        //     bh_active_eth_cores.insert(phys_eth_core);
-        //     // if (init_aeric) {
-        //     not_done_cores.insert(phys_eth_core);
-        //     // }
-        // }
+        if (init_aerisc) {
+            std::cout << "Loading fw on active eth core " << eth_core.str() << std::endl;
+            this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
+            if (this->arch() == ARCH::BLACKHOLE) {
+                bh_active_eth_cores.insert(phys_eth_core);
+                // if (init_aeric) {
+                not_done_cores.insert(phys_eth_core);
+                // }
+            }
+        }
     }
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
@@ -1113,6 +1114,7 @@ bool Device::close() {
         hw_command_queue->terminate();
     }
 
+    std::cout << "terminated the HW CQs" << std::endl;
     this->work_executor_.reset();
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
@@ -1125,6 +1127,11 @@ bool Device::close() {
     auto mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
     std::unordered_set<CoreCoord> wait_for_cores = not_done_dispatch_cores[mmio_device_id];
 
+    std::cout << "About to wait for cores to be done, waiting on: " << std::endl;
+    for (const auto& core : wait_for_cores) {
+        std::cout << core.str() << "\t";
+    }
+    std::cout << "\n";
     llrt::internal_::wait_until_cores_done(mmio_device_id, RUN_MSG_GO, wait_for_cores);
 
     DprintServerDetach(this);
@@ -1147,6 +1154,8 @@ bool Device::close() {
         }
     }
 
+    std::cout << "asserted worker cores" << std::endl;
+
     if (this->arch() == ARCH::BLACKHOLE) {
         for (const auto& eth_core : this->get_active_ethernet_cores()) {
             CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
@@ -1157,6 +1166,8 @@ bool Device::close() {
             tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_eth_core), reset_val);
         }
     }
+
+    std::cout << "asserted active eth cores" << std::endl;
 
     if (this->id_ != mmio_device_id) {
         for (auto it = not_done_dispatch_cores[mmio_device_id].begin(); it != not_done_dispatch_cores[mmio_device_id].end(); it++) {

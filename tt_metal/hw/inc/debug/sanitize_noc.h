@@ -244,8 +244,8 @@ inline void debug_sanitize_post_noc_addr_and_hang(
 
     // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
     // kernel is written. In this case we'll do an early exit back to base FW.
-    internal_::disable_erisc_app();
-    erisc_exit();
+    // internal_::disable_erisc_app();
+    // erisc_exit();
 #endif
 
     while (1) {

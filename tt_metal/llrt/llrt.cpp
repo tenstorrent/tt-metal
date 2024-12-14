@@ -250,9 +250,10 @@ void wait_until_cores_done(
             if (elapsed > timeout_ms) {
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
                 TT_THROW(
-                    "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
+                    "Device {}: Timeout ({} ms) waiting for physical {} cores to finish: {}.",
                     device_id,
                     timeout_ms,
+                    not_done_phys_cores.size(),
                     cores);
             }
         }

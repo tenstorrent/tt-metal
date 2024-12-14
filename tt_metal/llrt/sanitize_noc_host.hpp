@@ -17,8 +17,9 @@ namespace tt {
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 #define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
 
-#define DEBUG_VALID_ETH_ADDR(a, l)                                                        \
-    ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
+// Don't use HAL_MEM_ETH_SIZE, want to allow reading from syseng reserved space as well
+#define DEBUG_VALID_ETH_ADDR(a, l)                                                    \
+    ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + (512 * 1024))) || \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
 static bool coord_found_p(std::vector<CoreCoord> coords, CoreCoord core) {

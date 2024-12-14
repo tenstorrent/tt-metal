@@ -124,6 +124,7 @@ int main() {
 
             // Run the ERISC kernel, no kernel config buffer on active eth
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+                DPRINT << "about to run the kernel" << ENDL();
                 WAYPOINT("R");
                 // TODO: This currently runs on second risc on active eth cores but with newer drop of syseng FW
                 //  this will run on risc0
@@ -134,6 +135,8 @@ int main() {
 
                 RECORD_STACK_USAGE();
                 WAYPOINT("D");
+            } else {
+                DPRINT << "not running the kernel" << ENDL();
             }
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
