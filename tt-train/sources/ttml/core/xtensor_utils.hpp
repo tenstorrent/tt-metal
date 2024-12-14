@@ -19,7 +19,7 @@ set to N at compile time. xtensor_fixed<T, xshape<I, J, K> : tensor whose shape 
 
 namespace ttml::core {
 template <class T>
-xt::xarray<T> span_to_xtensor(std::span<T> vec, const ttnn::SimpleShape& shape) {
+xt::xarray<T> span_to_xtensor_view(std::span<T> vec, const ttnn::SimpleShape& shape) {
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(vec.data(), vec.size(), xt::no_ownership(), shape_vec);
 }
