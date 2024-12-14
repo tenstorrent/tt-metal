@@ -239,8 +239,6 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
 
         noc_async_write_one_packet_set_state(dest_noc_addr, coalesced_page_size, noc);
 
-        DPRINT << "num_rows " << ENDL();
-
         for (uint32_t h = 0; h < num_rows; ++h) {
             uint32_t prev_src_addr = src_addr;
             for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
@@ -280,7 +278,6 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
 
         uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
         noc_semaphore_inc(remote_sent_ptr_addr, pages_sent, noc);
-        // DPRINT << "remote_cb_push_back_and_write_pages pages_sent " << pages_sent <<ENDL();
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         remote_noc_xy_ptr += 2;
     }

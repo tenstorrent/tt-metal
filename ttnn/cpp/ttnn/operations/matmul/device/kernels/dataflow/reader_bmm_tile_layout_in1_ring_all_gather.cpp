@@ -84,11 +84,6 @@ void kernel_main() {
         cb_wait_front(sync_cb, 1);
         experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
         cb_pop_front(sync_cb, 1);
-
-        print_remote_fifo(remote_cb_id);
-
-        // DPRINT << "remote ptr after " << get_remote_cb_rd_ptr(remote_cb_id) / 16 << ENDL();
-
 #endif
     }
 
