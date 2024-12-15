@@ -35,11 +35,11 @@ void validate_bias_tensor(const ttnn::Tensor& bias_tensor) {
 
 void validate_weights_format(const std::string& weights_format) {
     TT_FATAL(weights_format.size() == 4, "weights_format must have exactly 4 characters");
-    TT_ASSERT(weights_format.find("O") != string::npos, "weights_format must contain \"O\"");
-    TT_ASSERT(weights_format.find("I") != string::npos, "weights_format must contain \"I\"");
-    TT_ASSERT(weights_format.find("H") != string::npos, "weights_format must contain \"H\"");
-    TT_ASSERT(weights_format.find("W") != string::npos, "weights_format must contain \"W\"");
-    TT_ASSERT(weights_format == "OIHW", "Conv2d weights format must be \"OIHW\"");
+    TT_FATAL(weights_format.find("O") != string::npos, "weights_format must contain \"O\"");
+    TT_FATAL(weights_format.find("I") != string::npos, "weights_format must contain \"I\"");
+    TT_FATAL(weights_format.find("H") != string::npos, "weights_format must contain \"H\"");
+    TT_FATAL(weights_format.find("W") != string::npos, "weights_format must contain \"W\"");
+    TT_FATAL(weights_format == "OIHW", "Conv2d weights format must be \"OIHW\"");
 }
 
 template <typename T>
@@ -48,9 +48,7 @@ bool check_non_tile_mul_width(
     const Conv2dConfig& conv_config,
     const uint32_t in_channels
 ){
-    ShardOrientation shard_orientation =
-        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-    auto num_cores_c = shard_orientation == ShardOrientation::COL_MAJOR ? device->compute_with_storage_grid_size().y : device->compute_with_storage_grid_size().x;
+    auto num_cores_c = conv_config.transpose_shards ? device->compute_with_storage_grid_size().y : device->compute_with_storage_grid_size().x;
     auto elem_size = conv_config.weights_dtype == DataType::BFLOAT8_B ? 1 : 2;
     bool is_non_tile_mul_width =
         (conv_config.shard_layout == TensorMemoryLayout::BLOCK_SHARDED) && conv_config.act_block_h_override == 0 &&
