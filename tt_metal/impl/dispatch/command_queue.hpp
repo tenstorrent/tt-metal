@@ -613,6 +613,7 @@ class HWCommandQueue {
     friend CommandQueue;
     friend Device;
     friend detail::Program_;
+    friend void captureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 };
 
 // Common interface for all command queue types

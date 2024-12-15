@@ -542,6 +542,11 @@ inline void captureCreateProgram(Program& program) {
 inline void captureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     auto& ctx = LightMetalCaptureContext::getInstance();
     if (!ctx.isTracing()) return;
+
+    // When Metal Trace is enabled, skip EnqueueProgram capture (replaced with LoadTrace + ReplayTrace)
+    bool metal_trace_en = cq.hw_command_queue().manager.get_bypass_mode();
+    if (metal_trace_en) return;
+
     uint32_t cq_global_id = cq.id(); // FIXME - Maybe not correct, probably should handle same way as Buffers.
     uint32_t program_global_id = ctx.getGlobalId(&program);
     log_info(tt::LogMetalTrace, "captureEnqueueProgram: cq_global_id: {} program_global_id: {}", cq_global_id, program_global_id);
