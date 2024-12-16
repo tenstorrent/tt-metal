@@ -3648,16 +3648,6 @@ void Device::generate_device_bank_to_noc_tables()
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
 
-    // Generate header file in proper location
-    jit_build_genfiles_bank_to_noc_coord_descriptor (
-        path,
-        soc_d.grid_size,
-        dram_noc_coord_per_bank,
-        dram_offsets_per_bank,
-        l1_noc_coord_per_bank,
-        l1_offset_per_bank
-    );
-
     dram_bank_to_noc_xy_.clear();
     dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * dram_noc_coord_per_bank.size());
     for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
