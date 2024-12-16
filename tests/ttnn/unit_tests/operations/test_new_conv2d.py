@@ -2743,7 +2743,6 @@ def test_shallow_conv_with_tiled_input(device):
     tt_kernel = ttnn.from_torch(torch_kernel)
     tt_input = ttnn.to_device(ttnn.from_torch(torch_input), device)
 
-    tt_input = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
     tt_input = ttnn.permute(tt_input, (0, 2, 3, 1))
 
     tt_input = ttnn.reshape(tt_input, (1, 1, batch_size * img_h * img_w, in_channels))
