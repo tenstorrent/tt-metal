@@ -15,20 +15,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import ModelArgs as ReferenceModelArgs
 
-from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
 
-
-def input_processor_for_llama70b(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
-    prompt_len = len(inputs.get("prompt_token_ids"))
-    if prompt_len > 32768:
-        raise ValueError(
-            f"TT LLama70b does not yet support prompts longer than 32768 tokens (received prompt with {prompt_len} tokens)"
-        )
-
-    return inputs
-
-
-@INPUT_REGISTRY.register_input_processor(input_processor_for_llama70b)
 class TtLlamaForCausalLM(TtLlamaModelForGeneration):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

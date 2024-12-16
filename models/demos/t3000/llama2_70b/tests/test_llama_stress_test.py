@@ -98,7 +98,7 @@ def run_test_LlamaModel_stress_test(
         start_pos = 0
         prev_pos = start_pos
         for cur_pos in tqdm(range(start_pos + 1, total_len), desc="Decode to 2k Progress", leave=False, colour="green"):
-            tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs(
+            tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(
                 tokens[:, prev_pos:cur_pos], prev_pos
             )
 
