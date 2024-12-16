@@ -178,12 +178,6 @@ const std::unordered_map<
     schedulers = {{"identity", create_idendity_scheduler}, {"warmup_linear", create_warmup_with_linear_scheduler}};
 
 int main(int argc, char **argv) {
-    auto result = signal(SIGINT, signal_handler);
-    if (result == SIG_ERR) {
-        std::cerr << "Failed to set signal handler\n";
-        return -1;
-    }
-
     auto start_timer = std::chrono::high_resolution_clock::now();
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
@@ -191,35 +185,48 @@ int main(int argc, char **argv) {
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt.yaml";
     bool is_eval = false;
     bool add_time_to_name = true;
+    bool enable_wandb = true;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
+    app.add_option("-w,--wandb", enable_wandb, "Enable wandb logging")->default_val(enable_wandb);
 
     CLI11_PARSE(app, argc, argv);
+    if (enable_wandb) {
+        auto result = signal(SIGINT, signal_handler);
+        if (result == SIG_ERR) {
+            std::cerr << "Failed to set signal handler\n";
+            return -1;
+        }
+    }
+
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
-    wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
-    wandbcpp::update_config({
-        {"model", "transformer"},
-        {"num_heads", static_cast<int>(config.transformer_config.num_heads)},
-        {"embedding_dim", static_cast<int>(config.transformer_config.embedding_dim)},
-        {"num_blocks", static_cast<int>(config.transformer_config.num_blocks)},
-        {"dropout_prob", config.transformer_config.dropout_prob},
-        {"learning_rate", config.learning_rate},
-        {"weight_decay", config.weight_decay},
-        {"batch_size", static_cast<int>(config.batch_size)},
-        {"sequence_length", static_cast<int>(config.transformer_config.max_sequence_length)},
-        {"max_steps", static_cast<int>(config.max_steps)},
-        {"seed", static_cast<int>(config.seed)},
-        {"tokenizer_type", config.tokenizer_type},
-        {"use_kahan_summation", config.use_kahan_summation},
-        {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
-        {"positional_embedding_type",
-         config.transformer_config.positional_embedding_type == ttml::models::gpt2::PositionalEmbeddingType::Trainable
-             ? "trainable"
-             : "fixed"},
-        {"scheduler_type", config.scheduler_type},
-    });
+    if (enable_wandb) {
+        wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
+        wandbcpp::update_config({
+            {"model", "transformer"},
+            {"num_heads", static_cast<int>(config.transformer_config.num_heads)},
+            {"embedding_dim", static_cast<int>(config.transformer_config.embedding_dim)},
+            {"num_blocks", static_cast<int>(config.transformer_config.num_blocks)},
+            {"dropout_prob", config.transformer_config.dropout_prob},
+            {"learning_rate", config.learning_rate},
+            {"weight_decay", config.weight_decay},
+            {"batch_size", static_cast<int>(config.batch_size)},
+            {"sequence_length", static_cast<int>(config.transformer_config.max_sequence_length)},
+            {"max_steps", static_cast<int>(config.max_steps)},
+            {"seed", static_cast<int>(config.seed)},
+            {"tokenizer_type", config.tokenizer_type},
+            {"use_kahan_summation", config.use_kahan_summation},
+            {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
+            {"positional_embedding_type",
+             config.transformer_config.positional_embedding_type ==
+                     ttml::models::gpt2::PositionalEmbeddingType::Trainable
+                 ? "trainable"
+                 : "fixed"},
+            {"scheduler_type", config.scheduler_type},
+        });
+    }
 
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
@@ -375,7 +382,7 @@ int main(int argc, char **argv) {
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
 
-                if (global_step % 10 == 0) {
+                if (enable_wandb && global_step % 10 == 0) {
                     wandbcpp::log(
                         {{"Step", (int)global_step},
                          {"Samples", (int)get_samples_count(global_step)},
@@ -416,6 +423,9 @@ int main(int argc, char **argv) {
         config.max_steps,
         (double)duration / 1000000.,
         device->num_program_cache_entries());
-    wandbcpp::finish();
+
+    if (enable_wandb) {
+        wandbcpp::finish();
+    }
     return 0;
 }
