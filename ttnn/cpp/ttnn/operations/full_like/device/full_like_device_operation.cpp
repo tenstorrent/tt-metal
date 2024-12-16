@@ -42,21 +42,18 @@ void FullLikeOperation::validate_on_program_cache_hit(
     validate(operation_attributes, tensor_args);
 }
 
-FullLikeOperation::shape_return_value_t FullLikeOperation::compute_output_shapes(
+FullLikeOperation::spec_return_value_t FullLikeOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input.get_logical_shape();
+    return TensorSpec(
+        tensor_args.input.get_logical_shape(),
+        TensorLayout(
+            operation_attributes.dtype, PageConfig(operation_attributes.layout), operation_attributes.memory_config));
 }
 
 FullLikeOperation::tensor_return_value_t FullLikeOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    const auto& input = tensor_args.input;
-    return create_device_tensor(
-        output_shape,
-        operation_attributes.dtype,
-        operation_attributes.layout,
-        input.device(),
-        operation_attributes.memory_config);
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input.device());
 }
 
 std::tuple<FullLikeOperation::operation_attributes_t, FullLikeOperation::tensor_args_t> FullLikeOperation::invoke(

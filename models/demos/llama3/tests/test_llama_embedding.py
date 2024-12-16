@@ -28,15 +28,22 @@ from models.demos.llama3.tt.llama_common import HostEmbedding
     ],
     indirect=True,
 )
-def test_llama_embedding(mesh_device, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize(
+    "max_seq_len",
+    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
+)
+def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
-
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
-    state_dict = model_args.load_state_dict()
 
+    state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     reference_emb = HostEmbedding(model_args)
@@ -67,9 +74,10 @@ def test_llama_embedding(mesh_device, use_program_cache, reset_seeds, ensure_gc)
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     tt_output = tt_emb(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0].view(
-        reference_output.shape
-    )
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=model_args.cluster_shape),
+    )[:32].view(reference_output.shape)
     logger.info(f"tt_output_torch: {tt_output_torch.shape}")
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)

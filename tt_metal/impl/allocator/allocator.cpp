@@ -169,7 +169,7 @@ BankManager::~BankManager() {
     this->allocator_.reset(nullptr);
 }
 
-BankManager&& BankManager::operator=(BankManager&& that) {
+BankManager&& BankManager::operator=(BankManager&& that) noexcept {
     buffer_type_ = that.buffer_type_;
     allocated_buffers_ = that.allocated_buffers_;
     bank_id_to_bank_offset_ = that.bank_id_to_bank_offset_;
@@ -437,9 +437,10 @@ void reset_allocator_size(Allocator& allocator, const BufferType& buffer_type) {
     }
 }
 
-DeviceAddr allocate_buffer(Allocator& allocator, DeviceAddr size, Buffer* buffer) {
+DeviceAddr allocate_buffer(Allocator& allocator, Buffer* buffer) {
     DeviceAddr address = 0;
-    auto page_size = buffer->page_size();
+    auto size = buffer->aligned_size();
+    auto page_size = buffer->aligned_page_size();
     auto buffer_type = buffer->buffer_type();
     auto bottom_up = buffer->bottom_up();
     auto num_shards = buffer->num_cores();
@@ -536,8 +537,8 @@ void Allocator::reset() {
 void AllocatorConfig::reset() {
     dram_bank_offsets.clear();
     core_type_from_noc_coord_table.clear();
-    worker_log_to_physical_routing_x.clear();
-    worker_log_to_physical_routing_y.clear();
+    worker_log_to_virtual_routing_x.clear();
+    worker_log_to_virtual_routing_y.clear();
     l1_bank_remap.clear();
 }
 

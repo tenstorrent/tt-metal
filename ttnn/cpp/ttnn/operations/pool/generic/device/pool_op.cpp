@@ -50,7 +50,7 @@ void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr
     return validate_pool2d(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
-Pool2D::shape_return_value_t Pool2D::compute_output_shapes(
+Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto& input = tensors.input_tensor_;
     auto& sliding_window_config = op_attr.sliding_window_config_;
@@ -71,7 +71,6 @@ Pool2D::shape_return_value_t Pool2D::compute_output_shapes(
     // need to pad the last dim to TILE_WIDTH
     uint32_t out_c = input_shape[3];
     uint32_t out_c_padded = tt::round_up(out_c, (out_c <= 16) ? 16 : tt::constants::TILE_WIDTH);
-    uint32_t out_pagesize = out_c_padded * datum_size(datatype_to_dataformat_converter(input.get_dtype()));
     uint32_t out_nhw = sliding_window_config.batch_size * out_h * out_w;
 
     uint32_t out_nhw_padded =
@@ -82,34 +81,29 @@ Pool2D::shape_return_value_t Pool2D::compute_output_shapes(
     const auto padding = Padding(
         {{0, 0}, {0, 0}, {0, out_nhw_padded - out_nhw}, {0, out_c_padded - out_c}},
         Padding::PadValue::NegativeInfinity);
-    auto out_shape = Shape(tt::tt_metal::LegacyShape(out_dims, padding));
-    return out_shape;
-}
+    auto output_shape = Shape(tt::tt_metal::LegacyShape(out_dims, padding));
 
-Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
-    const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    auto& input = tensors.input_tensor_;
-    auto& sliding_window_config = op_attr.sliding_window_config_;
-    auto& out_mem_config = op_attr.memory_config_;
-    auto& output_dtype = op_attr.output_dtype_;
-
-    Shape output_shape = compute_output_shapes(op_attr, tensors);
     auto mem_config = out_mem_config;
     if (mem_config.shard_spec.has_value()) {
         mem_config.shard_spec->shape[1] = input.shard_spec()->shape[1];
     } else {
         uint32_t ncores = input.shard_spec().value().num_cores();
         TT_FATAL(ncores == sliding_window_config.num_cores_nhw, "Number of cores should match");
-        uint32_t nbatch = output_shape[0];
-        uint32_t out_nhw_padded = output_shape[0] * output_shape[1] * output_shape[2];
-        uint32_t out_nhw_per_core = out_nhw_padded / ncores;
+        uint32_t out_nhw_per_core = output_shape[0] * output_shape[1] * output_shape[2] / ncores;
         CoreRangeSet shard_grid = sliding_window_config.core_range_set;
         std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_legacy_shape()[-1]};
         mem_config.shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, false};
     }
 
-    // return create_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config);
-    return create_device_tensor(output_shape, output_dtype, input.get_layout(), input.device(), mem_config);
+    return TensorSpec(
+        output_shape.logical_shape(),
+        TensorLayout::fromLegacyPaddedShape(output_dtype, PageConfig(input.get_layout()), mem_config, output_shape));
+}
+
+Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
+    const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+    auto output_spec = compute_output_specs(op_attr, tensors);
+    return create_device_tensor(output_spec, tensors.input_tensor_.device());
 }
 
 tt::stl::hash::hash_t Pool2D::compute_program_hash(

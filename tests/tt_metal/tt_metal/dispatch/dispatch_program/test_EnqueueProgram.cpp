@@ -17,6 +17,9 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+
 using std::vector;
 using namespace tt::tt_metal;
 
@@ -89,7 +92,8 @@ bool cb_config_successful(Device* device, Program& program, const DummyProgramMu
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
     // to read from
     vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size =
+        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
@@ -97,7 +101,7 @@ bool cb_config_successful(Device* device, Program& program, const DummyProgramMu
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device,
                 core_coord,
-                program.get_sem_base_addr(device, core_coord, CoreType::WORKER),
+                program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
                 cb_config_buffer_size,
                 cb_config_vector);
 
@@ -106,8 +110,8 @@ bool cb_config_successful(Device* device, Program& program, const DummyProgramMu
                 const uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
                 const uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
                 const uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
-                const bool addr_match = cb_config_vector.at(index) == ((cb_addr) >> 4);
-                const bool size_match = cb_config_vector.at(index + 1) == (cb_size >> 4);
+                const bool addr_match = cb_config_vector.at(index) == cb_addr;
+                const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                 const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
                 pass &= (addr_match and size_match and num_pages_match);
 
@@ -594,19 +598,10 @@ bool verify_rt_args(
     tt::Cluster::instance().l1_barrier(device->id());
     auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core)
                                             : device->worker_core_from_logical_core(logical_core);
-    std::vector<uint32_t> args_readback =
-        tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
-    log_debug(
-        tt::LogTest,
-        "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}",
-        expected_rt_args.size(),
-        label,
-        noc_xy,
-        logical_core.str(),
-        addr,
-        incr_val);
+    std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
+    log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
 
-    for (int i = 0; i < expected_rt_args.size(); i++) {
+    for(int i=0; i<expected_rt_args.size(); i++){
         uint32_t expected_val = expected_rt_args[i] + incr_val;
         log_debug(
             tt::LogTest,
@@ -828,7 +823,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
-    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size =
+        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     CoreCoord core_coord(0, 0);
 
     for (Device* device : devices_) {
@@ -855,15 +851,15 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
         uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
-        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);
-        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size >> 4);
+        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == (cb_addr);
+        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size);
         bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
         bool pass_intermediate = (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
         EXPECT_TRUE(pass_intermediate);
 
         uint32_t out_index = out_cb * sizeof(uint32_t);
-        bool addr_match_out = cb_config_vector.at(out_index) == ((cb_addr) >> 4);
-        bool size_match_out = cb_config_vector.at(out_index + 1) == (cb_size >> 4);
+        bool addr_match_out = cb_config_vector.at(out_index) == cb_addr;
+        bool size_match_out = cb_config_vector.at(out_index + 1) == cb_size;
         bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
         bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
         EXPECT_TRUE(pass_out);

@@ -1,4 +1,8 @@
-add_executable(test_distributed test_distributed.cpp)
+add_executable(
+    test_distributed
+    test_distributed.cpp
+    test_distributed_atexit.cpp
+)
 
 # Set up properties for the target
 setup_ttnn_test_target(test_distributed)

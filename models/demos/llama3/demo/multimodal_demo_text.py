@@ -23,7 +23,7 @@ from pkg_resources import resource_filename
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
 from models.demos.llama3.demo.simple_vision_demo import create_multimodal_model
-from models.demos.llama3.tt.multimodal.vision_generator import LlamaVision
+from models.demos.llama3.tt.generator import LlamaGenerator
 
 
 @pytest.mark.parametrize(
@@ -73,7 +73,7 @@ def test_llama_multimodal_demo_text(
         model_args, model = create_multimodal_model(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
         tokenizer = Tokenizer(model_path=tokenizer_path)
         formatter = ChatFormat(tokenizer)
-        generator = LlamaVision(model, model_args, mesh_device, tokenizer=tokenizer, formatter=formatter)
+        generator = LlamaGenerator(model, model_args, mesh_device, tokenizer=tokenizer, formatter=formatter)
 
     with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")

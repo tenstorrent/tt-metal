@@ -49,7 +49,12 @@ if(NOT TARGET Metalium::Metal)
                 INTERFACE_INCLUDE_DIRECTORIES
                     "${METALIUM_INCLUDE_DIRS}"
         )
-        target_link_libraries(Metalium::Metal INTERFACE ${DEVICE_LIBRARY})
+        target_link_libraries(
+            Metalium::Metal
+            INTERFACE
+                ${DEVICE_LIBRARY}
+                nlohmann_json::nlohmann_json
+        )
         message(STATUS "Successfully found libtt_metal.so at ${TT_METAL_LIBRARY}")
     else()
         message(FATAL_ERROR "libtt_metal.so not found in ${METALIUM_LIB_PATH}")
@@ -96,6 +101,7 @@ target_link_libraries(
         magic_enum
         yaml-cpp::yaml-cpp
         xtensor
+        xtensor-blas
         xtl
         tokenizers_cpp
         wandbcpp
@@ -129,4 +135,20 @@ target_link_libraries(
 )
 target_compile_options(wandbcpp PUBLIC -stdlib=libc++)
 
-add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/data/tokenizers")
+add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
+
+set(TOKENIZER_URL "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json")
+set(TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
+
+# Check if the file already exists before downloading
+if(NOT EXISTS "${TOKENIZER_FILE}")
+    message(STATUS "Downloading Tokenizer text file to ${TOKENIZER_FILE}")
+    file(
+        DOWNLOAD
+            ${TOKENIZER_URL}
+            ${TOKENIZER_FILE}
+        SHOW_PROGRESS
+    )
+else()
+    message(STATUS "Tokenizer text file already exists at ${TOKENIZER_FILE}, skipping download.")
+endif()

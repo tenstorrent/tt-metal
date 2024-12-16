@@ -98,10 +98,6 @@ static_assert(DPrintTypeID_Count < 64, "Exceeded number of dprint types");
 constexpr uint32_t DEBUG_PRINT_SERVER_STARTING_MAGIC = 0x98989898;
 constexpr uint32_t DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0xf8f8f8f8;
 
-// In case a single argument to operator << (such as a string) is larger than the buffer size
-// (making it impossible to print) we will instead print this message.
-constexpr const char* debug_print_overflow_error_message = "*** INTERNAL DEBUG PRINT BUFFER OVERFLOW ***\n\n";
-
 #define ATTR_PACK __attribute__((packed))
 
 struct DebugPrintMemLayout {

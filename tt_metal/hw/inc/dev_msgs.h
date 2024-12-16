@@ -108,7 +108,8 @@ struct kernel_config_msg_t {
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base[NUM_PROGRAMMABLE_CORE_TYPES];
     volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
-    volatile uint16_t cb_offset;
+    volatile uint16_t local_cb_offset;
+    volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
     volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
 
@@ -117,10 +118,11 @@ struct kernel_config_msg_t {
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
-    volatile uint8_t max_cb_index;
+    volatile uint8_t max_local_cb_end_index;
+    volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t enables;
-    volatile uint8_t pad2[12];
+    volatile uint8_t pad2[9];
 } __attribute__((packed));
 
 struct go_msg_t {
@@ -182,6 +184,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocMulticastNonWorker = 7,
     DebugSanitizeNocMulticastInvalidRange = 8,
     DebugSanitizeNocAlignment = 9,
+    DebugSanitizeNocMixedVirtualandPhysical = 10,
 };
 
 struct debug_assert_msg_t {
@@ -297,7 +300,12 @@ struct addressable_core_t {
 };
 
 // TODO: This can move into the hal eventually, currently sized for WH.
-constexpr static std::uint32_t MAX_NON_WORKER_CORES = 36 + 1 + 16;
+// This is the number of Ethernet cores on WH (Ethernet cores can be queried through Virtual Coordinates).
+// All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
+constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 18;
+// This is the total number of Non Worker Cores on WH (first term is Ethernet, second term is PCIe and last term is
+// DRAM).
+constexpr static std::uint32_t MAX_NON_WORKER_CORES = MAX_VIRTUAL_NON_WORKER_CORES + 1 + 16;
 constexpr static std::uint32_t MAX_HARVESTED_ROWS = 2;
 constexpr static std::uint8_t CORE_COORD_INVALID = 0xFF;
 struct core_info_msg_t {
@@ -306,10 +314,12 @@ struct core_info_msg_t {
     volatile uint64_t noc_dram_addr_base;
     volatile uint64_t noc_dram_addr_end;
     addressable_core_t non_worker_cores[MAX_NON_WORKER_CORES];
+    addressable_core_t virtual_non_worker_cores[MAX_VIRTUAL_NON_WORKER_CORES];
     volatile uint8_t harvested_y[MAX_HARVESTED_ROWS];
+    volatile uint8_t virtual_harvested_y[MAX_HARVESTED_ROWS];
     volatile uint8_t noc_size_x;
     volatile uint8_t noc_size_y;
-    volatile uint8_t pad[29];
+    volatile uint8_t pad[27];
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 4;

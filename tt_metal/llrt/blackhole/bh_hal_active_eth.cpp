@@ -46,6 +46,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         GET_ETH_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FW_VERSION_ADDR)] =
         eth_l1_mem::address_map::FW_VERSION_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] =
+        eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -65,10 +67,12 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FW_VERSION_ADDR)] = sizeof(std::uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] =
+        eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SIZE;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
-    for (std::uint8_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
+    for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
         // BH active ethernet runs idle erisc FW on the second ethernet
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,

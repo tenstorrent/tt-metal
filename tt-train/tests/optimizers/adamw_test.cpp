@@ -16,8 +16,13 @@
 
 class AdamWFullTest : public ::testing::Test {
 protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
+        ttml::autograd::ctx().close_device();
     }
 };
 

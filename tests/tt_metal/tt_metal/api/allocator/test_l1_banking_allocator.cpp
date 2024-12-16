@@ -8,6 +8,9 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 
+// FIXME: ARCH_NAME specific
+#include "dev_mem_map.h"
+
 namespace unit_tests::test_l1_banking_allocator {
 
 uint64_t get_alloc_limit(const tt::tt_metal::Device* device) {

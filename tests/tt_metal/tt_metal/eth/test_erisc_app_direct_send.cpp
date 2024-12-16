@@ -17,6 +17,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
@@ -224,10 +227,10 @@ bool send_over_eth(
 
     // TODO: this should be updated to use kernel api
     uint32_t active_eth_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-    ll_api::memory const& binary_mem_send = llrt::get_risc_binary(
-        sender_device->build_firmware_target_path(active_eth_index, 0, 0), active_eth_index, 0, 0);
-    ll_api::memory const& binary_mem_receive = llrt::get_risc_binary(
-        receiver_device->build_firmware_target_path(active_eth_index, 0, 0), active_eth_index, 0, 0);
+    ll_api::memory const& binary_mem_send =
+        llrt::get_risc_binary(sender_device->build_firmware_target_path(active_eth_index, 0, 0));
+    ll_api::memory const& binary_mem_receive =
+        llrt::get_risc_binary(receiver_device->build_firmware_target_path(active_eth_index, 0, 0));
 
     for (const auto& eth_core : eth_cores) {
         llrt::write_hex_vec_to_core(

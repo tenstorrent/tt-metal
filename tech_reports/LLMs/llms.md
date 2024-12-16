@@ -1,5 +1,5 @@
 # LLMs in TT-NN
-Authors: Mark O'Connor,
+Authors: Mark O'Connor, Djordje Ivanovic, Jack (Xun) Cai
 
 ## Contents
 - [LLMs in TT-NN](#llms-in-tt-nn)
@@ -59,13 +59,469 @@ Other useful resources:
   - Replicated layernorm vs distributed layernorm
     - Layernorm/rmsnorm weights in row major / wrapped around tile size trick
 ### 2.4 Attention
-  - Flash Attention and Flash Decode
-    - general description
-    - limitations
-    - which dims are parallelized
+
+Attention in TT-NN is implemented in custom TT-NN kernels. In PyTorch, the attention op is usually implemented in the following way with 6 steps:
+
+1. QKV projections matmuls
+2. Reshape Q, K, V to match the expected input shape for the attention op
+3. Apply RoPE to Q and K
+4. Cache K and V
+5. Scaled Dot Product Attention
+6. Output reshape and output matmul
+
+For example, the Llama model is implemented as follows:
+```python
+    def forward(
+        self,
+        x: torch.Tensor,
+        start_pos: int,
+        freqs_cis: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ):
+        """
+        Forward pass of the attention module.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+            start_pos (int): Starting position for caching.
+            freqs_cis (torch.Tensor): Precomputed frequency tensor.
+            mask (torch.Tensor, optional): Attention mask tensor.
+
+        Returns:
+            torch.Tensor: Output tensor after attention.
+
+        """
+        # (1) QKV projections matmuls
+        bsz, seqlen, _ = x.shape
+        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+
+        # (2) Reshape Q, K, V to match the expected input shape for the attention op
+        xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
+        xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
+        xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
+
+        # (3) Apply RoPE to Q and K
+        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
+
+        # (4) Cache K and V
+        self.cache_k[:bsz, start_pos : start_pos + seqlen] = xk
+        self.cache_v[:bsz, start_pos : start_pos + seqlen] = xv
+
+        # (5) Scaled Dot Product Attention
+        keys = self.cache_k[:bsz, : start_pos + seqlen]
+        values = self.cache_v[:bsz, : start_pos + seqlen]
+        output = torch.scaled_dot_product_attention(xq, keys, values, attn_mask=mask)
+
+        # (6) Output reshape and output matmul
+        output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
+        return self.wo(output)
+```
+
+The generic `torch` implementation is agnostic to **prefill** and **decode** modes, however, our implementation differientiates them. To learn more about the differences between the two modes and how we handle them in TT-NN, please see [3.2 Prefill and Decode](#32-prefill-and-decode). In general, our high performance attention module uses specialized implementations for each mode as they have different memory and compute patterns and bottlenecks, requiring different optimizations.
+
+The rest of this section will organized as follows. We split the attention module into two parts -- **prefill** and **decode** -- and describe the 6 steps implementations for each. Then, we discuss some limitations of the current implementation and useful facts that will help with debugging and performance optimization.
+
+Some common terminology used in this section:
+| Term | Description |
+| --- | --- |
+| bsz | batch size |
+| batch_id | batch index (used for prefill) |
+| cur_pos/cur_pos_tensor | list/tensor of current positions in the sequence for each batch |
+| cache_len | length of the KV cache |
+| seqlen | sequence length |
+| dim | hidden dimension of input x |
+| head_dim | hidden dimension of Q, K, V |
+| n_q_heads | number of heads in Q |
+| n_kv_heads | number of heads in K, V |
+
+### 2.4.1 Attention Prefill
+The attention module in prefill mode expects input shape `(1, bsz=1, seqlen, hidden_dim)` and outputs a tensor of the same shape. Note that `bsz=1` is required. For multiple batches, we simply run prefill iteratively and populate the KV cache at `batch_id`.
+
+An end-to-end example of the prefill attention module is in the `models/demos/llama3/tt/llama_attention.py` file, under the `forward_prefill` method. In short, we break down the attention module in prefill mode into the following steps:
+1. QKV projections matmuls.
+   - We combine the QKV projection weights into a single tensor, and perform standard `ttnn.linear`. Example:
+     ```python
+     xqkv_fused = ttnn.linear(x, wqkv, dtype=ttnn.bfloat16)
+     ```
+   - Input/Output shapes:
+      ```python
+      (1, 1, seqlen, dim) -> (1, 1, seqlen, (n_q_heads+2*n_kv_heads)*head_dim)
+      ```
+
+2. Reshape Q, K, V to match the expected input shape for scaled dot product attention.
+   - We split the fused QKV tensor into individual Q, K, V tensors using a custom optimized TM op, `ttnn.experimental.nlp_create_qkv_heads`. Example:
+     ```python
+     Q, K, V = ttnn.experimental.nlp_create_qkv_heads(xqkv_fused, num_heads=n_q_heads, num_kv_heads=n_kv_heads, transpose_k_heads=False)
+     ```
+   - Input/Output shapes:
+      ```python
+      (1, 1, seqlen, (n_q_heads+2*n_kv_heads)*head_dim) -> (1, n_q_heads, seqlen, head_dim), (1, n_kv_heads, seqlen, head_dim), (1, n_kv_heads, seqlen, head_dim)
+      ```
+
+3. Apply RoPE to Q and K
+   - We apply the RoPE transformation to Q and K using the rotary embedding op outlined in [2.2 RoPE](#22-rope). The input/output shapes remain the same as in step 2.
+
+4. Cache K and V
+   - We populate the KV cache at `batch_id` with the current K and V tensors using the `ttnn.fill_cache` op. Example:
+     ```python
+     ttnn.fill_cache(K_cache, K, batch_id)
+     ttnn.fill_cache(V_cache, V, batch_id)
+     ```
+   - If page table is used, we use the `ttnn.experimental.paged_fill_cache` op. Example:
+     ```python
+     ttnn.experimental.paged_fill_cache(K_cache, K, page_table, batch_idx=batch_id)
+     ttnn.experimental.paged_fill_cache(V_cache, V, page_table, batch_idx=batch_id)
+     ```
+
+5. Scaled Dot Product Attention
+   - We perform scaled dot product attention using our custom flash attention kernel, `ttnn.transformer.scaled_dot_product_attention`. It takes in the following arguments:
+     - `q`: Query tensor of shape `(1, n_q_heads, seqlen, head_dim)`.
+     - `k`: Key tensor of shape `(1, n_kv_heads, cache_len, head_dim)`.
+     - `v`: Value tensor of shape `(1, n_kv_heads, cache_len, head_dim)`.
+     - `attn_mask`: Defaults to `None`. [b x 1 x cache_len x seqlen]. Head broadcasting is implied.
+     - `is_causal`: bool, defaults to `true`. Whether to apply causal masking.
+     - `scale`: float, defaults to `None`.
+     - `program_config`: Defaults to `None`.
+     - `compute_kernel_config`: Defaults to `None`.
+
+   - For general prefilling phase use cases with causal attention, it is recommended to set `is_causal=True`. This removes the need for `attn_mask` and attention scores are computed in the lower triangular half of the attention matrix. For example:
+     ```python
+     attn_output = ttnn.transformer.scaled_dot_product_attention(Q,K,V,is_causal=True)
+     ```
+
+   - For non-causal attention, `attn_mask` must be provided. An example is in the cross attention case in visual language models. For example:
+     ```python
+     attn_output = ttnn.transformer.scaled_dot_product_attention(Q,K,V,attn_mask=mask, is_causal=False)
+     ```
+
+6. Output reshape and output matmul
+   - At last, we use `ttnn.experimental.nlp_concat_heads` to reshape the output of the attention op, followed by a standard `ttnn.linear` to do the output projection. Example:
+     ```python
+     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
+     output = ttnn.linear(attn_output, wo)
+     ```
+   - Input/Output shapes:
+     ```python
+     (1, n_q_heads, seqlen, head_dim) -> (1, 1, seqlen, hidden_dim) -> (1, 1, seqlen, hidden_dim)
+     ```
+
+### 2.4.2 Attention Decode
+The attention module in decode mode expects input shape `(1, seqlen=1, bsz, hidden_dim)` and outputs a tensor of the same shape. Decode mode expects sequence length of 1 and parallelizes over batch size due to the auto-regressive nature of decoding.
+
+An end-to-end example of the decode attention module is in the `models/demos/llama3/tt/llama_attention.py` file, under the `forward_decode` method. The decode mode is broken down into the following steps:
+
+1. QKV projections matmuls.
+   - This works the same as in prefill mode, using `ttnn.linear`. Note that the input shape is `(1, 1, bsz, dim)` instead of `(1, 1, seqlen, dim)`.
+   - Input/Output shapes:
+      ```python
+      (1, 1, bsz, dim) -> (1, 1, bsz, (n_q_heads+2*n_kv_heads)*head_dim)
+      ```
+
+2. Reshape Q, K, V to match the expected input shape for scaled dot product attention.
+   - We split the fused QKV tensor into individual Q, K, V tensors using `ttnn.experimental.nlp_create_qkv_heads_decode`. Note that this is a different op than `ttnn.experimental.nlp_create_qkv_heads` used in prefill mode. Example:
+     ```python
+     Q, K, V = ttnn.experimental.nlp_create_qkv_heads_decode(
+      xqkv_fused,
+      num_heads=n_q_heads,
+      num_kv_heads=n_kv_heads,
+      memory_config=ttnn.MemoryConfig(
+          ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
+      )
+     )
+     ```
+   - **Input/Output shapes**: The output is height sharded across the batch dimension on `bsz` number of cores.
+      ```python
+      (1, 1, bsz, (n_q_heads+2*n_kv_heads)*head_dim) -> (1, bsz, n_q_heads, head_dim), (1, bsz, n_kv_heads, head_dim), (1, bsz, n_kv_heads, head_dim)
+      ```
+
+3. Apply RoPE to Q and K
+   - Again, we apply the RoPE transformation to Q and K using the rotary embedding op outlined in [2.2 RoPE](#22-rope). The input/output shapes remain the same as in step 2.
+
+4. Cache K and V
+   - We populate the KV cache at `cur_pos` for all batches with the current K and V tensors using the `ttnn.experimental.paged_update_cache` op. This op takes in an optional `page_table` argument to support paged KV cache updates. Example:
+     ```python
+     ttnn.experimental.paged_update_cache(keys, K, update_idxs=cur_pos, page_table=page_table)
+     ttnn.experimental.paged_update_cache(values, V, update_idxs=cur_pos, page_table=page_table)
+     ```
+   - If current position is `cur_pos_tensor`, a `ttnn.Tensor` rather than a list, we use the `update_idxs_tensor` argument instead:
+     ```python
+     ttnn.experimental.paged_update_cache(keys, K, update_idxs_tensor=cur_pos_tensor, page_table=page_table)
+     ```
+
+5. Scaled Dot Product Attention Decode
+   - We perform scaled dot product attention using our custom flash attention kernel optimized for decode mode, `ttnn.transformer.scaled_dot_product_attention_decode` and `ttnn.transformer.paged_scaled_dot_product_attention_decode` for paged KV cache.
+   - `ttnn.transformer.scaled_dot_product_attention_decode` takes in the following arguments:
+     - `q`: Query tensor of shape `(1, bsz, n_q_heads, head_dim)`.
+     - `k`: Key tensor of shape `(1, bsz, cache_len, head_dim)`.
+     - `v`: Value tensor of shape `(1, bsz, cache_len, head_dim)`.
+     - `is_causal`: bool, defaults to `true`. Whether to apply causal masking.
+     - `attn_mask`: Optional attention mask tensor. Defaults to `None` and only used if `is_causal=False`.
+     - `cur_pos`: (Required for is_causal=True) List of current positions in the sequence for each batch. Defaults to `None`. Must be provided if `cur_pos_tensor` is not provided.
+     - `cur_pos_tensor`: (Required for is_causal=True) Optional current position tensor. Defaults to `None`. Must be provided if `cur_pos` is not provided.
+     - `scale`: Optional scale factor. Defaults to `None`.
+     - `program_config`: Optional program configuration. Defaults to `None`.
+     - `compute_kernel_config`: Optional compute kernel configuration. Defaults to `None`.
+     - `memory_config`: Optional memory configuration for output tensor. Defaults to `None`.
+   - `ttnn.transformer.paged_scaled_dot_product_attention_decode` takes in the same arguments as `ttnn.transformer.scaled_dot_product_attention_decode`, but also takes in an additional `page_table_tensor` argument.
+   - For general decode use cases, it is recommended to set `is_causal=True`. This removes the need for `attn_mask` which greatly reduces memory bandwidth usage. For example:
+     ```python
+     attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(Q, K, V, cur_pos_tensor=cur_pos, page_table=page_table)
+     ```
+   - For non-causal attention, `attn_mask` must be provided. An example is in the cross attention case in visual language models. For example:
+     ```python
+     attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(Q, K, V, attn_mask=mask, is_causal=False)
+     ```
+
+6. Output reshape and output matmul
+   - Lastly, we use `ttnn.experimental.nlp_concat_heads_decode` to reshape the output of the attention op, followed by a standard `ttnn.linear` to do the output projection. Example:
+     ```python
+     attn_output = ttnn.experimental.nlp_concat_heads_decode(attn_output, num_heads=n_q_heads)
+     output = ttnn.linear(attn_output, wo)
+     ```
+   - Input/Output shapes:
+     ```python
+     (1, bsz, n_q_heads, head_dim) -> (1, 1, bsz, hidden_dim) -> (1, 1, bsz, hidden_dim)
+     ```
+
+### 2.4.3 Miscellaneous Facts
+Flash attention and flash decode are the major ops for attention. They are optimized over for latency and throughput, and perform much better than vanilla implementations. If you are interested in how they work, please refer to our [Flash Attention Tech Report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/FlashAttention/FlashAttention.md).
+
+TLDR -- here are some useful things about the attention ops to keep in mind that will help you write efficient and bug-free code:
+
+1. **Program Configs** in flash attention (and flash decode) ops:
+   The Program config has the following parameters:
+   - `compute_with_storage_grid_size`: The size of the grid size.
+   - `q_chunk_size`: The size of a chunk to process at a time for Q.
+   - `k_chunk_size`: The size of a chunk to process at a time for K and V.
+   - `exp_approx_mode`: Whether to use the exponential approximation mode for softmax.
+   - `max_cores_per_head_batch`: The maximum number of cores to use for each head batch in flash decode.
+
+   Flash attention processes Q, K, V in chunks of size `q_chunk_size` and `k_chunk_size`. The chunk size must be a power of 2 and a multiple of 32. By default, the chunk size is set to 512, but you should experiment with different values to find the best performance. Flash attention is parallelized on the cores specified in `compute_with_storage_grid_size`. For example, if you are running on a grid size of 8x8, then flash attention is parallelized over 64 cores. The parallelization is divided by batch, then by head, then by the number of Q chunks.
+
+   Flash decode processes the entire Q (since query in decode mode is small) and K/V in chunks of size `k_chunk_size`. As a result, the `q_chunk_size` field is not used for flash decode. It is parallelized over the cores specified in `compute_with_storage_grid_size`. The parallelization is divided by batch, then by kv_head. In many cases, there will be more cores than `heads*batch`, so this is why flash decode is needed because it allows for multiple cores to process a single head. In extreme cases where there are too many cores to process a single head, the noc bandwidth between cores will become the bottleneck. We experimentally found out that more than 16 cores per head batch no longer provides any benefits and starts degrading performance. The `max_cores_per_head_batch` field is used to limit the number of cores used for each head batch for flash decode, and is set to 16 by default.
+
+   Lastly, the `exp_approx_mode` field is to set the exponential approximation mode for softmax in flash attention and flash decode. We recommend setting this to `true` for small `seqlen/chunk_size` values. For large `seqlen/chunk_size` values, the error introduced by the exponential approximation can accumulate through chunk accumulation, causing major degradation in pcc. For example in Llama3 models, we use `q_chunk_size` and `k_chunk_size` of 512, and `exp_approx_mode` set to `false` for long sequence lengths greater than 16K.
+
+2. **Current Position Tensor** for flash decode and kv cache ops:
+
+   In decode mode, you can either provide a list of current positions, or a tensor. The tensor version can be more efficient because it supports **tracing**. To learn more about what is tracing and how to use it, please refer to [4.1 Tracing](#41-tracing). In short, tracing requires the traced variables to be statically known at the compile time, so if you provide a list of current positions, you cannot modify it for the next token generation. However, if you provide a tensor, the position values are stored in device memory and can be updated using binary addition op, e.g. `ttnn.add`.
+
 ### 2.5 MLP
+
 ### 2.6 Decoder
+<div align="center">
+<img src="images/2.6-decoder.png" alt="Decoder Diagram" title="Decoder Title" width="350" height="400">
+</div>
+When the components explained in previous sections (MLP, Attention, RMSNorm) are implemented, bringing up the decoder should be relatively straightforward.
+According to the diagram (based on the Llama3.1 example), the components are stacked sequentially during the forward pass.
+The only thing to consider is whether addition of MLP and Attention outputs should be stored in L1 or in DRAM.
+
+<br>
+
+The Decode forward pass implementation below follows the diagram above. Keep in mind that, in order to optimize memory usage, it is recommended to deallocate tensors after their usage, which can be crucial under tighter memory constraints.
+<br>
+
+To optimize performance in decode mode, we maintain the residual stream in L1 and shard it across cores and devices. However, determining the optimal number of cores for sharding can be challenging, especially for operations like DRAM-sharded matmuls. Here is the [code](https://github.com/tenstorrent/tt-metal/blob/53c32c0c0da926f97bd0eb042e70fd54c2866f44/models/demos/llama3/tt/model_config.py#L931) in Llama model config, that produces the core grid that will divide the N and K dims of a matmul evenly.
+When it’s not feasible to keep the streams sharded, we use  the ttnn op `interleave_to_sharded`, and conversely, switch back as needed.
+In our implementation of Llama3.1 there are some ops that require interleaved tensors and resharding.
+
+<br>
+
+```py
+def forward(
+        self,
+        x: ttnn.Tensor,
+        current_pos,
+        rot_mat=None,
+        transformation_mats=None,
+        user_id=0,
+        mode="decode",
+        page_table=None,
+    ) -> ttnn.Tensor:
+        if mode == "prefill":
+            skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        elif mode == 'decode':
+            skip_mem_cfg = self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
+        # Attention RMSNorm
+        attn_in = self.attention_norm(x)
+        # Attention
+        attn_out = self.attention.forward(
+            attn_in,
+            current_pos,
+            rot_mat,
+            transformation_mats,
+            user_id,
+            mode,
+            page_table,
+        )
+        ttnn.deallocate(attn_in)
+        # Residual add of inputs and attention output
+        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
+        ttnn.deallocate(attn_out)
+        # MLP and RMSNorm
+        ff_out = self.feed_forward.forward(self.ffn_norm(h), mode)
+        # Residual add of attention output and mlp output
+        out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)
+
+        ttnn.deallocate(ff_out)
+        ttnn.deallocate(h)
+
+        return out
+```
+
+
 ### 2.7 LM Head
+
+The `LMHead` is unique because LLMs typically have large vocabulary sizes, which are independent of the model size (i.e. model parameters).
+As a result, the `LMHead` has a large `last_dim` in its weight matrix. Given the substantial size of `LMHead` weights and the memory limitations of the hardware, these weights must be distributed across multiple devices and processed in iterations, while activations are replicated across devices.
+
+The number of iterations required depends on the size of the weights and the number of devices available, ranging from 1 to several iterations. For example, in Llama 3.1’s decode mode, the LMHead matrix multiplication involves shapes of ```(32, 8K) x (8K, 128K)```.
+
+Below is an illustration of how the LMHead weights are partitioned across two devices, followed by its implementation. For ilustrative purposes it uses 128K for the `vocab_size` instead of the real Llama3.1 value of `128256`.
+
+<div align="center">
+<img src="images/2.7-lm-head.png" alt="LM Head Diagram" title="LM_Head" width="650" height="350">
+</div>
+
+```py
+size_per_device = self.vocab_size // self.num_devices
+num_splits = math.ceil(size_per_device / max_columns_per_device)
+
+split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
+split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
+
+# Split the output weights
+torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+
+self.output_weights = []
+
+for i, split_size in enumerate(split_sizes):
+    cache_file_name = (
+        None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_{i}"
+    )
+
+    # Create a list to store the split tensors for each device
+    device_splits = []
+    for device in range(self.num_devices):
+        start = device * size_per_device + sum(split_sizes[:i])
+        end = start + split_size
+        device_splits.append(torch_output_weights[:, start:end])
+
+    # Concatenate the splits from all devices
+    combined_split = torch.cat(device_splits, dim=-1)
+
+    memory_config = args.create_dram_sharded_mem_config(
+        k=args.dim, n=combined_split.shape[-1] // self.num_devices
+    )
+    self.output_weights.append(
+        ttnn.as_tensor(
+            combined_split,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=memory_config,
+            cache_file_name=cache_file_name,
+        )
+    )
+```
+
+We use dram-sharded matmul for LMHead with `program_config` and `memory_config` generated by the code below.
+For more information check [Section: Op Configs](#44-op-configs).
+The primary reason for having multiple `program_configs` is that the weight shapes may result in unequal split sizes. This variability means the same configuration cannot be used for every matrix multiplication.
+
+```py
+# Generate dram-sharded memory_config
+memory_config = args.create_dram_sharded_mem_config(
+    k=args.dim, n=combined_split.shape[-1] // self.num_devices
+)
+# Generate dram-sharded program_config
+self.program_configs = [
+    args.dram_matmul_config(
+        args.tile_padded_batch_rows,
+        args.dim,
+        split_size,
+        args.lm_head_core_grid.num_cores,
+    )
+    for split_size in split_sizes
+]
+```
+Once weights are pushed to the devices and the decoders are executed, the `LMHead` forward pass needs to be executed in iterations.
+The code below shows that after each iteration outputs are converted from sharded to interleaved tensors. Once all iterations are completed, the final output is produced by concatenation over the last dim and returned as `output`.
+
+When executing the model, it is essential to ensure that the output of the last decoder is already replicated across tensors. Since this replication is enforced earlier, no additional code is required in the `LMHead` forward pass to handle it.
+
+```py
+def forward(self, x: ttnn.Tensor):
+    outputs = []
+    for weight, pc in zip(self.output_weights, self.program_configs):
+        output = ttnn.linear(
+            x,
+            weight,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=pc,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+        )
+        outputs.append(output)
+
+    # Concatenate the outputs
+    output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    return output
+```
+
+
+### 2.8 Model
+
+<div align="center">
+<img src="images/2.8-llama-model.png" alt="Llama model" title="Llama model" width="350" height="350">
+</div> <br>
+
+Once the model components (discussed in previous sections) are implemented, there isn’t much left to finalize. In our implementation, embeddings are managed outside the model class, as explained in [Section 2.1 Embedding](#21-embedding).
+
+The model’s constructor initializes N decoders (e.g. 80 for Llama3.1-70b), the `RMSNorm` and the `LMHead`, ensuring that weights for all components are loaded onto the appropriate devices.
+
+During the forward pass, the decoders are executed sequentially, followed by normalization and the `LMHead` computation at the end.
+A specific optimization is applied for the prefill mode: since only the last token is relevant, the `LMHead` is executed only on the final tile in this mode.
+
+In prefill mode, the RMSNorm output is interleaved, but the LMHead requires a sharded tensor. To accommodate this, the `interleaved_to_sharded` function is used to prepare the output accordingly.
+
+```py
+def forward(
+    self,
+    x: ttnn.Tensor,
+    current_pos,
+    rot_mat=None,
+    transformation_mats=None,
+    user_id=0,
+    mode="decode",
+    page_table=None,
+    get_last_token=-1,
+):
+    for layer in self.layers:
+        x = layer(x, current_pos, rot_mat, transformation_mats, user_id, mode, page_table)
+
+    if mode == "prefill" and get_last_token == -1:
+        return x
+
+    # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
+    if get_last_token != -1:
+        x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+
+    # Output norm
+    x = self.norm(x, mode=mode)
+
+    if mode == "prefill":
+        x = ttnn.interleaved_to_sharded(
+            x,
+            self.model_config["LM_HEAD_INPUT_MEMCFG"],
+        )
+
+    return self.lm_head(x)
+```
+
+
 ## 3. Features
 ### 3.1 Generative Decoding
 ### 3.2 Prefill and Decode
@@ -221,7 +677,7 @@ This CSV file contains information recorded from all devices during program exec
 python models/perf/perf_report.py OPS_CSV_FILE
 ```
 
-For device performance we recommend looking at a single layer. You can do this by using `--id-range` or by changing your test to run only a single layer of the model. For more information see: [Performance Report Analysis Tool](https://github.com/tenstorrent/tt-metal/tree/main/models/perf). The Performance Report Analysis Tool document describes how to select specific ranges of OPs. 
+For device performance we recommend looking at a single layer. You can do this by using `--id-range` or by changing your test to run only a single layer of the model. For more information see: [Performance Report Analysis Tool](https://github.com/tenstorrent/tt-metal/tree/main/models/perf). The Performance Report Analysis Tool document describes how to select specific ranges of OPs.
 
 ##### What makes a good performance test?
 

@@ -10,7 +10,7 @@
 
 #include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/common/logger.hpp"
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "impl/device/device.hpp"
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
@@ -28,6 +28,9 @@
 
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
+
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
 
 using tt::tt_metal::Device;
 using tt::tt_metal::distributed::MeshDevice;
@@ -221,8 +224,8 @@ void build_and_run_roundtrip_latency_test(
             sample_page_size,
             eth_sender_core,
             receiver_start_semaphore,
-            device->physical_core_from_logical_core(init_worker_core, CoreType::WORKER).x,
-            device->physical_core_from_logical_core(init_worker_core, CoreType::WORKER).y,
+            device->virtual_core_from_logical_core(init_worker_core, CoreType::WORKER).x,
+            device->virtual_core_from_logical_core(init_worker_core, CoreType::WORKER).y,
             worker_sem0);
         std::vector<uint32_t> const& sender_eth_rt_args = get_eth_sender_rt_args(
             device,
@@ -230,15 +233,15 @@ void build_and_run_roundtrip_latency_test(
             num_samples,
             max_concurrent_samples,
             sample_page_size,
-            device->physical_core_from_logical_core(init_worker_core, CoreType::WORKER).x,
-            device->physical_core_from_logical_core(init_worker_core, CoreType::WORKER).y,
+            device->virtual_core_from_logical_core(init_worker_core, CoreType::WORKER).x,
+            device->virtual_core_from_logical_core(init_worker_core, CoreType::WORKER).y,
             worker_sem1);
 
         std::vector<uint32_t> worker_init_rt_args = {
             worker_sem0,
             worker_sem1,
-            static_cast<uint32_t>(device->physical_core_from_logical_core(eth_receiver_core, CoreType::ETH).x),
-            static_cast<uint32_t>(device->physical_core_from_logical_core(eth_receiver_core, CoreType::ETH).y),
+            static_cast<uint32_t>(device->virtual_core_from_logical_core(eth_receiver_core, CoreType::ETH).x),
+            static_cast<uint32_t>(device->virtual_core_from_logical_core(eth_receiver_core, CoreType::ETH).y),
             receiver_start_semaphore};
 
         auto receiver_kernel = tt_metal::CreateKernel(
@@ -530,7 +533,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-    } catch (std::exception e) {
+    } catch (std::exception& e) {
         test_fixture.TearDown();
         return -1;
     }

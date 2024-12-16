@@ -6,6 +6,9 @@
 
 #include "dispatch_fixture.hpp"
 
+// TODO: ARCH_NAME specific, must remove
+#include "noc/noc_parameters.h"
+
 using std::vector;
 
 // Test sync w/ semaphores betweeen eth/tensix cores
@@ -34,7 +37,7 @@ static void test_sems_across_core_types(
             Program program = CreateProgram();
 
             CoreCoord eth_core = *eth_cores.begin();
-            CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
+            CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
             uint32_t eth_sem_id = CreateSemaphore(program, eth_core, eth_sem_init_val, CoreType::ETH);
             auto eth_kernel = CreateKernel(
                 program,
@@ -99,7 +102,7 @@ TEST_F(DispatchFixture, EthTestBlank) {
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
-        CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
+        CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
             program,
             "tt_metal/kernels/dataflow/blank.cpp",
@@ -153,7 +156,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
-        CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
+        CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
@@ -186,7 +189,8 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
-    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size =
+        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();

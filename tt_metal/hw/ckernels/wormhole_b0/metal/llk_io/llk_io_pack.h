@@ -31,12 +31,12 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     // updated by packer here we don't synchronize with packer, so if we use tiles_received_ptr could case a data race
     // alternatively we could sync with packer, but that's slower and more complex code
     // that is, don't do this: uint32_t tiles_received = tiles_received_ptr[0];
-    uint32_t tiles_received = cb_interface[output].tiles_received;
+    uint32_t tiles_received = get_local_cb_interface(output).tiles_received;
 
     std::int32_t free_tiles;
     do {
         std::uint16_t tiles_acked = (std::uint16_t)reg_read((std::uint32_t)tiles_acked_ptr);
-        std::uint32_t free_tiles_wrap = cb_interface[output].fifo_num_pages - (tiles_received - tiles_acked);
+        std::uint32_t free_tiles_wrap = get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked);
         free_tiles = (std::int32_t)free_tiles_wrap;
     } while (free_tiles < num_tiles);
 }
@@ -49,14 +49,14 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
         (volatile tt_l1_ptr std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_received_ptr(operand)) >> 2) &
                                             0x3ffff);
 
-    // cb_interface[output].tiles_received is used only by the TRISC2 (the one driving packer)
+    // get_local_cb_interface(output).tiles_received is used only by the TRISC2 (the one driving packer)
     // we need it becasue tiles_received_ptr is updated by the packer, and in cb_reserve_back func (see above) we want
     // to avoid synchronization with packer cb_reserve_back must used the most recent value of tiles_received (cannot
     // use stale or delayed), otherwise it would think there's less tiles in the CB than there actually are so we use
-    // cb_interface[output].tiles_received instead of tiles_received_ptr, because it is updated by TRISC2 and no
-    // additional synchronization is needed
-    cb_interface[output].tiles_received += num_tiles;
-    uint16_t tiles_received_new = cb_interface[output].tiles_received;
+    // get_local_cb_interface(output).tiles_received instead of tiles_received_ptr, because it is updated by TRISC2 and
+    // no additional synchronization is needed
+    get_local_cb_interface(output).tiles_received += num_tiles;
+    uint16_t tiles_received_new = get_local_cb_interface(output).tiles_received;
 
     // Update the value at tiles_received_ptr with tiles_received_new only after the packer has finished packing
     // We need to use a Tensix instruction to do the update, which runs only after STALLWAIT has finished
@@ -72,13 +72,13 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     std::uint32_t output = operand;
-    std::uint32_t num_words = num_tiles * cb_interface[operand].fifo_page_size;
+    std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
 
-    cb_interface[output].fifo_wr_ptr += num_words;
-    cb_interface[output].fifo_wr_tile_ptr = 0;
+    get_local_cb_interface(output).fifo_wr_ptr += num_words;
+    get_local_cb_interface(output).fifo_wr_tile_ptr = 0;
 
-    if (cb_interface[output].fifo_wr_ptr >= cb_interface[output].fifo_limit) {
-        cb_interface[output].fifo_wr_ptr -= cb_interface[output].fifo_size;
+    if (get_local_cb_interface(output).fifo_wr_ptr >= get_local_cb_interface(output).fifo_limit) {
+        get_local_cb_interface(output).fifo_wr_ptr -= get_local_cb_interface(output).fifo_size;
     }
 
     llk_push_to_brisc(operand, num_tiles, num_words);
@@ -96,14 +96,14 @@ inline void llk_push_blocks(const std::int32_t operand, const std::int32_t num_b
 // FIXME: FP32 accumulation --> pop tiles in the operand? just change wr_ptr?
 inline void llk_free_tiles(std::uint32_t operand, std::uint32_t num_tiles) {
     // std::uint32_t output = operand_to_output_index(operand);
-    // if (cb_interface[output].accumulation_buffer) {
+    // if (get_local_cb_interface(output).accumulation_buffer) {
 
-    //     std::uint32_t shared_output = operand_to_output_index(cb_interface[output].shared_buffer_operand);
+    //     std::uint32_t shared_output = operand_to_output_index(get_local_cb_interface(output).shared_buffer_operand);
 
-    //     cb_interface[output].f.fifo_wr_ptr = outputs[shared_output].fifo_wr_ptr;
+    //     get_local_cb_interface(output).f.fifo_wr_ptr = outputs[shared_output].fifo_wr_ptr;
 
-    //     cb_interface[output].f.fifo_wr_base_ptr = outputs[output].fifo_wr_ptr; //inc base ptr
+    //     get_local_cb_interface(output).f.fifo_wr_base_ptr = outputs[output].fifo_wr_ptr; //inc base ptr
 
-    //     cb_interface[output].curr_iter = 0;
+    //     get_local_cb_interface(output).curr_iter = 0;
     // }
 }

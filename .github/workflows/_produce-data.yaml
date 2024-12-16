@@ -22,7 +22,10 @@ on:
       - "(Single-card) Model perf tests"
       - "(Single-card) Device perf tests"
       - "(Single-card) Demo tests"
+      - "(Single-card) Tests for new models"
       - "Nightly fast dispatch tests"
+      - "(Single-card) Nightly model and ttnn tests"
+      - "(Single-card) Tests for new models"
       - "(T3K) T3000 demo tests"
       - "(T3K) T3000 model perf tests"
       - "(T3K) T3000 perplexity tests"
@@ -39,6 +42,7 @@ on:
       - "(TGG) TGG frequent tests"
       - "ttnn - Run sweeps"
       - "Blackhole post-commit tests"
+      - "Custom test dispatch"
     types:
       - completed
 

@@ -12,7 +12,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -40,53 +40,6 @@ Tensor _tanhshrink(const Tensor& x, const std::optional<MemoryConfig>& output_me
     Tensor tan_x = ttnn::tanh(x, output_mem_config);
     Tensor result = ttnn::subtract(x, tan_x, std::nullopt, output_mem_config);
     return result;
-}
-
-// power - floating point exponent
-Tensor _power(
-    uint8_t queue_id,
-    const Tensor& input_a,
-    float exponent,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    TT_FATAL(exponent >= 0.0f, "works for positive exponents only");
-    const uint32_t exponent_floor = static_cast<uint32_t>(std::floor(exponent));
-    if (static_cast<float>(exponent_floor) == exponent) {
-        if (output_tensor.has_value()) {
-            ttnn::power(queue_id, input_a, exponent_floor, output_mem_config, output_tensor);
-            return output_tensor.value();
-        }
-        return ttnn::power(queue_id, input_a, exponent_floor, output_mem_config);
-    }
-    const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
-    Tensor pow_trunc_log = ttnn::multiply(
-        queue_id, ttnn::log(queue_id, input_a, output_mem_config), exponent_trunc, std::nullopt, output_mem_config);
-    Tensor pow_frac = ttnn::exp(queue_id, pow_trunc_log, false, output_mem_config);
-    pow_trunc_log.deallocate();
-    float t_nan = std::nanf("");
-    Tensor result = ttnn::multiply(
-        queue_id,
-        ttnn::power(queue_id, input_a, exponent_floor, output_mem_config),
-        pow_frac,
-        std::nullopt,
-        output_mem_config);
-    // To handle negative inputs:
-    // in torch For -ve inputs with float exponent power returns nan
-    auto output_memory_config = output_tensor.has_value() ? output_tensor.value().memory_config()
-                                                          : output_mem_config.value_or(input_a.memory_config());
-    result = ttnn::where(
-        ttnn::ltz(queue_id, input_a, output_mem_config), t_nan, result, output_memory_config, output_tensor);
-    return result;
-}
-
-// power - integer exponent
-Tensor _power(
-    uint8_t queue_id,
-    const Tensor& input,
-    uint32_t exponent,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    return ttnn::power(queue_id, input, exponent, output_mem_config, output_tensor);
 }
 
 // acosh(x) = log(x + sqrt(x^2 - 1))
@@ -623,19 +576,16 @@ Tensor _hardtanh(
 Tensor _selu(
     const Tensor& x, const float scale, const float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     // term 2
-    Tensor x_Exp = ttnn::exp(x, false, output_mem_config);
-    Tensor x_Exp_minus_1 = ttnn::subtract(x_Exp, -1.0f, std::nullopt, output_mem_config);
-    x_Exp.deallocate();
+    Tensor x_Exp_minus_1 = ttnn::expm1(x);
     Tensor result_t2_ = ttnn::multiply(x_Exp_minus_1, alpha, std::nullopt, output_mem_config);
     x_Exp_minus_1.deallocate();
-    Tensor result_term2 =
-        ttnn::multiply(ttnn::gtz(result_t2_, output_mem_config), result_t2_, std::nullopt, output_mem_config);
+    Tensor result_term2 = ttnn::minimum(result_t2_, 0.0f, output_mem_config);
     result_t2_.deallocate();
 
     // term 1
-    Tensor x_relu = ttnn::relu(x, output_mem_config);
-    Tensor result_term1 = ttnn::multiply(x_relu, scale, std::nullopt, output_mem_config);
-    x_relu.deallocate();
+    Tensor x_max = ttnn::maximum(x, 0.0f, output_mem_config);
+    Tensor result_term1 = ttnn::multiply(x_max, scale, std::nullopt, output_mem_config);
+    x_max.deallocate();
     Tensor result_selu = ttnn::add(result_term1, result_term2, std::nullopt, output_mem_config);
 
     return result_selu;
@@ -724,7 +674,7 @@ Tensor _swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryCon
 
 // tril : select lower triangular region of input matrix
 Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_l = numpy::index_tril<::bfloat16>(
+    Tensor index_l = ttnn::index_tril<::bfloat16>(
         input_a.get_legacy_shape(),
         diag,
         DataType::BFLOAT16,
@@ -736,7 +686,7 @@ Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConf
 
 // triu : select upper triangular region of input matrix
 Tensor _triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_u = numpy::index_triu<::bfloat16>(
+    Tensor index_u = ttnn::index_triu<::bfloat16>(
         input_a.get_legacy_shape(),
         diag,
         DataType::BFLOAT16,

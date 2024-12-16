@@ -8,7 +8,7 @@
 #include <limits>
 #include <random>
 
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/math.hpp"
@@ -23,7 +23,8 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
-// #include "impl/kernels/kernel_types.hpp"
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -252,7 +253,7 @@ bool RunWriteBWTest(
         for (uint32_t w = 0; w < chip0_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
             auto worker_noc_coord =
-                sender_device->physical_core_from_logical_core(chip0_sender_worker_core, CoreType::WORKER);
+                sender_device->virtual_core_from_logical_core(chip0_sender_worker_core, CoreType::WORKER);
             chip0_edm_args.push_back(
                 KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                     .to_uint32());
@@ -399,7 +400,7 @@ bool RunWriteBWTest(
         for (uint32_t w = 0; w < chip1_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
             auto worker_noc_coord =
-                receiver_device->physical_core_from_logical_core(chip1_sender_noc_xy, CoreType::WORKER);
+                receiver_device->virtual_core_from_logical_core(chip1_sender_noc_xy, CoreType::WORKER);
             chip1_edm_args.push_back(
                 KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                     .to_uint32());
@@ -447,7 +448,7 @@ bool RunWriteBWTest(
         for (uint32_t w = 0; w < chip1_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
             auto worker_noc_coord =
-                receiver_device->physical_core_from_logical_core(chip1_receiver_worker_core, CoreType::WORKER);
+                receiver_device->virtual_core_from_logical_core(chip1_receiver_worker_core, CoreType::WORKER);
             chip1_edm_args.push_back(
                 KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                     .to_uint32());
