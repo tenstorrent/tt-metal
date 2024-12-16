@@ -8,7 +8,7 @@
 #include "reshape.hpp"
 #include "tt_metal/common/constants.hpp"
 #include <functional>
-#include <ttnn/operations/numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
