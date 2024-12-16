@@ -155,8 +155,22 @@ grid_size = [8, 7]
                 ),
             ),
         ),
+        (
+            (1, 48, 56, 32),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.num_cores_to_corerangeset(56, grid_size, True),
+                    [48, 32],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                    ttnn.ShardMode.LOGICAL,
+                ),
+            ),
+        ),
     ],
-    ids=["test1"],
+    ids=["test1", "test2"],
 )
 def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layout, tile, device):
     torch.manual_seed(0)
