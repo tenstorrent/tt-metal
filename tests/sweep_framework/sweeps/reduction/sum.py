@@ -13,6 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.reduction_common import run_sum
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -55,6 +56,19 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
+def mesh_device_fixture():
+    import os
+
+    device = ttnn.open_device(device_id=0)
+    # FIXME: if this condition is disabled, i get following error:
+    #           "libc++abi: terminating due to uncaught exception of type std::runtime_error: TT_ASSERT @ ../tt_metal/impl/debug/dprint_server.cpp:801: rpos <= bufsize"
+    assert not ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
+    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
+
+
 # This is the run instructions for the test, defined by the developer.
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
@@ -69,31 +83,19 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    return run_sum(input_shape, dim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config, device)
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
 
-    dim = dim % len(input_shape)
-    # print(f"dim {dim} input_shape {input_shape} input_a_dtype {input_a_dtype}")
+import pytest
 
-    torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=True)
 
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
-
-    start_time = start_measuring_time()
-    result = ttnn.sum(input_tensor_a, dim=dim, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(result)
-    e2e_perf = stop_measuring_time(start_time)
-
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    # print(f"input_shape {input_shape} pcc {pcc}")
-    return [pcc, e2e_perf]
+@pytest.mark.parametrize(
+    "input_shape, dim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config",
+    [
+        ([7, 32, 4, 96], 3, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+    ],
+)
+def test_reduction_sum_localrun_fail_only(
+    device, input_shape, dim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config
+):
+    run_sum(input_shape, dim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config, device)

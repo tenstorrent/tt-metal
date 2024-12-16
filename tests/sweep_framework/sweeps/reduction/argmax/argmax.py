@@ -62,6 +62,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             return True, "Absolute value of dim must be less or equal than the rank of input tensor"
     if test_vector["input_layout"] == ttnn.TILE_LAYOUT:
         return True, "Tiled layout not supported"
+    if test_vector["input_a_dtype"] != ttnn.bfloat16:
+        return True, "Only BFLOAT16 is supported for inputs!"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
         test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
     ):
