@@ -287,37 +287,37 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
 
 
 @pytest.mark.parametrize(
-    "num_reader_cores, num_tensors, input_shapes, num_layers",
+    "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [  # TODO: test different shapes etc
-        # (2, 3, [(128, 128), (128, 128*2), (128, 128*3)], 2), # hang on multi dtypes
-        # (2, 2, [(256, 512), (256, 512)], 5),
-        # (2, 2, [(1024, 256), (1024, 256)], 5),
-        # (2, 2, [(128, 128), (128, 128)], 2),
-        # (2, 2, [(256, 1024), (256, 1024)], 5),
+        (2, 3, [(128, 128), (128, 128 * 2), (128, 128 * 3)], [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16], 2),
+        (2, 2, [(256, 512), (256, 512)], [ttnn.bfloat4_b] * 2, 5),
+        (2, 2, [(1024, 256), (1024, 256)], [ttnn.bfloat4_b] * 2, 5),
+        (2, 2, [(128, 128), (128, 128)], [ttnn.bfloat4_b] * 2, 2),
+        (2, 2, [(256, 1024), (256, 1024)], [ttnn.bfloat4_b] * 2, 5),
         (
             12,
             5,
             [(2304, 3840)] * 5,
+            [ttnn.bfloat4_b] * 5,
             2,
         ),  # FF1/3 = 72 tiles x 120 tiles = 8640 tiles / 24 cores = 720 tiles per receiver core
-        # (
-        #     1,
-        #     4,
-        #     [(192, 320), (192, 320), (192, 320), (192, 320)],
-        #     1,
-        # ),
-        # (12, 5, [(7680, 2304)] * 5, 5),  # FF2
-        # (12, 6, [(2304, 1536)] * 6, 5),  # QKV
-        # (12, 5, [(2304, 2304)] * 5, 5),  # DO
-        # (12, 5, [(2304, 3840), (3840, 2304), (2304, 3840), (1536, 2304), (2304, 2304)], 1),  # ff1 + ff2 +ff3+ qkv + do
-    ],
-)
-@pytest.mark.parametrize(
-    "dtype, pcc_threshold",
-    [
-        # (ttnn.bfloat16, 0.999),
-        # (ttnn.bfloat8_b, 0.999),
-        (ttnn.bfloat4_b, 0.99),
+        (
+            1,
+            4,
+            [(192, 320), (192, 320), (192, 320), (192, 320)],
+            [ttnn.bfloat4_b, ttnn.bfloat8_b] * 2,
+            1,
+        ),
+        (12, 2, [(3840, 2304)] * 2, [ttnn.bfloat8_b] * 2, 5),  # FF2  # OOM when using more layers/tensors
+        (12, 6, [(2304, 1536)] * 6, [ttnn.bfloat8_b] * 6, 5),  # QKV
+        (12, 5, [(2304, 2304)] * 5, [ttnn.bfloat8_b] * 5, 5),  # DO
+        (
+            12,
+            5,
+            [(2304, 3840), (3840, 2304), (2304, 3840), (2304, 1536), (2304, 2304)],
+            [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat8_b],
+            2,
+        ),  # ff1 + ff2 +ff3+ qkv + do
     ],
 )
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
@@ -327,12 +327,12 @@ def test_run_prefetcher(
     input_shapes,
     num_layers,
     num_reader_cores,
-    dtype,
-    pcc_threshold,
+    dtypes,
     use_program_cache,
     function_level_defaults,
 ):
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shapes[0]}")
+    assert len(input_shapes) == len(dtypes)
 
     num_global_cb_receivers = 2
 
@@ -397,7 +397,7 @@ def test_run_prefetcher(
         tt_tensor = ttnn.as_tensor(
             pt_tensors[tid],
             device=device,
-            dtype=dtype,  # ttnn.bfloat4_b if (tid % 2) == 0 else ttnn.bfloat8_b,
+            dtype=dtypes[tid % num_tensors],
             memory_config=input_sharded_mem_config,
             layout=ttnn.TILE_LAYOUT,
         )
@@ -650,12 +650,13 @@ def test_run_prefetcher(
         tt_out = ttnn.to_torch(outputs_t[i])
         pt_out = in0_tensors[i % num_tensors] @ pt_tensors[i]
 
+        dtype = dtypes[i % num_tensors]
         if dtype == ttnn.bfloat4_b:
             pcc_threshold = 0.99
         elif dtype == ttnn.bfloat8_b:
             pcc_threshold = 0.999
-        elif dtype == ttnn.bfloat16_b:
-            pcc_threshold = 0.9999
+        elif dtype == ttnn.bfloat16:
+            pcc_threshold = 0.999  # Because using LoFi math fidelity
 
         passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
         logger.info(output)
