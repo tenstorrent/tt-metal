@@ -249,38 +249,33 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         enable_subblock_padding,
         use_non_tile_height);
 
-    if(std::getenv("TT_DISABLE_CONV_L1_CHECK")==nullptr) {
-        tt::log_info(tt::LogOp, "Allocation Stats before Op: {}", this->pre_op_l1_allocation_size_bytes);
-        program_with_cbs.program.set_pre_exec_callback([this, arch, input_dtype, weights_dtype, output_dtype, weights_shape, has_bias, device](const Program& program) {
-            const uint32_t post_op_l1_stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-            auto actual_cb_size = program.get_max_cb_memory_usage(device);
+        const uint32_t post_op_l1_stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+        auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
 
-            auto [calc_output_size, calc_CB_size] = estimate_L1_usage(
-                    arch, this->memory_config.memory_layout,
-                    input_dtype, weights_dtype, output_dtype,
-                    compute_kernel_config,
-                    block_config, parallelization_config,
-                    input_tensor_shape, weights_shape, sliding_window_config.get_output_shape(),
-                    output_channels, groups, std::array<uint32_t,2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
-                    Conv2dConfig{
-                        .enable_act_double_buffer=enable_act_double_buffer,
-                        .enable_weights_double_buffer=enable_weights_double_buffer,
-                        .enable_split_reader=enable_split_reader,
-                        .enable_subblock_padding=enable_subblock_padding
-                    },
-                    has_bias, use_non_tile_height);
-            if(calc_CB_size > 0) {
-                if(calc_CB_size != actual_cb_size) {
-                    tt::log_error("Calculated CB size {} does not match with the actual CB size {}",calc_CB_size,actual_cb_size);
-                    TT_ASSERT(actual_cb_size==calc_CB_size);
-                }
-            }
-            if(calc_output_size > 0) {
-                if(post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
-                    tt::log_error(tt::LogOp, "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}", this->pre_op_l1_allocation_size_bytes, post_op_l1_stats,calc_output_size);
-                }
-            }
-        });
+        auto [calc_output_size, calc_CB_size] = estimate_L1_usage(
+                arch, this->memory_config.memory_layout,
+                input_dtype, weights_dtype, output_dtype,
+                compute_kernel_config,
+                block_config, parallelization_config,
+                input_tensor_shape, weights_shape, sliding_window_config.get_output_shape(),
+                output_channels, groups, std::array<uint32_t,2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
+                Conv2dConfig{
+                    .enable_act_double_buffer=enable_act_double_buffer,
+                    .enable_weights_double_buffer=enable_weights_double_buffer,
+                    .enable_split_reader=enable_split_reader,
+                    .enable_subblock_padding=enable_subblock_padding
+                },
+                has_bias, use_non_tile_height);
+    if(calc_CB_size > 0) {
+        if(calc_CB_size != actual_cb_size) {
+            tt::log_error("Calculated CB size {} does not match with the actual CB size {}",calc_CB_size,actual_cb_size);
+            TT_ASSERT(actual_cb_size==calc_CB_size);
+        }
+    }
+    if(calc_output_size > 0) {
+        if(post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
+            tt::log_error(tt::LogOp, "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}", this->pre_op_l1_allocation_size_bytes, post_op_l1_stats,calc_output_size);
+        }
     }
     return program_with_cbs;
 }
