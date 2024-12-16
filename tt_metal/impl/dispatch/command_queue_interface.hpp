@@ -4,7 +4,7 @@
 
 #pragma once
 #include <climits>
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <mutex>
 
 #include "tt_metal/common/base.hpp"
