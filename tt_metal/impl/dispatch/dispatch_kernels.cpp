@@ -986,6 +986,9 @@ void DemuxKernel::GenerateDependentConfigs() {
             TT_FATAL(false, "Unexpected kernel type downstream of DEMUX");
         }
     }
+    // TODO: this is just to match the previous implementation hard-code, remove later
+    if (!tt::Cluster::instance().is_galaxy_cluster())
+        this->config.output_depacketize = 0x3;
 }
 
 void EthTunnelerKernel::GenerateDependentConfigs() {
