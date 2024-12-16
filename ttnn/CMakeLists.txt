@@ -715,10 +715,6 @@ set(PRECOMPILED_HEADER_TARGET "")
 
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        message(
-            "Debug build for "
-            ${SUBLIBRARY_NAME}
-        )
         add_library(${SUBLIBRARY_NAME} SHARED ${ARGN})
         install(
             TARGETS
