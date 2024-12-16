@@ -586,15 +586,14 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestWrapCompletionQOnInsufficientSpa
 TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBuffer) {
     const uint32_t page_size = 256;
     const uint32_t buffer_size = 64 * page_size;
-    const uint32_t offset = 256;
-    const uint32_t size = 512;
+    const BufferRegion region(256, 512);
     for (Device* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
         auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
-        auto src = local_test_functions::generate_arange_vector(size);
-        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, offset, size, false);
+        auto src = local_test_functions::generate_arange_vector(region.size);
+        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
         vector<uint32_t> result;
-        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, offset, size, true);
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
         EXPECT_EQ(src, result);
     }
 }
@@ -602,15 +601,16 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBuffer) {
 TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBufferLargeOffset) {
     const uint32_t page_size = 4;
     const uint32_t buffer_size = (0xFFFF + 50000) * 2 * page_size;
-    const uint32_t offset = ((2 * 0xFFFF) + 25000) * page_size;
-    const uint32_t size = 32;
+    // const uint32_t offset = ((2 * 0xFFFF) + 25000) * page_size;
+    // const uint32_t size = 32;
+    const BufferRegion region(((2 * 0xFFFF) + 25000) * page_size, 32);
     for (Device* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
         auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
-        auto src = local_test_functions::generate_arange_vector(size);
-        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, offset, size, false);
+        auto src = local_test_functions::generate_arange_vector(region.size);
+        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
         vector<uint32_t> result;
-        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, offset, size, true);
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
         EXPECT_EQ(src, result);
     }
 }
