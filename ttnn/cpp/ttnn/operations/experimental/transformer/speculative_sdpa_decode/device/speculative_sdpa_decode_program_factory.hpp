@@ -27,6 +27,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config,
     const uint32_t k_chunk_size,
+    const uint32_t speculative_chunk_size,
     std::optional<bool> share_cache);
 
 }  // namespace ttnn::operations::experimental::transformer::detail

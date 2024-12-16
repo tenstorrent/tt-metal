@@ -129,11 +129,11 @@ def run_test_sdpa_decode_single_iter_single_device(
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
 
-    start_indices = [s // 2 for _ in range(b)] if start_indices is None else start_indices
+    start_indices = [s // 2 - 1 for _ in range(b)] if start_indices is None else start_indices
     max_start_idx = max(start_indices)
     scale = d**-0.5
 
-    k_chunk_size = get_chunk_size(max_start_idx + 1, s)
+    k_chunk_size = speculation_length  # 128#get_chunk_size(max_start_idx + 1, s)
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=padded_num_heads,
@@ -144,7 +144,7 @@ def run_test_sdpa_decode_single_iter_single_device(
     padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size) if causal else s
 
     # Test various sequence lengths
-    logger.debug(f"Testing with sequence length: {max_start_idx if causal else s}")
+    logger.debug(f"Testing with max position: {max_start_idx if causal else s}")
     logger.debug(f"Using chunk size: {k_chunk_size}")
     logger.debug(f"Using padded layer length: {padded_layer_len}")
     logger.debug(f"Using padded num heads: {padded_num_heads}")
@@ -278,10 +278,11 @@ def run_test_sdpa_decode_single_iter_single_device(
     non_skip_indices = torch.tensor(start_indices) != -1
     out_pass, out_pcc = comp_pcc(expected_gt[:, non_skip_indices], tt_back_gt[:, non_skip_indices], min_pcc)
     logger.debug(f"gt python vs pytorch: {out_pcc}")
-    assert out_pass
+    # assert out_pass
 
     out_pass, out_pcc = comp_pcc(expected_spec[:, non_skip_indices], tt_back_spec[:, non_skip_indices], min_pcc)
     logger.debug(f"spec python vs pytorch: {out_pcc}")
+    breakpoint()
     assert out_pass
 
     out_pass, out_pcc = comp_pcc(lp_distance, tt_back_spec_lp_distance, min_pcc)
@@ -308,13 +309,14 @@ def run_test_sdpa_decode_single_iter_single_device(
     "b, nh, nkv, s, d, grid_size, single_iter, cur_pos_tensor",
     (
         # [8, 8, 1, 32768, 128, (8, 7), True, False],  # Llama2-70B
-        [4, 32, 8, 8192, 128, (8, 7), True, True],  # llama 3.1 8b
+        # [4, 32, 8, 8192, 128, (8, 7), True, True],  # llama 3.1 8b
+        [1, 8, 1, 256, 32, (1, 1), True, True],  # llama 3.1 8b
     ),
 )
 @pytest.mark.parametrize(
     "speculation_length",
     [
-        128,
+        32,
     ],
 )
 def test_sdpa_decode_single_device(

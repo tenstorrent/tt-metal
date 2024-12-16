@@ -255,9 +255,11 @@ operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::crea
         lambda = 0.2f;
     }
 
-    auto speculative_chunk_size = this->speculative_chunk_size;
-    if (not speculative_chunk_size.has_value()) {
-        speculative_chunk_size = 128;
+    uint32_t speculative_chunk_size_;
+    if (not this->speculative_chunk_size.has_value()) {
+        speculative_chunk_size_ = 128;
+    } else {
+        speculative_chunk_size_ = this->speculative_chunk_size.value();
     }
 
     return detail::speculative_sdpa_decode_multi_core(
@@ -277,6 +279,7 @@ operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::crea
         this->compute_kernel_config,
         this->program_config,
         this->k_chunk_size,
+        speculative_chunk_size_,
         this->share_cache);
 }
 
