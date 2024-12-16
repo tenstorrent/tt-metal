@@ -392,3 +392,27 @@ def run_activation_test_threshold(device, h, w, scalar1, scalar2, ttnn_function,
 @pytest.mark.parametrize("w", [128])
 def test_threshold(device, h, w, value, threshold):
     run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold)
+
+
+def run_activation_unary_test_nhw(device, n, h, w, ttnn_function, pcc=0.99):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((n, h, w), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize(
+    "n,h,w",
+    ((2, 4096, 1536), (2, 333, 1536)),
+)
+def test_sd3_5_medium(device, n, h, w):
+    run_activation_unary_test_nhw(device, n, h, w, ttnn.gelu)

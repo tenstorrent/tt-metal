@@ -238,3 +238,74 @@ def test_silu_llm(
         shard_orientation,
         op,
     )
+
+
+def run_elt_silu(
+    device,
+    batch_size,
+    input_width,
+    grid_size,
+    ncores,
+    shard_strategy,
+    shard_orientation,
+    op,
+    dtype=ttnn.bfloat16,
+):
+    input_shape = [batch_size, input_width]
+    torch.manual_seed(0)
+    input = torch.rand(input_shape, dtype=torch.bfloat16) * 2 - 1
+    input_tensor = ttnn.from_torch(
+        input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, dtype=dtype
+    )
+    # op computation
+    if op == "silu":
+        torch_silu = torch.nn.SiLU()
+        torch_result = torch_silu(input)
+        output_tensor = ttnn.silu(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+    elif op == "relu":
+        torch_relu = torch.nn.ReLU()
+        torch_result = torch_relu(input)
+        output_tensor = ttnn.relu(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # output comparision
+    output_tensor = ttnn.to_memory_config(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_result, output_tensor, 0.999)
+    logger.info(pcc_msg)
+    assert passing
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "batch_size, input_width, ncores, grid_size, shard_strategy, shard_orientation",
+    ((2, 1536, 40, (8, 5), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.ShardOrientation.ROW_MAJOR),),
+)
+@pytest.mark.parametrize("op", ["silu"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_sd3_5_medium(
+    device,
+    batch_size,
+    input_width,
+    grid_size,
+    ncores,
+    shard_strategy,
+    shard_orientation,
+    op,
+    dtype,
+):
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        if shard_strategy == ttnn.ShardStrategy.BLOCK:
+            grid_size = (grid_size[0], 4) if grid_size[1] == 8 else grid_size  # reduce #f core used for N300
+
+    run_elt_silu(
+        device,
+        batch_size,
+        input_width,
+        grid_size,
+        ncores,
+        shard_strategy,
+        shard_orientation,
+        op,
+        dtype,
+    )
