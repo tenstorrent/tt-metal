@@ -673,4 +673,12 @@ void EdmLineFabricOpInterface::teardown_from_host(tt::fabric::TerminationSignal 
     }
 }
 
+void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
+}
+
+void teardown_edm_fabric(distributed::MeshDevice* mesh_device) {
+
+}
+
+
 }  // namespace ttnn::ccl
