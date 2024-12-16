@@ -29,7 +29,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(16, max_tensor_size=2 * 1024 * 1024),
+        "input_spec": gen_sharded_spec_unary(16, max_tensor_size_per_core=36 * 1024, layouts=["TILE_LAYOUT"]),
         "input_a_dtype": [ttnn.int32],
     },
 }
@@ -47,7 +47,7 @@ def mesh_device_fixture():
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    input_shape, X, Y, sharding_strategy, _, _, input_layout = test_vector["input_spec"].values()
+    input_shape, x, y, sharding_strategy, _, _, input_layout = test_vector["input_spec"].values()
     pre_sharded_height = math.prod(input_shape[:-1])
     pre_sharded_width = input_shape[-1]
 
@@ -106,10 +106,46 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.bitwise_and(input_tensor_a, value=scalar, memory_config=sharded_config)
+    result = ttnn.bitwise_and(input_tensor_a, scalar, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(result)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]
+
+
+from tests.sweep_framework.framework.permutations import *
+from tqdm import tqdm
+
+
+def get_stats() -> list:
+    test_name = __file__.split("/")[-1]  #
+    print(f"Running sweep {test_name}")
+    for suite in parameters.keys():
+        print(f"Running suite {suite}: ")
+        device_id = 0
+        device = ttnn.open_device(device_id=device_id)
+        suite_vectors = list(permutations(parameters[suite]))
+        print(len(suite_vectors))
+        passes = 0
+        fails = 0
+        total_valid_cases = 0
+        invalidated = 0
+        for vector in tqdm(suite_vectors):
+            if invalidate_vector(vector)[0]:
+                invalidated += 1
+                continue
+            total_valid_cases += 1
+            try:
+                passed, _ = run(**vector, device=device)
+                if passed[0] != True:
+                    fails += 1
+                else:
+                    passes += 1
+            except Exception as e:
+                print(e)
+                print(vector)
+                break
+        ttnn.close_device(device)
+        return [test_name, fails, passes, (passes / total_valid_cases) * 100]

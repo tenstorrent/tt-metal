@@ -29,7 +29,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(6, max_tensor_size=2 * 1024 * 1024),
+        "input_spec": gen_sharded_spec_unary(6, max_tensor_size_per_core=36 * 1024, layouts=["TILE_LAYOUT"]),
         "shift_bits": list(range(1, 31)),
         "input_a_dtype": [ttnn.int32],
     },
@@ -48,7 +48,7 @@ def mesh_device_fixture():
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    input_shape, X, Y, sharding_strategy, _, _, input_layout = test_vector["input_spec"].values()
+    input_shape, x, y, sharding_strategy, _, _, input_layout = test_vector["input_spec"].values()
     pre_sharded_height = math.prod(input_shape[:-1])
     pre_sharded_width = input_shape[-1]
 
