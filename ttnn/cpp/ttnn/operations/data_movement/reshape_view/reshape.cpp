@@ -22,6 +22,7 @@
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -270,13 +271,12 @@ ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shape, c
         return tensor;
     }
     if (tensor.get_layout() == ttnn::TILE_LAYOUT &&
-        (shape[-1]%tile_first_dim!=0 || shape.rank()==1 || shape[-2]%tile_second_dim!=0 ))
-    {
-        //Correct the output shape to add padding metadata before reshape (view)
-        return tensor.reshape(tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
+        (shape[-1] % tile_first_dim != 0 || shape.rank() == 1 || shape[-2] % tile_second_dim != 0)) {
+        // Correct the output shape to add padding metadata before reshape (view)
+        return ttnn::experimental::view(tensor, tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
     }
-    //Perform a reshape (view)
-    return tensor.reshape(shape);
+    // Perform a reshape (view)
+    return ttnn::experimental::view(tensor, shape);
 }
 
 ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
@@ -340,6 +340,18 @@ ttnn::Tensor ReshapeViewOperation::invoke(
 
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2]:1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2]:1;
+
+    // Just edit shape if shape has a 0 dimension
+    if (tensor.get_logical_volume() == 0) {
+        TT_FATAL(shape.logical_shape().volume() == 0, "Tensor volume is 0, but shape's volume is not");
+        TT_FATAL(
+            (tensor.storage_type() != StorageType::MULTI_DEVICE &&
+             tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
+            "Reshaping a multi-device tensor with 0 volume is not supported");
+        return ttnn::experimental::view(tensor, shape);
+    }
+    TT_FATAL(shape.logical_shape().volume() != 0, "Tensor volume is not 0, but shape volume is 0");
+
     bool this_is_view =
         (tensor_shape[-1] == shape[-1]) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
@@ -349,7 +361,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
           tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
     if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE))) {
             // This case has been allowed in the past though it means introducing padding values to the data
-            return tensor.reshape(shape);
+            return ttnn::experimental::view(tensor, shape);
         }
 
     if (this_is_view) {
@@ -366,7 +378,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
 
         if (tile_tensor_view_reshape_possible) {
             // This case has been allowed in the past though it means introducing padding values to the data
-            return tensor.reshape(shape);
+            return ttnn::experimental::view(tensor, shape);
         }
         //This is a completely incorrect test but it is due to issue 15558
         TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");

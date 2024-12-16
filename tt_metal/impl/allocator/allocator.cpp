@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/allocator/allocator.hpp"
 
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
@@ -169,7 +169,7 @@ BankManager::~BankManager() {
     this->allocator_.reset(nullptr);
 }
 
-BankManager&& BankManager::operator=(BankManager&& that) {
+BankManager&& BankManager::operator=(BankManager&& that) noexcept {
     buffer_type_ = that.buffer_type_;
     allocated_buffers_ = that.allocated_buffers_;
     bank_id_to_bank_offset_ = that.bank_id_to_bank_offset_;

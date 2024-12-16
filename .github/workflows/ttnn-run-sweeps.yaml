@@ -362,6 +362,7 @@ on:
           - data_movement.embedding.embedding_pytorch2
           - data_movement.view.view_pytorch2
           - data_movement.view.view_tt_torch
+          - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 

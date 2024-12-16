@@ -10,7 +10,18 @@
 #include "core/tt_tensor_utils.hpp"
 #include "modules/positional_embeddings.hpp"
 
-TEST(PositionalEmbeddingTest, NonTrainableEmbedding) {
+class PositionalEmbeddingTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(PositionalEmbeddingTest, NonTrainableEmbedding) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();

@@ -18,6 +18,17 @@
 #include "optimizers/optimizer_base.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 
+class NanoGPTTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
 using ttml::autograd::TensorPtr;
 
 using DatasetSample = std::pair<std::span<const uint32_t>, std::span<const uint32_t>>;
@@ -226,13 +237,13 @@ If one of these tests fails, it means one (or more) of the following:
 - loss values changed (regression in ops accuracy)
 */
 
-TEST(NanoGPTTest, AdamW) {
+TEST_F(NanoGPTTest, AdamW) {
     if (should_run_tests()) {
         train_test(/* use_moreh_adamw */ false);
     }
 }
 
-TEST(NanoGPTTest, MorehAdamW) {
+TEST_F(NanoGPTTest, MorehAdamW) {
     if (should_run_tests()) {
         train_test(/* use_moreh_adamw */ true);
     }

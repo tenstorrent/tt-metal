@@ -575,7 +575,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
         }
 
         if (conv_config.override_sharding_config) {
-            TT_FATAL(conv_config.core_grid.has_value(), "Error");
+            TT_FATAL(conv_config.core_grid.has_value(), "Core grid must be provided when overriding sharding config");
             // override parallel config
             auto shard_orientation = shard_layout == TensorMemoryLayout::BLOCK_SHARDED
                                          ? block_shard_orientation
@@ -874,6 +874,11 @@ shard_or_reshard_tensor_if_required<MeshDevice>(
     bool is_mm_conv,
     bool auto_shard,
     bool is_non_tile_mul_width);
+
+std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
+    tt::stl::reflection::operator<<(os, config);
+    return os;
+}
 
 }  // namespace operations
 }  // namespace ttnn

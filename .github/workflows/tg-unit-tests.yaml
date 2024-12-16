@@ -11,7 +11,7 @@ jobs:
     with:
       arch: '["wormhole_b0"]'
     secrets: inherit
-  TG-UMD-tests:
+  TG-Unit-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-unit-tests-impl.yaml

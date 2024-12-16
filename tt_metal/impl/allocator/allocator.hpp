@@ -50,7 +50,7 @@ public:
         uint32_t alignment_bytes,
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false);
-    BankManager&& operator=(BankManager&& that);
+    BankManager&& operator=(BankManager&& that) noexcept;
     ~BankManager();
     uint32_t num_banks() const;
 
