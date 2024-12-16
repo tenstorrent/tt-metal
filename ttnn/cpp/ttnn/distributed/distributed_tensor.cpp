@@ -94,7 +94,9 @@ public:
         return tensor_shards;
     }
 
-    DistributedTensorConfig config() const override { return DistributedTensorConfig{ShardTensor2D(mesh_shape_)}; }
+    DistributedTensorConfig config() const override {
+        return DistributedTensorConfig{ShardTensor2D{ShardMesh{mesh_shape_.num_rows, mesh_shape_.num_cols}}};
+    }
 
 private:
     MeshShape mesh_shape_;
