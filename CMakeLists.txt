@@ -215,7 +215,7 @@ add_compile_options(
     -Wswitch
     -Wuninitialized
     -Wno-unused-parameter
-    -mavx2
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-mavx2>"
     -fPIC
     -fvisibility-inlines-hidden
     -fno-lto # FIXME: This seems to be here for ttnn; it should go to TTNN, then.

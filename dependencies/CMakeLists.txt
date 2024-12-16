@@ -97,3 +97,13 @@ CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG b8f28551cc
 ############################################################################################################################
 
 CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.9.1)
+
+#######################################################################################################################
+# simd-everywhere/simde : https://github.com/simd-everywhere/simde
+#######################################################################################################################
+
+CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
+if(simd-everywhere_ADDED)
+    add_library(simde INTERFACE)
+    target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
+endif()

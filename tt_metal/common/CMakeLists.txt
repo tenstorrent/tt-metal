@@ -22,6 +22,7 @@ target_link_libraries(
         Metalium::Metal::STL
         Metalium::Metal::LLRT
         umd::Firmware
+        simde
 )
 
 target_include_directories(

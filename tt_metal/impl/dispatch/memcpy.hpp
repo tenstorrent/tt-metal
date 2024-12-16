@@ -5,18 +5,26 @@
 #pragma once
 
 #include <cstdint>
-#include <emmintrin.h>
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/tt_stl/aligned_allocator.hpp"
 #include "umd/device/device_api_metal.h"
 
+#if defined(__x86_64__)
+#include <emmintrin.h>
+#endif
+
 namespace tt::tt_metal {
 
+#if defined(__x86_64__)
 static constexpr uint32_t MEMCPY_ALIGNMENT = sizeof(__m128i);
+#else
+static constexpr uint32_t MEMCPY_ALIGNMENT = 16;
+#endif
 
 template <typename T>
 using vector_memcpy_aligned = std::vector<T, tt::stl::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
 
+#if defined(__x86_64__)
 // Ideally would work by cachelines, but the min size is less than that
 // Benchmarked to be approximately 1.4x - 1.8x faster than std::memcpy
 // TODO: Revisit this w/ regard to possibly eliminating min sizes and orphan writes at the end
@@ -83,5 +91,14 @@ static inline void memcpy_to_device(void* __restrict dst, const void* __restrict
         tt_driver_atomics::sfence();
     }
 }
+#else
+template <bool debug_sync = false>
+static inline void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n) {
+    memcpy(dst, src, n);
+    if constexpr (debug_sync) {
+        tt_driver_atomics::sfence();
+    }
+}
+#endif
 
 }  // namespace tt::tt_metal
