@@ -19,7 +19,7 @@ namespace utils {
         case BinaryOpType::ADD: return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
         case BinaryOpType::SUB:
         case BinaryOpType::MUL:
-        // case BinaryOpType::DIV_FAST: will be enabled after #15780 is resolved
+        case BinaryOpType::DIV_FAST:
         case BinaryOpType::RSUB:
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
