@@ -25,6 +25,11 @@ recursive-include tt_metal/hw/firmware module.mk riscv/*
 # Third-party sources
 graft tt_metal/third_party
 recursive-exclude tt_metal/third_party **/doxygen/* **/docs/*
+# Remove unneeded third party files
+prune tt_metal/third_party/taskflow
+prune tt_metal/third_party/lfs/
+prune tt_metal/third_party/pybind11/tests
+prune tt_metal/third_party/pybind11/docs
 
 # BUDA-Eager sources
 recursive-include tt_eager/ *.py *.hpp *.cpp module.mk
@@ -37,9 +42,10 @@ prune tt_metal/**/.git/
 prune tt_metal/**/.github/
 prune docs/doxygen_build/
 prune docs/build/
-# Remove unneeded third party files
-prune tt_metal/third_party/taskflow
-prune tt_metal/third_party/pybind11/tests
+exclude *.pdf *.png *.jpeg *.jpg *.svg *.html *.css
+
+# Remove programming examples
+prune tt_metal/programming_examples/
 exclude .pre-commit-config.yaml
 
 # Some sources we want to exclude and not advertise
