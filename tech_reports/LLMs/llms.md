@@ -1447,9 +1447,7 @@ in0_block_w=1,
 out_subblock_h=1, # Must be divisible by per_core_M
 out_subblock_w=1, # Must be divisible by per_core_N
 ```
-- `in0_block_w` should divide evenly into K. Higher is better. 
-- `out_subblock_h` and `out_subblock_w` should divide evenly into M and N respectively. Higher is better. 
-  - When FP32 accumulate is enabled, `out_subblock_h * out_subblock_w` should be <= 4. Otherwise, `out_subblock_h * out_subblock_w` should be <= 8.
+`in0_block_w` should divide evenly into K. Higher is better. `out_subblock_h` and `out_subblock_w` should divide evenly into M and N respectively. Higher is better. The product `out_subblock_h * out_subblock_w` must be less than or equal to the size of DST, which depends on the HW architecture and whether FP32 accumulation is enabled. For example, Wormhole DST has 8 tiles when accumulating in BF16 and 4 tiles when accumulating in FP32.
 
 ```python
 per_core_M=math.ceil(M / 32 / cores_y),  # M / TILE_HEIGHT / Grid_Size
@@ -1497,7 +1495,6 @@ output = ttnn.linear(
   activation,
   weights,
   compute_kernel_config=compute_kernel_config,
-  core_grid=None,
   dtype=ttnn.bfloat16,
   program_config=matmul_program_config,
   memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
