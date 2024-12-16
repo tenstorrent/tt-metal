@@ -188,7 +188,6 @@ def test_sharded_rm(
     assert passing
 
 
-@skip_for_blackhole("BH LLK issue with untilize, #14594")
 @pytest.mark.parametrize("H, num_cores", [[100352, 98], [25088, 98]])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
@@ -264,7 +263,6 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, 
     assert passing
 
 
-@skip_for_blackhole("Mismatching on BH, see #14609")
 @pytest.mark.parametrize("H, num_cores", [[25088, 98]])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defaults):
@@ -1702,7 +1700,8 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
         "unbatched_16_shape_out_interleaved",
     ],
 )
-@skip_for_blackhole("BH Issue with untilize LLK, see #14594")
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_width_sharded_untilize_with_unpadding(
     shape, output_H, in_sharded, out_sharded, dtype, device, function_level_defaults
@@ -1773,7 +1772,6 @@ def test_width_sharded_untilize_with_unpadding(
     assert passing
 
 
-@skip_for_blackhole("BH LLK Issue with tilize, #14609")
 @pytest.mark.parametrize("input_shape", [[8, 1, 49, 2048], [1, 1, 8, 2048], [16, 1, 49, 2048], [1, 1, 16, 2048]])
 @pytest.mark.parametrize("sharding_config", [(True, True), (False, False)], ids=["both_sharded", "both_interleaved"])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
