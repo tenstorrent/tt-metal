@@ -420,6 +420,19 @@ class EthTunnelerKernel : public FDKernel {
         TT_ASSERT(false, "Couldn't find router kernel");
         return queue_id;
     }
+    uint32_t GetRouterId(EthRouterKernel *k, bool upstream) {
+        std::vector<FDKernel *> &search = (upstream)? upstream_kernels : downstream_kernels;
+        uint32_t router_id = 0;
+        for (auto kernel : search) {
+            if (auto router_kernel = dynamic_cast<EthRouterKernel *>(kernel)) {
+                if (k == router_kernel)
+                    return router_id;
+                router_id++;
+            }
+        }
+        TT_ASSERT(false, "Couldn't find router kernel");
+        return router_id;
+    }
 
    private:
     eth_tunneler_config_t config;

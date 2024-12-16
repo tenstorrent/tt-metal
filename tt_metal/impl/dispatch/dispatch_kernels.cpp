@@ -243,7 +243,10 @@ void PrefetchKernel::GenerateStaticConfigs() {
         this->logical_core = dispatch_core_manager::instance().prefetcher_core(servicing_device_id, channel, cq_id);
 
         this->config.downstream_cb_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        this->config.downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(device->num_hw_cqs());
+        if (tt::Cluster::instance().is_galaxy_cluster()) // TODO: whys is this hard-coded for galaxy?
+            this->config.downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(1);
+        else
+            this->config.downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(device->num_hw_cqs());
 
         this->config.pcie_base = issue_queue_start_addr;
         this->config.pcie_size = issue_queue_size;
@@ -264,8 +267,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
         this->config.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program,
             this->logical_core,
-            my_dispatch_constants.mux_buffer_pages(device->num_hw_cqs()),
-            GetCoreType());  // TODO: Changes for Galaxy
+            this->config.downstream_cb_pages.value(),
+            GetCoreType());
         tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType()); // TODO: what is this third semaphore for?
         this->config.cmddat_q_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         this->config.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
@@ -414,7 +417,11 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         this->config.split_dispatch_page_preamble_size = 0;
         this->config.split_prefetch = true;
-        this->config.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device->num_hw_cqs());
+        // TODO: why is this hard-coded to 1 CQ on Galaxy?
+        if (tt::Cluster::instance().is_galaxy_cluster())
+            this->config.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(1);
+        else
+            this->config.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device->num_hw_cqs());
 
         this->config.packed_write_max_unicast_sub_cmds =
             device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
@@ -606,7 +613,11 @@ void EthRouterKernel::GenerateStaticConfigs() {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->servicing_device_id); // TODO: can be mmio
         this->logical_core = dispatch_core_manager::instance().mux_core(this->servicing_device_id, channel, placement_cq_id);
         this->config.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
-        this->config.rx_queue_size_words = my_dispatch_constants.mux_buffer_size(device->num_hw_cqs()) >> 4;
+        // TODO: why is this hard-coded NUM_CQS=1 for galaxy?
+        if (tt::Cluster::instance().is_galaxy_cluster())
+            this->config.rx_queue_size_words = my_dispatch_constants.mux_buffer_size(1) >> 4;
+        else
+            this->config.rx_queue_size_words = my_dispatch_constants.mux_buffer_size(device->num_hw_cqs()) >> 4;
 
         this->config.kernel_status_buf_addr_arg = 0;
         this->config.kernel_status_buf_size_bytes = 0;
@@ -721,7 +732,9 @@ void PrefetchKernel::GenerateDependentConfigs() {
         this->config.downstream_logical_core = router_kernel->GetLogicalCore();
         this->config.downstream_s_logical_core = UNUSED_LOGICAL_CORE_ADJUSTED;
         uint32_t router_idx = router_kernel->GetUpstreamPort(this); // Need the port that this connects to downstream
-        this->config.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base() + my_dispatch_constants.mux_buffer_size(device->num_hw_cqs()) * router_idx;
+        this->config.downstream_cb_base =
+            (router_kernel->GetConfig().rx_queue_start_addr_words.value() << 4) +
+            (router_kernel->GetConfig().rx_queue_size_words.value() << 4) * router_idx;
         this->config.downstream_cb_sem_id = router_kernel->GetConfig().input_packetize_local_sem[router_idx];
         this->config.downstream_dispatch_s_cb_sem_id = 0; // No downstream DISPATCH_S in this case
     } else if (this->config.is_d_variant.value()) {
@@ -928,7 +941,7 @@ void DemuxKernel::GenerateDependentConfigs() {
         this->config.remote_rx_queue_id = us->GetDownstreamPort(this) + 1; // TODO: can this be cleaned up?
         // TODO: why is just this one different? Just match previous implementation for now
         if (us->GetDownstreamPort(this) == 1)
-            this->config.endpoint_id_start_index = this->config.endpoint_id_start_index.value() + 2;
+            this->config.endpoint_id_start_index = this->config.endpoint_id_start_index.value() + this->downstream_kernels.size();
     } else {
         TT_FATAL(false, "Unexpected kernel type upstream of DEMUX");
     }
@@ -959,8 +972,14 @@ void DemuxKernel::GenerateDependentConfigs() {
             this->config.remote_tx_queue_size_words[idx] = 0x1000; // TODO: hard-coded on previous implementation
             // Match previous implementation where downstream demux has output_depacketize fields zeroed out. TODO: can remove this later
             this->config.output_depacketize_downstream_sem_id[idx] = 0;
-            uint32_t dest_map_array[4] = {0, 0, 1, 1};
-            uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+            uint64_t dest_endpoint_output_map;
+            if (device->num_hw_cqs() == 1) {
+                uint32_t dest_map_array[4] = {0, 0, 1, 1};  // TODO: how to set these generically? Currently just matching the hard-coded previous implementation
+                dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+            } else {
+                uint32_t dest_map_array[8] = {0, 0, 0, 0, 1, 1, 1, 1};
+                dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 8);
+            }
             this->config.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
             this->config.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
         } else {
@@ -1126,7 +1145,7 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         this->config.inner_stop_mux_d_bypass = 0;
         // For certain chips in a tunnel (between first stop and end of tunnel, not including), we do a bypass
         if (this->config.vc_count.value() > (device->num_hw_cqs() + 1) && this->config.vc_count.value() < (4 * device->num_hw_cqs() + 1)) {
-            this->config.inner_stop_mux_d_bypass = (return_vc_id << 24) | ((tunneler_kernel->GetConfig().vc_count.value() * 2 - 3) << 16) | (paired_physical_coord.y << 8) | (paired_physical_coord.x);
+            this->config.inner_stop_mux_d_bypass = (return_vc_id << 24) | (((tunneler_kernel->GetConfig().vc_count.value() - device->num_hw_cqs()) * 2 - 1) << 16) | (paired_physical_coord.y << 8) | (paired_physical_coord.x);
         }
     }
 }
@@ -1141,13 +1160,13 @@ void EthRouterKernel::GenerateDependentConfigs() {
         auto tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->downstream_kernels[0]);
         TT_ASSERT(tunneler_kernel);
 
-        uint32_t router_id = 0; // TODO: This needs to change for multi-mux
+        uint32_t router_id = tunneler_kernel->GetRouterId(this, true);
         for (int idx = 0; idx < this->upstream_kernels.size(); idx++) {
             auto prefetch_kernel = dynamic_cast<PrefetchKernel *>(this->upstream_kernels[idx]);
             TT_ASSERT(prefetch_kernel);
             this->config.remote_tx_x[idx] = tunneler_kernel->GetPhysicalCore().x;
             this->config.remote_tx_y[idx] = tunneler_kernel->GetPhysicalCore().y;
-            this->config.remote_tx_queue_id[idx] = idx; // TODO: needs to be fixed for galaxy
+            this->config.remote_tx_queue_id[idx] = idx + MAX_SWITCH_FAN_IN * router_id;
             this->config.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
             this->config.remote_tx_queue_start_addr_words[idx] =
                 tunneler_kernel->GetConfig().in_queue_start_addr_words.value() +
