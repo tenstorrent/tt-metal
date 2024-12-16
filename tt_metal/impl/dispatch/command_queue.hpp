@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "buffers/buffer.hpp"
 #include "common/env_lib.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -584,29 +585,25 @@ private:
     void enqueue_read_buffer(
         std::shared_ptr<Buffer>& buffer,
         void* dst,
-        const size_t offset,
-        const size_t size,
+        const BufferRegion region,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids={});
     void enqueue_read_buffer(
         Buffer& buffer,
         void* dst,
-        const size_t offset,
-        const size_t size,
+        const BufferRegion region,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids={});
     void enqueue_write_buffer(
         std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
         HostDataType src,
-        const size_t offset,
-        const size_t size,
+        const BufferRegion region,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids={});
     void enqueue_write_buffer(
         Buffer& buffer,
         const void* src,
-        const size_t offset,
-        const size_t size,
+        const BufferRegion region,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids={});
     void enqueue_program(Program& program, bool blocking);
@@ -626,15 +623,13 @@ private:
         CommandQueue& cq,
         std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
         void* dst,
-        const size_t offset,
-        const size_t size,
+        const BufferRegion region,
         bool blocking);
     friend void EnqueueWriteBufferImpl(
         CommandQueue& cq,
         std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
         HostDataType src,
-        const size_t offset,
-        const size_t size,
+        const BufferRegion region,
         bool blocking);
     friend void EnqueueGetBufferAddrImpl(void* dst_buf_addr, const Buffer* buffer);
     friend void EnqueueRecordEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
@@ -656,8 +651,7 @@ struct CommandInterface {
     std::optional<void*> dst;
     std::optional<std::shared_ptr<Event>> event;
     std::optional<uint32_t> trace_id;
-    std::optional<size_t> offset;
-    std::optional<size_t> size;
+    std::optional<BufferRegion> region;
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };
 

@@ -10,6 +10,7 @@
 
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/bfloat16.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 #include "impl/buffers/buffer_constants.hpp"
 #include "tt_metal/tt_stl/overloaded.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -947,7 +948,8 @@ void memcpy(
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
     }
-    EnqueueReadSubBuffer(queue, src.device_buffer(), dst, offset, size, blocking);
+    const BufferRegion region(offset, size);
+    EnqueueReadSubBuffer(queue, src.device_buffer(), dst, region, blocking);
 }
 
 void memcpy(void* dst, const Tensor& src, const bool blocking) {
@@ -977,7 +979,8 @@ void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const size_t offs
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
     }
-    EnqueueWriteBuffer(queue, dst.device_buffer(), src, false);
+    const BufferRegion region(offset, size);
+    EnqueueWriteSubBuffer(queue, dst.device_buffer(), src, region, false);
 }
 
 void memcpy(Tensor& dst, const void* src) { memcpy(dst.device()->command_queue(), dst, src); }
