@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 #include "umd/device/tt_xy_pair.h"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "tt_metal/tt_stl/span.hpp"

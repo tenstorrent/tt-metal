@@ -7,7 +7,7 @@
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;
@@ -37,8 +37,8 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 template <auto HostFunction, typename DeviceFunction, typename... Args>
 bool run_test(
     const tt::tt_metal::LegacyShape& shape, const DeviceFunction& device_function, Device* device, Args... args) {
-    auto input_tensor_a = ttnn::numpy::random::random(shape, DataType::BFLOAT16);
-    auto input_tensor_b = ttnn::numpy::random::random(shape, DataType::BFLOAT16);
+    auto input_tensor_a = ttnn::random::random(shape, DataType::BFLOAT16);
+    auto input_tensor_b = ttnn::random::random(shape, DataType::BFLOAT16);
 
     auto host_output = HostFunction(input_tensor_a, input_tensor_b);
     auto device_output =
@@ -46,7 +46,7 @@ bool run_test(
             .cpu()
             .to(Layout::ROW_MAJOR);
 
-    return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
+    return ttnn::allclose<bfloat16>(host_output, device_output, args...);
 }
 
 int main() {
@@ -114,7 +114,7 @@ int main() {
 
     // Allocate a tensor to show that the addresses aren't cached
     auto input_tensor =
-        ttnn::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
+        ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
 
     run_binary_ops();
 

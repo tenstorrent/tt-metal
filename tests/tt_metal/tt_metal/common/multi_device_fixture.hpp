@@ -8,7 +8,7 @@
 
 #include "host_api.hpp"
 #include "dispatch_fixture.hpp"
-#include "umd/device/tt_cluster_descriptor_types.h"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 
@@ -38,7 +38,7 @@ protected:
                 ids.push_back(id);
             }
 
-            const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+            const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
             tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
             this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         } else {

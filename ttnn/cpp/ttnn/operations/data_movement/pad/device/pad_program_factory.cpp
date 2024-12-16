@@ -6,10 +6,12 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/math.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_log.h"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -1029,6 +1031,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     auto stick_size_padded = W_padded * a.element_size();
     auto stick_size_padded_front = front_pad[-1] * a.element_size();
     auto stick_size_padded_end = stick_size_padded - stick_size - stick_size_padded_front;
+    uint32_t stick_size_padded_aligned = align(stick_size_padded, hal.get_alignment(HalMemType::L1));
     uint32_t row_major_min_bytes = 16;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -1050,24 +1053,31 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
          num_sticks_padded_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
 
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     auto num_sticks = num_sticks_padded_per_core_group_1 > num_sticks_padded_per_core_group_2
                           ? num_sticks_padded_per_core_group_1
                           : num_sticks_padded_per_core_group_2;
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_sticks * stick_size_padded, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, stick_size_padded);
+        tt::tt_metal::CircularBufferConfig(num_sticks * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, stick_size_padded_aligned);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
-    if (not_pad_by_zero) {
-        uint32_t src1_cb_index = 1;
-        tt::tt_metal::CircularBufferConfig cb_src1_config =
-            tt::tt_metal::CircularBufferConfig(row_major_min_bytes, {{src1_cb_index, cb_data_format}})
-                .set_page_size(src1_cb_index, row_major_min_bytes);
-        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, stick_size_padded_aligned);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+
+    if (stick_size_padded_front != 0) {
+        uint32_t src2_cb_index = tt::CBIndex::c_2;
+        tt::tt_metal::CircularBufferConfig cb_src2_config =
+            tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src2_cb_index, cb_data_format}})
+                .set_page_size(src2_cb_index, stick_size_padded_aligned);
+        auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
     }
 
     Buffer* src0_buffer = a.buffer();
@@ -1104,13 +1114,15 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         (std::uint32_t)(stick_size_padded_end / row_major_min_bytes),
         (std::uint32_t)(stick_size_padded / row_major_min_bytes),
         (std::uint32_t)src_stick_size_is_power_of_two,
-        (std::uint32_t)src_stick_size_is_power_of_two ? src_log2_stick_size : stick_size};
+        (std::uint32_t)src_stick_size_is_power_of_two ? src_log2_stick_size : stick_size,
+        (std::uint32_t)stick_size_padded_aligned};
     std::vector<uint32_t> writer_ct_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)dst_is_dram,
         (std::uint32_t)stick_size_padded,
         (std::uint32_t)dst_stick_size_is_power_of_two,
-        (std::uint32_t)dst_stick_size_is_power_of_two ? dst_log2_stick_size : stick_size_padded};
+        (std::uint32_t)dst_stick_size_is_power_of_two ? dst_log2_stick_size : stick_size_padded,
+        (std::uint32_t)stick_size_padded_aligned};
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -1387,7 +1399,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     return ret_val;
 }
 
-operation::ProgramWithCallbacks pad_rm_sharded(
+operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     const Tensor& a,
     Tensor& output,
     const tt::tt_metal::LegacyShape& output_tensor_shape,
@@ -1565,4 +1577,141 @@ operation::ProgramWithCallbacks pad_rm_sharded(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
+operation::ProgramWithCallbacks pad_rm_sharded_width_only(
+    const Tensor& input_tensor,
+    Tensor& output,
+    const tt::tt_metal::LegacyShape& output_tensor_shape,
+    const ttnn::SimpleShape& input_tensor_start,
+    float pad_value) {
+    Program program{};
+
+    TT_ASSERT(
+        output.shard_spec().has_value() and output.shard_spec()->shape[1] == output_tensor_shape[-1],
+        "ttnn.pad: pad_rm_sharded_width_only expects sharded output parameter with shard width equal to the width of "
+        "the requested output tensor. Ensure pad_impl is calling this program factory correctly.");
+
+    uint32_t W = input_tensor.logical_shape()[-1];
+    uint32_t W_padded = output_tensor_shape[3];
+
+    auto unpadded_stick_bytes = W * input_tensor.element_size();
+    auto padded_stick_bytes = W_padded * input_tensor.element_size();
+
+    Device *device = input_tensor.device();
+
+    // input shard spec
+    auto input_shard_spec = input_tensor.shard_spec().value();
+    uint32_t shard_height_unpadded = input_shard_spec.shape[0];
+
+    // output shard spec
+    auto shard_spec_padded = output.shard_spec().value();
+    uint32_t shard_height_padded = shard_spec_padded.shape[0];
+
+    auto& all_cores_padded = shard_spec_padded.grid;
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    uint32_t input_shard_cb_index = tt::CBIndex::c_0;
+    tt::tt_metal::CircularBufferConfig input_shard_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            shard_height_unpadded * unpadded_stick_bytes, {{input_shard_cb_index, input_cb_data_format}})
+            .set_page_size(input_shard_cb_index, unpadded_stick_bytes)
+            .set_globally_allocated_address(*input_tensor.buffer());
+    auto input_shard_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, input_shard_cb_config);
+
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    uint32_t output_shard_cb_index = tt::CBIndex::c_16;
+    tt::tt_metal::CircularBufferConfig output_shard_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            shard_height_padded * padded_stick_bytes, {{output_shard_cb_index, output_cb_data_format}})
+            .set_page_size(output_shard_cb_index, padded_stick_bytes)
+            .set_globally_allocated_address(*output.buffer());
+    auto output_shard_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, output_shard_cb_config);
+
+    // construct const buffer with the pad_value
+    tt::DataFormat pad_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    uint32_t pad_val_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_pad_val_config =
+        tt::tt_metal::CircularBufferConfig(padded_stick_bytes, {{pad_val_cb_index, pad_val_cb_data_format}})
+            .set_page_size(pad_val_cb_index, padded_stick_bytes);
+    auto pad_val_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_pad_val_config);
+
+    uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
+
+    uint32_t padding_value_as_u32;
+    if (input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16) {
+        uint16_t bfloat_pad_value_bits = bfloat16(pad_value).to_uint16();
+        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
+    } else if (input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32) {
+        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
+    } else {
+        TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
+    }
+
+    // FIXME: assumes that this was sharded using DRAM alignment so that gaps are left in the tensor.
+    // if this changes, we should change the stick step to be 16B (L1 alignment).
+    auto dram_alignment_bytes = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    uint32_t padded_stick_step = tt::round_up(
+        padded_stick_bytes, dram_alignment_bytes);  // round padded_stick bytes to a multiple of dram_alignment_bytes
+    uint32_t unpadded_stick_step = tt::round_up(
+        unpadded_stick_bytes,
+        dram_alignment_bytes);  // round unpadded_stick bytes to a multiple of dram_alignment_bytes
+
+    std::vector<uint32_t> reader_ct_args = {
+        unpadded_stick_bytes,
+        padded_stick_bytes,
+        shard_height_unpadded,
+        shard_height_padded,
+        W_padding_front_bytes,
+        input_shard_cb_index,
+        output_shard_cb_index,
+        unpadded_stick_step,
+        padded_stick_step};
+
+    std::vector<uint32_t> writer_ct_args = {
+        padded_stick_bytes,
+        shard_height_padded,
+        padding_value_as_u32,
+        output.element_size(),
+        output_shard_cb_index,
+        pad_val_cb_index,
+        padded_stick_step};
+
+    KernelHandle reader_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded_stickwise.cpp",
+        all_cores_padded,
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+
+    KernelHandle writer_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded_stickwise.cpp",
+        all_cores_padded,
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+
+    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores_padded, {});
+    tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores_padded, {});
+
+    auto override_runtime_args_callback = [
+            input_shard_cb,
+            output_shard_cb
+        ]
+    (
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
+    ) {
+        auto input_buffer = input_tensors.at(0).buffer();
+        auto output_buffer = output_tensors.at(0).buffer();
+
+        UpdateDynamicCircularBufferAddress(program, input_shard_cb, *input_buffer);
+        UpdateDynamicCircularBufferAddress(program, output_shard_cb, *output_buffer);
+    };
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+}
 }  // namespace ttnn::operations::data_movement::detail

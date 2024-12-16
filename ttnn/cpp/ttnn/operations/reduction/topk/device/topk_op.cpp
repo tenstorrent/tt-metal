@@ -5,9 +5,6 @@
 #include "topk_op.hpp"
 #include "topk_program_factory.hpp"
 
-// FIXME: ARCH_NAME specific include
-#include "tensix_types.h"  // L1_SIZE
-
 namespace topk_utils {
 
 static inline bool verify_available_cores(
@@ -16,6 +13,7 @@ static inline bool verify_available_cores(
     uint16_t max_dim,
     CoreCoord grid,
     uint16_t k,
+    const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
     const auto max_cores = grid.y - 1;  // reserve one core for the gather - switch to grid.x as it allows for more
@@ -30,7 +28,7 @@ static inline bool verify_available_cores(
             (split_size / tt::constants::TILE_WIDTH) *
             (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
                                                   // as a matching set of indices, is processed by a core
-        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < L1_SIZE && num_cores > 1) {
+        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < l1_size && num_cores > 1) {
             return true;
         }
     }
@@ -79,6 +77,7 @@ void TopK::validate_with_output_tensors(
                 input_shape[this->dim] / 2,
                 device->compute_with_storage_grid_size(),
                 this->k,
+                device->l1_size_per_core(),
                 value_tile_size,
                 index_tile_size),
             "Not enough cores available to run topk operation");

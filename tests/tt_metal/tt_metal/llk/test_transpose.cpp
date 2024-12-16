@@ -108,9 +108,6 @@ void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& 
     std::shared_ptr<tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    CoreCoord dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-    CoreCoord dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
     uint32_t src0_cb_index = 0;
     uint32_t num_buffer_tiles = 32;
     tt_metal::CircularBufferConfig cb_src0_config =
@@ -161,8 +158,8 @@ void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& 
         core,
         {
             dram_buffer_src_addr,
-            (std::uint32_t)dram_src_noc_xy.x,
-            (std::uint32_t)dram_src_noc_xy.y,
+            (uint32_t)0,  // unused to maintain compat
+            (uint32_t)0,  // unused to maintain compat
             num_tensor_tiles,
             NC,
             Ht,
@@ -175,7 +172,9 @@ void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& 
         program,
         unary_writer_kernel,
         core,
-        {dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tensor_tiles});
+        {dram_buffer_dst_addr,
+         (uint32_t)0,  // unused to maintain compat
+         num_tensor_tiles});
 
     auto seed = std::chrono::system_clock::now().time_since_epoch().count();
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);

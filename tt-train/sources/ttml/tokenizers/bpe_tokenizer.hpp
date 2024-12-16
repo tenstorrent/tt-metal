@@ -21,7 +21,7 @@ public:
 
     [[nodiscard]] std::vector<uint32_t> encode(const std::string& text) const override;
     [[nodiscard]] std::string decode(const std::vector<uint32_t>& tokens) const override;
-    [[nodiscard]] uint32_t get_vocab_size() const;
+    [[nodiscard]] uint32_t get_vocab_size() const override;
 
 private:
     class BPETokenizerImpl;

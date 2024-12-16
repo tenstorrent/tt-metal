@@ -11,14 +11,12 @@
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-using std::vector;
-using tt::tt_metal::Tensor;
-using namespace tt::tt_metal;
 
-static vector<vector<bfloat16>> ref_weight_in = {
+static std::vector<std::vector<bfloat16>> ref_weight_in = {
     {
         16140, 16151, 16183, 16216, 16154, 16219, 16139, 16216, 16088, 16159, 16165, 16068, 16096, 16024, 16228, 15720,
         16246, 16011, 16068, 16116, 16202, 16207, 16135, 16117, 16145, 16073, 16236, 16214, 15761, 16044, 15794, 16165,
@@ -246,7 +244,7 @@ static vector<vector<bfloat16>> ref_weight_in = {
     }
 
 };
-static vector<vector<bfloat16>> ref_weight_out = {
+static std::vector<std::vector<bfloat16>> ref_weight_out = {
     {16140, 16151, 16183, 16216, 16154, 16219, 16139, 16216, 16088, 16156, 15971, 16157, 16069, 16241, 16231, 16174,
      16102, 16056, 16250, 15716, 16154, 16102, 16189, 15523, 15648, 16098, 16016, 15972, 16228, 16243, 16174, 16100,
      16101, 16216, 16250, 16179, 16206, 16137, 16180, 16101, 15821, 15819, 16235, 16052, 16182, 15912, 16128, 16159,
@@ -419,9 +417,11 @@ static vector<vector<bfloat16>> ref_weight_out = {
         15832, 15895, 16234, 16062, 16231, 16173, 16122, 16016, 16187, 15560, 16229, 16046, 16243, 16219, 15849, 16135,
     }};
 
-static vector<tt::tt_metal::Array4D> weight_tensor_shape = {{8, 8, 3, 3}, {10, 10, 3, 3}, {12, 8, 3, 3}, {8, 15, 3, 3}};
-static vector<tt::tt_metal::Array4D> bias_tensor_shape = {{1, 1, 1, 32}, {1, 1, 1, 60}, {12, 1, 1, 320}, {8, 1, 1, 48}};
-static vector<uint32_t> shards = {8, 3, 5, 4};
+static std::vector<tt::tt_metal::Array4D> weight_tensor_shape = {
+    {8, 8, 3, 3}, {10, 10, 3, 3}, {12, 8, 3, 3}, {8, 15, 3, 3}};
+static std::vector<tt::tt_metal::Array4D> bias_tensor_shape = {
+    {1, 1, 1, 32}, {1, 1, 1, 60}, {12, 1, 1, 320}, {8, 1, 1, 48}};
+static std::vector<uint32_t> shards = {8, 3, 5, 4};
 
 template <typename T>
 static uint32_t compare_out_with_ref(const owned_buffer::Buffer<bfloat16>& out_buf, T& ref) {
@@ -447,7 +447,7 @@ static uint32_t compare_out_with_ref(const owned_buffer::Buffer<bfloat16>& out_b
 static void test_convert_conv_weight_tensor_to_tiled_layout_block_sharded() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     for (auto i = 0; i < weight_tensor_shape.size(); i++) {
-        auto input_tensor = ttnn::numpy::zeros(weight_tensor_shape[i]);
+        auto input_tensor = ttnn::zeros(weight_tensor_shape[i]);
         auto input_buffer = owned_buffer::get_as<bfloat16>(input_tensor);
         for (auto j = 0; j < input_buffer.size(); j++) {
             input_buffer[j] = ref_weight_in[i][j];
@@ -463,8 +463,7 @@ static void test_convert_conv_weight_tensor_to_tiled_layout_block_sharded() {
 static void test_convert_conv_bias_tensor_to_tiled_layout_block_sharded() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     for (auto i = 0; i < bias_tensor_shape.size(); i++) {
-        auto input_tensor =
-            ttnn::numpy::random::random(bias_tensor_shape[i], DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
+        auto input_tensor = ttnn::random::random(bias_tensor_shape[i], DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
         auto input_buffer = owned_buffer::get_as<bfloat16>(input_tensor);
         auto output_tensor =
             convert_conv_bias_tensor_to_tiled_layout_block_sharded(input_tensor, shards[i], DataType::BFLOAT16);

@@ -153,6 +153,7 @@ from ttnn.types import (
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
     MeshShape,
+    MeshOffset,
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,
@@ -186,7 +187,10 @@ from ttnn.device import (
     format_output_tensor,
     pad_to_tile_shape,
     SubDevice,
+    SubDeviceId,
     SubDeviceManagerId,
+    DefaultQueueId,
+    init_device_compute_kernel_config,
 )
 
 from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
@@ -207,6 +211,7 @@ from ttnn.core import (
     load_memory_config,
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
+    num_cores_to_corerangeset_in_subcoregrids,
 )
 
 import ttnn.reflection

@@ -35,9 +35,6 @@ tt_metal::Program generate_eltwise_unary_program(Device* device) {
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig src_cb_config =
@@ -99,9 +96,9 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device* devi
         Buffer out(device, NUM_TILES * 2048, 2048, BufferType::DRAM);
 
         // Absolutely disgusting way to query for the kernel I want to set runtime args for... needs to be cleaned up
-        const KernelGroup* kernel_group = program.kernels_on_core(worker_core, CoreType::WORKER);
-        SetRuntimeArgs(program, kernel_group->riscv0_id.value(), worker_core, {out.address(), 0, 0, NUM_TILES});
-        SetRuntimeArgs(program, kernel_group->riscv1_id.value(), worker_core, {buf.address(), 0, 0, NUM_TILES});
+        const KernelGroup *kernel_group = program.kernels_on_core(worker_core, CoreType::WORKER);
+        SetRuntimeArgs(program, kernel_group->riscv0_id.value(), worker_core, {out.address(), 0, NUM_TILES});
+        SetRuntimeArgs(program, kernel_group->riscv1_id.value(), worker_core, {buf.address(), 0, NUM_TILES});
 
         EnqueueWriteBuffer(cq, std::ref(buf), inp, false);
         EnqueueProgram(cq, program, false);

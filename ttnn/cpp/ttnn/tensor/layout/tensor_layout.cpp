@@ -166,7 +166,7 @@ size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::SimpleShape& s
     const auto width_remainder = physical_size.width() % page_shape.width();
     const auto height_remainder = physical_size.height() % page_shape.height();
     TT_FATAL(
-        width_remainder == 0 && height_remainder == 0,
+        (width_remainder == 0 && height_remainder == 0) || ((physical_size.width() * physical_size.height()) == 0),
         "Physical size {} must be multiple of page size {}",
         physical_size,
         page_shape);

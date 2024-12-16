@@ -8,7 +8,7 @@
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "impl/device/device.hpp"
-#include "umd/device/tt_cluster_descriptor_types.h"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -44,7 +44,7 @@ protected:
 
     void create_device(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
         const chip_id_t device_id = 0;
-        const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
         this->device_ =
             tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
     }
@@ -88,7 +88,7 @@ protected:
     }
 
     void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
         const chip_id_t mmio_device_id = 0;
         this->reserved_devices_ = tt::tt_metal::detail::CreateDevices(
             {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
@@ -143,7 +143,7 @@ protected:
             chip_ids.push_back(id);
         }
 
-        const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
         reserved_devices_ = tt::tt_metal::detail::CreateDevices(
             chip_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         for (const auto& [id, device] : reserved_devices_) {

@@ -10,7 +10,7 @@
 #include <tuple>
 #include <map>
 
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "impl/device/device.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "tt_backend_api_types.hpp"
@@ -287,7 +287,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-    } catch (std::exception e) {
+    } catch (std::exception& e) {
         test_fixture.TearDown();
         return -1;
     }

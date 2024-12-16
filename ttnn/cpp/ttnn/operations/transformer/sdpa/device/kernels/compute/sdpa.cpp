@@ -336,7 +336,7 @@ void MAIN {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t St = get_compile_time_arg_val(3);
+    constexpr uint32_t Skt = get_compile_time_arg_val(3);
     constexpr uint32_t DHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
@@ -360,6 +360,7 @@ void MAIN {
 
     constexpr uint32_t is_causal = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(24) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -368,6 +369,7 @@ void MAIN {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
+    const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -413,13 +415,16 @@ void MAIN {
 #endif
 
                 // Get Q chunk
-                const uint32_t q_low_idx =
+                if constexpr (is_chunked) {
+                    q_chunk = chunked_q_chunk_offset + q_chunk;
+                }
+                uint32_t q_low_idx =
                     q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                 uint32_t q_high_idx;
                 if constexpr (is_causal) {
                     q_high_idx = q_low_idx + Sq_chunk_t;
                 } else {
-                    q_high_idx = St;
+                    q_high_idx = Skt;
                 }
                 cb_wait_front(cb_q_in, q_chunk_tiles);
 
@@ -510,6 +515,7 @@ void MAIN {
                         out_subblock_h,
                         out_subblock_w,
                         false /*transpose*/);
+
                     reconfig_data_format_srca(cb_out_im);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "tt_metal/graph/graph_tracking.hpp"
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 #include <mutex>

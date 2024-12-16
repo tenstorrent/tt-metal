@@ -257,7 +257,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
         mesh_shape=ttnn.MeshShape(2, 2),
         dispatch_core_config=dispatch_core_config,
         **device_params,
-        offset=(0, 1),
+        offset=ttnn.MeshOffset(0, 1),
         mesh_type=ttnn.MeshType.Ring,
     )
 

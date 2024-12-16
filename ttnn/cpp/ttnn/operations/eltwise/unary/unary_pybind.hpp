@@ -976,91 +976,6 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
-void bind_power(py::module& module, const unary_operation_t& operation, const std::string& note = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            exponent (float, int): the exponent value.
-
-        Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes, layouts, and ranks:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
-                 - 2, 3, 4
-
-            {2}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> exponent = 2
-            >>> output = {1}(tensor, exponent)
-        )doc",
-        ttnn::pow.base_name(),
-        ttnn::pow.python_fully_qualified_name(),
-        note);
-
-    bind_registered_operation(
-        module,
-        ttnn::pow,
-        doc,
-        // integer exponent
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               uint32_t exponent,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor,
-               const uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
-            },
-            py::arg("input_tensor"),
-            py::arg("exponent"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
-
-            // float exponent
-            ttnn::pybind_overload_t{
-                [](const unary_operation_t& self,
-                const Tensor& input_tensor,
-                float exponent,
-                const std::optional<MemoryConfig>& memory_config,
-                std::optional<Tensor> output_tensor,
-                const uint8_t queue_id) -> ttnn::Tensor {
-                    return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
-                },
-                py::arg("input_tensor"),
-                py::arg("exponent"),
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt,
-                py::arg("queue_id") = 0}
-            );
-}
-
-template <typename unary_operation_t>
 void bind_unary_composite(
     py::module& module,
     const unary_operation_t& operation,
@@ -1815,9 +1730,6 @@ void py_module(py::module& module) {
 
     // Unaries with float parameter
     detail::bind_unary_operation_with_float_parameter(module, ttnn::elu, "alpha", "The alpha parameter for the ELU function","",R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::rsub, "value", "subtrahent value which is actually calculated as minuend",
-        "Returns tensor with respective elements of the input tensor subtracted from the value.", R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(System memory is not supported.)doc");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "negative_slope", "The slope parameter for the Leaky ReLU function", "",R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::fill, "fill_value", "The value to be filled in the output tensor",
@@ -1832,10 +1744,6 @@ void py_module(py::module& module) {
     // Unaries with integer parameter
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_left_shift, "shift_bits", "integer within range (0, 31)", "INT32", "Support provided for Wormhole_B0 only.");
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_right_shift, "shift_bits", "integer within range (0, 31)", "INT32", "Support provided for Wormhole_B0 only.");
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_and, "value", "scalar value", "INT32", "Input tensor needs to be positive. Support provided only for Wormhole_B0.");
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_or, "value", "scalar value", "INT32", "Input tensor needs to be positive. Support provided only for Wormhole_B0.");
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_xor, "value", "scalar value","INT32", "Input tensor needs to be positive. Support provided only for Wormhole_B0.");
-
 
     // Unary ops with dim parameter
     detail::bind_unary_operation_with_dim_parameter(
@@ -1896,7 +1804,6 @@ void py_module(py::module& module) {
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     detail::bind_unary_chain(module, ttnn::unary_chain);
     detail::bind_identity(module, ttnn::identity);
-    detail::bind_power(module, ttnn::pow);
 
     // unary composite imported into ttnn
     detail::bind_unary_composite(module, ttnn::deg2rad, R"doc(Performs deg2rad function on :attr:`input_tensor`.)doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");

@@ -120,34 +120,29 @@ static void RunTest(DPrintFixture* fixture, Device* device, tt::DataFormat data_
         .device = device, .size = tile_size, .page_size = tile_size, .buffer_type = tt_metal::BufferType::DRAM};
     auto src_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
 
     // Create kernels on device
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
-        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
+        llrt::RunTimeOptions::get_instance().get_root_dir() +
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program,
-        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
+        llrt::RunTimeOptions::get_instance().get_root_dir() +
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program,
-        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
+        llrt::RunTimeOptions::get_instance().get_root_dir() +
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
         core,
-        ComputeConfig{}
-    );
+        ComputeConfig{});
 
     // BRISC kernel needs dram info via rtargs
-    tt_metal::SetRuntimeArgs(
-        program,
-        brisc_print_kernel_id,
-        core,
-        {dram_buffer_src_addr, (std::uint32_t)dram_src_noc_xy.x, (std::uint32_t)dram_src_noc_xy.y});
+    tt_metal::SetRuntimeArgs(program, brisc_print_kernel_id, core, {dram_buffer_src_addr, (std::uint32_t)0});
 
     // Create input tile
     std::vector<uint32_t> u32_vec = GenerateInputTile(data_format);

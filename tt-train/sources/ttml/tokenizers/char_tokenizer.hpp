@@ -33,7 +33,7 @@ public:
 
     [[nodiscard]] const CharTokenizer::Vocabulary& get_vocabulary() const;
 
-    [[nodiscard]] uint32_t get_vocab_size() const;
+    [[nodiscard]] uint32_t get_vocab_size() const override;
 
     ~CharTokenizer() override = default;
 

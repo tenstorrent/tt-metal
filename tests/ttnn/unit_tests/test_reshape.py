@@ -410,3 +410,70 @@ def test_fp32_support(input_shape, output_shape, device):
     output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 1, 864, 128), (1, 27, 32, 128)),
+        ((1, 256, 32), (32, 256)),
+        ((1, 256, 1024), (1, 128, 32, 64)),
+        ((64, 32), (32, 64)),
+        ((1, 1445, 192), (1445, 192)),
+        ((1, 256), (1, 1, 256)),
+        ((16, 1, 32), (16, 1, 32)),
+    ],
+)
+def test_bf8_support(input_shape, output_shape, device):
+    torch_input_tensor = torch.randint(0, 100, input_shape)
+    torch_result = torch_input_tensor.reshape(output_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_output = ttnn.reshape(input_tensor, output_shape)
+
+    output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ([0], [0, 1]),
+        ([0], [1, 0]),
+        ([0, 5], [0, 0, 5]),
+        ([5, 0], [0, 5, 0]),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+)
+@pytest.mark.parametrize(
+    "ttnn_reshape",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "use_device, memory_config",
+    [(True, None), (True, ttnn.L1_MEMORY_CONFIG), (False, None)],
+)
+def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, use_device, memory_config, device):
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    if use_device:
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, memory_config=memory_config)
+    else:
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout)
+    if ttnn_reshape:
+        tt_output_tensor = ttnn.reshape(tt_input_tensor, output_shape)
+    else:
+        tt_output_tensor = tt_input_tensor.reshape(output_shape)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    assert tt_output_tensor.shape == torch.Size(output_shape)

@@ -24,6 +24,8 @@ protected:
         if (std::filesystem::exists(test_filename)) {
             std::filesystem::remove(test_filename);
         }
+
+        ttml::autograd::ctx().open_device();
     }
 
     void TearDown() override {
@@ -31,6 +33,7 @@ protected:
         if (std::filesystem::exists(test_filename)) {
             std::filesystem::remove(test_filename);
         }
+        ttml::autograd::ctx().close_device();
     }
 
     const std::string test_filename = "/tmp/test_tensor.msgpack";

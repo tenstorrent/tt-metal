@@ -47,7 +47,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
-    bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
+    bool untilize_out, bool fuse_relu,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     DataType dtype,
@@ -69,7 +69,6 @@ struct OptimizedConvNew {
     const uint32_t output_channels;
     const uint32_t groups;
     bool untilize_out, has_bias, fuse_relu;
-    MathFidelity math_fidelity;
     MemoryConfig memory_config;
     const DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape; // For sharded input, input tensor shape is nonsense
@@ -84,7 +83,7 @@ struct OptimizedConvNew {
         uint32_t output_channels, uint32_t groups,
         bool untile_out,
         bool has_bias, bool fuse_relu,
-        MathFidelity mfidelity, const OptimizedConvParallelizationConfig& p_config,
+        const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         MemoryConfig memory_config,
         DataType dtype,
@@ -96,7 +95,6 @@ struct OptimizedConvNew {
             untilize_out(untile_out),
             has_bias(has_bias),
             fuse_relu(fuse_relu),
-            math_fidelity(mfidelity),
             parallelization_config(p_config),
             block_config(b_config),
             memory_config(memory_config),
@@ -110,8 +108,7 @@ struct OptimizedConvNew {
             use_non_tile_height(use_non_tile_height) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
 
     operation::OpPerformanceModel create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const;
@@ -124,7 +121,6 @@ struct OptimizedConvNew {
         "untilize_out",
         "has_bias",
         "fuse_relu",
-        "math_fidelity",
         "dtype",
         "input_tensor_shape",
         "use_shallow_conv_variant",
@@ -141,7 +137,6 @@ struct OptimizedConvNew {
             std::cref(this->untilize_out),
             std::cref(this->has_bias),
             std::cref(this->fuse_relu),
-            std::cref(this->math_fidelity),
             std::cref(this->dtype),
             std::cref(this->input_tensor_shape),
             std::cref(this->use_shallow_conv_variant),
@@ -156,14 +151,14 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
-    bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
+    bool untilize_out, bool fuse_relu,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const MemoryConfig& memory_config,
     DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
     bool enable_split_reader = false,

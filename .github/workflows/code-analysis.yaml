@@ -7,12 +7,20 @@ on:
         required: false
         type: string
         default: "ubuntu-22.04-amd64"
+      full-scan:
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       os:
         required: false
         type: string
         default: "ubuntu-22.04-amd64"
+      full-scan:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-docker-image:
@@ -41,20 +49,16 @@ jobs:
             echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
             exit 1
           fi
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
           echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
-      - name: Update submodules
-        run: |
-          git submodule update --init --recursive
       - name: Generate docker tag
         id: generate-docker-tag
         uses: ./.github/actions/generate-docker-tag
         with:
-          image: ${{ inputs.os }}
+          image: tt-metalium/${{ inputs.os }}
       - name: Docker login
         uses: docker/login-action@v3
         with:
@@ -63,6 +67,84 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull docker image
         run: docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          clean: true
+
+      - name: Determine merge base
+        if: github.ref_name != 'main' && !inputs.full-scan
+        run: |
+          echo "Current branch: ${{ github.ref_name }}"
+          MERGE_BASE=$(git merge-base ${{ github.ref_name }} origin/main)
+          echo "Merge base between ${{ github.ref_name }} and main: $MERGE_BASE"
+          echo "MERGE_BASE=$MERGE_BASE" >> $GITHUB_ENV
+
+      - name: Check out baseline
+        if: github.ref_name != 'main' && !inputs.full-scan
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.MERGE_BASE }}
+          fetch-depth: 0
+          submodules: recursive
+          clean: true
+
+      - name: Create baseline
+        if: github.ref_name != 'main' && !inputs.full-scan
+        uses: addnab/docker-run-action@v3
+        with:
+          image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+          options: |
+            --rm
+            --tmpfs /tmp
+            -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
+            --group-add 1457
+            -v ${{ github.workspace }}:${{ github.workspace }}
+            -v /etc/passwd:/etc/passwd:ro
+            -v /etc/shadow:/etc/shadow:ro
+            -v /etc/bashrc:/etc/bashrc:ro
+            -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
+            -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
+            -e ARCH_NAME=${{ env.ARCH_NAME }}
+            -e CARGO_HOME=${{ github.workspace }}/.cargo
+            -w ${{ github.workspace }}
+          run: |
+            set -eu # basic shell hygiene
+
+            # /tmp is a tmpfs; more efficient than persisted storage
+            mkdir -p /tmp/ccache
+            export CCACHE_TEMPDIR=/tmp/ccache
+
+            # Zero out the stats so we can see how we did this build
+            # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+            ccache -z
+
+            # Suppress clang-tidy to first get an up-to-date build tree
+            ln -sf /usr/bin/true ./clang-tidy-shim
+
+            cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY=$(pwd)/clang-tidy-shim -DCMAKE_C_CLANG_TIDY=$(pwd)/clang-tidy-shim
+            nice -n 19 cmake --build --preset clang-tidy
+
+            mkdir -p out
+            ccache -s > out/ccache.stats
+
+      - name: Publish Ccache summary
+        if: github.ref_name != 'main' && !inputs.full-scan
+        run: |
+          echo '## CCache Summary (baseline)' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat out/ccache.stats >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          clean: false
+
       - name: Analyze code with clang-tidy
         uses: addnab/docker-run-action@v3
         with:
@@ -92,10 +174,13 @@ jobs:
             # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
             ccache -z
 
-            cmake --preset clang-tidy
-            # cmake -B .build/clang-tidy -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_CLANG_TIDY=clang-tidy-17 -DTT_UNITY_BUILDS=FALSE -DCMAKE_DISABLE_PRECOMPILE_HEADERS=TRUE -DENABLE_CCACHE=TRUE -DTT_METAL_BUILD_TESTS=TRUE -DTTNN_BUILD_TESTS=TRUE -DBUILD_PROGRAMMING_EXAMPLES=TRUE -DBUILD_TT_TRAIN=TRUE
+            # Restore shim to legit clang-tidy
+            # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
+            ln -sf $(which clang-tidy-17) ./clang-tidy-shim
+
+            cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
             nice -n 19 cmake --build --preset clang-tidy
-            mkdir out
+            mkdir -p out
             ccache -s > out/ccache.stats
       - name: Publish Ccache summary
         run: |

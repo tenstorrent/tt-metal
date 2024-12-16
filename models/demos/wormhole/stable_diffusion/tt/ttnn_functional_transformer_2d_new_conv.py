@@ -242,14 +242,17 @@ class transformer_2d_model:
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             input_channels_alignment=32,
-            fp32_dest_acc_enabled=self.compute_kernel_config.fp32_dest_acc_en,
             transpose_shards=False,
         )
-        [hidden_states, _out_height, _out_width, self.proj_in_conv_weights, self.proj_in_conv_bias] = ttnn.conv2d(
+        compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=self.compute_kernel_config.fp32_dest_acc_en,
+        )
+        [hidden_states, [self.proj_in_conv_weights, self.proj_in_conv_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             in_channels=self.proj_in_in_channels,
             out_channels=self.proj_in_out_channels,
@@ -263,7 +266,10 @@ class transformer_2d_model:
             weight_tensor=self.proj_in_conv_weights,
             bias_tensor=self.proj_in_conv_bias,
             conv_config=conv_config,
+            compute_config=compute_config,
             conv_op_cache=conv_cache,
+            return_output_dim=False,
+            return_weights_and_bias=True,
         )
 
         inner_dim = hidden_states.shape[-1]
@@ -293,10 +299,8 @@ class transformer_2d_model:
                 # hidden_states = ttnn.to_memory_config(hidden_states, self.proj_out.conv.input_sharded_memory_config)
                 [
                     hidden_states,
-                    _out_height,
-                    _out_width,
-                    self.proj_out_conv_weights,
-                    self.proj_out_conv_bias,
+                    [_out_height, _out_width],
+                    [self.proj_out_conv_weights, self.proj_out_conv_bias],
                 ] = ttnn.conv2d(
                     input_tensor=hidden_states,
                     in_channels=self.proj_out_in_channels,
@@ -312,6 +316,8 @@ class transformer_2d_model:
                     bias_tensor=self.proj_out_conv_bias,
                     conv_config=conv_config,
                     conv_op_cache=conv_cache,
+                    return_output_dim=True,
+                    return_weights_and_bias=True,
                 )
 
                 if output_bfloat16:

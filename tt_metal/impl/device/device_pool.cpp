@@ -243,7 +243,7 @@ void DevicePool::initialize_device(v1::DeviceHandle handle) const {
     watcher_init(dev);
 
     // TODO: as optimization, investigate removing all this call for already initialized devivces
-    if (!llrt::OptionsG.get_skip_reset_cores_on_init()) {
+    if (!llrt::RunTimeOptions::get_instance().get_skip_reset_cores_on_init()) {
         dev->reset_cores();
     }
     dev->initialize_and_launch_firmware();
@@ -526,7 +526,7 @@ DevicePool::~DevicePool() {
 }
 
 v1::DeviceHandle DevicePool::get_handle(Device* device) const {
-    for (v1::DeviceKey::value_type index = 0; index < this->devices.size(); ++index) {
+    for (size_t index = 0; index < this->devices.size(); ++index) {
         if (this->devices[index].get() == device) {
             return {{index, 0}};
         }

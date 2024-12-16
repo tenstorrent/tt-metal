@@ -49,17 +49,10 @@ using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
 // Return a reference to a potentially shared binary image.
-// The images are cached by path name, which is never erased.
-// TODO: Remove core_type_idx, processor_class_idx,
-// processor_type_idx -- the information they provide can be
-// obtained directly from the binary image.
+// The images are cached by path name.
 ll_api::memory const& get_risc_binary(
     string const& path,
-    uint32_t core_type_idx,
-    uint32_t processor_class_idx,
-    uint32_t processor_type_idx,
-    ll_api::memory::PackSpans span_type = ll_api::memory::PackSpans::NO_PACK,
-    ll_api::memory::Relocate relo_type = ll_api::memory::Relocate::NONE);
+    ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 
@@ -87,25 +80,13 @@ void write_hex_vec_to_core(
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size);
 
-CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord &physical_core);
+CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord &ethernet_core);
 
 void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg, go_msg_t * go_msg, uint64_t addr, bool send_go = true);
 
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core);
 
 void print_worker_cores(chip_id_t chip_id = 0);
-
-inline bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return std::find(soc_desc.physical_workers.begin(), soc_desc.physical_workers.end(), core) !=
-           soc_desc.physical_workers.end();
-}
-
-inline bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return std::find(soc_desc.physical_ethernet_cores.begin(), soc_desc.physical_ethernet_cores.end(), core) !=
-           soc_desc.physical_ethernet_cores.end();
-}
 
 uint32_t generate_risc_startup_addr(bool is_eth_core);
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core);

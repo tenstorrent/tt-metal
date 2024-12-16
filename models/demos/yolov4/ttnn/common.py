@@ -80,13 +80,9 @@ class Conv:
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat8_b,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             activation=self.activation,
             shard_layout=self.shard_layout,
-            math_approx_mode_enabled=True,
-            fp32_dest_acc_enabled=False,
             act_block_w_div=1,
-            packer_l1_accum_enabled=False,
             input_channels_alignment=16 if self.input_params[3] < 16 else 32,
             transpose_shards=False,
             reshard_if_not_optimal=self.reshard,
@@ -96,10 +92,17 @@ class Conv:
             enable_act_double_buffer=self.enable_act_double_buffer,
             output_layout=self.output_layout,
         )
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
-        [output_tensor, _out_height, _out_width, self.weights, self.bias] = ttnn.conv2d(
+        output_tensor, [self.weights, self.bias] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
@@ -113,5 +116,8 @@ class Conv:
             input_height=self.input_params[1],
             input_width=self.input_params[2],
             conv_config=conv_config,
+            compute_config=compute_config,
+            return_output_dim=False,
+            return_weights_and_bias=True,
         )
         return output_tensor

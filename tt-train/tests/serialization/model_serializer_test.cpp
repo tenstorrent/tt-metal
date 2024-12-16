@@ -9,7 +9,29 @@
 #include "models/gpt2.hpp"
 #include "models/mlp.hpp"
 
-TEST(MultiLayerPerceptronParametersTest, BasicReadWrite) {
+class MultiLayerPerceptronParametersTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+class TransformerConfigTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(MultiLayerPerceptronParametersTest, BasicReadWrite) {
     // Original configuration
     ttml::modules::MultiLayerPerceptronParameters original_config;
     original_config.input_features = 16;
@@ -28,7 +50,7 @@ TEST(MultiLayerPerceptronParametersTest, BasicReadWrite) {
     EXPECT_EQ(original_config.output_features, read_config_result.output_features);
 }
 
-TEST(MultiLayerPerceptronParametersTest, MissingFields) {
+TEST_F(MultiLayerPerceptronParametersTest, MissingFields) {
     // YAML configuration with missing 'hidden_features'
     YAML::Node yaml_node;
     yaml_node["input_features"] = 16;
@@ -44,7 +66,7 @@ TEST(MultiLayerPerceptronParametersTest, MissingFields) {
 }
 
 // Test 3: Handling of Invalid Data Types in YAML Configuration
-TEST(MultiLayerPerceptronParametersTest, InvalidDataTypes) {
+TEST_F(MultiLayerPerceptronParametersTest, InvalidDataTypes) {
     // YAML configuration with invalid data types
     YAML::Node yaml_node;
     yaml_node["input_features"] = "sixteen";        // Should be uint32_t
@@ -59,7 +81,7 @@ TEST(MultiLayerPerceptronParametersTest, InvalidDataTypes) {
         YAML::Exception);
 }
 
-TEST(TransformerConfigTest, BasicReadWrite) {
+TEST_F(TransformerConfigTest, BasicReadWrite) {
     // Original configuration
     ttml::models::gpt2::TransformerConfig original_config;
     original_config.num_heads = 8;
@@ -84,7 +106,7 @@ TEST(TransformerConfigTest, BasicReadWrite) {
     EXPECT_EQ(original_config.max_sequence_length, read_config_result.max_sequence_length);
 }
 
-TEST(TransformerConfigTest, MissingFields) {
+TEST_F(TransformerConfigTest, MissingFields) {
     // YAML configuration with missing 'dropout_prob'
     YAML::Node yaml_node;
     yaml_node["num_heads"] = 8;
@@ -97,7 +119,7 @@ TEST(TransformerConfigTest, MissingFields) {
     EXPECT_THROW({ auto read_config_result = ttml::models::gpt2::read_config(yaml_node); }, YAML::Exception);
 }
 
-TEST(TransformerConfigTest, InvalidDataTypes) {
+TEST_F(TransformerConfigTest, InvalidDataTypes) {
     // YAML configuration with invalid data types
     YAML::Node yaml_node;
     yaml_node["num_heads"] = "eight";                    // Should be uint32_t

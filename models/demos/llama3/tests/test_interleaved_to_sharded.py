@@ -63,7 +63,7 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     seqlen = 1
     batch = model_args.max_batch_size
 
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
+    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_scaling_factor)
     freqs_cis = torch.complex(cos, sin)
 
     for i in range(generation_length):
@@ -80,7 +80,7 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        decode_input = model_args.prepare_inputs_ttnn_decode(
+        decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             ttnn.L1_MEMORY_CONFIG,
         )

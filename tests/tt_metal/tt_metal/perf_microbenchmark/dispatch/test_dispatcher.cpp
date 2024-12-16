@@ -390,21 +390,12 @@ void initialize_dram_banks(Device* device) {
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        auto offset = device->bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->dram_core_from_dram_channel(dram_channel);
         log_info(
             tt::LogTest,
-            "Initializing DRAM {} bytes for bank_id: {} core: {} at addr: 0x{:x}",
+            "Initializing DRAM {} bytes for bank_id: {}",
             bank_size,
-            bank_id,
-            bank_core,
-            offset);
-        tt::Cluster::instance().write_core(
-            static_cast<const void*>(fill.data()),
-            fill.size() * sizeof(uint32_t),
-            tt_cxy_pair(device->id(), bank_core),
-            offset);
+            bank_id);
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, 0, fill);
     }
 }
 
@@ -697,7 +688,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "test_dispatcher.cpp - Test Passed");

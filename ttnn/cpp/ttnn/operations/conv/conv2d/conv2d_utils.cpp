@@ -575,7 +575,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
         }
 
         if (conv_config.override_sharding_config) {
-            TT_FATAL(conv_config.core_grid.has_value(), "Error");
+            TT_FATAL(conv_config.core_grid.has_value(), "Core grid must be provided when overriding sharding config");
             // override parallel config
             auto shard_orientation = shard_layout == TensorMemoryLayout::BLOCK_SHARDED
                                          ? block_shard_orientation
@@ -754,6 +754,8 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
             .in0_block_w = conv_blocking_config.act_block_w_ntiles,
             .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
             .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
+            .out_block_h = div_up(conv_parallelization_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT),
+            .out_block_w = div_up(conv_parallelization_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH),
             .per_core_M = div_up(conv_parallelization_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT),
             .per_core_N = div_up(conv_parallelization_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH),
             .fuse_batch = true,
@@ -895,6 +897,11 @@ template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool, bool> sh
     uint32_t out_channel,
     bool is_mm_conv,
     bool is_non_tile_mul_width);
+
+std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
+    tt::stl::reflection::operator<<(os, config);
+    return os;
+}
 
 }  // namespace operations
 }  // namespace ttnn

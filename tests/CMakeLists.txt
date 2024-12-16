@@ -5,8 +5,8 @@ target_link_libraries(
     test_common_libs
     INTERFACE
         pthread
-        gtest
-        gtest_main
+        gmock_main
+        nlohmann_json::nlohmann_json
         magic_enum
         fmt::fmt-header-only
         span

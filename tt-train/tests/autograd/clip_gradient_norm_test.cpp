@@ -9,7 +9,18 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 
-TEST(ClipGradientNormTest, GradNormTensor_0) {
+class ClipGradientNormTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(ClipGradientNormTest, GradNormTensor_0) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::vector<float> data(81, -1.F);
@@ -30,7 +41,7 @@ TEST(ClipGradientNormTest, GradNormTensor_0) {
     }
 }
 
-TEST(ClipGradientNormTest, GradNormTensor_1) {
+TEST_F(ClipGradientNormTest, GradNormTensor_1) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::vector<float> data(81, -1.F);
@@ -51,7 +62,7 @@ TEST(ClipGradientNormTest, GradNormTensor_1) {
     }
 }
 
-TEST(ClipGradientNormTest, GradNormTensor_2) {
+TEST_F(ClipGradientNormTest, GradNormTensor_2) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::vector<float> data(81, -1.F);

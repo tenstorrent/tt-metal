@@ -3,7 +3,7 @@ set -eo pipefail
 
 run_tgg_llm_tests() {
   # Merge all the generated reports
-  env python models/perf/merge_perf_results.py
+  env python3 models/perf/merge_perf_results.py
 }
 
 run_tgg_cnn_tests() {
@@ -12,7 +12,7 @@ run_tgg_cnn_tests() {
   env pytest -n auto models/demos/tgg/resnet50/tests/test_perf_e2e_resnet50.py -m "model_perf_tgg" --timeout=900 ; fail+=$?
 
   # Merge all the generated reports
-  env python models/perf/merge_perf_results.py
+  env python3 models/perf/merge_perf_results.py
 }
 
 main() {

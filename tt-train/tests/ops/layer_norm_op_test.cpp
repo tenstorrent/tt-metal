@@ -13,7 +13,18 @@
 #include "ops/layernorm_op.hpp"
 #include "ops/losses.hpp"
 
-TEST(LayerNormOpTest, LayerNormOp_0) {
+class LayerNormOpTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(LayerNormOpTest, LayerNormOp_0) {
     using namespace ttml;
 
     uint32_t batch_size = 6;
@@ -66,7 +77,7 @@ TEST(LayerNormOpTest, LayerNormOp_0) {
     }
 }
 
-TEST(LayerNormOpTest, LayerNormOp_backward) {
+TEST_F(LayerNormOpTest, LayerNormOp_backward) {
     using namespace ttml;
 
     uint32_t batch_size = 1;
@@ -101,7 +112,7 @@ TEST(LayerNormOpTest, LayerNormOp_backward) {
     }
 }
 
-TEST(LayerNormOpTest, CompositeLayerNormOp_0) {
+TEST_F(LayerNormOpTest, CompositeLayerNormOp_0) {
     using namespace ttml;
 
     uint32_t batch_size = 6;
@@ -154,7 +165,7 @@ TEST(LayerNormOpTest, CompositeLayerNormOp_0) {
     }
 }
 
-TEST(LayerNormOpTest, CompositeLayerNormOp_backward) {
+TEST_F(LayerNormOpTest, CompositeLayerNormOp_backward) {
     using namespace ttml;
 
     uint32_t batch_size = 1;

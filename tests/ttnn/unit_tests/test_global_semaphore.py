@@ -29,7 +29,7 @@ def run_global_semaphore(device):
 
     assert ttnn.get_global_semaphore_address(global_sem0) != ttnn.get_global_semaphore_address(global_sem1)
 
-    ttnn.reset_global_semaphore_value(global_sem0)
+    ttnn.reset_global_semaphore_value(global_sem0, 3)
 
 
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)

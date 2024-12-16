@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 #include "graph_processor.hpp"
 #include "graph_trace_utils.hpp"
 

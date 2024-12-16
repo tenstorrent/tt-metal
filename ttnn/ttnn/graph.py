@@ -8,7 +8,7 @@ from loguru import logger
 import pathlib
 import graphviz
 
-from ttnn._ttnn.graph import RunMode, begin_graph_capture, end_graph_capture
+from ttnn._ttnn.graph import RunMode, begin_graph_capture, end_graph_capture, extract_calltrace
 
 
 class ExitStackWithPop(contextlib.ExitStack):
