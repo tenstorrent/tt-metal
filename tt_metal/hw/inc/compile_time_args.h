@@ -6,4 +6,5 @@
 
 namespace ckernel {
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
+#define get_compile_time_arg_vals(arg_idx) KERNEL_COMPILE_TIME_ARGS[arg_idx]
 }  // namespace ckernel
