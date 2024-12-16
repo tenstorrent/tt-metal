@@ -199,7 +199,7 @@ void py_module(py::module& module) {
         .def(
             "create_sub_device_manager_with_fabric",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.create_sub_device_manager(sub_devices, local_l1_size);
+                return self.create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
             },
             py::arg("sub_devices"),
             py::arg("local_l1_size"),
