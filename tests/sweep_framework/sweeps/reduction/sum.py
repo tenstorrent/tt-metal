@@ -61,7 +61,7 @@ def mesh_device_fixture():
 
     device = ttnn.open_device(device_id=0)
     # FIXME: if this condition is disabled, i get following error:
-    #           "libc++abi: terminating due to uncaught exception of type std::runtime_error: TT_ASSERT @ ../tt_metal/impl/debug/dprint_server.cpp:801: rpos <= bufsize"
+    #     "libc++abi: terminating due to uncaught exception of type std::runtime_error: TT_ASSERT @ ../tt_metal/impl/debug/dprint_server.cpp:801: rpos <= bufsize"
     assert not ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
     device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
     yield (device, device_name)

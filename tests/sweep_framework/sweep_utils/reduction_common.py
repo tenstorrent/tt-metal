@@ -35,7 +35,6 @@ def run_sum(
     )(input_shape)
 
     dim = dim % len(input_shape)
-    # print(f"dim {dim} input_shape {input_shape} input_a_dtype {input_a_dtype}")
 
     torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=True)
 
