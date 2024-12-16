@@ -27,6 +27,7 @@ void kernel_main() {
     uint32_t end_block = get_arg_val<uint32_t>(2);
 
     // Input shape and strides (excluding W dimension and measured in rows, not bytes)
+    // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
     uint32_t input_shape[N], src_strides[N];
     for (uint32_t i = 3; i < N + 3; i++) {
         input_shape[i - 3] = get_arg_val<uint32_t>(i);

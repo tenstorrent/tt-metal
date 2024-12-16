@@ -49,6 +49,7 @@ void kernel_main() {
     const InterleavedAddrGen<dst_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = output_tensor_page_size};
 
     // Input shape, permutation, and destination strides
+    // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
     uint32_t input_shape[N], perm[N], dest_strides[N];
     for (uint32_t i = 3; i < N + 3; i++) {
         input_shape[i - 3] = get_arg_val<uint32_t>(i);
