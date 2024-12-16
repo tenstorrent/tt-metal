@@ -91,15 +91,17 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
         tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
 
     constexpr int max_rank = 4;
-    for (int i = 0; i < max_rank; i++) {
-        auto a_dim = i < input_shape_a.rank() ? input_shape_a[-i] : 1;
-        auto b_dim = i < input_shape_b.rank() ? input_shape_b[-i] : 1;
-        TT_FATAL(
-            a_dim == b_dim || a_dim == 1 || b_dim == 1,
-            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
-            i,
-            a_dim,
-            b_dim);
+    if (input_shape_a.rank() > 0 && input_shape_b.rank() > 0) {
+        for (int i = 1; i <= max_rank; i++) {
+            auto a_dim = i <= input_shape_a.rank() ? input_shape_a[-i] : 1;
+            auto b_dim = i <= input_shape_b.rank() ? input_shape_b[-i] : 1;
+            TT_FATAL(
+                a_dim == b_dim || a_dim == 1 || b_dim == 1,
+                "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
+                i,
+                a_dim,
+                b_dim);
+        }
     }
 }
 
