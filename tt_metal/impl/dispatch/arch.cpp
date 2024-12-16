@@ -2,9 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dispatch_kernels.hpp"
+#include "kernel_config/fd_kernel.hpp"
 #include "impl/device/device_pool.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "kernel_config/fd_kernel.hpp"
+#include "kernel_config/prefetch_kernel.hpp"
+#include "kernel_config/dispatch_kernel.hpp"
+#include "kernel_config/dispatch_s_kernel.hpp"
+#include "kernel_config/mux_kernel.hpp"
+#include "kernel_config/demux_kernel.hpp"
+#include "kernel_config/eth_router_kernel.hpp"
+#include "kernel_config/eth_tunneler_kernel.hpp"
 
 #define DISPATCH_MAX_UPSTREAM 4
 #define DISPATCH_MAX_DOWNSTREAM 4
@@ -381,7 +389,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t> &device_
     uint32_t total_devices = tt::Cluster::instance().number_of_devices();
     TT_ASSERT(total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 36, "Unexpected target.");
     uint32_t num_devices = device_ids.size();
-    tt::log_warning("FD Config: {}/{} devices, {} HW CQs", num_devices, total_devices, num_hw_cqs);
+    tt::log_debug("FD Config: {}/{} devices, {} HW CQs", num_devices, total_devices, num_hw_cqs);
     TT_ASSERT(num_devices > 0, "Can't determine dispatch architecture with no active devices.");
     TT_ASSERT(num_devices <= total_devices);
     std::vector<dispatch_kernel_node_t> nodes;
@@ -396,7 +404,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t> &device_
         }
     }
     // Supported grid either has one remote per mmio or none
-    tt::log_warning("FD Config: mmio_count={}, remote_count={}", mmio_devices.size(), remote_devices.size());
+    tt::log_debug("FD Config: mmio_count={}, remote_count={}", mmio_devices.size(), remote_devices.size());
 
     // Helper function to get nodes for single device
     auto populate_single_device = [&]() {
@@ -653,7 +661,7 @@ void populate_fd_kernels(const std::set<chip_id_t> &device_ids, uint32_t num_hw_
     }
 }
 
-std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
+std::unique_ptr<Program> create_cq_program(Device *device) {
     TT_ASSERT(
         node_id_to_kernel.size() > 0,
         "Tried to create CQ program without nodes populated (need to run populate_fd_kernels()");
@@ -664,9 +672,9 @@ std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
     for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
         if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
             node_id_to_kernel[idx]->AddDeviceAndProgram(device, cq_program_ptr.get());
-            tt::log_warning("GenerateStaticConfigs for Node {}", idx);
+            tt::log_debug("GenerateStaticConfigs for Node {}", idx);
             node_id_to_kernel[idx]->GenerateStaticConfigs();
-            tt::log_warning("Node {} has coord: {} (phys={})", idx, node_id_to_kernel[idx]->GetLogicalCore().str(), node_id_to_kernel[idx]->GetVirtualCore().str());
+            tt::log_debug("Node {} has coord: {} (phys={})", idx, node_id_to_kernel[idx]->GetLogicalCore().str(), node_id_to_kernel[idx]->GetVirtualCore().str());
         }
     }
 
@@ -674,16 +682,16 @@ std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
     // for (auto &node_and_kernel : node_id_to_kernel) {
     for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
         if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
-            tt::log_warning("GenerateDependentConfigs for Node {}", idx);
+            tt::log_debug("GenerateDependentConfigs for Node {}", idx);
             node_id_to_kernel[idx]->GenerateDependentConfigs();
-            tt::log_warning("CreateKernel for Node {}", idx);
+            tt::log_debug("CreateKernel for Node {}", idx);
             node_id_to_kernel[idx]->CreateKernel();
         }
     }
 
     // Compile the program and return it so Device can register it
     detail::CompileProgram(device, *cq_program_ptr, /*fd_bootloader_mode=*/true);
-    tt::log_warning("Done Compiling CQ Program for Device {}, grid size = {}", device->id(), device->compute_with_storage_grid_size().str());
+    tt::log_debug("Done Compiling CQ Program for Device {}, grid size = {}", device->id(), device->compute_with_storage_grid_size().str());
     return cq_program_ptr;
 }
 

@@ -830,7 +830,6 @@ void Device::configure_kernel_variant(
     Program& program,
     const string& path,
     const std::vector<uint32_t>& compile_args,
-    chip_id_t device_id,
     CoreCoord kernel_core,
     CoreCoord kernel_virtual_core,
     CoreType dispatch_core_type,
@@ -868,7 +867,6 @@ void Device::configure_kernel_variant(
         {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_slave_virtual_noc_coords.x)},
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_slave_virtual_noc_coords.y)},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
-        {"DEVICE_ID", std::to_string(device_id)},
     };
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
@@ -2236,11 +2234,11 @@ void Device::compile_command_queue_programs_new() {
     auto command_queue_program_ptr = std::make_unique<Program>();
     auto mmio_command_queue_program_ptr = std::make_unique<Program>();
     if (this->is_mmio_capable()) {
-        auto command_queue_program_ptr = create_mmio_cq_program(this);
+        auto command_queue_program_ptr = create_cq_program(this);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
         this->setup_tunnel_for_remote_devices();
     } else {
-        auto command_queue_program_ptr = create_mmio_cq_program(this);
+        auto command_queue_program_ptr = create_cq_program(this);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
     }
 }
@@ -2361,7 +2359,6 @@ void Device::compile_command_queue_programs() {
                 *command_queue_program_ptr,
                 "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
                 prefetch_compile_args,
-                this->id(),
                 prefetch_core,
                 prefetch_virtual_core,
                 dispatch_core_type,
@@ -2421,7 +2418,6 @@ void Device::compile_command_queue_programs() {
                 *command_queue_program_ptr,
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
-                this->id(),
                 dispatch_core,
                 dispatch_virtual_core,
                 dispatch_core_type,
@@ -2452,7 +2448,6 @@ void Device::compile_command_queue_programs() {
                     *command_queue_program_ptr,
                     "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp",
                     dispatch_s_compile_args,
-                    this->id(),
                     dispatch_s_core,
                     dispatch_s_virtual_core,
                     dispatch_core_type,
@@ -2520,7 +2515,6 @@ void Device::compile_command_queue_programs() {
                     *mmio_command_queue_program_ptr,
                     prefetch_settings.kernel_file,
                     prefetch_settings.compile_args,
-                    mmio_device->id(),
                     prefetch_core,
                     prefetch_settings.worker_virtual_core,
                     prefetch_settings.dispatch_core_type,
@@ -2549,7 +2543,6 @@ void Device::compile_command_queue_programs() {
                     *mmio_command_queue_program_ptr,
                     mux_settings.kernel_file,
                     mux_settings.compile_args,
-                    mmio_device->id(),
                     mux_core,
                     CoreCoord{0, 0},
                     mux_settings.dispatch_core_type,
@@ -2568,7 +2561,6 @@ void Device::compile_command_queue_programs() {
                 *mmio_command_queue_program_ptr,
                 tunneler_settings.kernel_file,
                 tunneler_settings.compile_args,
-                    mmio_device->id(),
                 tunneler_core,
                 CoreCoord{0, 0},
                 CoreType::ETH,
@@ -2592,7 +2584,6 @@ void Device::compile_command_queue_programs() {
                     *mmio_command_queue_program_ptr,
                     demux_settings.kernel_file,
                     demux_settings.compile_args,
-                    mmio_device->id(),
                     demux_core,
                     CoreCoord{0, 0},
                     demux_settings.dispatch_core_type,
@@ -2616,7 +2607,6 @@ void Device::compile_command_queue_programs() {
                     *mmio_command_queue_program_ptr,
                     dispatch_settings.kernel_file,
                     dispatch_settings.compile_args,
-                    mmio_device->id(),
                     dispatch_core,
                     dispatch_settings.worker_virtual_core,
                     dispatch_settings.dispatch_core_type,
@@ -2639,7 +2629,6 @@ void Device::compile_command_queue_programs() {
             *command_queue_program_ptr,
             us_tunneler_settings.kernel_file,
             us_tunneler_settings.compile_args,
-                    this->id(),
             us_tunneler_core,
             CoreCoord{0, 0},
             CoreType::ETH,
@@ -2660,7 +2649,6 @@ void Device::compile_command_queue_programs() {
                 *command_queue_program_ptr,
                 ds_tunneler_settings.kernel_file,
                 ds_tunneler_settings.compile_args,
-                    this->id(),
                 ds_tunneler_core,
                 CoreCoord{0, 0},
                 CoreType::ETH,
@@ -2685,7 +2673,6 @@ void Device::compile_command_queue_programs() {
                 *command_queue_program_ptr,
                 demux_d_settings.kernel_file,
                 demux_d_settings.compile_args,
-                    this->id(),
                 demux_d_core,
                 CoreCoord{0, 0},
                 demux_d_settings.dispatch_core_type,
@@ -2709,7 +2696,6 @@ void Device::compile_command_queue_programs() {
                 *command_queue_program_ptr,
                 prefetch_d_settings.kernel_file,
                 prefetch_d_settings.compile_args,
-                    this->id(),
                 prefetch_d_core,
                 prefetch_d_settings.worker_virtual_core,
                 prefetch_d_settings.dispatch_core_type,
@@ -2738,7 +2724,6 @@ void Device::compile_command_queue_programs() {
                 *command_queue_program_ptr,
                 dispatch_d_settings.kernel_file,
                 dispatch_d_settings.compile_args,
-                    this->id(),
                 dispatch_d_core,
                 dispatch_d_settings.worker_virtual_core,
                 dispatch_d_settings.dispatch_core_type,
@@ -2762,7 +2747,6 @@ void Device::compile_command_queue_programs() {
                     *command_queue_program_ptr,
                     dispatch_s_settings.kernel_file,
                     dispatch_s_settings.compile_args,
-                    this->id(),
                     dispatch_s_core,
                     dispatch_s_settings.worker_virtual_core,
                     dispatch_s_settings.dispatch_core_type,
@@ -2789,7 +2773,6 @@ void Device::compile_command_queue_programs() {
             *command_queue_program_ptr,
             mux_d_settings.kernel_file,
             mux_d_settings.compile_args,
-                    this->id(),
             mux_d_core,
             CoreCoord{0, 0},
             mux_d_settings.dispatch_core_type,

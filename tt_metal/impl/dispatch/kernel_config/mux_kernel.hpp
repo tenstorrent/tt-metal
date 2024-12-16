@@ -1,0 +1,48 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+#include "fd_kernel.hpp"
+
+typedef struct mux_config {
+    std::optional<uint32_t> reserved;
+    std::optional<uint32_t> rx_queue_start_addr_words;
+    std::optional<uint32_t> rx_queue_size_words;
+    std::optional<uint32_t> mux_fan_in;
+
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_x;             // [4:7], dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_y;             // [4:7], dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_queue_id;      // [4:7], dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> remote_rx_network_type;  // [4:7]
+    std::optional<uint32_t> remote_tx_queue_start_addr_words;                       // Dependent
+    std::optional<uint32_t> remote_tx_queue_size_words;                             // Dependent
+    std::optional<uint32_t> remote_tx_x;                                            // Dependent
+    std::optional<uint32_t> remote_tx_y;                                            // Dependent
+    std::optional<uint32_t> remote_tx_queue_id;                                     // Dependent
+    std::optional<uint32_t> tx_network_type;
+
+    std::optional<uint32_t> test_results_buf_addr_arg;
+    std::optional<uint32_t> test_results_buf_size_bytes;
+    std::optional<uint32_t> timeout_cycles;
+    std::optional<uint32_t> output_depacketize;
+    std::optional<uint32_t> output_depacketize_info;                         // Packed, pack with above same is input?
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize;  // Dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_log_page_size;  // Dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_upstream_sem;   // Dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_local_sem;
+    std::optional<uint32_t> input_packetize_src_endpoint;   // Packed w/ max 4 assumption
+    std::optional<uint32_t> input_packetize_dest_endpoint;  // Same as src
+} mux_config_t;
+
+class MuxKernel : public FDKernel {
+public:
+    MuxKernel(int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection) :
+        FDKernel(node_id, device_id, cq_id, noc_selection) {}
+    void CreateKernel() override;
+    void GenerateStaticConfigs() override;
+    void GenerateDependentConfigs() override;
+    const mux_config_t& GetConfig() { return this->config; }
+
+private:
+    mux_config_t config;
+};

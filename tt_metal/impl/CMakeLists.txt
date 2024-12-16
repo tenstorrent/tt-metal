@@ -21,7 +21,14 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/arch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fd_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/prefetch_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/dispatch_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/dispatch_s_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/mux_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/demux_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_router_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_tunneler_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp

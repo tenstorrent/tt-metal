@@ -1,0 +1,49 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+#include "fd_kernel.hpp"
+
+typedef struct demux_config {
+    std::optional<uint32_t> endpoint_id_start_index;
+    std::optional<uint32_t> rx_queue_start_addr_words;
+    std::optional<uint32_t> rx_queue_size_words;
+    std::optional<uint32_t> demux_fan_out;  // Dependent
+
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_x;                       // [4:7], dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_y;                       // [4:7], dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_queue_id;                // [4:7]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_network_type;            // [4:7]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_queue_start_addr_words;  // [8:2:14], dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> remote_tx_queue_size_words;        // [9:2:15], dependent
+    std::optional<uint32_t> remote_rx_x;                                                       // Dependent
+    std::optional<uint32_t> remote_rx_y;                                                       // Dependent
+    std::optional<uint32_t> remote_rx_queue_id;                                                // Dependent
+    std::optional<uint32_t> remote_rx_network_type;
+
+    std::optional<uint32_t> dest_endpoint_output_map_hi;  // Dependent
+    std::optional<uint32_t> dest_endpoint_output_map_lo;  // Dependent
+    std::optional<uint32_t> test_results_buf_addr_arg;
+    std::optional<uint32_t> test_results_buf_size_bytes;
+    std::optional<uint32_t> timeout_cycles;
+    std::optional<uint32_t> output_depacketize;                                                    // Dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_cb_log_page_size;   // [26:29]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_downstream_sem_id;  // [26:29], dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_local_sem_id;       // [26:29]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_remove_header;      // [26:29]
+} demux_config_t;
+
+class DemuxKernel : public FDKernel {
+public:
+    DemuxKernel(int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection) :
+        FDKernel(node_id, device_id, cq_id, noc_selection) {}
+    void CreateKernel() override;
+    void GenerateStaticConfigs() override;
+    void GenerateDependentConfigs() override;
+    const demux_config_t& GetConfig() { return this->config; }
+    void SetPlacementCQID(int id) { this->placement_cq_id = id; }
+
+private:
+    demux_config_t config;
+    int placement_cq_id;  // TODO: remove channel hard-coding for dispatch core manager
+};
