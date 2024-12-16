@@ -730,7 +730,7 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
                 COMPONENT tt_build_artifacts
         )
     else()
-        add_library(${SUBLIBRARY_NAME} STATIC ${ARGN})
+        add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
     endif()
     if(WITH_PYTHON_BINDINGS)
         target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
