@@ -339,7 +339,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         ids_str += fmt::format("{}, ", id);
     }
     log_warning("Device Pool init, ids: {}skip_remote_devices: {}", ids_str, this->skip_remote_devices);
-    if (llrt::OptionsG.get_use_new_fd_init()) {
+    if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
     for (const auto& device_id : devices_to_activate) {

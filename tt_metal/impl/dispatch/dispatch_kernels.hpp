@@ -31,8 +31,8 @@ class FDKernel {
         return dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     }
     tt_cxy_pair GetLogicalCore() { return logical_core; }
-    tt_cxy_pair GetPhysicalCore() {
-        return tt_cxy_pair(logical_core.chip, tt::get_physical_core_coordinate(logical_core, GetCoreType()));
+    tt_cxy_pair GetVirtualCore() {
+        return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core, GetCoreType());
     }
     int GetUpstreamPort(FDKernel *other) { return GetPort(other, this->upstream_kernels); }
     int GetDownstreamPort(FDKernel *other) { return GetPort(other, this->downstream_kernels); }
@@ -400,9 +400,6 @@ class EthTunnelerKernel : public FDKernel {
     CoreType GetCoreType() override {
         // Tunneler kernel is the exception in that it's always on ethernet core even if dispatch is on tensix.
         return CoreType::ETH;
-    }
-    tt_cxy_pair GetPhysicalCore() {
-        return tt_cxy_pair(logical_core.chip, tt::get_physical_core_coordinate(logical_core, GetCoreType()));
     }
     const eth_tunneler_config_t &GetConfig() { return this->config; }
     bool IsRemote() { return this->is_remote; }

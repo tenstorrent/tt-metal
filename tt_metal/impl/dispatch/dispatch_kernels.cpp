@@ -133,7 +133,7 @@ void FDKernel::configure_kernel_variant(
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
-    if (tt::llrt::OptionsG.watcher_dispatch_disabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
     if (!tt::DPrintServerReadsDispatchCores(this->device)) {
@@ -829,7 +829,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         TT_ASSERT(prefetch_h_kernel);
         this->config.downstream_logical_core = UNUSED_LOGICAL_CORE_ADJUSTED;
         this->config.downstream_s_logical_core = UNUSED_LOGICAL_CORE_ADJUSTED;
-        this->config.prefetch_h_noc_xy = NOC_XY_ENCODING(prefetch_h_kernel->GetPhysicalCore().x, prefetch_h_kernel->GetPhysicalCore().y);
+        this->config.prefetch_h_noc_xy = tt::tt_metal::hal.noc_xy_encoding(prefetch_h_kernel->GetVirtualCore().x, prefetch_h_kernel->GetVirtualCore().y);
         this->config.prefetch_h_local_downstream_sem_addr = prefetch_h_kernel->GetConfig().my_downstream_cb_sem_id;
         this->config.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base(); // Unused
         this->config.downstream_cb_size = (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * my_dispatch_constants.dispatch_buffer_pages(); // Unused
@@ -891,8 +891,8 @@ void MuxKernel::GenerateDependentConfigs() {
     uint32_t num_upstream_dispatchers = 0;
     for (int idx = 0; idx < this->upstream_kernels.size(); idx++) {
         FDKernel *k = this->upstream_kernels[idx];
-        this->config.remote_rx_x[idx] = k->GetPhysicalCore().x;
-        this->config.remote_rx_y[idx] = k->GetPhysicalCore().y;
+        this->config.remote_rx_x[idx] = k->GetVirtualCore().x;
+        this->config.remote_rx_y[idx] = k->GetVirtualCore().y;
         this->config.input_packetize_log_page_size[idx] = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE; // Does this ever change?
         if (auto dispatch_kernel = dynamic_cast<DispatchKernel *>(k)) {
             this->config.input_packetize[idx] = 0x1;
@@ -922,8 +922,8 @@ void MuxKernel::GenerateDependentConfigs() {
         tunneler_kernel->GetConfig().in_queue_start_addr_words.value() +
         (tunneler_kernel->GetConfig().vc_count.value() - 1) * tunneler_kernel->GetConfig().in_queue_size_words.value();
     this->config.remote_tx_queue_size_words = tunneler_kernel->GetConfig().in_queue_size_words;
-    this->config.remote_tx_x = ds->GetPhysicalCore().x;
-    this->config.remote_tx_y = ds->GetPhysicalCore().y;
+    this->config.remote_tx_x = ds->GetVirtualCore().x;
+    this->config.remote_tx_y = ds->GetVirtualCore().y;
     this->config.remote_tx_queue_id = tunneler_kernel->GetConfig().vc_count.value() - 1;
 }
 
@@ -932,12 +932,12 @@ void DemuxKernel::GenerateDependentConfigs() {
     // Upstream, expect EthTunneler or DEMUX
     TT_ASSERT(this->upstream_kernels.size() == 1);
     if (auto us = dynamic_cast<EthTunnelerKernel *>(this->upstream_kernels[0])) {
-        this->config.remote_rx_x = us->GetPhysicalCore().x;
-        this->config.remote_rx_y = us->GetPhysicalCore().y;
+        this->config.remote_rx_x = us->GetVirtualCore().x;
+        this->config.remote_rx_y = us->GetVirtualCore().y;
         this->config.remote_rx_queue_id = us->GetConfig().vc_count.value() * 2 - 1;
     } else if (auto us = dynamic_cast<DemuxKernel *>(this->upstream_kernels[0])) {
-        this->config.remote_rx_x = us->GetPhysicalCore().x;
-        this->config.remote_rx_y = us->GetPhysicalCore().y;
+        this->config.remote_rx_x = us->GetVirtualCore().x;
+        this->config.remote_rx_y = us->GetVirtualCore().y;
         this->config.remote_rx_queue_id = us->GetDownstreamPort(this) + 1; // TODO: can this be cleaned up?
         // TODO: why is just this one different? Just match previous implementation for now
         if (us->GetDownstreamPort(this) == 1)
@@ -952,8 +952,8 @@ void DemuxKernel::GenerateDependentConfigs() {
     this->config.output_depacketize = 0; // Populated per downstream kernel
     for (int idx = 0; idx < this->downstream_kernels.size(); idx++) {
         FDKernel *k = this->downstream_kernels[idx];
-        this->config.remote_tx_x[idx] = k->GetPhysicalCore().x;
-        this->config.remote_tx_y[idx] = k->GetPhysicalCore().y;
+        this->config.remote_tx_x[idx] = k->GetVirtualCore().x;
+        this->config.remote_tx_y[idx] = k->GetVirtualCore().y;
         // Expect downstream to be either a DISPATCH or another DEMUX
         if (auto dispatch_kernel = dynamic_cast<DispatchKernel *>(k)) {
             this->config.remote_tx_queue_start_addr_words[idx] = dispatch_kernel->GetConfig().dispatch_cb_base.value() >> 4;
@@ -999,7 +999,7 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         uint16_t downstream_channel = tt::Cluster::instance().get_assigned_channel_for_device(downstream_device_id);
         tt_cxy_pair paired_logical_core =
             dispatch_core_manager::instance().us_tunneler_core_local(downstream_device_id, downstream_channel, cq_id);
-        CoreCoord paired_physical_coord = tt::get_physical_core_coordinate(paired_logical_core, CoreType::ETH);
+        tt_cxy_pair paired_physical_coord = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(paired_logical_core, CoreType::ETH);
 
         // Upstream, we expect a US_TUNNELER_LOCAL and one or more PACKET_ROUTER
         EthTunnelerKernel *tunneler_kernel = nullptr;
@@ -1021,8 +1021,8 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
             uint32_t router_vc_count = router_kernel->GetConfig().vc_count.value();
             uint32_t router_fwd_vc_count = router_kernel->GetConfig().fwd_vc_count.value();
             for (int idx = 0; idx < router_fwd_vc_count; idx++) {
-                this->config.remote_sender_x[remote_idx] = router_kernel->GetPhysicalCore().x;
-                this->config.remote_sender_y[remote_idx] = router_kernel->GetPhysicalCore().y;
+                this->config.remote_sender_x[remote_idx] = router_kernel->GetVirtualCore().x;
+                this->config.remote_sender_y[remote_idx] = router_kernel->GetVirtualCore().y;
                 // Router output lane ids start after it's input lane ids, assume after lanes that go to on-device kernels
                 this->config.remote_sender_queue_id[remote_idx] = router_vc_count + idx + router_vc_count - router_fwd_vc_count;
                 this->config.remote_sender_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
@@ -1048,8 +1048,8 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         for (uint32_t idx = 0; idx < this->config.vc_count.value(); idx++) {
             if (idx == this->config.vc_count.value() - 1) {
                 // Last VC is the return VC, driving a DEMUX or MUX_D
-                this->config.remote_receiver_x[idx] = other_ds_kernel->GetPhysicalCore().x;
-                this->config.remote_receiver_y[idx] = other_ds_kernel->GetPhysicalCore().y;
+                this->config.remote_receiver_x[idx] = other_ds_kernel->GetVirtualCore().x;
+                this->config.remote_receiver_y[idx] = other_ds_kernel->GetVirtualCore().y;
                 this->config.remote_receiver_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
                 if (auto demux_kernel = dynamic_cast<DemuxKernel *>(other_ds_kernel)) {
                     this->config.remote_receiver_queue_start[idx] = demux_kernel->GetConfig().rx_queue_start_addr_words;
@@ -1080,7 +1080,7 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         chip_id_t upstream_device_id = GetUpstreamDeviceId(device_id);
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
         tt_cxy_pair paired_logical_core = dispatch_core_manager::instance().tunneler_core(upstream_device_id, device_id, channel, cq_id);
-        CoreCoord paired_physical_coord = tt::get_physical_core_coordinate(paired_logical_core, CoreType::ETH);
+        tt_cxy_pair paired_physical_coord = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(paired_logical_core, CoreType::ETH);
 
         TT_ASSERT(this->upstream_kernels.size() == 2);
         auto tunneler_kernel = dynamic_cast<EthTunnelerKernel *>(this->upstream_kernels[0]);
@@ -1094,8 +1094,8 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         for (uint32_t idx = 0; idx < this->config.vc_count.value(); idx++) {
             if (idx == this->config.vc_count.value() - 1) {
                 // Last VC is the return VC, driven by the mux
-                this->config.remote_sender_x[idx] = mux_kernel->GetPhysicalCore().x;
-                this->config.remote_sender_y[idx] = mux_kernel->GetPhysicalCore().y;
+                this->config.remote_sender_x[idx] = mux_kernel->GetVirtualCore().x;
+                this->config.remote_sender_y[idx] = mux_kernel->GetVirtualCore().y;
                 // MUX output queue id is counted after all of it's inputs
                 this->config.remote_sender_queue_id[idx] = mux_kernel->GetConfig().mux_fan_in.value();
                 this->config.remote_sender_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
@@ -1126,8 +1126,8 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         int remote_idx = 0;
         for (auto router_kernel : router_kernels) {
             for (int idx = 0; idx < router_kernel->GetConfig().vc_count.value(); idx++) {
-                this->config.remote_receiver_x[remote_idx] = router_kernel->GetPhysicalCore().x;
-                this->config.remote_receiver_y[remote_idx] = router_kernel->GetPhysicalCore().y;
+                this->config.remote_receiver_x[remote_idx] = router_kernel->GetVirtualCore().x;
+                this->config.remote_receiver_y[remote_idx] = router_kernel->GetVirtualCore().y;
                 this->config.remote_receiver_queue_id[remote_idx] = idx; // Queue ids start counting from 0 at input
                 this->config.remote_receiver_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
                 this->config.remote_receiver_queue_start[remote_idx] = router_kernel->GetConfig().rx_queue_start_addr_words.value() + idx * router_kernel->GetConfig().rx_queue_size_words.value();
@@ -1167,8 +1167,8 @@ void EthRouterKernel::GenerateDependentConfigs() {
         for (int idx = 0; idx < this->upstream_kernels.size(); idx++) {
             auto prefetch_kernel = dynamic_cast<PrefetchKernel *>(this->upstream_kernels[idx]);
             TT_ASSERT(prefetch_kernel);
-            this->config.remote_tx_x[idx] = tunneler_kernel->GetPhysicalCore().x;
-            this->config.remote_tx_y[idx] = tunneler_kernel->GetPhysicalCore().y;
+            this->config.remote_tx_x[idx] = tunneler_kernel->GetVirtualCore().x;
+            this->config.remote_tx_y[idx] = tunneler_kernel->GetVirtualCore().y;
             this->config.remote_tx_queue_id[idx] = idx + MAX_SWITCH_FAN_IN * router_id;
             this->config.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
             this->config.remote_tx_queue_start_addr_words[idx] =
@@ -1176,8 +1176,8 @@ void EthRouterKernel::GenerateDependentConfigs() {
                 (idx + router_id * MAX_SWITCH_FAN_IN) * tunneler_kernel->GetConfig().in_queue_size_words.value();
             this->config.remote_tx_queue_size_words[idx] = tunneler_kernel->GetConfig().in_queue_size_words.value();
 
-            this->config.remote_rx_x[idx] = prefetch_kernel->GetPhysicalCore().x;
-            this->config.remote_rx_y[idx] = prefetch_kernel->GetPhysicalCore().y;
+            this->config.remote_rx_x[idx] = prefetch_kernel->GetVirtualCore().x;
+            this->config.remote_rx_y[idx] = prefetch_kernel->GetVirtualCore().y;
             this->config.remote_rx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
 
             this->config.input_packetize_upstream_sem[idx] = prefetch_kernel->GetConfig().my_downstream_cb_sem_id.value();
@@ -1194,8 +1194,8 @@ void EthRouterKernel::GenerateDependentConfigs() {
         TT_ASSERT(us_tunneler_kernel);
         // Upstream queues connect to the upstream tunneler, as many queues as we have VCs
         for (int idx = 0; idx < config.vc_count.value(); idx++) {
-            this->config.remote_rx_x[idx] = us_tunneler_kernel->GetPhysicalCore().x;
-            this->config.remote_rx_y[idx] = us_tunneler_kernel->GetPhysicalCore().y;
+            this->config.remote_rx_x[idx] = us_tunneler_kernel->GetVirtualCore().x;
+            this->config.remote_rx_y[idx] = us_tunneler_kernel->GetVirtualCore().y;
             // Queue id starts counting after the input VCs
             this->config.remote_rx_queue_id[idx] = us_tunneler_kernel->GetRouterQueueIdOffset(this, false) + idx;
             this->config.remote_rx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
@@ -1218,8 +1218,8 @@ void EthRouterKernel::GenerateDependentConfigs() {
         // Populate remote_tx_* for prefetch kernels, assume they are connected "first"
         uint32_t remote_idx = 0;
         for (auto prefetch_kernel : prefetch_kernels) {
-            this->config.remote_tx_x[remote_idx] = prefetch_kernel->GetPhysicalCore().x;
-            this->config.remote_tx_y[remote_idx] = prefetch_kernel->GetPhysicalCore().y;
+            this->config.remote_tx_x[remote_idx] = prefetch_kernel->GetVirtualCore().x;
+            this->config.remote_tx_y[remote_idx] = prefetch_kernel->GetVirtualCore().y;
             this->config.remote_tx_queue_id[remote_idx] = 0; // Prefetch queue id always 0
             this->config.remote_tx_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
             this->config.remote_tx_queue_start_addr_words[remote_idx] = prefetch_kernel->GetConfig().cmddat_q_base.value() >> 4;
@@ -1232,8 +1232,8 @@ void EthRouterKernel::GenerateDependentConfigs() {
         // Populate remote_tx_* for the downstream tunneler, as many queues as we have fwd VCs
         if (ds_tunneler_kernel) {
             for (int idx = 0; idx < config.fwd_vc_count.value(); idx++) {
-                this->config.remote_tx_x[remote_idx] = ds_tunneler_kernel->GetPhysicalCore().x;
-                this->config.remote_tx_y[remote_idx] = ds_tunneler_kernel->GetPhysicalCore().y;
+                this->config.remote_tx_x[remote_idx] = ds_tunneler_kernel->GetVirtualCore().x;
+                this->config.remote_tx_y[remote_idx] = ds_tunneler_kernel->GetVirtualCore().y;
                 this->config.remote_tx_queue_id[remote_idx] = ds_tunneler_kernel->GetRouterQueueIdOffset(this, true) + idx;
                 this->config.remote_tx_network_type[remote_idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
                 this->config.remote_tx_queue_start_addr_words[remote_idx] = ds_tunneler_kernel->GetConfig().in_queue_start_addr_words.value() + ds_tunneler_kernel->GetConfig().in_queue_size_words.value() * (this->config.remote_tx_queue_id[remote_idx].value());
@@ -1279,22 +1279,32 @@ void PrefetchKernel::CreateKernel() {
         config.is_h_variant.value(),
     };
     TT_ASSERT(compile_args.size() == 28);
-    const auto& grid_size = device->grid_size();
-    CoreCoord my_phys_core = tt::get_physical_core_coordinate(this->logical_core, GetCoreType());
-    CoreCoord upstream_phys_core = tt::get_physical_core_coordinate(config.upstream_logical_core.value(), GetCoreType());
-    CoreCoord downstream_phys_core = tt::get_physical_core_coordinate(config.downstream_logical_core.value(), GetCoreType());
-    CoreCoord downstream_s_phys_core =
-        tt::get_physical_core_coordinate(config.downstream_s_logical_core.value(), GetCoreType());
+    auto my_virtual_core = device->virtual_core_from_logical_core(this->logical_core, GetCoreType());
+    auto upstream_virtual_core =
+        device->virtual_core_from_logical_core(config.upstream_logical_core.value(), GetCoreType());
+    auto downstream_virtual_core =
+        device->virtual_core_from_logical_core(config.downstream_logical_core.value(), GetCoreType());
+    auto downstream_s_virtual_core =
+        device->virtual_core_from_logical_core(config.downstream_s_logical_core.value(), GetCoreType());
+
+    auto my_virtual_noc_coords = device->virtual_noc0_coordinate(noc_selection.non_dispatch_noc, my_virtual_core);
+    auto upstream_virtual_noc_coords =
+        device->virtual_noc0_coordinate(noc_selection.upstream_noc, upstream_virtual_core);
+    auto downstream_virtual_noc_coords =
+        device->virtual_noc0_coordinate(noc_selection.downstream_noc, downstream_virtual_core);
+    auto downstream_s_virtual_noc_coords =
+        device->virtual_noc0_coordinate(noc_selection.downstream_noc, downstream_s_virtual_core);
+
     std::map<string, string> defines = {
-        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.x, my_phys_core.x))},
-        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.y, my_phys_core.y))},
+        {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
+        {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(this->noc_selection.upstream_noc)}, // Unused, remove later
-        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.upstream_noc, grid_size.x, upstream_phys_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.upstream_noc, grid_size.y, upstream_phys_core.y))},
-        {"DOWNSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.x, downstream_phys_core.x))},
-        {"DOWNSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.y, downstream_phys_core.y))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.x, downstream_s_phys_core.x))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.y, downstream_s_phys_core.y))},
+        {"UPSTREAM_NOC_X", std::to_string(upstream_virtual_noc_coords.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
     };
     this->configure_kernel_variant(
         dispatch_kernel_file_names[PREFETCH],
@@ -1304,7 +1314,8 @@ void PrefetchKernel::CreateKernel() {
         false,
         // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
         // respect code space
-        tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline()));
+        tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() &&
+            (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline()));
 }
 
 void DispatchKernel::CreateKernel() {
@@ -1348,22 +1359,32 @@ void DispatchKernel::CreateKernel() {
         config.is_h_variant.value(),
     };
     TT_ASSERT(compile_args.size() == 31);
-    const auto& grid_size = device->grid_size();
-    CoreCoord my_phys_core = tt::get_physical_core_coordinate(this->logical_core, GetCoreType());
-    CoreCoord upstream_phys_core = tt::get_physical_core_coordinate(config.upstream_logical_core.value(), GetCoreType());
-    CoreCoord downstream_phys_core = tt::get_physical_core_coordinate(config.downstream_logical_core.value(), GetCoreType());
-    CoreCoord downstream_s_phys_core =
-        tt::get_physical_core_coordinate(config.downstream_s_logical_core.value(), GetCoreType());
+    auto my_virtual_core = device->virtual_core_from_logical_core(this->logical_core, GetCoreType());
+    auto upstream_virtual_core =
+        device->virtual_core_from_logical_core(config.upstream_logical_core.value(), GetCoreType());
+    auto downstream_virtual_core =
+        device->virtual_core_from_logical_core(config.downstream_logical_core.value(), GetCoreType());
+    auto downstream_s_virtual_core =
+        device->virtual_core_from_logical_core(config.downstream_s_logical_core.value(), GetCoreType());
+
+    auto my_virtual_noc_coords = device->virtual_noc0_coordinate(noc_selection.non_dispatch_noc, my_virtual_core);
+    auto upstream_virtual_noc_coords =
+        device->virtual_noc0_coordinate(noc_selection.upstream_noc, upstream_virtual_core);
+    auto downstream_virtual_noc_coords =
+        device->virtual_noc0_coordinate(noc_selection.downstream_noc, downstream_virtual_core);
+    auto downstream_s_virtual_noc_coords =
+        device->virtual_noc0_coordinate(noc_selection.downstream_noc, downstream_s_virtual_core);
+
     std::map<string, string> defines = {
-        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.x, my_phys_core.x))},
-        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.y, my_phys_core.y))},
+        {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
+        {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(this->noc_selection.upstream_noc)},
-        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.upstream_noc, grid_size.x, upstream_phys_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.upstream_noc, grid_size.y, upstream_phys_core.y))},
-        {"DOWNSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.x, downstream_phys_core.x))},
-        {"DOWNSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.y, downstream_phys_core.y))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.x, downstream_s_phys_core.x))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.y, downstream_s_phys_core.y))},
+        {"UPSTREAM_NOC_X", std::to_string(upstream_virtual_noc_coords.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
     };
     configure_kernel_variant(
         dispatch_kernel_file_names[DISPATCH],
@@ -1390,22 +1411,32 @@ void DispatchSKernel::CreateKernel() {
         config.max_num_go_signal_noc_data_entries.value(),
     };
     TT_ASSERT(compile_args.size() == 12);
-    const auto& grid_size = device->grid_size();
-    CoreCoord my_phys_core = tt::get_physical_core_coordinate(this->logical_core, GetCoreType());
-    CoreCoord upstream_phys_core = tt::get_physical_core_coordinate(config.upstream_logical_core.value(), GetCoreType());
-    CoreCoord downstream_phys_core = tt::get_physical_core_coordinate(config.downstream_logical_core.value(), GetCoreType());
-    CoreCoord downstream_s_phys_core =
-        tt::get_physical_core_coordinate(UNUSED_LOGICAL_CORE, GetCoreType()); // Unused, remove later
+    auto my_virtual_core = device->virtual_core_from_logical_core(this->logical_core, GetCoreType());
+    auto upstream_virtual_core =
+        device->virtual_core_from_logical_core(config.upstream_logical_core.value(), GetCoreType());
+    auto downstream_virtual_core =
+        device->virtual_core_from_logical_core(config.downstream_logical_core.value(), GetCoreType());
+    auto downstream_s_virtual_core =
+        device->virtual_core_from_logical_core(UNUSED_LOGICAL_CORE, GetCoreType());
+
+    auto my_virtual_noc_coords = device->virtual_noc0_coordinate(noc_selection.non_dispatch_noc, my_virtual_core);
+    auto upstream_virtual_noc_coords =
+        device->virtual_noc0_coordinate(noc_selection.upstream_noc, upstream_virtual_core);
+    auto downstream_virtual_noc_coords =
+        device->virtual_noc0_coordinate(noc_selection.downstream_noc, downstream_virtual_core);
+    auto downstream_s_virtual_noc_coords =
+        device->virtual_noc0_coordinate(noc_selection.downstream_noc, downstream_s_virtual_core);
+
     std::map<string, string> defines = {
-        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.x, my_phys_core.x))},
-        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.y, my_phys_core.y))},
+        {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
+        {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(this->noc_selection.upstream_noc)}, // Unused, remove later
-        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.upstream_noc, grid_size.x, upstream_phys_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.upstream_noc, grid_size.y, upstream_phys_core.y))},
-        {"DOWNSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.x, downstream_phys_core.x))},
-        {"DOWNSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.y, downstream_phys_core.y))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.x, downstream_s_phys_core.x))}, // Unused, remove later
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.downstream_noc, grid_size.y, downstream_s_phys_core.y))}, // Unused, remove later
+        {"UPSTREAM_NOC_X", std::to_string(upstream_virtual_noc_coords.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)}, // Unused, remove later
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)}, // Unused, remove later
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], compile_args, defines, false, true, false);
 }
@@ -1509,9 +1540,9 @@ void DemuxKernel::CreateKernel() {
     }
     TT_ASSERT(compile_args.size() == 30);
     const auto& grid_size = device->grid_size();
-    CoreCoord my_phys_core = tt::get_physical_core_coordinate(this->logical_core, GetCoreType());
-    tt::log_warning("Demux {} has logical core {}, physical core {}", node_id, logical_core.str(), my_phys_core.str());
-    tt::log_warning("Noc XY={},{}", tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.x, my_phys_core.x),std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.y, my_phys_core.y)));
+    tt_cxy_pair my_virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->logical_core, GetCoreType());
+    tt::log_warning("Demux {} has logical core {}, physical core {}", node_id, logical_core.str(), my_virtual_core.str());
+    tt::log_warning("Noc XY={},{}", tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.x, my_virtual_core.x),std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.y, my_virtual_core.y)));
     std::map<string, string> defines = { // All of these unused, remove later
         {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.x, 0))},
         {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(this->noc_selection.non_dispatch_noc, grid_size.y, 0))},

@@ -43,7 +43,6 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
         exit 1
     fi
     echo "FD Compile Args Test - 1CQ PASS"
-    exit 0
 
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
         echo "FD Compile Args Test - 2CQ"
@@ -52,13 +51,13 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
         for i in $check_list; do
             grep $i log.new > $i.new; sort -n -o $i.new{,}
         done
-        find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_new.csv
+        find . -name "kernel_args.csv" | xargs -I {} wc -l {} | sort -n | tail -1l | awk '{print $2}' | xargs -I {} cp {} kernel_args_new.csv
 
         TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 TT_METAL_OLD_FD_INIT=1 $test_cmd | tee log.old
         for i in $check_list; do
             grep $i log.old > $i.old; sort -n -o $i.old{,}
         done
-        find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_old.csv
+        find . -name "kernel_args.csv" | xargs -I {} wc -l {} | sort -n | tail -1l | awk '{print $2}' | xargs -I {} cp {} kernel_args_old.csv
 
         for i in $check_list; do
             if diff $i.old $i.new; then

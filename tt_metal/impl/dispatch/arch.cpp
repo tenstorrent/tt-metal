@@ -666,7 +666,7 @@ std::unique_ptr<Program> create_mmio_cq_program(Device *device) {
             node_id_to_kernel[idx]->AddDeviceAndProgram(device, cq_program_ptr.get());
             tt::log_warning("GenerateStaticConfigs for Node {}", idx);
             node_id_to_kernel[idx]->GenerateStaticConfigs();
-            tt::log_warning("Node {} has coord: {} (phys={})", idx, node_id_to_kernel[idx]->GetLogicalCore().str(), node_id_to_kernel[idx]->GetPhysicalCore().str());
+            tt::log_warning("Node {} has coord: {} (phys={})", idx, node_id_to_kernel[idx]->GetLogicalCore().str(), node_id_to_kernel[idx]->GetVirtualCore().str());
         }
     }
 

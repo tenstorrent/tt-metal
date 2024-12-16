@@ -435,7 +435,7 @@ class dispatch_core_manager {
             "Allocated {} Core: {}({}) for Device {} Channel {} CQ ID {}",
             name,
             cxy.str(),
-            tt::get_physical_core_coordinate(cxy, force_ethernet? CoreType::ETH : get_dispatch_core_type(cxy.chip)),
+            tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(cxy, force_ethernet? CoreType::ETH : get_dispatch_core_type(cxy.chip)).str(),
             device_id,
             channel,
             cq_id);

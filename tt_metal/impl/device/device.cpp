@@ -2260,7 +2260,7 @@ void Device::compile_command_queue_programs() {
     const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(this->id());
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     tt_cxy_pair unused_core = tt_cxy_pair(this->id(), 0, 0);
-    CoreCoord unused_virtual_core = this->virtual_core_from_logical(unused_core, dispatch_core_type);
+    CoreCoord unused_virtual_core = this->virtual_core_from_logical_core(unused_core, dispatch_core_type);
     static_assert(my_noc_index != dispatch_upstream_noc_index, "Dispatch NOC used to communicate with upstream must be different from NOC used for other transactions");
     static_assert(my_noc_index != dispatch_s_noc_index, "Dispatch_s NOC must be different from Dispatch_d NOC");
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
@@ -2524,9 +2524,9 @@ void Device::compile_command_queue_programs() {
                     prefetch_core,
                     prefetch_settings.worker_virtual_core,
                     prefetch_settings.dispatch_core_type,
-                    unused_physical_core,
+                    unused_virtual_core,
                     prefetch_settings.downstream_cores[0],
-                    unused_physical_core,
+                    unused_virtual_core,
                     std::map<string, string> {},
                     my_noc_index,
                     my_noc_index,
@@ -2621,8 +2621,8 @@ void Device::compile_command_queue_programs() {
                     dispatch_settings.worker_virtual_core,
                     dispatch_settings.dispatch_core_type,
                     dispatch_settings.upstream_cores[0],
-                    unused_physical_core,
-                    unused_physical_core,
+                    unused_virtual_core,
+                    unused_virtual_core,
                     std::map<string, string> {},
                     my_noc_index,
                     dispatch_upstream_noc_index,
@@ -2715,7 +2715,7 @@ void Device::compile_command_queue_programs() {
                 prefetch_d_settings.dispatch_core_type,
                 prefetch_d_settings.upstream_cores[0],
                 prefetch_d_settings.downstream_cores[0],
-                (this->dispatch_s_enabled())? prefetch_d_settings.downstream_cores[1] : unused_physical_core, // need to update
+                (this->dispatch_s_enabled())? prefetch_d_settings.downstream_cores[1] : unused_virtual_core, // need to update
                 std::map<string, string> {},
                 my_noc_index,
                 my_noc_index,
@@ -2744,7 +2744,7 @@ void Device::compile_command_queue_programs() {
                 dispatch_d_settings.dispatch_core_type,
                 dispatch_d_settings.upstream_cores[0],
                 dispatch_d_settings.downstream_cores[0],
-                (this->dispatch_s_enabled())? dispatch_d_settings.downstream_cores[1] : unused_physical_core, // need to update
+                (this->dispatch_s_enabled())? dispatch_d_settings.downstream_cores[1] : unused_virtual_core, // need to update
                 std::map<string, string> {},
                 my_noc_index,
                 dispatch_upstream_noc_index,
@@ -2768,7 +2768,7 @@ void Device::compile_command_queue_programs() {
                     dispatch_s_settings.dispatch_core_type,
                     dispatch_s_settings.upstream_cores[0],
                     dispatch_s_settings.downstream_cores[0],
-                    unused_physical_core,
+                    unused_virtual_core,
                     std::map<string, string> {},
                     dispatch_s_noc_index,
                     dispatch_s_noc_index,
@@ -2881,7 +2881,7 @@ void Device::configure_command_queue_programs() {
         TT_ASSERT(this->command_queue_programs.size() == 1);
     } else {
         uint32_t program_size = tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1 ? 2 : 1;
-        if (llrt::OptionsG.get_use_new_fd_init())
+        if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init())
             program_size = 1;
         TT_ASSERT(this->command_queue_programs.size() == program_size);
     }
@@ -2999,7 +2999,7 @@ void Device::configure_command_queue_programs() {
     command_queue_program.finalize(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
-    if (device_id != mmio_device_id && !llrt::OptionsG.get_use_new_fd_init()) {
+    if (device_id != mmio_device_id && !llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
         if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
             //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
@@ -3037,7 +3037,7 @@ void Device::init_command_queue_device() {
 
     if (llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
         detail::EnablePersistentKernelCache();
-        if (llrt::OptionsG.get_use_new_fd_init()) {
+        if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
             log_warning("Running new FD init");
             this->compile_command_queue_programs_new();
         } else {
@@ -3046,7 +3046,7 @@ void Device::init_command_queue_device() {
         }
         detail::DisablePersistentKernelCache();
     } else {
-        if (llrt::OptionsG.get_use_new_fd_init()) {
+        if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
             log_warning("Running new FD init");
             this->compile_command_queue_programs_new();
         } else {
@@ -3059,11 +3059,11 @@ void Device::init_command_queue_device() {
         TT_ASSERT(this->command_queue_programs.size() == 1);
     } else {
         uint32_t program_size = tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1 ? 2 : 1;
-        if (llrt::OptionsG.get_use_new_fd_init())
+        if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init())
             program_size = 1;
         TT_ASSERT(this->command_queue_programs.size() == program_size);
     }
-    if (llrt::OptionsG.get_use_new_fd_init()) {
+    if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
         this->configure_command_queue_programs_new();
     } else {
         this->configure_command_queue_programs();
@@ -3083,7 +3083,7 @@ void Device::init_command_queue_device() {
         }
     }
 
-    if (!this->is_mmio_capable() && !llrt::OptionsG.get_use_new_fd_init()) {
+    if (!this->is_mmio_capable() && !llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
         if (tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1) {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
             Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
