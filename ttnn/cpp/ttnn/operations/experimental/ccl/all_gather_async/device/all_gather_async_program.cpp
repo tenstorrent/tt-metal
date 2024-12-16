@@ -85,7 +85,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    std::optional<GlobalSemaphore> semaphore_handle,
+    const std::shared_ptr<const GlobalSemaphore>& semaphore_handle,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& _fabric_handle) {
     bool persistent_fabric_mode = _fabric_handle.has_value();
     tt::tt_metal::Program program{};
@@ -276,11 +276,11 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         bool generate_teardown_commands = !persistent_fabric_mode && link == 0;
         if (generate_teardown_commands) {
             TT_FATAL(
-                semaphore_handle.has_value(),
+                semaphore_handle != nullptr,
                 "Internal error during all-=gather fatcory. Global semaphore for fabric teardown not properly "
                 "initialized for non-persistent fabric mode");
             writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_multicast_semaphore_inc(
-                semaphore_handle.value(),
+                semaphore_handle.get(),
                 ttnn::ccl::cmd::CclCommandAtomicInc{1},
                 drain_sync_core.x,
                 drain_sync_core.y,
@@ -288,11 +288,11 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             // 3, wait for n_chip*num_links number of semaphore at teardown semaphore address for first chip, and
             // n_chip*num_links+1 for other chips
             writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_semaphore_wait(
-                semaphore_handle.value(), is_first_chip ? ring_size * num_links : ring_size * num_links + 1));
+                semaphore_handle.get(), is_first_chip ? ring_size * num_links : ring_size * num_links + 1));
             // 4, send semaphore unicast to forward device except for the last chip
             if (!is_last_chip) {
                 writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_unicast_semaphore_inc(
-                    semaphore_handle.value(),
+                    semaphore_handle.get(),
                     ttnn::ccl::cmd::CclCommandAtomicInc{1},
                     drain_sync_core.x,
                     drain_sync_core.y,
@@ -308,7 +308,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
                     info.edm_noc_x, info.edm_noc_y, info.termination_addr, 1));
             }
             // 6. (drain sync core) reset semaphore to 0
-            writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_core_semaphore_set(semaphore_handle.value(), 0));
+            writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_core_semaphore_set(semaphore_handle.get(), 0));
         }
 
         // set the rt args

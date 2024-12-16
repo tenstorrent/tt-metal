@@ -34,7 +34,7 @@ struct AllGatherAsync {
     const uint32_t ring_index;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
-    std::optional<GlobalSemaphore> semaphore_handle;
+    std::shared_ptr<const GlobalSemaphore> semaphore_handle;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle;
     std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map;
 
@@ -47,7 +47,7 @@ struct AllGatherAsync {
         uint32_t ring_index,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        std::optional<GlobalSemaphore> semaphore_handle,
+        std::shared_ptr<const GlobalSemaphore>& semaphore_handle,
         std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
         std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) :
         forward_device(forward_device),
@@ -73,7 +73,7 @@ struct AllGatherAsync {
         attrs.emplace_back("ring_index", ring_index);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore_handle", semaphore_handle);
+        attrs.emplace_back("semaphore_handle", semaphore_handle.get());
 
         return attrs;
     }
@@ -112,7 +112,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    std::optional<GlobalSemaphore> semaphore_handle,
+    const std::shared_ptr<const GlobalSemaphore>& semaphore_handle,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 
 namespace operations {

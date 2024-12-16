@@ -123,7 +123,7 @@ static ttnn::ccl::cmd::CclCommandAddrType get_semaphore_addr_type(semaphore_id_t
     return std::visit(
         tt::stl::overloaded{
             [](uint32_t) { return ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID; },
-            [](tt::tt_metal::GlobalSemaphore) { return ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS; },
+            [](tt::tt_metal::GlobalSemaphore const*) { return ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS; },
             [](auto&&) -> void {
                 TT_THROW(
                     "ttnn::ccl::cmd::uops::get_semaphore_addr_type called with unsupported semaphore types. "
@@ -136,8 +136,9 @@ static ttnn::ccl::cmd::CclCommandAddrArgs get_semaphore_addr_val(semaphore_id_t 
     return std::visit(
         tt::stl::overloaded{
             [](uint32_t id) -> CclCommandAddrArgs { return ttnn::ccl::cmd::CclCommandAddrSemaphoreId{id}; },
-            [](tt::tt_metal::GlobalSemaphore const& semaphore) -> CclCommandAddrArgs {
-                return ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{semaphore.address()};
+            [](tt::tt_metal::GlobalSemaphore const* semaphore) -> CclCommandAddrArgs {
+                TT_FATAL(semaphore != nullptr, "Internal error: GlobalSemaphore pointer is null in call to get_semaphore_addr_val");
+                return ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{semaphore->address()};
             },
             [](auto&&) -> void {
                 TT_THROW(
