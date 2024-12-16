@@ -278,7 +278,6 @@ void kernel_main() {
                 k_start_tile_id,
                 v_start_tile_id,
                 mask_start_tile_id,
-                PSt,
                 k_reader,
                 v_reader,
                 mask_reader,

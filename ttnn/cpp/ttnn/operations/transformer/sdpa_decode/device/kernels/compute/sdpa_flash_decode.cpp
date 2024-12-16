@@ -137,6 +137,8 @@ void MAIN {
             DHt,
             Sq_chunk_t,
             Sk_chunk_t,
+            qk_chunk_tiles,
+            out_chunk_tiles,
             // QK matmul block parameters
             qk_in0_block_w,
             qk_subblock_w,
@@ -171,7 +173,7 @@ void MAIN {
             cb_exp_max_diff,
             cb_out_o,
             cb_out_m,
-            cb_out_l>(k_chunk_start, k_chunk_end, do_reduce, apply_mask_at_last_chunk, qk_chunk_tiles, out_chunk_tiles);
+            cb_out_l>(k_chunk_start, k_chunk_end, do_reduce, apply_mask_at_last_chunk);
 
         // do reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
