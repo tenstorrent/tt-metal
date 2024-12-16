@@ -3,26 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <utility>
 #include "conv2d_op.hpp"
 #include "common/math.hpp"
 
+#include "buffers/buffer_constants.hpp"
 #include "common/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include "tt_metal/tt_stl/reflection.hpp"
 
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/sharding_utilities.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 using namespace tt::constants;
 namespace optimized_conv_op_utils {
 using namespace tt;
@@ -72,9 +74,11 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool enable_subblock_padding,
     bool use_non_tile_height
 ) {
+    tt::tt_metal::Device* device = a.device();
+    auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
-        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height]
+        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height, stats]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 using ttnn::operations::experimental::auto_format::FormatParams;
                 auto& a = input_tensors.at(0);
@@ -92,9 +96,27 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                 auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
                 auto arch = is_tensor_on_device_or_multidevice(a) ? a.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
                 bool fp32_accum = a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
+                auto optimized_conv_op =  OptimizedConvNew(sliding_window_config,
+                                  output_channels,
+                                  groups,
+                                  untilize_out,
+                                  bias.has_value(),
+                                  fuse_relu,
+                                  parallelization_config,
+                                  block_config,
+                                  memory_config,
+                                  dtype,
+                                  input_tensor_shape,
+                                  use_shallow_conv_variant,
+                                  compute_kernel_config,
+                                  enable_act_double_buffer,
+                                  enable_weights_double_buffer,
+                                  enable_split_reader,
+                                  enable_subblock_padding,
+                                  use_non_tile_height);
+                optimized_conv_op.pre_op_l1_allocation_size_bytes = stats.total_allocated_bytes;
                 return operation::run_without_autoformat(
-                    OptimizedConvNew(sliding_window_config, output_channels, groups, untilize_out, bias.has_value(), fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height
-                    ),
+                    optimized_conv_op,
                     input_tensors,
                     optional_input_tensors);
             }, {a, b}, output_tensors, {std::move(bias)});
@@ -198,7 +220,17 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& input_tensor_bias = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return multi_core_optimized_conv_sharded_v2_new(
+    tt::tt_metal::Device* device = input_tensor_a.device();
+    const auto arch = device->arch();
+    const auto has_bias =  input_tensor_bias.has_value();
+
+    const auto input_dtype = input_tensor_a.dtype();
+    const auto weights_dtype = input_tensor_b.dtype();
+    const auto output_dtype = output_tensor.dtype();
+
+    const auto weights_shape = input_tensor_b.get_legacy_shape();
+
+    auto program_with_cbs =  multi_core_optimized_conv_sharded_v2_new(
         input_tensor_a, input_tensor_b, input_tensor_bias,
         sliding_window_config,
         output_channels,
@@ -216,6 +248,36 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         enable_split_reader,
         enable_subblock_padding,
         use_non_tile_height);
+
+        const uint32_t post_op_l1_stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+        auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
+
+        auto [calc_output_size, calc_CB_size] = estimate_L1_usage(
+                arch, this->memory_config.memory_layout,
+                input_dtype, weights_dtype, output_dtype,
+                compute_kernel_config,
+                block_config, parallelization_config,
+                input_tensor_shape, weights_shape, sliding_window_config.get_output_shape(),
+                output_channels, groups, std::array<uint32_t,2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
+                Conv2dConfig{
+                    .enable_act_double_buffer=enable_act_double_buffer,
+                    .enable_weights_double_buffer=enable_weights_double_buffer,
+                    .enable_split_reader=enable_split_reader,
+                    .enable_subblock_padding=enable_subblock_padding
+                },
+                has_bias, use_non_tile_height);
+    if(calc_CB_size > 0) {
+        if(calc_CB_size != actual_cb_size) {
+            tt::log_error("Calculated CB size {} does not match with the actual CB size {}",calc_CB_size,actual_cb_size);
+            TT_ASSERT(actual_cb_size==calc_CB_size);
+        }
+    }
+    if(calc_output_size > 0) {
+        if(post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
+            tt::log_error(tt::LogOp, "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}", this->pre_op_l1_allocation_size_bytes, post_op_l1_stats,calc_output_size);
+        }
+    }
+    return program_with_cbs;
 }
 
 operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const {

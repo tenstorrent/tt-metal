@@ -75,6 +75,26 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     }
 }
 
+tt::ARCH get_arch_from_compute_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (not compute_kernel_config.has_value()) {
+        return tt::ARCH::Invalid;
+    }
+    return std::visit(
+        [](auto&& compute_kernel_config) -> tt::ARCH {
+            using T = std::decay_t<decltype(compute_kernel_config)>;
+            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+                return tt::ARCH::GRAYSKULL;
+            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+                return tt::ARCH::WORMHOLE_B0;
+            } else if constexpr (std::is_same_v<T, BlackholeComputeKernelConfig>) {
+                return tt::ARCH::BLACKHOLE;
+            } else {
+                TT_THROW("arch not supported");
+            }
+        },
+        compute_kernel_config.value());
+}
+
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if (not compute_kernel_config.has_value()) {
         return false;

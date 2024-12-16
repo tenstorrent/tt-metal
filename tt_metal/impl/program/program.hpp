@@ -166,6 +166,9 @@ class Program {
 
     const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
 
+    uint32_t get_cb_memory_size() const;
+
+
    private:
     std::unique_ptr<detail::Program_> pimpl_;
 
