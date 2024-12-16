@@ -219,6 +219,7 @@ on:
           - eltwise.binary.add.add_all_pytorch2
           - eltwise.binary.add.add_set2_pytorch2
           - eltwise.binary.add.add_different_memory_configs
+          - eltwise.binary.add.add_forge
           - eltwise.unary.gtz.gtz
           - eltwise.unary.ltz.ltz
           - eltwise.unary.gez.gez
