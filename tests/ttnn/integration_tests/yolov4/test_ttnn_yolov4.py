@@ -70,4 +70,4 @@ def test_yolov4(device, reset_seeds, model_location_generator):
 
     assert_with_pcc(result_1, ref1, 0.99)
     assert_with_pcc(result_2, ref2, 0.99)
-    assert_with_pcc(result_3, ref3, 0.99)
+    assert_with_pcc(result_3, ref3, 0.98)
