@@ -169,6 +169,7 @@ public:
     virtual const string& get_full_kernel_name() const = 0;
     virtual void process_defines(const std::function<void(const string& define, const string& value)>) const = 0;
     virtual void process_compile_time_args(const std::function<void(int i, uint32_t value)>) const = 0;
+    virtual void process_compile_time_args_combined(const std::function<void(uint32_t value)>) const = 0;
 
 private:
     bool use_multi_threaded_compile = true;
