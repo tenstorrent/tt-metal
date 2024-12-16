@@ -20,7 +20,7 @@ from models.utility_functions import torch_random
 
 
 parameters = {
-    "suite_1": {
+    "nightly": {
         "input_shape": [
             {"self": [100, 1, 256], "other": [100, 1, 1], "input_dtype": "ttnn.float32"},
             {"self": [1024], "other": [1, 10, 1024], "input_dtype": "ttnn.bfloat16"},
