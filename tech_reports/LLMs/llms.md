@@ -1055,7 +1055,9 @@ LLMs use batching to process multiple sequences in parallel. There are a few rea
 - LLM inference is bound by time to read model weights from DRAM. Batching allows model weight reuse across multiple sequences.
 - Total throughput of the system increases with batch size.
 
-However, there are tradeoffs with batching. As the batch size increases, the latency per decode step will also increase. It is typical to use different batch sizes for different use cases, depending on the goal of the system.
+However, there are tradeoffs with batching. In decode mode, latency scales sublinearly with batch size up to a point. This is because decode is bound by time to read model weights from DRAM rather than time to compute. If the batch grows very large, decode mode will eventually become compute bound, causing latency to scale linearly with batch size. In prefill mode, latency scales linearly with batch size because prefill is compute bound. 
+
+It is typical to use different batch sizes for different use cases, depending on the goal of the system.
 
 #### Performance Metrics
 **Time to first token (TTFT)** measures the latency to generate the first token of the sequence. This is the time to prefill a prompt and generate the first token. It is a measure of interactivity. 
@@ -1390,6 +1392,10 @@ while True:
   else:
     break
 ```
+
+![alt text](continuous_batching.png)
+The above image from anyscale (https://www.anyscale.com/blog/continuous-batching-llm-inference) shows how continuous batching inserts prefill sequences into the batch as soon as there is a free slot.
+
 Continuous batching improves TTFT by reducing wait times for incoming users. It also increases total throughput by keeping the decode batch full of useful work.
 
 Continuous batching is an LLM serving optimization but it requires some support in the model. The model has to support single user prefill so that when a slot is open, the model can prefill a new request into a specific slot of the batch. The model also has to support batched decode where position ids can be different for each user in the batch, to avoid context contamination.
@@ -1398,7 +1404,7 @@ Implementing continuous batching requires that the serving code track data for e
 ### 3.5 vLLM Integration
 
 #### Overview
-vLLM is an open-source LLM serving library. We use vLLM to serve our models in production because of the features it enables. On the serving side, vLLM support continuous batching and paged attention. In addition, vLLM provides an OpenAI-compatible server which is useful for deployment.
+vLLM is an [open-source LLM serving library](https://github.com/vllm-project/vllm). We use vLLM to serve our models in production because of the features it enables. On the serving side, vLLM supports continuous batching and [paged attention](https://arxiv.org/pdf/2309.06180). In addition, vLLM provides an OpenAI-compatible server which is useful for deployment.
 
 Tenstorrent maintains a [fork of vLLM](https://github.com/tenstorrent/vllm/tree/dev) for serving models on Tenstorrent hardware. The [README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md) has instructions for setting up the environment.
 
