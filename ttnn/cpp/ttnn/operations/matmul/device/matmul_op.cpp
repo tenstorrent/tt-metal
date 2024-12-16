@@ -894,6 +894,17 @@ void add_stagger_defines_if_needed(
     }
 }
 
+void add_workload_delay_defines_if_needed(
+    const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines) {
+    // testing minimum delay between compute workloads
+    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
+    const char * delay = std::getenv("TT_ENABLE_WORKLOAD_DELAY");
+    if (delay && arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
+        mm_kernel_defines["MM_WORKLOAD_DELAY"] = delay;
+        log_warning(tt::LogOp, "Workload delay enabled for matmul op using {} cores.", num_cores);
+    }
+}
+
 }  // namespace bmm_op_utils
 
 namespace ttnn {

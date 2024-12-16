@@ -38,8 +38,9 @@ namespace ckernel {
  * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | ntiles    | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  * */
+template <uint32_t workload_delay = 0>
 ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
-    UNPACK(( llk_wait_tiles(cbid, ntiles)  ));
+    UNPACK(( llk_wait_tiles<workload_delay>(cbid, ntiles)  ));
 }
 
 /**
@@ -70,8 +71,9 @@ ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
  * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | ntiles    | The number of tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
+template <uint32_t workload_delay = 0>
 ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) {
-    UNPACK(( llk_pop_tiles(cbid, ntiles)  ));
+    UNPACK(( llk_pop_tiles<workload_delay>(cbid, ntiles)  ));
 }
 
 /**
