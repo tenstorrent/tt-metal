@@ -108,7 +108,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
 void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = this->buffer.aligned_page_size();
     command.add_prefetch_relay_paged(
-        this->buffer.is_dram(), this->src_page_index, this->buffer.address(), padded_page_size, this->pages_to_read);
+        this->buffer.is_dram(), this->src_page_index, this->bank_base_address, padded_page_size, this->pages_to_read);
 }
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
@@ -224,17 +224,18 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
         for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
              sysmem_address_offset += this->padded_page_size) {
             uint32_t page_size_to_copy = this->padded_page_size;
-            if (src_address_offset + this->padded_page_size > buffer.page_size()) {
+            if (src_address_offset + this->padded_page_size > this->buffer.page_size()) {
                 // last partial page being copied from unpadded src buffer
                 page_size_to_copy -= padding;
             }
             command_sequence.add_data((char*)this->src + src_address_offset, page_size_to_copy, this->padded_page_size);
             src_address_offset += page_size_to_copy;
         }
+        // try passing in second parameter - pass in start addr or start idx?
     } else {
-        uint32_t unpadded_src_offset =
-            (((buffer_addr_offset / this->padded_page_size) * num_banks) + this->dst_page_index) *
-            this->buffer.page_size();
+        uint32_t unpadded_src_offset = (((buffer_addr_offset / this->padded_page_size) * num_banks) +
+                                        (this->dst_page_index - this->orig_dst_page_index)) *
+                                       this->buffer.page_size();
         if (this->buffer.page_size() % this->buffer.alignment() != 0 and
             this->buffer.page_size() != this->buffer.size()) {
             // If page size is not aligned, we cannot do a contiguous write
@@ -246,7 +247,7 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
                 src_address_offset += this->buffer.page_size();
             }
         } else {
-            command_sequence.add_data((char*)this->src + unpadded_src_offset, data_size_bytes, data_size_bytes);
+            command_sequence.add_data((char*)this->src + unpadded_src_offset, data_size_bytes, data_size_bytes/* + (this->dst_page_index * this->buffer.page_size())*/);
         }
     }
 }
@@ -307,6 +308,7 @@ void EnqueueWriteBufferCommand::process() {
         cmd_sequence_sizeB += hal.get_alignment(HalMemType::HOST) * num_worker_counters;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
     }
 
+    // const uint32_t offset_size_bytes = this->dst_page_index * this->padded_page_size;
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
@@ -1027,9 +1029,17 @@ void HWCommandQueue::enqueue_read_buffer(
             "(Size + offset) {} must be <= the buffer size {}.",
             size + offset,
             buffer.size());
+
         const uint32_t pages_to_read = size / buffer.page_size();
         if (pages_to_read > 0) {
+            uint32_t bank_base_address = buffer.address();
             src_page_index = offset / buffer.page_size();
+            if (src_page_index > 15) {
+                const uint32_t num_banks = this->device->num_banks(buffer.buffer_type());
+                const uint32_t num_pages_per_bank = src_page_index / num_banks;
+                bank_base_address += num_pages_per_bank * buffer.aligned_page_size();
+                src_page_index = src_page_index % num_banks;
+            }
             // this is a streaming command so we don't need to break down to multiple
             auto command = EnqueueReadInterleavedBufferCommand(
                 this->id,
@@ -1040,6 +1050,7 @@ void HWCommandQueue::enqueue_read_buffer(
                 this->manager,
                 this->expected_num_workers_completed,
                 sub_device_ids,
+                bank_base_address,
                 src_page_index,
                 pages_to_read);
 
@@ -1233,7 +1244,6 @@ void HWCommandQueue::enqueue_write_buffer(
 
         uint32_t bank_base_address = buffer.address();
 
-        uint32_t num_full_pages_written = 0;
         uint32_t orig_dst_page_index = dst_page_index;
         while (total_pages_to_write > 0) {
             uint32_t data_offsetB = hal.get_alignment(HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
@@ -1284,6 +1294,7 @@ void HWCommandQueue::enqueue_write_buffer(
                 bank_base_address,
                 page_size_to_write,
                 dst_page_index,
+                orig_dst_page_index,
                 num_pages_to_write);
             this->enqueue_command(
                 command, false, sub_device_ids);  // don't block until the entire src data is enqueued in the issue queue
