@@ -52,7 +52,7 @@ Applies a 2D convolution over `input_tensor`, a 4D tensor with dimensions ordere
 
 #### Python API
 
-```
+```python
     output_tensor = ttnn.conv2d(
         input_tensor,
         weight_tensor,
@@ -67,6 +67,7 @@ Applies a 2D convolution over `input_tensor`, a 4D tensor with dimensions ordere
         batch_size,
         input_height,
         input_width,
+        ## optional arguments
         conv_config,
         compute_config,
         groups,
@@ -95,8 +96,8 @@ Arguments:
 * `compute_config` _optional_ structure of compute configuration parameters of type `DeviceConfiguration`. This is described in detail below.
 * `groups` _optional_ `int` to control the connections between inputs and outputs. Both `in_channels` and `out_channels` should be divisible by `groups`.
 * `memory_config` _optional_ output tensor memory configuration. This is described below.
-* `return_weights_and_bias` _optional_ `bool` indicating whether to return pre-processed weights and bias tensors on device.
-* `return_output_dim` _optional_ `bool` indicating whether to return the outout tensor height and width.
+* `return_weights_and_bias = False` _optional_ `bool` indicating whether to return pre-processed weights and bias tensors on device.
+* `return_output_dim = False` _optional_ `bool` indicating whether to return the outout tensor height and width.
 
 #### `Conv2dConfig`
 
@@ -106,19 +107,19 @@ Following are the conv2d operation configuration parameters:
 * `weights_dtype = ttnn.bfloat16` weights and bias data type.
 * `activation = ""` _optional_ `string`. Any activation function to apply. Options are `"relu"`.
 * `input_channels_alignment = 32` _optional_ `uint32_t`. Alignment value for channels dimension in the input tensor. This is applicable when `in_channels < 32` and should take a value of `16` in those cases, `32` otherwise.
-* `deallocate_activation = false` _optional_ bool indicating whether the input activation tensor memory should be deallocated.
-* `reallocate_halo_output = false` _optional_ bool indicating if the intermediate tensor generated within the op should be reallocated to reduce memory fragmentation.
+* `deallocate_activation = False` _optional_ bool indicating whether the input activation tensor memory should be deallocated.
+* `reallocate_halo_output = False` _optional_ bool indicating if the intermediate tensor generated within the op should be reallocated to reduce memory fragmentation.
 * `act_block_h_override = 0` _optional_ `uint32_t` to override the `act_block_h` parameter, which determines the size of blocks used in computations -- smaller values require less memory, larger values require more memory but are more performant. This argument is ignored when `shard_layout = WIDTH_SHARDED`.
 * `act_block_w_div = 1` _optional_ `uint32_t`, value by which the maximum possible `act_block_w` parameter is divided. This arguments is ignored when `shard_layout = HEIGHT_SHARDED` or `BLOCK_SHARDED`.
-* `reshard_if_not_optimal = false` _optional_ bool indicating whether the operation can re-shard the input tensor to make it more optimal for performance. If true, override_sharding_config should not be set to true.
-* `override_sharding_config = false` _optional_ bool indicating if input sharding config should be overridden with provided shard_layout. If true, reshard_if_not_optimal should not be set to true.
+* `reshard_if_not_optimal = False` _optional_ bool indicating whether the operation can re-shard the input tensor to make it more optimal for performance. If true, override_sharding_config should not be set to true.
+* `override_sharding_config = False` _optional_ bool indicating if input sharding config should be overridden with provided shard_layout. If true, reshard_if_not_optimal should not be set to true.
 * `shard_layout = None` _optional_ `ttnn.TensorMemoryLayout` to specify type of sharding to use.
 * `core_grid = None` _optional_ `ttnn.CoreRangeSet` specifies the core grid to use. Applicable only when `override_sharding_config = True`,
-* `transpose_shards = true` _optional_ `bool` whether the shards be distributed in `ROW_MAJOR` order. This is applicable only when not using height sharding.
+* `transpose_shards = True` _optional_ `bool` whether the shards be distributed in `ROW_MAJOR` order. This is applicable only when not using height sharding.
 * `output_layout = ttnn.TILE_LAYOUT` _optional_ `ttnn.Layout` to specify whether the output tensor be in `TILE` or `ROW_MAJOR` layout.
-* `enable_act_double_buffer = false` _optional_ bool to enable activation double buffering.
-* `enable_weights_double_buffer = false` _optional_ bool to enable weights double buffering when using block sharding.
-* `enable_split_reader = false` _optional_ bool to two concurrent reader kernels instead of one.
+* `enable_act_double_buffer = False` _optional_ bool to enable activation double buffering.
+* `enable_weights_double_buffer = False` _optional_ bool to enable weights double buffering when using block sharding.
+* `enable_split_reader = False` _optional_ bool to two concurrent reader kernels instead of one.
 
 #### Compute Config
 
@@ -130,14 +131,14 @@ Architecture specific device compute kernel configuration, `DeviceComputeKernelC
 
 Wormhole and Blackhole specific parameters:
 
-* `fp32_dest_acc_en = false` enable accumulations in fp32.
-* `packer_l1_acc = false` enable packer accumulation directly in L1.
+* `fp32_dest_acc_en = False` enable accumulations in fp32.
+* `packer_l1_acc = False` enable packer accumulation directly in L1.
 
-#### Preparing input tensors
+#### Example Usage
+
+##### Preparing input tensors
 
 `conv2d` takes 4D `input_tensor` with dimensions ordered as `(N, H, W, C)` (channels last), and `weight_tensor` as `(C_in, C_out // groups, kernel_h, kernel_w)` 4D tensor. The input activation, weight and bias tensors can be on host or on device. If weight and bias are on device, they need to be already pre-processed by the conv2d op.
-
-Example to prepare the input tensors:
 
 ```python
     import ttnn
@@ -166,7 +167,9 @@ Example to prepare the input tensors:
     ttnn_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 ```
 
-#### Calling the operation
+##### Calling the operation
+
+Once the inputs are prepared, we can call the `conv2d` operation as shown in the following example. Many of the arguments in the `conv2d` API are optional, and will be using defaults as listed above.
 
 ```python
 
@@ -193,13 +196,23 @@ Example to prepare the input tensors:
     )
 ```
 
-#### Output post-processing
+To get higher performance it is advisable to use the following optional arguments:
+
+* `deallocate_activation = True` If the input tensor is no longer needed after the conv2d operation, this option will free up the input buffer and have more memory available for the operation.
+* `reallocate_halo_output = True` The `conv2d` operation executes a _haloing_ step before computing the convolutions to optimize memory accesses. This option will reallocate the output of this step in order to reduce memory fragmentation to avoid memory fitting issues.
+* `enable_act_double_buffer = True` If enough memory is available, enabling double buffering of the input activations will result in a better performance.
+* `enable_weights_double_buffer = false` If enough memory is available, enabling weights double buffering can improve performance when using block sharding.
+* `enable_split_reader = True` By default, a single reader kernel is used to read in activations from the input shard. Enabling this option will use two concurrent reader kernels, potentially improving overall performance.
+
+##### Output post-processing
+
+The generated output of the `conv2d` operation is a 4D tensor with the `NHWC` order of dimensions, and requires a permute operation to convert to the standard `NCHW` order. The following is an example of how to typically post-process the output tensor. Note that the `reshape` is used to un-flatten the outout tensor. The slice operation removes any padding that may have been added by the operation to the last dimension.
 
 ```python
     ttnn_output_tensor = ttnn.from_device(ttnn_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(ttnn_output_tensor)
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
-    torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
+    torch_output_tensor = torch_output_tensor[:, :, :, :out_channels]
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
 ```
 
