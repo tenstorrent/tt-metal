@@ -954,6 +954,11 @@ std::vector<T> convert_logical_data_to_physical_data(
         physical_data.size(),
         physical_shape);
 
+    if (tensor_spec.layout() == Layout::TILE) {
+        // TODO: Fix convert_layout_row_major_to_tile to take in vector instead of buffer?
+        return tensor_impl::convert_layout_row_major_to_tile(
+            physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
+    }
     return physical_data;
 }
 
@@ -980,6 +985,13 @@ std::vector<T> convert_physical_data_to_logical_data(
         physical_data.size(),
         physical_shape);
 
+    auto row_major_physical_data = physical_data;
+    if (tensor_spec.layout() == Layout::TILE) {
+        // TODO: Fix convert_layout_tile_to_row_major to take in vector instead of buffer?
+        row_major_physical_data = tensor_impl::convert_layout_tile_to_row_major(
+            physical_shape, tensor_spec.tile(), owned_buffer::create<T>(std::move(row_major_physical_data)));
+    }
+
     const auto& logical_shape = tensor_spec.logical_shape();
     const auto& logical_shard_shape = tensor_spec.tensor_layout().get_logical_shard_shape();
     const auto& physical_shard_shape = tensor_spec.tensor_layout().get_physical_shard_shape();
@@ -998,7 +1010,7 @@ std::vector<T> convert_physical_data_to_logical_data(
             auto physical_idx_start = idx_pair[1];
 
             for (size_t col = 0; col < cols; col++) {
-                logical_data[logical_idx_start + col] = physical_data[physical_idx_start + col];
+                logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
             }
         }
     }

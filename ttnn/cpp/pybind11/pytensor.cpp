@@ -69,13 +69,12 @@ void log_external_operation(
 template <typename T>
 Tensor create_owned_tensor(T* data_ptr, const ttnn::TensorSpec& tensor_spec) {
     std::size_t num_elements = tensor_spec.logical_shape().volume();
-    auto data = std::vector<T>(data_ptr, data_ptr + num_elements);
-    auto buffer = owned_buffer::create(std::move(data));
+    auto logical_data = std::vector<T>(data_ptr, data_ptr + num_elements);
 
-    if (tensor_spec.layout() == Layout::TILE) {
-        data = tensor_impl::convert_layout_row_major_to_tile(tensor_spec.physical_shape(), tensor_spec.tile(), buffer);
-        buffer = owned_buffer::create(std::move(data));
-    }
+    // Convert row major logical data to physical data based on tensor spec
+    auto physical_data = tensor_impl::convert_logical_data_to_physical_data(logical_data, tensor_spec);
+
+    auto buffer = owned_buffer::create(std::move(physical_data));
     auto storage = OwnedStorage{std::move(buffer)};
     return Tensor(std::move(storage), tensor_spec);
 }
@@ -475,12 +474,12 @@ Tensor convert_python_tensors_to_tt_tensors(
 template <typename T>
 owned_buffer::Buffer<T> create_row_major_owned_buffer(
     owned_buffer::Buffer<T> owned_buffer, const ttnn::TensorSpec& tensor_spec) {
-    if (tensor_spec.layout() == Layout::TILE) {
-        auto data = tensor_impl::convert_layout_tile_to_row_major(
-            tensor_spec.physical_shape(), tensor_spec.tile(), owned_buffer);
-        return owned_buffer::create(std::move(data));
-    }
-    return owned_buffer;
+    auto physical_data = owned_buffer.get();
+
+    // Convert physical data based on tensor spec to row major logical data
+    auto logical_data = tensor_impl::convert_physical_data_to_logical_data(physical_data, tensor_spec);
+
+    return owned_buffer::create(std::move(logical_data));
 }
 
 std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(const Tensor& tt_tensor) {
