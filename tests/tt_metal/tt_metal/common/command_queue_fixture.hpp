@@ -72,14 +72,6 @@ protected:
         this->validate_dispatch_mode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
-        // Temp workaround until switch is flipped
-        if (!slow_dispatch_) {
-            for (Device* device : devices_) {
-                for (int cq_idx = 0; cq_idx < device->num_hw_cqs(); cq_idx++) {
-                    device->hw_command_queue(cq_idx);
-                }
-            }
-        }
     }
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
@@ -90,7 +82,7 @@ protected:
         if (slow_dispatch) {
             tt::log_info(
                 tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            this->slow_dispatch_ = true;
+            this->slow_dispatch_ = false;
             GTEST_SKIP();
         }
     }
@@ -122,14 +114,6 @@ protected:
         this->validate_dispatch_mode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
-        // Temp workaround until switch is flipped
-        if (!slow_dispatch_) {
-            for (Device* device : devices_) {
-                for (int cq_idx = 0; cq_idx < device->num_hw_cqs(); cq_idx++) {
-                    device->hw_command_queue(cq_idx);
-                }
-            }
-        }
     }
 };
 
