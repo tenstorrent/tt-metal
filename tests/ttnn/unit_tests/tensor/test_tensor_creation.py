@@ -129,14 +129,14 @@ grid_size = [8, 7]
     "layout, tile",
     [
         (ttnn.ROW_MAJOR_LAYOUT, None),
-        # (ttnn.TILE_LAYOUT, ttnn.Tile([32, 32])),
+        (ttnn.TILE_LAYOUT, ttnn.Tile([32, 32])),
     ],
 )
 @pytest.mark.parametrize(
     "tt_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(

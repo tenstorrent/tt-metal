@@ -879,6 +879,26 @@ std::array<size_t, 4> compute_shard_spec(const Size& shape, const Size& shard_sh
     return {num_shards_height, last_shard_height, num_shards_width, last_shard_width};
 };
 
+// TODO: Remove when we generalize interleaved and sharded; when we do, directly get from TensorLayout
+std::array<Size, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tensor_spec) {
+    if (tensor_spec.memory_config().is_sharded()) {
+        return {
+            tensor_spec.tensor_layout().get_logical_shard_shape(),
+            tensor_spec.tensor_layout().get_physical_shard_shape()};
+    }
+
+    const auto& logical_shape = tensor_spec.logical_shape();
+    Size logical_shard_shape{logical_shape[-2], logical_shape[-1]};
+    auto physical_shard_shape = logical_shard_shape;
+    if (tensor_spec.layout() == Layout::TILE) {
+        const auto& tile = tensor_spec.tile();
+        auto physical_shard_height = tt::round_up(logical_shard_shape.height(), tile.get_height());
+        auto physical_shard_width = tt::round_up(logical_shard_shape.width(), tile.get_width());
+        physical_shard_shape = Size{physical_shard_height, physical_shard_width};
+    }
+    return {logical_shard_shape, physical_shard_shape};
+}
+
 using LogicalPhysicalIdxPairs = std::vector<std::array<size_t, 2>>;
 using LogicalPhysicalMapping = std::pair<LogicalPhysicalIdxPairs, size_t>;
 std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
@@ -925,9 +945,8 @@ std::vector<T> convert_logical_data_to_physical_data(
         logical_data.size(),
         logical_shape);
 
-    const auto& logical_shard_shape = tensor_spec.tensor_layout().get_logical_shard_shape();
-    const auto& physical_shard_shape = tensor_spec.tensor_layout().get_physical_shard_shape();
     const auto& physical_shape = tensor_spec.physical_shape();
+    auto [logical_shard_shape, physical_shard_shape] = get_logical_and_physical_shard_shapes(tensor_spec);
 
     std::vector<T> physical_data(physical_shape.height() * physical_shape.width(), 0);
 
@@ -993,8 +1012,7 @@ std::vector<T> convert_physical_data_to_logical_data(
     }
 
     const auto& logical_shape = tensor_spec.logical_shape();
-    const auto& logical_shard_shape = tensor_spec.tensor_layout().get_logical_shard_shape();
-    const auto& physical_shard_shape = tensor_spec.tensor_layout().get_physical_shard_shape();
+    auto [logical_shard_shape, physical_shard_shape] = get_logical_and_physical_shard_shapes(tensor_spec);
 
     auto logical_2D_shape = flatten_to_2D(logical_shape);
     std::vector<T> logical_data(logical_2D_shape.height() * logical_2D_shape.width(), 0);
