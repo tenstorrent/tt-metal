@@ -4,6 +4,7 @@
 
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -59,7 +60,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     uint32_t index_end_dim = index_dims.back();
 
     Tensor input_5d = input;
-    input_5d = input_5d.reshape(input_5d_shape);
+    input_5d = ttnn::experimental::view(input_5d, input_5d_shape);
 
     auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
 
