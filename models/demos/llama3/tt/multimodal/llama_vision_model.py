@@ -466,6 +466,10 @@ class CrossAttentionTransformer(torch.nn.Module):
         assert (
             B == self.configuration.max_batch_size
         ), f"Batch size must match max batch size. Got {B}, expected {self.configuration.max_batch_size}"
+        unpadded_batch_size = len(cross_attention_masks)
+        assert unpadded_batch_size == len(
+            full_text_row_masked_out_mask
+        ), f"cross_attention_masks batch dim ({unpadded_batch_size}) does not match full_text_row_masked_out_mask batch dim ({len(full_text_row_masked_out_mask)})"
         h = self.prepare_inputs_common(position_id, tokens)
         tt_h = self.configuration.prepare_residual_tensor_decode(
             h,
@@ -481,8 +485,20 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        tt_rope_id = self.text_model.rope_setup.get_rot_idxs(position_id, on_host=True)
-        xattn_mask = torch.cat([cross_attention_masks[i][:, :, position_id[i]] for i in range(B)], dim=1).unsqueeze(0)
+        rot_position_id = torch.maximum(
+            position_id, torch.tensor(0, dtype=torch.int64)
+        )  # Ensure position indices are non-negative
+        tt_rope_id = self.text_model.rope_setup.get_rot_idxs(rot_position_id, on_host=True)
+
+        xattn_mask = torch.cat(
+            [cross_attention_masks[i][:, :, position_id[i]] for i in range(unpadded_batch_size)], dim=1
+        ).unsqueeze(0)
+        # Pad xattn_mask along batch if tokens have been padded
+        if B > unpadded_batch_size:
+            xattn_mask = torch.cat(
+                [xattn_mask, torch.zeros(1, 1, B - unpadded_batch_size, xattn_mask.shape[-1])], dim=2
+            )
+
         xattn_mask_expand = xattn_mask.expand(-1, self.configuration.n_heads // self.configuration.num_devices, -1, -1)
         xattn_mask_expand = xattn_mask_expand.transpose(1, 2).contiguous()
 
@@ -495,8 +511,13 @@ class CrossAttentionTransformer(torch.nn.Module):
         )
 
         full_text_mask = torch.cat(
-            [full_text_row_masked_out_mask[i][:, :, position_id[i]] for i in range(B)], dim=1
+            [full_text_row_masked_out_mask[i][:, :, position_id[i]] for i in range(unpadded_batch_size)], dim=1
         ).unsqueeze(0)
+        # Pad full_text_mask along batch if tokens have been padded
+        if B > unpadded_batch_size:
+            full_text_mask = torch.cat(
+                [full_text_mask, torch.zeros(1, 1, B - unpadded_batch_size, full_text_mask.shape[-1])], dim=2
+            )
         full_text_mask_expand_1NSH = full_text_mask.expand(
             -1, self.configuration.n_heads // self.configuration.num_devices, -1, self.configuration.head_dim
         )
