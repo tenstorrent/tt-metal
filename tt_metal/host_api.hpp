@@ -670,7 +670,7 @@ void EnqueueReadSubBuffer(
     const size_t size,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
-    dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(DType));
+    dst.resize(size / sizeof(DType));
     EnqueueReadSubBuffer(cq, buffer, static_cast<void*>(dst.data()), offset, size, blocking, sub_device_ids);
 }
 template <typename DType>

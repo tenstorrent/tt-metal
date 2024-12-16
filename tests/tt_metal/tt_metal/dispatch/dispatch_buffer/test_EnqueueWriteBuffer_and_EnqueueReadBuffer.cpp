@@ -584,18 +584,34 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestWrapCompletionQOnInsufficientSpa
 }
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBuffer) {
-    const uint32_t page_size = 1024;
-    const uint32_t offset = 2048;
-    const uint32_t size = 4096;
+    const uint32_t page_size = 256;
+    const uint32_t buffer_size = 64 * page_size;
+    const uint32_t offset = 256;
+    const uint32_t size = 512;
     for (Device* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
-        auto buffer = Buffer::create(device, 32 * page_size, page_size, BufferType::DRAM);
-        auto src1 = local_test_functions::generate_arange_vector(buffer->size());
-        // EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, offset, size, false);
-        EnqueueWriteBuffer(device->command_queue(), *buffer, src1, false);
+        auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
+        auto src = local_test_functions::generate_arange_vector(size);
+        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, offset, size, false);
         vector<uint32_t> result;
         EnqueueReadSubBuffer(device->command_queue(), *buffer, result, offset, size, true);
-        EXPECT_EQ(src1, result);
+        EXPECT_EQ(src, result);
+    }
+}
+
+TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBufferLargeOffset) {
+    const uint32_t page_size = 4;
+    const uint32_t buffer_size = (0xFFFF + 50000) * 2 * page_size;
+    const uint32_t offset = ((2 * 0xFFFF) + 25000) * page_size;
+    const uint32_t size = 32;
+    for (Device* device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
+        auto src = local_test_functions::generate_arange_vector(size);
+        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, offset, size, false);
+        vector<uint32_t> result;
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, offset, size, true);
+        EXPECT_EQ(src, result);
     }
 }
 
