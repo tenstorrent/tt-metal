@@ -646,14 +646,18 @@ void EthRouterKernel::GenerateStaticConfigs() {
         this->config.input_packetize_dst_endpoint = {0x0};
 
         this->config.fwd_vc_count = this->config.vc_count;
+        uint32_t created_semaphores = 0;
         for (int idx = 0; idx < this->downstream_kernels.size(); idx++) {
             // Forwward VCs are the ones that don't connect to a prefetch
             if (auto pk = dynamic_cast<PrefetchKernel *>(this->downstream_kernels[idx])) {
                 this->config.fwd_vc_count = this->config.fwd_vc_count.value() - 1;
                 this->config.output_depacketize_local_sem[idx] = // TODO: to match for now, init one per vc after
                     tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType());
+                created_semaphores++;
             }
         }
+        if (created_semaphores == 0) // Just to match previous implementation
+            tt::tt_metal::CreateSemaphore(*program, this->logical_core, 0, GetCoreType());
 
         for (int idx = 0; idx < this->config.vc_count.value(); idx++) {
             this->config.output_depacketize_log_page_size[idx] = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
