@@ -58,6 +58,8 @@ def extract_memconfig_info(layout_str):
     if "l1" in smem_config_o:
         mem_config_o = "ttnn.L1_MEMORY_CONFIG"
 
+    print(f"Computed layout_a: {layout_a}")
+
     return layout_a, layout_b, mem_config_a, mem_config_b, mem_config_o
 
 
@@ -74,13 +76,22 @@ def generate_unary_test_file(test_data, filename):
             return "ttnn.bfloat16"
         return "ttnn.bfloat16"
 
+    runs_on_ttnn_found = False
+    for item in test_data:
+        if item.get("runs_on_ttnn") == "yes":
+            runs_on_ttnn_found = True
+            break
+
+    if not runs_on_ttnn_found:
+        print("Warning: No test data with 'runs_on_ttnn' set to 'yes'. Skipping file generation.")
+        return
+
     for i in range(len(test_data)):
         if test_data[i]["runs_on_ttnn"] != "yes":
             continue
         input_a_shape, input_a_dtype = extract_tensor_info(test_data[i]["input_shapes"][0])
         input_b_shape, input_b_dtype = extract_tensor_info(test_data[i]["input_shapes"][1])
         output_shape, output_dtype = extract_tensor_info(test_data[i]["output_shapes"][0])
-        # oshape, odtype = extract_tensor_info(test_data[i]["output_shapes"][0])
         print(input_a_shape, input_a_dtype)
         print(input_b_shape, input_b_dtype)
         print(output_shape, output_dtype)
@@ -107,8 +118,9 @@ def generate_unary_test_file(test_data, filename):
     param_string = f"""
 parameters = {{
     "nightly": {{
-        "input_shape":
-           [{shapes_str}],
+        "input_shape": [
+            {shapes_str}
+        ],
         "input_a_layout": [{input_a_layout}],
         "input_b_layout": [{input_b_layout}],
         "input_a_memory_config": [{input_a_mem_config}],

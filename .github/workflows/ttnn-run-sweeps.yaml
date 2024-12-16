@@ -240,6 +240,7 @@ on:
           - eltwise.binary.multiply.multiply
           - eltwise.binary.multiply.mul_tensor_pytorch2
           - eltwise.binary.multiply.multiply_scalar_pytorch2
+          - eltwise.binary.multiply.multiply_forge
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div.div_forge
@@ -299,6 +300,7 @@ on:
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
           - eltwise.composite.binary.minimum.minimum_pytorch2
+          - eltwise.composite.binary.minimum.minimum_forge
           - eltwise.composite.binary.maximum.maximum
           - eltwise.composite.binary.maximum.maximum_pytorch2
           - eltwise.composite.binary.pow.pow_pytorch2
