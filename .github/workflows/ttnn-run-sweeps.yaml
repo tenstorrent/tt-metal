@@ -230,6 +230,7 @@ on:
           - eltwise.unary_complex.conj_bw
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
+          - eltwise.binary.subtract.subtract_forge
           - eltwise.binary.multiply.multiply
           - eltwise.binary.multiply.mul_tensor_pytorch2
           - eltwise.binary.multiply.multiply_scalar_pytorch2
@@ -246,9 +247,10 @@ on:
           - eltwise.binary.logical_and.logical_and
           - eltwise.binary.logical_and.logical_and_output
           - eltwise.binary.polyval.polyval
-          - eltwise.binary.remainder.remainder
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
+          - eltwise.binary.scatter.scatter_forge
+          - eltwise.binary.remainder.remainder
           - eltwise.binary.remainder.remainder_scalar_pytorch2
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
