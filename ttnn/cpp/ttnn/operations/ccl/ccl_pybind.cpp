@@ -13,6 +13,10 @@ void py_bind_common(pybind11::module& module) {
     py::enum_<ttnn::ccl::Topology>(module, "Topology")
         .value("Ring", ttnn::ccl::Topology::Ring)
         .value("Linear", ttnn::ccl::Topology::Linear);
+
+    module.def("initialize_edm_fabric", &ttnn::ccl::initialize_edm_fabric, py::kw_only(), py::arg("mesh_device"));
+
+    module.def("teardown_edm_fabric", &ttnn::ccl::teardown_edm_fabric, py::kw_only(), py::arg("mesh_device"));
 }
 
 }  // namespace ttnn::operations::ccl
