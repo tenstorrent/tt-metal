@@ -154,9 +154,20 @@ class TtLlamaDecoder_optimized:
         page_table=None,
         kv_cache=None,
         mode="decode",
+        chunk_page_table=None,
+        chunk_start_idx=None,
     ) -> ttnn.Tensor:
         if mode == "prefill":
-            return self.prefill_forward(xs, rot_mats, start_pos, user_id, page_table=page_table, kv_cache=kv_cache)
+            return self.prefill_forward(
+                xs,
+                rot_mats,
+                start_pos,
+                user_id,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+            )
         elif mode == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache)
         else:
@@ -276,6 +287,8 @@ class TtLlamaDecoder_optimized:
         user_id: int = 0,
         page_table=None,
         kv_cache=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
     ) -> List[ttnn.Tensor]:
         attn_norm_interleaved = self.tt_distributed_rmsnorm(xs, self.norm_eps, self.attn_norm_sharded)
         attn_norm_interleaved = ttnn.all_gather(
@@ -294,6 +307,8 @@ class TtLlamaDecoder_optimized:
             page_table=page_table,
             kv_cache=kv_cache,
             mode="prefill",
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
         )
 
         attn_norm_interleaved.deallocate(True)
