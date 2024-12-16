@@ -35,8 +35,7 @@ struct AllGatherAsync {
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
     std::shared_ptr<const GlobalSemaphore> semaphore_handle;
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle;
-    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map;
+    bool enable_persistent_fabric_mode;
 
     AllGatherAsync(
         std::optional<Device*> forward_device,
@@ -48,8 +47,7 @@ struct AllGatherAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         std::shared_ptr<const GlobalSemaphore>& semaphore_handle,
-        std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
-        std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) :
+        bool enable_persistent_fabric_mode) :
         forward_device(forward_device),
         backward_device(backward_device),
         dim(dim),
@@ -59,8 +57,7 @@ struct AllGatherAsync {
         output_mem_config(output_mem_config),
         topology(topology),
         semaphore_handle(semaphore_handle),
-        fabric_handle(fabric_handle),
-        sub_device_id_map(sub_device_id_map) {}
+        enable_persistent_fabric_mode(enable_persistent_fabric_mode) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -96,8 +93,7 @@ AllGatherAsync create_all_gather_async_struct(
     const std::vector<Device*>& devices,
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore_handles,
-    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
+    bool enable_persistent_fabric_mode);
 }  // namespace all_gather_async_detail
 }  // namespace ccl
 
@@ -113,7 +109,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::shared_ptr<const GlobalSemaphore>& semaphore_handle,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
+    bool enable_persistent_fabric_mode);
 
 namespace operations {
 namespace experimental {
@@ -125,8 +121,7 @@ Tensor all_gather_async(
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::unordered_map<chip_id_t, SubDeviceId> sub_device_id_map = {},                 // TODO make reference
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
+    bool enable_persistent_fabric_mode = false);  // TODO make reference
 
 }  // namespace ccl
 }  // namespace experimental

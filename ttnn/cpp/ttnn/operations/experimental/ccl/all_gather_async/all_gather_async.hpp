@@ -16,7 +16,8 @@ struct ExecuteAllGatherAsync {
         const int32_t dim,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        bool enable_persistent_fabric_mode = false);
 };
 
 }  // namespace operations::experimental::ccl
