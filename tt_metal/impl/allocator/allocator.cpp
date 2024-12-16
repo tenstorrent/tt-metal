@@ -7,6 +7,7 @@
 #include <magic_enum.hpp>
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
@@ -27,8 +28,17 @@ static char const* get_memory_pool_name(BufferType buffer_type) {
 #endif
 
 void BankManager::init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset) {
-    this->allocator_ =
-        std::make_unique<FreeListOpt>(size_bytes, offset, alignment_bytes, alignment_bytes);
+    switch (this->buffer_type_) {
+        case BufferType::DRAM:
+            this->allocator_ = std::make_unique<FreeListOpt>(size_bytes, offset, alignment_bytes, alignment_bytes);
+            break;
+        case BufferType::L1:
+            this->allocator_ = std::make_unique<FreeList>(
+                size_bytes, offset, alignment_bytes, alignment_bytes, FreeList::SearchPolicy::FIRST);
+            break;
+        default:
+            TT_THROW("Unsupported buffer type to initialize BankManager {}", magic_enum::enum_name(this->buffer_type_));
+    }
 }
 
 void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool disable_interleaved) {
