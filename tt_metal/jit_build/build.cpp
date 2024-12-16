@@ -582,6 +582,13 @@ void JitBuildState::compile_one(
         settings->process_compile_time_args([&defines](int i, uint32_t value) {
             defines += "-DKERNEL_COMPILE_TIME_ARG_" + to_string(i) + "=" + to_string(value) + " ";
         });
+
+        // settings->process_compile_time_args_combined(
+        //     [&defines](uint32_t value) { defines += "-DKERNEL_COMPILE_TIME_ARGS=\\(int[]\\){2,7,23,33,12,76} "; });
+
+        // settings->process_compile_time_args_combined(
+        //     [&defines](uint32_t value) { defines += "-DKERNEL_COMPILE_TIME_ARGS=\\(int[]\\){" + to_string(value) + "}
+        //     "; });
     }
 
     string cmd;

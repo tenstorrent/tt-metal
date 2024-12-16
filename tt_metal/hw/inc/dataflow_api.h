@@ -226,6 +226,18 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  */
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
 
+/**
+ * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using
+ * CreateKernel calls.
+ *
+ * Return value: constexpr uint32_t
+ *
+ * | Argument              | Description                        | Type                  | Valid Range | Required |
+ * |-----------------------|------------------------------------|-----------------------|-------------|----------|
+ * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
+ */
+#define get_compile_time_arg_vals(arg_idx) KERNEL_COMPILE_TIME_ARGS[arg_idx]
+
 FORCE_INLINE
 constexpr static std::int32_t GET_TILE_SIZE(uint format) {
     switch (format & 0x1F) {

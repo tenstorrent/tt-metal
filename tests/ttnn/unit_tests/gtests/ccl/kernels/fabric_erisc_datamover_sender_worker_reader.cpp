@@ -10,6 +10,8 @@
 void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t num_pages_to_read_total = get_compile_time_arg_val(1);
+    constexpr auto num_pages_to_read_total_vals0 = get_compile_time_arg_vals(0);
+    constexpr auto num_pages_to_read_total_vals1 = get_compile_time_arg_vals(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t pages_per_edm_buffer = 1;
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
@@ -23,6 +25,8 @@ void kernel_main() {
            << "\n\tnum_pages_to_read_total=" << num_pages_to_read_total
            << "\n\tpages_per_edm_buffer=" << pages_per_edm_buffer << "\n\tpage_size=" << page_size << "\n";
 
+    DPRINT << "\ncust args --> " << "\n\tnum_pages_to_read_total_vals0=" << num_pages_to_read_total_vals0
+           << "\n\tnum_pages_to_read_total_vals1=" << num_pages_to_read_total_vals1;
     for (uint32_t num_pages_read = 0; num_pages_read < num_pages_to_read_total;
          num_pages_read += pages_per_edm_buffer) {
         // How can I read ahead into the circular buffer so I don't have to do an async read barrier for
