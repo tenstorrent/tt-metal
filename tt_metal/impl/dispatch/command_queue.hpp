@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <fstream>
 #include <memory>
 #include <span>
@@ -106,10 +107,12 @@ class EnqueueReadBufferCommand : public Command {
 };
 
 class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
-   private:
+private:
     void add_prefetch_relay(HugepageDeviceCommand& command) override;
 
-   public:
+    uint32_t bank_base_address;
+
+public:
     EnqueueReadInterleavedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -119,6 +122,7 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
         SystemMemoryManager& manager,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         tt::stl::Span<const SubDeviceId> sub_device_ids,
+        uint32_t bank_base_address,
         uint32_t src_page_index = 0,
         std::optional<uint32_t> pages_to_read = std::nullopt) :
         EnqueueReadBufferCommand(
@@ -131,7 +135,9 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
             expected_num_workers_completed,
             sub_device_ids,
             src_page_index,
-            pages_to_read) {}
+            pages_to_read) {
+        this->bank_base_address = bank_base_address;
+    }
 };
 
 class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
@@ -217,11 +223,13 @@ class EnqueueWriteBufferCommand : public Command {
 };
 
 class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
-   private:
+private:
     void add_dispatch_write(HugepageDeviceCommand& command) override;
     void add_buffer_data(HugepageDeviceCommand& command) override;
 
-   public:
+    uint32_t orig_dst_page_index;
+
+public:
     EnqueueWriteInterleavedBufferCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -235,6 +243,7 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
         uint32_t bank_base_address,
         uint32_t padded_page_size,
         uint32_t dst_page_index = 0,
+        uint32_t orig_dst_page_index = 0,
         std::optional<uint32_t> pages_to_write = std::nullopt) :
         EnqueueWriteBufferCommand(
             command_queue_id,
@@ -250,7 +259,7 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
             padded_page_size,
             dst_page_index,
             pages_to_write) {
-        ;
+        this->orig_dst_page_index = orig_dst_page_index;
     }
 };
 
