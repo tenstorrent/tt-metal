@@ -7,7 +7,7 @@
 #include <memory>
 #include <optional>
 
-#include "tt_metal/third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
