@@ -20,28 +20,28 @@ using BaseTilizeValType = std::function<ttnn::Tensor(const ttnn::Tensor&)>;
 using MassagedTilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
-ttnn::Shape update_original_shape(ttnn::Shape& original) {
+ttnn::Shape update_original_shape(ttnn::Shape& original, uint32_t tile_height, uint32_t tile_width) {
     std::vector<uint32_t> update_original(original.rank());
     uint32_t indx1 = original.rank() - 1;
     uint32_t indx2 = original.rank() - 2;
-    if (original[indx2] % tt::constants::TILE_HEIGHT != 0) {
-        update_original[indx2] = (original[indx2] / tt::constants::TILE_HEIGHT + 1) * tt::constants::TILE_HEIGHT;
+    if (original[indx2] % tile_height != 0) {
+        update_original[indx2] = (original[indx2] / tile_height + 1) * tile_height;
         for (int i = 0; i < original.rank(); i++) {
             if (i != indx2) {
                 update_original[i] = original[i];
             }
         }
-        return ttnn::Shape(tt::tt_metal::LegacyShape(update_original));
+        return tt::tt_metal::LegacyShape(update_original);
     }
 
-    else if (original[indx1] % tt::constants::TILE_WIDTH != 0) {
-        update_original[indx1] = (original[indx1] / tt::constants::TILE_WIDTH + 1) * tt::constants::TILE_WIDTH;
+    else if (original[indx1] % tile_width != 0) {
+        update_original[indx1] = (original[indx1] / tile_width + 1) * tile_width;
         for (int i = 0; i < original.rank(); i++) {
             if (i != indx1) {
                 update_original[i] = original[i];
             }
         }
-        return ttnn::Shape(tt::tt_metal::LegacyShape(update_original));
+        return tt::tt_metal::LegacyShape(update_original);
     }
     return original;
 }
@@ -53,11 +53,14 @@ MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeValArgs {
             *original_shape = input_tensor.get_shape();
             ttnn::Tensor squeezed_tensor = squeeze_to_le_4D(input_tensor);
-            auto print_shape = squeezed_tensor.get_shape();
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            auto unsqueezed_tensor = ttnn::reshape(output, update_original_shape(*original_shape));
+            const auto tile = output.get_tensor_spec().tile();
+            uint32_t tile_height = tile.get_height();
+            uint32_t tile_width = tile.get_width();
+            auto unsqueezed_tensor =
+                ttnn::reshape(output, update_original_shape(*original_shape, tile_height, tile_width));
             return unsqueezed_tensor;
         },
         .operation = std::move(base_tilize)});
