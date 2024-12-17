@@ -43,17 +43,25 @@ UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_out
     return tensor_args.input;
 }
 
+tt::stl::hash::hash_t UniformDeviceOperation::compute_program_hash(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto cached_operation_attributes = operation_attributes;
+    cached_operation_attributes.seed = 0;
+    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
+}
+
 std::tuple<UniformDeviceOperation::operation_attributes_t, UniformDeviceOperation::tensor_args_t>
 UniformDeviceOperation::invoke(
     const Tensor& input,
     const float from,
     const float to,
+    const uint32_t seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
         operation_attributes_t{
             from,
             to,
+            seed,
             memory_config.value_or(input.memory_config()),
             init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         tensor_args_t{input}};
