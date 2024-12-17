@@ -145,7 +145,7 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
     }
     auto override_runtime_args_callback = [reader_kernel_id, compute_with_storage_grid_size](
                                               const void* operation,
-                                              const Program& program,
+                                              const tt::tt_metal::Program& program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {

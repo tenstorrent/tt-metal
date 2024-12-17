@@ -15,7 +15,7 @@ struct Pad {
     const tt::tt_metal::LegacyShape output_tensor_shape;
     const ttnn::SimpleShape input_tensor_start;
     const float pad_value;
-    const MemoryConfig output_mem_config;
+    const tt::tt_metal::MemoryConfig output_mem_config;
     const bool use_multicore;
 
     void validate_with_output_tensors(

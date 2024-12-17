@@ -10,7 +10,7 @@
 namespace ttnn::operations::data_movement {
 
 struct IndexedFill {
-    const MemoryConfig output_mem_config;
+    const tt::tt_metal::MemoryConfig output_mem_config;
     const int64_t dim;
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;

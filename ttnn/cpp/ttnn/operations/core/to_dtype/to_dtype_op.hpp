@@ -24,17 +24,17 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
     auto input_dtype = input_tensor.get_dtype();
 
     auto buffer = std::visit(
-        [](auto&& storage) -> std::variant<OwnedBuffer, BorrowedBuffer> {
+        [](auto&& storage) -> std::variant<tt::tt_metal::OwnedBuffer, tt::tt_metal::BorrowedBuffer> {
             using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, OwnedStorage>) {
+            if constexpr (std::is_same_v<T, tt::tt_metal::OwnedStorage>) {
                 return storage.buffer;
-            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
+            } else if constexpr (std::is_same_v<T, tt::tt_metal::DeviceStorage>) {
                 TT_THROW("Device input_tensor cannot be converted to torch");
-            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
+            } else if constexpr (std::is_same_v<T, tt::tt_metal::BorrowedStorage>) {
                 return storage.buffer;
-            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+            } else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceStorage>) {
                 TT_THROW("Tensor with MultiDeviceStorage cannot be converted to torch");
-            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+            } else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceHostStorage>) {
                 TT_THROW(
                     "Tensor MultiDeviceHostStorage cannot be converted to torch directly. Use composer(..) "
                     "functionality.");
@@ -49,17 +49,21 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
             std::holds_alternative<OwnedBuffer>(buffer),
             "Unexpected type {}",
             tt::stl::get_active_type_name_in_variant(buffer));
-        auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
+        auto uint32_data =
+            std::get<tt::tt_metal::owned_buffer::Buffer<std::uint32_t>>(std::get<tt::tt_metal::OwnedBuffer>(buffer))
+                .get();
         auto float_unpacked_data =
             unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
+        buffer = tt::tt_metal::owned_buffer::create<float>(std::move(float_unpacked_data));
         input_dtype = DataType::FLOAT32;
     } else if (input_dtype == DataType::BFLOAT4_B) {
         TT_ASSERT(
             std::holds_alternative<OwnedBuffer>(buffer),
             "Unexpected type {}",
             tt::stl::get_active_type_name_in_variant(buffer));
-        auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
+        auto uint32_data =
+            std::get<tt::tt_metal::owned_buffer::Buffer<std::uint32_t>>(std::get<tt::tt_metal::OwnedBuffer>(buffer))
+                .get();
         auto float_unpacked_data =
             unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
         buffer = owned_buffer::create<float>(std::move(float_unpacked_data));

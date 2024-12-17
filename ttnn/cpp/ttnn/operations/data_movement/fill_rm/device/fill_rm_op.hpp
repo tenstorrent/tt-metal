@@ -23,7 +23,7 @@ namespace ttnn::operations::data_movement {
 struct FillRM {
     uint32_t N, C, H, W, hFill, wFill;
     float val_hi, val_lo;
-    const MemoryConfig output_mem_config;
+    const tt::tt_metal::MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;

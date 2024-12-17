@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     bool untilize_out, bool fuse_relu,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    DataType dtype,
+    tt::tt_metal::DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
@@ -69,8 +69,8 @@ struct OptimizedConvNew {
     const uint32_t output_channels;
     const uint32_t groups;
     bool untilize_out, has_bias, fuse_relu;
-    MemoryConfig memory_config;
-    const DataType dtype;
+    tt::tt_metal::MemoryConfig memory_config;
+    const tt::tt_metal::DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape; // For sharded input, input tensor shape is nonsense
     bool use_shallow_conv_variant;
     const DeviceComputeKernelConfig compute_kernel_config;
@@ -85,8 +85,8 @@ struct OptimizedConvNew {
         bool has_bias, bool fuse_relu,
         const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
-        MemoryConfig memory_config,
-        DataType dtype,
+        tt::tt_metal::MemoryConfig memory_config,
+        tt::tt_metal::DataType dtype,
         std::array<std::uint32_t, 4> input_tensor_shape, bool use_shallow_conv_variant,
         const DeviceComputeKernelConfig compute_kernel_config, bool enable_act_double_buffer, bool enable_weights_double_buffer, bool enable_split_reader, bool enable_subblock_padding, bool use_non_tile_height) :
             output_channels(output_channels),

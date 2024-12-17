@@ -52,10 +52,10 @@ struct BinaryDeviceOperation {
 
     struct ElementWiseMultiCore {
         struct shared_variables_t {
-            KernelHandle binary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
-            KernelHandle eltwise_binary_kernel_id;
-            CBHandle cb_src0;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle eltwise_binary_kernel_id;
+            tt::tt_metal::CBHandle cb_src0;
             CBHandle cb_src1;
             CBHandle cb_output;
             CoreCoord compute_with_storage_grid_size;

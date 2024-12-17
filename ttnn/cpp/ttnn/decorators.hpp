@@ -311,7 +311,7 @@ struct registered_operation_t {
     template <typename... args_t>
     auto operator()(args_t&&... args) const {
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
+        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
         auto output = invoke(std::forward<args_t>(args)...);
 
         // Should every output tensor be tracked?
@@ -321,7 +321,7 @@ struct registered_operation_t {
         }
         */
 
-        GraphTracker::instance().track_function_end(output);
+        tt::tt_metal::GraphTracker::instance().track_function_end(output);
         tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }
