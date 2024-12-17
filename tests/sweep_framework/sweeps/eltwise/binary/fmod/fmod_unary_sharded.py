@@ -29,7 +29,8 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(12, layouts=["TILE_LAYOUT"]),
+        "input_spec": gen_sharded_spec_unary(16, layouts=["TILE_LAYOUT"]),
+        "unsafe_range": [[-0.01, 0.01]],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
@@ -69,6 +70,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_spec,
+    unsafe_range,
     input_a_dtype,
     *,
     device,
@@ -91,7 +93,11 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
+
     scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
+    if unsafe_range:
+        while unsafe_range[0] <= scalar <= unsafe_range[1]:
+            scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
     golden_function = ttnn.get_golden_function(ttnn.fmod)
     torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
@@ -118,4 +124,5 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+
     return [pcc, e2e_perf]

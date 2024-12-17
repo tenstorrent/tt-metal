@@ -29,13 +29,8 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(12, layouts=["TILE_LAYOUT"]),
+        "input_spec": gen_sharded_spec_unary(16, layouts=["TILE_LAYOUT"]),
         "use_unsafe_range": [False],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    },
-    "xfail": {
-        "input_spec": gen_sharded_spec_unary(12, layouts=["TILE_LAYOUT"]),
-        "use_unsafe_range": [True],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
@@ -75,6 +70,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_spec,
+    use_unsafe_range,
     input_a_dtype,
     *,
     device,
@@ -99,8 +95,9 @@ def run(
     )(input_shape)
 
     scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
-    while -0.004 <= scalar <= 0.004:
-        scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
+    if not use_unsafe_range:
+        while -0.004 <= scalar <= 0.004:
+            scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
     golden_function = ttnn.get_golden_function(ttnn.remainder)
     torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
