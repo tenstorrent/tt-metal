@@ -21,6 +21,7 @@ TIMEOUT = 30
 def run_sum(
     input_shape,
     dim,
+    keepdim,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -36,7 +37,7 @@ def run_sum(
 
     dim = dim % len(input_shape)
 
-    torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=True)
+    torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

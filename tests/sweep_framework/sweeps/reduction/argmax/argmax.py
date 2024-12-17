@@ -39,6 +39,7 @@ parameters = {
         + gen_shapes([1], [128], [1], 7)
         + gen_shapes([1], [250], [3], 4),
         "dim": [0, 1, 2, 3, None],
+        "keepdim": [True, False],
         "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -68,6 +69,15 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
     ):
         return True, "Row major is only supported for fp32 & fp16"
+    if not test_vector["keepdim"]:
+        return True, "keepdim = false is not supported"
+
+    device = ttnn.open_device(device_id=0)
+    if test_vector["input_a_dtype"] == ttnn.float32 and ttnn.device.is_grayskull(device):
+        return True, "Dest Fp32 mode is not supported for arch grayskull"
+    ttnn.close_device(device)
+    del device
+
     return False, None
 
 
@@ -78,6 +88,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_shape,
     dim,
+    keepdim,
     input_a_dtype,
     input_layout,
     input_a_memory_config,
@@ -96,7 +107,7 @@ def run(
     )(input_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.argmax)
-    torch_output_tensor = golden_function(torch_input_tensor_a, dim=dim)
+    torch_output_tensor = golden_function(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

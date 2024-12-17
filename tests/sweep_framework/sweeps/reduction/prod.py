@@ -36,6 +36,7 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 555, 128], [1, 1, 1], 4)
         + gen_shapes([1, 1], [32, 32], [1, 1], 32),
         "dim": [None, 0, 1, 2, 3],
+        "keepdim": [True, False],
         "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -52,21 +53,16 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
     ):
         return True, "Row major is only supported for fp32 & fp16"
-    return False, None
-
-
-def mesh_device_fixture():
-    import os
+    if not test_vector["keepdim"]:
+        return True, "keepdim = false is not supported"
 
     device = ttnn.open_device(device_id=0)
-    # FIXME: if this condition is disabled, i get following error:
-    #     "ibc++abi: terminating due to uncaught exception of type std::runtime_error: TT_FATAL @ ../tt_metal/jit_build/data_format.cpp:230: arch != tt::ARCH::GRAYSKULL"
-    #     "Dest Fp32 mode is not supported for arch grayskull"
-    assert not ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
-    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
-    yield (device, device_name)
+    if test_vector["input_a_dtype"] == ttnn.float32 and ttnn.device.is_grayskull(device):
+        return True, "Dest Fp32 mode is not supported for arch grayskull"
     ttnn.close_device(device)
     del device
+
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -76,6 +72,7 @@ def mesh_device_fixture():
 def run(
     input_shape,
     dim,
+    keepdim,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -92,7 +89,7 @@ def run(
 
     dim = dim % len(input_shape)
 
-    torch_output_tensor = torch.prod(torch_input_tensor_a, dim=dim, keepdim=True)
+    torch_output_tensor = torch.prod(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

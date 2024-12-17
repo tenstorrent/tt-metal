@@ -51,24 +51,12 @@ parameters = {
         "dim": [-1, -2, -3, -4, None],
         "largest": [True, False],
         "k": [32],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
-
-
-def mesh_device_fixture():
-    import os
-
-    device = ttnn.open_device(device_id=0)
-    # FIXME: if this condition is disabled, my program is stuck indefinetly
-    assert not ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
-    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
-    yield (device, device_name)
-    ttnn.close_device(device)
-    del device
 
 
 # Invalidate vector is called during the generation phase where each vector will be passed in.
@@ -87,6 +75,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
     ):
         return True, "Row major is only supported for fp32 & fp16"
+
+    device = ttnn.open_device(device_id=0)
+    if test_vector["input_a_dtype"] == ttnn.float32 and ttnn.device.is_grayskull(device):
+        return True, "Dest Fp32 mode is not supported for arch grayskull"
+    ttnn.close_device(device)
+    del device
+
     return False, None
 
 

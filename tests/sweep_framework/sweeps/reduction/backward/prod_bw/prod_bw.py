@@ -40,6 +40,7 @@ parameters = {
         + gen_shapes([1], [14], [11], 12)
         + gen_shapes([1], [24], [21], 22),
         "dim": [0, 1, 2, 3, None],
+        "keepdim": [True, False],
         "grad_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
@@ -63,6 +64,17 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             return False, None
         else:
             return True, "Row major is only supported for fp32 & fp16"
+    if not test_vector["keepdim"]:
+        return True, "keepdim = false is not supported"
+
+    device = ttnn.open_device(device_id=0)
+    if (
+        test_vector["input_a_dtype"] == ttnn.float32 or test_vector["grad_dtype"] == ttnn.float32
+    ) and ttnn.device.is_grayskull(device):
+        return True, "Dest Fp32 mode is not supported for arch grayskull"
+    ttnn.close_device(device)
+    del device
+
     return False, None
 
 
@@ -73,6 +85,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_shape,
     dim,
+    keepdim,
     grad_dtype,
     input_a_dtype,
     input_layout,
@@ -94,7 +107,7 @@ def run(
     max_dim = len(input_shape) - 1
     dim = random.randint(-max_dim - 1, max_dim)
 
-    intermediate_result = torch.prod(torch_input_tensor_a, dim=dim, keepdim=True)
+    intermediate_result = torch.prod(torch_input_tensor_a, dim=dim, keepdim=keepdim)
     torch_grad_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), grad_dtype
     )(intermediate_result.shape)
