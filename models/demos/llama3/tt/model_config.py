@@ -98,6 +98,7 @@ class TtModelArgs:
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
+        self.max_prefill_chunk_size = max_seq_len
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
@@ -155,6 +156,7 @@ class TtModelArgs:
             self.model_name = "3.1-70B"
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+            self.max_prefill_chunk_size = 64 * 1024  # 70B on T3K maxes out at 64k tokens prefill
         else:
             # NOTE: 3.2-90B and 3.3-70B also use scaling factor of 8
             raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
