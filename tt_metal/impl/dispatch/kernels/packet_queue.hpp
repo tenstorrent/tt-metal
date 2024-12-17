@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include <utility>
+#include <array>
+
+#include "debug/assert.h"
 #include "risc_attribs.h"
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "dataflow_api.h"
@@ -64,6 +68,52 @@ typedef struct dispatch_packet_header_t dispatch_packet_header_t;
 
 static_assert(sizeof(dispatch_packet_header_t) == PACKET_WORD_SIZE_BYTES);
 
+// A sequence of DispatchRemoteNetworkType's used for stamping out multiple input/output queue templates
+template <DispatchRemoteNetworkType... NetworkTypes>
+struct NetworkTypeSequence {
+    static constexpr size_t size = sizeof...(NetworkTypes);
+    static constexpr std::array<DispatchRemoteNetworkType, size> values = {NetworkTypes...};
+};
+// When there is no queue
+using NoNetworkTypeSequence = NetworkTypeSequence<>;
+
+// A sequence of CB Mode enabled or disabled used for stamping out multiple input/output queue templates
+template <bool... CBModeEnabled>
+struct CBModeTypeSequence {
+    static constexpr size_t size = sizeof...(CBModeEnabled);
+    static constexpr std::array<bool, size> values = {CBModeEnabled...};
+};
+// When there is no queue
+using NoCBModeTypeSequence = CBModeTypeSequence<>;
+
+
+// Helper function to call the lambda N times, passing in the template arguments and index
+template <typename NetworkTypeSequence, typename CBModeSequence, typename F, size_t... Index>
+bool process_queues(F&& func, std::index_sequence<Index...>) {
+    static_assert(NetworkTypeSequence::size == CBModeSequence::size);
+    bool result = true;
+    (([&]() {
+        if constexpr (NetworkTypeSequence::values[Index] == DispatchRemoteNetworkType::DISABLE_QUEUE) {
+            return true;
+        } else {
+            return std::forward<F>(func)
+                .template operator()<NetworkTypeSequence::values[Index], CBModeSequence::values[Index], Index>(Index);
+        }
+     }() &&
+      (result = true)),
+     ...);
+    return result;
+}
+
+// F is a lambda that will be called over each queue from index 0 to NetworkTypeSequence::size
+// If any function returns false it will stop.
+template <typename NetworkTypeSequence, typename CBModeSequence, typename F>
+bool process_queues(F&& func) {
+    static_assert(NetworkTypeSequence::size == CBModeSequence::size);
+    return process_queues<NetworkTypeSequence, CBModeSequence>(
+        std::forward<F>(func), std::make_index_sequence<NetworkTypeSequence::size>());
+}
+
 
 class packet_queue_state_t;
 class packet_input_queue_state_t;
@@ -92,7 +142,7 @@ protected:
     volatile uint32_t* local_rptr_sent_reset;
     volatile uint32_t* local_rptr_cleared_reset;
 
-    bool cb_mode;
+    bool cb_mode; // used in advance_next_packet
     uint32_t cb_mode_page_size_words;
     uint8_t cb_mode_local_sem_id;
     uint8_t cb_mode_remote_sem_id;
@@ -203,14 +253,6 @@ public:
         return *this->local_wptr_val;
     }
 
-    inline void advance_queue_local_wptr(uint32_t num_words) {
-        if (this->queue_is_input) {
-            *this->local_wptr_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
-        } else {
-            this->local_wptr += num_words;
-        }
-    }
-
     inline uint32_t get_queue_local_rptr_sent() const {
         return *this->local_rptr_sent_val;
     }
@@ -219,20 +261,30 @@ public:
         return *this->local_rptr_cleared_val;
     }
 
-    inline void advance_queue_local_rptr_sent(uint32_t num_words)  {
-        if (this->queue_is_input) {
-            this->local_rptr_sent += num_words;
+    template<bool is_input>
+    inline void advance_queue_local_wptr(uint32_t num_words) {
+        if constexpr (is_input) {
+            *this->local_wptr_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         } else {
-        *this->local_rptr_sent_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            this->local_wptr += num_words;
         }
     }
 
-    inline void advance_queue_local_rptr_cleared(uint32_t num_words)  {
+    template<bool is_input>
+    inline void advance_queue_local_rptr_sent(uint32_t num_words)  {
+        if constexpr (is_input) {
+            this->local_rptr_sent += num_words;
+        } else {
+            *this->local_rptr_sent_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        }
+    }
 
-        if (this->queue_is_input) {
+    template<bool is_input>
+    inline void advance_queue_local_rptr_cleared(uint32_t num_words)  {
+        if constexpr (is_input) {
             this->local_rptr_cleared += num_words;
         } else {
-        *this->local_rptr_cleared_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            *this->local_rptr_cleared_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
     }
 
@@ -288,77 +340,78 @@ public:
         return queue_size_words - this->get_queue_wptr_offset_words();
     }
 
+    template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline void remote_reg_update(uint32_t reg_addr, uint32_t val) {
-
-        if ((this->remote_update_network_type == DispatchRemoteNetworkType::NONE) || this->cb_mode) {
+        if constexpr (network_type == DispatchRemoteNetworkType::NONE || cb_mode == true || network_type == DispatchRemoteNetworkType::DISABLE_QUEUE) {
             return;
-        }
-        else if (this->remote_update_network_type == DispatchRemoteNetworkType::ETH) {
+        } else if constexpr (network_type == DispatchRemoteNetworkType::ETH) {
             eth_write_remote_reg(reg_addr, val);
         } else {
-            uint64_t dest_addr = NOC_XY_ADDR(this->remote_x, this->remote_y, reg_addr);
+            const auto dest_addr = get_noc_addr(this->remote_x, this->remote_y, reg_addr);
             noc_inline_dw_write(dest_addr, val);
         }
     }
 
+    template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline void advance_queue_remote_wptr(uint32_t num_words) {
         uint32_t val = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         uint32_t reg_addr = this->remote_wptr_update_addr;
-        this->remote_reg_update(reg_addr, val);
+        this->remote_reg_update<network_type, cb_mode>(reg_addr, val);
     }
 
+    template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline void advance_queue_remote_rptr_sent(uint32_t num_words) {
         uint32_t val = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         uint32_t reg_addr = this->remote_rptr_sent_update_addr;
-        this->remote_reg_update(reg_addr, val);
+        this->remote_reg_update<network_type, cb_mode>(reg_addr, val);
     }
 
+    template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline void advance_queue_remote_rptr_cleared(uint32_t num_words) {
         uint32_t val = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         uint32_t reg_addr = this->remote_rptr_cleared_update_addr;
-        this->remote_reg_update(reg_addr, val);
+        this->remote_reg_update<network_type, cb_mode>(reg_addr, val);
     }
 
     inline void reset_ready_flag() {
         *this->local_ready_status_ptr = 0;
     }
 
+    template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline void send_remote_ready_notification() {
-        this->remote_reg_update(this->remote_ready_status_addr,
-                                PACKET_QUEUE_REMOTE_READY_FLAG);
+        this->remote_reg_update<network_type, cb_mode>(this->remote_ready_status_addr, PACKET_QUEUE_REMOTE_READY_FLAG);
     }
 
-    inline void set_remote_ready_status_addr(uint8_t remote_queue_id) {
+    inline void set_end_remote_queue(uint8_t remote_queue_id, uint8_t remote_x, uint8_t remote_y) {
+        this->remote_x = remote_x;
+        this->remote_y = remote_y;
         this->remote_ready_status_addr = STREAM_REG_ADDR(remote_queue_id, STREAM_REMOTE_SRC_REG_INDEX);
     }
 
+    template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline void send_remote_finished_notification() {
-        this->remote_reg_update(this->remote_ready_status_addr,
-                                PACKET_QUEUE_REMOTE_FINISHED_FLAG);
-    }
-
-    inline bool is_remote_ready() const {
-        return *this->local_ready_status_ptr == PACKET_QUEUE_REMOTE_READY_FLAG;
+        this->remote_reg_update<network_type, cb_mode>(this->remote_ready_status_addr, PACKET_QUEUE_REMOTE_FINISHED_FLAG);
     }
 
     inline uint32_t get_remote_ready_status() const {
         return *this->local_ready_status_ptr;
     }
 
+    inline bool is_remote_ready() const {
+        return this->get_remote_ready_status() == PACKET_QUEUE_REMOTE_READY_FLAG;
+    }
+
     inline bool is_remote_finished() const {
-        return *this->local_ready_status_ptr == PACKET_QUEUE_REMOTE_FINISHED_FLAG;
+        return this->get_remote_ready_status() == PACKET_QUEUE_REMOTE_FINISHED_FLAG;
     }
 
     inline uint32_t cb_mode_get_local_sem_val() {
-        if (!this->cb_mode) {
-            return 0;
-        }
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* local_sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(this->cb_mode_local_sem_id));
         // semaphore underflow is currently used to signal path teardown with minimal prefetcher changes
         uint32_t val = *local_sem_addr;
-        if (val & 0x80000000) {
+        if (val & 0x80000000) { // hardcoded frmo cq_dispatch/prefetch kernel
             val &= 0x7fffffff;
             *this->local_ready_status_ptr = PACKET_QUEUE_REMOTE_FINISHED_FLAG;
         }
@@ -366,9 +419,6 @@ public:
     }
 
     inline bool cb_mode_local_sem_downstream_complete() {
-        if (!this->cb_mode) {
-            return false;
-        }
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* local_sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(this->cb_mode_local_sem_id));
@@ -378,22 +428,21 @@ public:
     }
 
     inline void cb_mode_inc_local_sem_val(uint32_t val) {
-        if (this->cb_mode) {
-            uint32_t sem_l1_addr = get_semaphore<fd_core_type>(this->cb_mode_local_sem_id);
-            uint64_t sem_noc_addr = get_noc_addr(sem_l1_addr);
-            noc_semaphore_inc(sem_noc_addr, val);
-            noc_async_atomic_barrier();
-        }
+        uint32_t sem_l1_addr = get_semaphore<fd_core_type>(this->cb_mode_local_sem_id);
+        uint64_t sem_noc_addr = get_noc_addr(sem_l1_addr);
+        noc_semaphore_inc(sem_noc_addr, val);
+        noc_async_atomic_barrier();
     }
 
     inline void cb_mode_inc_remote_sem_val(uint32_t val) {
         uint32_t sem_l1_addr = get_semaphore<fd_core_type>(this->cb_mode_remote_sem_id);
         uint64_t sem_noc_addr = get_noc_addr(remote_x, remote_y, sem_l1_addr);
-        if (this->cb_mode && (val > 0)) {
+        if (val) {
             noc_semaphore_inc(sem_noc_addr, val);
         }
     }
 
+    template<bool is_input>
     inline uint32_t cb_mode_rptr_sent_advance_page_align() {
         uint32_t rptr_val = this->get_queue_local_rptr_sent();
         uint32_t page_size_words_mask = this->cb_mode_page_size_words - 1;
@@ -401,23 +450,25 @@ public:
         uint32_t input_pad_words_skipped = 0;
         if (num_words_past_page_boundary > 0) {
             input_pad_words_skipped = this->cb_mode_page_size_words - num_words_past_page_boundary;
-            this->advance_queue_local_rptr_sent(input_pad_words_skipped);
+            this->advance_queue_local_rptr_sent<is_input>(input_pad_words_skipped);
         }
         return input_pad_words_skipped;
     }
 
+    template<bool is_input>
     inline void cb_mode_local_sem_wptr_update() {
         uint32_t local_sem_val = this->cb_mode_get_local_sem_val();
         for (uint32_t i = 0; i < local_sem_val; i++) {
-            this->advance_queue_local_wptr(this->cb_mode_page_size_words);
+            this->advance_queue_local_wptr<is_input>(this->cb_mode_page_size_words);
         }
         this->cb_mode_inc_local_sem_val(-local_sem_val);
     }
 
+    template<bool is_input>
     inline void cb_mode_local_sem_rptr_cleared_update() {
         uint32_t local_sem_val = this->cb_mode_get_local_sem_val();
         for (uint32_t i = 0; i < local_sem_val; i++) {
-            this->advance_queue_local_rptr_cleared(this->cb_mode_page_size_words);
+            this->advance_queue_local_rptr_cleared<is_input>(this->cb_mode_page_size_words);
         }
         this->cb_mode_inc_local_sem_val(-local_sem_val);
     }
@@ -520,7 +571,6 @@ public:
 
         tt_l1_ptr uint32_t* queue_ptr =
             reinterpret_cast<tt_l1_ptr uint32_t*>(queue_start_addr_words*PACKET_WORD_SIZE_BYTES);
-        // zero_l1_buf(queue_ptr, queue_size_words*PACKET_WORD_SIZE_BYTES);
 
         this->packetizer_page_words_cleared = 0;
 
@@ -542,17 +592,14 @@ public:
         return this->end_of_cmd;
     }
 
-    inline bool is_packetizer_input() const {
-        return this->cb_mode;
-    }
-
     inline uint32_t get_queue_data_num_words_available_to_send() const {
         return (this->get_queue_local_wptr() - this->get_queue_local_rptr_sent()) & this->queue_size_mask;
     }
 
+    template<bool cb_mode>
     inline bool get_curr_packet_valid() {
-        if (this->cb_mode) {
-            this->cb_mode_local_sem_wptr_update();
+        if constexpr (cb_mode) {
+            this->cb_mode_local_sem_wptr_update<true>();
         }
         if (!this->curr_packet_valid && (this->get_queue_data_num_words_available_to_send() > 0)){
             this->advance_next_packet();
@@ -625,9 +672,10 @@ public:
         return num_words_available_to_send >= this->get_curr_packet_words_remaining();
     }
 
+    template<bool cb_mode>
     inline uint32_t input_queue_curr_packet_num_words_available_to_send() {
-        if (this->cb_mode) {
-            this->cb_mode_local_sem_wptr_update();
+        if constexpr (cb_mode) {
+            this->cb_mode_local_sem_wptr_update<true>();
         }
         uint32_t num_words = this->get_queue_data_num_words_available_to_send();
         if (num_words == 0) {
@@ -638,16 +686,17 @@ public:
     }
 
     // returns the number of words skipped for page padding if in packetizer mode
+    template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline uint32_t input_queue_advance_words_sent(uint32_t num_words) {
         uint32_t input_pad_words_skipped = 0;
         if (num_words > 0) {
-            this->advance_queue_local_rptr_sent(num_words);
-            this->advance_queue_remote_rptr_sent(num_words);
+            this->advance_queue_local_rptr_sent<true>(num_words);
+            this->advance_queue_remote_rptr_sent<network_type, cb_mode>(num_words);
             this->curr_packet_words_sent += num_words;
             uint32_t curr_packet_words_remaining = this->get_curr_packet_words_remaining();
             if (curr_packet_words_remaining == 0) {
-                if (this->is_packetizer_input()) {
-                    input_pad_words_skipped = this->cb_mode_rptr_sent_advance_page_align();
+                if constexpr (cb_mode) {
+                    input_pad_words_skipped = this->cb_mode_rptr_sent_advance_page_align<true>();
                 }
                 this->curr_packet_valid = false;
                 this->advance_next_packet();
@@ -656,11 +705,12 @@ public:
         return input_pad_words_skipped;
     }
 
+    template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline void input_queue_advance_words_cleared(uint32_t num_words) {
         if (num_words > 0) {
-            this->advance_queue_local_rptr_cleared(num_words);
-            this->advance_queue_remote_rptr_cleared(num_words);
-            if (this->is_packetizer_input()) {
+            this->advance_queue_local_rptr_cleared<true>(num_words);
+            this->advance_queue_remote_rptr_cleared<network_type, cb_mode>(num_words);
+            if constexpr (cb_mode) {
                 this->packetizer_page_words_cleared += num_words;
                 uint32_t remote_sem_inc = 0;
                 while (this->packetizer_page_words_cleared >= this->cb_mode_page_size_words) {
@@ -669,13 +719,6 @@ public:
                 }
                 this->cb_mode_inc_remote_sem_val(remote_sem_inc);
             }
-        }
-    }
-
-    inline void input_queue_clear_all_words_sent() {
-        uint32_t num_words = this->get_num_words_sent_not_cleared();
-        if (num_words > 0) {
-            this->input_queue_advance_words_cleared(num_words);
         }
     }
 
@@ -698,8 +741,7 @@ class packet_output_queue_state_t : public packet_queue_state_t {
 
 protected:
 
-    uint32_t max_noc_send_words;
-    uint32_t max_eth_send_words;
+    uint32_t output_max_send_words;
 
     uint32_t unpacketizer_page_words_sent;
     bool unpacketizer_remove_header;
@@ -737,14 +779,15 @@ protected:
             return this->prev_output_total_words_in_flight;
         }
 
+        template<typename input_network_types, typename input_cb_modes>
         inline uint32_t prev_words_in_flight_flush() {
-
             uint32_t words_flushed = this->prev_output_total_words_in_flight;
             if (words_flushed > 0) {
-                for (uint32_t i = 0; i < num_input_queues; i++) {
-                    this->input_queue_array[i].input_queue_advance_words_cleared(this->prev_input_queue_words_in_flight[i]);
-                    this->prev_input_queue_words_in_flight[i] = 0;
-                }
+                process_queues<input_network_types, input_cb_modes>([&]<auto network_type, auto cb_mode, auto sequence_i>(auto) -> bool {
+                    this->input_queue_array[sequence_i].template input_queue_advance_words_cleared<network_type, cb_mode>(this->prev_input_queue_words_in_flight[sequence_i]);
+                    this->prev_input_queue_words_in_flight[sequence_i] = 0;
+                    return true;
+                });
             }
 
             uint32_t* tmp = this->prev_input_queue_words_in_flight;
@@ -756,8 +799,10 @@ protected:
             return words_flushed;
         }
 
+
+        template<DispatchRemoteNetworkType input_network_type, bool input_cb_mode>
         inline void register_words_in_flight(uint32_t input_queue_id, uint32_t num_words) {
-            uint32_t input_pad_words_skipped = this->input_queue_array[input_queue_id].input_queue_advance_words_sent(num_words);
+            uint32_t input_pad_words_skipped = this->input_queue_array[input_queue_id].input_queue_advance_words_sent<input_network_type, input_cb_mode>(num_words);
             this->curr_input_queue_words_in_flight[input_queue_id] += (num_words + input_pad_words_skipped);
             this->curr_output_total_words_in_flight += num_words;
         }
@@ -816,82 +861,81 @@ public:
         this->unpacketizer_page_words_sent = 0;
         this->ptr_offset_mask = queue_size_words - 1;
         this->queue_size_mask = (queue_size_words << 1) - 1;
-        this->max_noc_send_words = DEFAULT_MAX_NOC_SEND_WORDS;
-        this->max_eth_send_words = DEFAULT_MAX_ETH_SEND_WORDS;
         this->input_queue_status.init(input_queue_array, num_input_queues);
+        switch (remote_update_network_type) {
+            case DispatchRemoteNetworkType::DISABLE_QUEUE:
+            case DispatchRemoteNetworkType::NONE:
+                this->output_max_send_words = 0;
+                break;
+            case DispatchRemoteNetworkType::ETH:
+                this->output_max_send_words = DEFAULT_MAX_ETH_SEND_WORDS;
+                break;
+            case DispatchRemoteNetworkType::NOC0:
+            case DispatchRemoteNetworkType::NOC1:
+                this->output_max_send_words = DEFAULT_MAX_NOC_SEND_WORDS;
+                break;
+            default:
+                ASSERT(false);
+        }
+
         this->reset_queue_local_rptr_sent();
         this->reset_queue_local_rptr_cleared();
         this->reset_ready_flag();
     }
 
-    inline bool is_unpacketizer_output() const {
-        return this->cb_mode;
-    }
-
-    inline void set_max_noc_send_words(uint32_t max_noc_send_words) {
-        this->max_noc_send_words = max_noc_send_words;
-    }
-
-    inline void set_max_eth_send_words(uint32_t max_eth_send_words) {
-        this->max_eth_send_words = max_eth_send_words;
-    }
-
-    inline uint32_t output_max_num_words_to_forward() const {
-        return (this->remote_update_network_type == DispatchRemoteNetworkType::ETH) ?
-            this->max_eth_send_words : this->max_noc_send_words;
-    }
-
+    template<DispatchRemoteNetworkType network_type>
     inline void send_data_to_remote(uint32_t src_addr, uint32_t dest_addr, uint32_t num_words) {
-        if ((this->remote_update_network_type == DispatchRemoteNetworkType::NONE) ||
-            (num_words == 0)) {
-            return;
-        } else if (this->remote_update_network_type == DispatchRemoteNetworkType::ETH) {
-            // while(eth_txq_is_busy());
-            internal_::eth_send_packet(0, src_addr/PACKET_WORD_SIZE_BYTES, dest_addr/PACKET_WORD_SIZE_BYTES, num_words);
-        } else {
-            uint64_t noc_dest_addr = NOC_XY_ADDR(this->remote_x, this->remote_y, dest_addr);
-            noc_async_write(src_addr, noc_dest_addr, num_words*PACKET_WORD_SIZE_BYTES);
+        if constexpr (network_type == DispatchRemoteNetworkType::NONE) return;
+        else {
+            if (!num_words) return;
+
+            if constexpr (network_type == DispatchRemoteNetworkType::ETH) {
+                internal_::eth_send_packet(0, src_addr/PACKET_WORD_SIZE_BYTES, dest_addr/PACKET_WORD_SIZE_BYTES, num_words);
+            } else {
+                const auto noc_dest_addr = get_noc_addr(this->remote_x, this->remote_y, dest_addr);
+                noc_async_write(src_addr, noc_dest_addr, num_words*PACKET_WORD_SIZE_BYTES);
+            }
         }
     }
 
-    inline void remote_wptr_update(uint32_t num_words) {
-        this->advance_queue_remote_wptr(num_words);
-    }
-
+    template<bool cb_mode, typename input_network_types, typename input_cb_modes>
     inline uint32_t prev_words_in_flight_check_flush() {
-        if (this->is_unpacketizer_output()) {
+        if constexpr (cb_mode) {
             uint32_t words_written_not_sent = get_num_words_written_not_sent();
             noc_async_writes_flushed();
-            this->advance_queue_local_rptr_sent(words_written_not_sent);
-            uint32_t words_flushed = this->input_queue_status.prev_words_in_flight_flush();
-            this->cb_mode_local_sem_rptr_cleared_update();
+            this->advance_queue_local_rptr_sent<false>(words_written_not_sent);
+            uint32_t words_flushed = this->input_queue_status.prev_words_in_flight_flush<input_network_types, input_cb_modes>();
+            this->cb_mode_local_sem_rptr_cleared_update<false>();
             return words_flushed;
         }
         else if (this->get_num_words_written_not_sent() <= this->input_queue_status.get_curr_output_total_words_in_flight()) {
-            return this->input_queue_status.prev_words_in_flight_flush();
+            return this->input_queue_status.prev_words_in_flight_flush<input_network_types, input_cb_modes>();
         }
         else {
             return 0;
         }
     }
 
+    template<bool cb_mode, typename input_network_types, typename input_cb_modes>
     bool output_barrier(uint32_t timeout_cycles = 0) {
         uint32_t start_timestamp = 0;
         if (timeout_cycles > 0) {
             start_timestamp = get_timestamp_32b();
         }
-        if (this->is_unpacketizer_output()) {
+
+        if constexpr (cb_mode) {
            noc_async_writes_flushed();
         }
+
         while (this->get_queue_data_num_words_occupied() > 0) {
-            if (this->is_unpacketizer_output()) {
-                this->cb_mode_local_sem_rptr_cleared_update();
+            if constexpr (cb_mode) {
+                this->cb_mode_local_sem_rptr_cleared_update<false>();
                 if (this->cb_mode_local_sem_downstream_complete()) {
                     // There is no guaranteed that dispatch_h will increment semaphore for all commmands
                     // (specifically the final terminate command).
                     // So just clear whatever remains once the completion signal is received.
                     uint32_t words_occupied = this->get_queue_data_num_words_occupied();
-                    this->advance_queue_local_rptr_cleared(words_occupied);
+                    this->advance_queue_local_rptr_cleared<false>(words_occupied);
                 }
             }
             if (timeout_cycles > 0) {
@@ -902,16 +946,16 @@ public:
             }
             this->yield();
         }
-        this->input_queue_status.prev_words_in_flight_flush();
-        this->input_queue_status.prev_words_in_flight_flush();
+        this->input_queue_status.prev_words_in_flight_flush<input_network_types, input_cb_modes>();
+        this->input_queue_status.prev_words_in_flight_flush<input_network_types, input_cb_modes>();
         return true;
     }
 
+    template<bool cb_mode>
     inline uint32_t get_num_words_to_send(uint32_t input_queue_index) {
-
         packet_input_queue_state_t* input_queue_ptr = &(this->input_queue_status.input_queue_array[input_queue_index]);
 
-        uint32_t num_words_available_in_input = input_queue_ptr->input_queue_curr_packet_num_words_available_to_send();
+        uint32_t num_words_available_in_input = input_queue_ptr->input_queue_curr_packet_num_words_available_to_send<cb_mode>();
         uint32_t num_words_before_input_rptr_wrap = input_queue_ptr->get_queue_words_before_rptr_sent_wrap();
         num_words_available_in_input = std::min(num_words_available_in_input, num_words_before_input_rptr_wrap);
         uint32_t num_words_free_in_output = this->get_queue_data_num_words_free();
@@ -923,15 +967,15 @@ public:
 
         uint32_t output_buf_words_before_wptr_wrap = this->get_queue_words_before_wptr_wrap();
         num_words_to_forward = std::min(num_words_to_forward, output_buf_words_before_wptr_wrap);
-        num_words_to_forward = std::min(num_words_to_forward, this->output_max_num_words_to_forward());
+        num_words_to_forward = std::min(num_words_to_forward, this->output_max_send_words);
 
         return num_words_to_forward;
     }
 
+    template<DispatchRemoteNetworkType output_network_type, bool output_cb_mode, DispatchRemoteNetworkType input_network_type, bool input_cb_mode>
     inline uint32_t forward_data_from_input(uint32_t input_queue_index, bool& full_packet_sent, uint16_t end_of_cmd) {
-
         packet_input_queue_state_t* input_queue_ptr = &(this->input_queue_status.input_queue_array[input_queue_index]);
-        uint32_t num_words_to_forward = this->get_num_words_to_send(input_queue_index);
+        uint32_t num_words_to_forward = this->get_num_words_to_send<output_cb_mode>(input_queue_index);
         full_packet_sent = (num_words_to_forward == input_queue_ptr->get_curr_packet_words_remaining());
         if (num_words_to_forward == 0) {
             return 0;
@@ -939,24 +983,21 @@ public:
 
         if (this->unpacketizer_remove_header && input_queue_ptr->curr_packet_start()) {
             num_words_to_forward--;
-            this->input_queue_status.register_words_in_flight(input_queue_index, 1);
+            this->input_queue_status.register_words_in_flight<input_network_type, input_cb_mode>(input_queue_index, 1);
+            if (num_words_to_forward == 0) {
+                return 0;
+            }
         }
-        if (num_words_to_forward == 0) {
-            return 0;
-        }
 
-        uint32_t src_addr =
-            (input_queue_ptr->queue_start_addr_words +
-             input_queue_ptr->get_queue_rptr_sent_offset_words())*PACKET_WORD_SIZE_BYTES;
-        uint32_t dest_addr =
-            (this->queue_start_addr_words + this->get_queue_wptr_offset_words())*PACKET_WORD_SIZE_BYTES;
+        const auto src_addr = input_queue_ptr->get_queue_rptr_sent_addr_bytes();
+        const auto dest_addr = this->get_queue_wptr_addr_bytes();
 
-        this->send_data_to_remote(src_addr, dest_addr, num_words_to_forward);
-        this->input_queue_status.register_words_in_flight(input_queue_index, num_words_to_forward);
-        this->advance_queue_local_wptr(num_words_to_forward);
+        this->send_data_to_remote<output_network_type>(src_addr, dest_addr, num_words_to_forward);
+        this->input_queue_status.register_words_in_flight<input_network_type, input_cb_mode>(input_queue_index, num_words_to_forward);
+        this->advance_queue_local_wptr<false>(num_words_to_forward);
 
-        if (!this->is_unpacketizer_output()) {
-            this->remote_wptr_update(num_words_to_forward);
+        if constexpr (!output_cb_mode) {
+            this->advance_queue_remote_wptr<output_network_type, output_cb_mode>(num_words_to_forward);
         } else {
             this->unpacketizer_page_words_sent += num_words_to_forward;
             if (full_packet_sent && end_of_cmd) {
@@ -965,7 +1006,7 @@ public:
                 if (unpacketizer_page_words_sent_past_page_bound > 0) {
                     uint32_t pad_words = this->cb_mode_page_size_words - unpacketizer_page_words_sent_past_page_bound;
                     this->unpacketizer_page_words_sent += pad_words;
-                    this->advance_queue_local_wptr(pad_words);
+                    this->advance_queue_local_wptr<false>(pad_words);
                 }
             }
             uint32_t remote_sem_inc = 0;
@@ -987,20 +1028,23 @@ public:
 };
 
 
-/**
- *  Polling for ready signal from the remote peers of all input and output queues.
- *  Blocks until all are ready, but doesn't block polling on each individual queue.
- *  Returns false in case of timeout.
- */
-bool wait_all_src_dest_ready(packet_input_queue_state_t* input_queue_array, uint32_t num_input_queues,
-                             packet_output_queue_state_t* output_queue_array, uint32_t num_output_queues,
-                             uint32_t timeout_cycles = 0) {
+// Wait for all input and output queues and their remotes to signal Ready on the remote ready status
+template <
+    typename InputNetworkTypeSequence,
+    typename InputCBSequence,
+    typename OutputNetworkTypeSequence,
+    typename OutputCBSequence>
+bool wait_all_input_output_ready(packet_input_queue_state_t* input_queue_array, packet_output_queue_state_t* output_queue_array, uint32_t timeout_cycles = 0) {
+    static_assert(InputNetworkTypeSequence::size == InputCBSequence::size);
+    static_assert(OutputNetworkTypeSequence::size == OutputCBSequence::size);
 
+    bool src_ready[InputNetworkTypeSequence::size];
+    bool dest_ready[OutputNetworkTypeSequence::size];
     bool all_src_dest_ready = false;
-    bool src_ready[num_input_queues] = {false};
-    bool dest_ready[num_output_queues] = {false};
-
     uint32_t iters = 0;
+
+    std::fill_n(src_ready, InputNetworkTypeSequence::size, false);
+    std::fill_n(dest_ready, OutputNetworkTypeSequence::size, false);
 
     uint32_t start_timestamp = get_timestamp_32b();
     while (!all_src_dest_ready) {
@@ -1011,37 +1055,41 @@ bool wait_all_src_dest_ready(packet_input_queue_state_t* input_queue_array, uint
                 return false;
             }
         }
+
         all_src_dest_ready = true;
-        for (uint32_t i = 0; i < num_input_queues; i++) {
-            if (!src_ready[i]) {
-                src_ready[i] = input_queue_array[i].is_packetizer_input() ||
-                               input_queue_array[i].is_remote_ready();
-                if (!src_ready[i]) {
-                    input_queue_array[i].send_remote_ready_notification();
-                    all_src_dest_ready = false;
-                } else {
-                    // handshake with src complete
+        // checking input queues
+        process_queues<InputNetworkTypeSequence, InputCBSequence>(
+            [&]<auto network_type, auto cb_mode, auto>(auto index) -> bool {
+                if (!src_ready[index]) {
+                    src_ready[index] = cb_mode || input_queue_array[index].is_remote_ready();
+                    if (!src_ready[index]) {
+                        input_queue_array[index].template send_remote_ready_notification<network_type, cb_mode>();
+                        all_src_dest_ready = false;
+                    } else {
+                        // handshake with src complete
+                    }
                 }
-            }
-        }
-        for (uint32_t i = 0; i < num_output_queues; i++) {
-            if (!dest_ready[i]) {
-                dest_ready[i] = output_queue_array[i].is_remote_ready() ||
-                                output_queue_array[i].is_unpacketizer_output();
-                if (dest_ready[i]) {
-                    output_queue_array[i].send_remote_ready_notification();
-                } else {
-                    all_src_dest_ready = false;
+
+                return true;  // keep looping through other queues
+            });
+
+        // checking output queues
+        process_queues<OutputNetworkTypeSequence, OutputCBSequence>(
+            [&]<auto network_type, auto cb_mode, auto>(auto index) -> bool {
+                if (!dest_ready[index]) {
+                    dest_ready[index] = cb_mode || output_queue_array[index].is_remote_ready();
+                    if (dest_ready[index]) {
+                        output_queue_array[index].template send_remote_ready_notification<network_type, cb_mode>();
+                    } else {
+                        all_src_dest_ready = false;
+                    }
                 }
-            }
-        }
+                return true;
+            });
+
 #if defined(COMPILE_FOR_ERISC)
-        if ((timeout_cycles == 0) && (iters & 0xFFF) == 0) {
-            //if timeout is disabled, context switch every 4096 iterations.
-            //this is necessary to allow ethernet routing layer to operate.
-            //this core may have pending ethernet routing work.
-            internal_::risc_context_switch();
-        }
+        // Just for init purposes it's ok to keep context switching
+        internal_::risc_context_switch();
 #endif
     }
     return true;

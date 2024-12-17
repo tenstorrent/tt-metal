@@ -7,9 +7,6 @@
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_helpers.hpp"
 
-packet_input_queue_state_t input_queue;
-packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
-
 constexpr uint32_t endpoint_id_start_index = get_compile_time_arg_val(0);
 
 constexpr uint32_t rx_queue_start_addr_words = get_compile_time_arg_val(1);
@@ -181,6 +178,14 @@ constexpr uint32_t output_depacketize_remove_header[MAX_SWITCH_FAN_OUT] =
     };
 
 
+packet_input_queue_state_t input_queue;
+using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type>;
+using input_queue_cb_mode_sequence = CBModeTypeSequence<false>;
+
+packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
+using output_queue_network_sequence = NetworkTypeSequence<remote_tx_network_type[0], remote_tx_network_type[1], remote_tx_network_type[2], remote_tx_network_type[3]>;
+using output_queue_cb_mode_sequence = CBModeTypeSequence<output_depacketize[0], output_depacketize[1], output_depacketize[2], output_depacketize[3]>;
+
 
 inline uint8_t dest_output_queue_id(uint32_t dest_endpoint_id) {
     uint32_t dest_endpoint_index = dest_endpoint_id - endpoint_id_start_index;
@@ -207,7 +212,10 @@ void kernel_main() {
     input_queue.init(0, rx_queue_start_addr_words, rx_queue_size_words,
                      remote_rx_x, remote_rx_y, remote_rx_queue_id, remote_rx_network_type);
 
-    if (!wait_all_src_dest_ready(&input_queue, 1, output_queues, demux_fan_out, timeout_cycles)) {
+    if (!wait_all_input_output_ready<input_queue_network_sequence,
+                                     input_queue_cb_mode_sequence,
+                                     output_queue_network_sequence,
+                                     output_queue_cb_mode_sequence>(&input_queue, output_queues, timeout_cycles)) {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
@@ -231,37 +239,56 @@ void kernel_main() {
                 break;
             }
         }
-        if (input_queue.get_curr_packet_valid()) {
+        if (input_queue.get_curr_packet_valid<false>()) {
             uint32_t dest = input_queue.get_curr_packet_dest();
             uint8_t output_queue_id = dest_output_queue_id(dest);
             bool full_packet_sent;
-            uint32_t words_sent = output_queues[output_queue_id].forward_data_from_input(0, full_packet_sent, input_queue.get_end_of_cmd());
+            uint32_t words_sent = 0;
+
+            switch(output_queue_id) {
+                case 0:
+                    words_sent = output_queues[output_queue_id].forward_data_from_input<remote_tx_network_type[0], output_depacketize[0], remote_rx_network_type, false>(0, full_packet_sent, input_queue.get_end_of_cmd());
+                    break;
+                case 1:
+                    words_sent = output_queues[output_queue_id].forward_data_from_input<remote_tx_network_type[1], output_depacketize[1], remote_rx_network_type, false>(0, full_packet_sent, input_queue.get_end_of_cmd());
+                    break;
+                case 2:
+                    words_sent = output_queues[output_queue_id].forward_data_from_input<remote_tx_network_type[2], output_depacketize[2], remote_rx_network_type, false>(0, full_packet_sent, input_queue.get_end_of_cmd());
+                    break;
+                case 3:
+                    words_sent = output_queues[output_queue_id].forward_data_from_input<remote_tx_network_type[3], output_depacketize[3], remote_rx_network_type, false>(0, full_packet_sent, input_queue.get_end_of_cmd());
+                    break;
+                default:
+                    break;
+            }
             data_words_sent += words_sent;
             if ((words_sent > 0) && (timeout_cycles > 0)) {
                 progress_timestamp = get_timestamp_32b();
             }
         }
         all_outputs_finished = true;
-        for (uint32_t i = 0; i < demux_fan_out; i++) {
-            output_queues[i].prev_words_in_flight_check_flush();
-            all_outputs_finished &= output_queues[i].is_remote_finished();
-        }
+        process_queues<output_queue_network_sequence, output_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto) -> bool {
+            output_queues[sequence_i].template prev_words_in_flight_check_flush<cbmode, input_queue_network_sequence, input_queue_cb_mode_sequence>();
+            all_outputs_finished &= output_queues[sequence_i].is_remote_finished();
+            return true;
+        });
     }
 
     if (!timeout) {
         write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000002);
-        for (uint32_t i = 0; i < demux_fan_out; i++) {
-            if (!output_queues[i].output_barrier(timeout_cycles)) {
+        process_queues<output_queue_network_sequence, output_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto) -> bool {
+            if (!output_queues[sequence_i].template output_barrier<cbmode, input_queue_network_sequence, input_queue_cb_mode_sequence>(timeout_cycles)) {
                 timeout = true;
-                break;
+                return false;
             }
-        }
+            return true;
+        });
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     if (!timeout) {
         write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000003);
-        input_queue.send_remote_finished_notification();
+        input_queue.send_remote_finished_notification<remote_rx_network_type, false>();
     }
 
     set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
@@ -270,9 +297,6 @@ void kernel_main() {
 
     if (timeout) {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
-        // DPRINT << "demux timeout" << ENDL();
-        // // input_queue.dprint_object();
-        // output_queues[0].dprint_object();
     } else {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
         write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);

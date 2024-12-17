@@ -7,9 +7,6 @@
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_helpers.hpp"
 
-packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
-packet_output_queue_state_t output_queue;
-
 constexpr uint32_t reserved = get_compile_time_arg_val(0);
 
 // assume up to MAX_SWITCH_FAN_IN queues with contiguous storage,
@@ -137,6 +134,13 @@ constexpr uint32_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(24) >> 24) & 0xFF
     };
 
+packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
+using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
+using input_queue_cb_mode_sequence = CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;
+
+packet_output_queue_state_t output_queue;
+using output_queue_network_sequence = NetworkTypeSequence<tx_network_type>;
+using output_queue_cb_mode_sequence = CBModeTypeSequence<output_depacketize>;
 
 void kernel_main() {
 
@@ -159,17 +163,22 @@ void kernel_main() {
                       output_depacketize_downstream_sem, output_depacketize_local_sem,
                       output_depacketize_remove_header);
 
-    if (!wait_all_src_dest_ready(input_queues, mux_fan_in, &output_queue, 1, timeout_cycles)) {
+    if (!wait_all_input_output_ready<
+            input_queue_network_sequence,
+            input_queue_cb_mode_sequence,
+            output_queue_network_sequence,
+            output_queue_cb_mode_sequence>(input_queues, &output_queue, timeout_cycles)) {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
 
     write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000001);
 
-    uint32_t curr_input = 0;
+    // uint32_t curr_input = 0;
     bool timeout = false;
     bool dest_finished = false;
     bool curr_input_partial_packet_sent = false;
+    uint32_t partial_packet_sent_index = 0;
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;
     uint64_t start_timestamp = get_timestamp();
@@ -185,28 +194,36 @@ void kernel_main() {
                 break;
             }
         }
-        if (input_queues[curr_input].get_curr_packet_valid()) {
-            bool full_packet_sent;
-            uint32_t words_sent = output_queue.forward_data_from_input(curr_input, full_packet_sent, input_queues[curr_input].get_end_of_cmd());
-            data_words_sent += words_sent;
-            if ((words_sent > 0) && (timeout_cycles > 0)) {
-                progress_timestamp = get_timestamp_32b();
+
+        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto input_network_type, auto input_cb_mode, auto sequence_i>(auto) -> bool {
+            if (curr_input_partial_packet_sent && partial_packet_sent_index != sequence_i) return true;
+
+            if (input_queues[sequence_i].template get_curr_packet_valid<input_cb_mode>()) {
+                bool full_packet_sent;
+                uint32_t words_sent = output_queue.template forward_data_from_input<tx_network_type, output_depacketize, input_network_type, input_cb_mode>(sequence_i, full_packet_sent, input_queues[sequence_i].get_end_of_cmd());
+                data_words_sent += words_sent;
+                if ((words_sent > 0) && (timeout_cycles > 0)) {
+                    progress_timestamp = get_timestamp_32b();
+                }
+                curr_input_partial_packet_sent = !full_packet_sent;
             }
-            curr_input_partial_packet_sent = !full_packet_sent;
-        }
-        if (!curr_input_partial_packet_sent) {
-            curr_input++;
-            if (curr_input == mux_fan_in) {
-                curr_input = 0;
+
+            if (curr_input_partial_packet_sent) {
+                partial_packet_sent_index = sequence_i;
+                // stop looping at this queue. come back to it at the next iteration from the outer while loop
+                return false;
             }
-        }
-        output_queue.prev_words_in_flight_check_flush();
+
+            return true;
+        });
+
+        output_queue.prev_words_in_flight_check_flush<output_depacketize, input_queue_network_sequence, input_queue_cb_mode_sequence>();
         dest_finished = output_queue.is_remote_finished();
     }
 
     if (!timeout) {
         write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000002);
-        if (!output_queue.output_barrier(timeout_cycles)) {
+        if (!output_queue.output_barrier<output_depacketize, input_queue_network_sequence, input_queue_cb_mode_sequence>(timeout_cycles)) {
             timeout = true;
         }
     }
@@ -214,9 +231,11 @@ void kernel_main() {
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     if (!timeout) {
         write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000003);
-        for (uint32_t i = 0; i < mux_fan_in; i++) {
-            input_queues[i].send_remote_finished_notification();
-        }
+
+        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto network_type, auto cbmode, auto sequence_i>(auto) -> bool {
+            input_queues[sequence_i].template send_remote_finished_notification<network_type, cbmode>();
+            return true;
+        });
     }
 
     set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
@@ -225,9 +244,6 @@ void kernel_main() {
 
     if (timeout) {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
-        // DPRINT << "mux timeout" << ENDL();
-        // input_queues[0].dprint_object();
-        // output_queue.dprint_object();
     } else {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
         write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);
