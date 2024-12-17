@@ -490,8 +490,8 @@ Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optiona
  *   by running reshape.
  */
 Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const ttnn::SimpleShape s_a = input_a.get_padded_shape();
-    const ttnn::SimpleShape s_b = input_b.get_padded_shape();
+    const ttnn::SimpleShape s_a = input_a.padded_shape();
+    const ttnn::SimpleShape s_b = input_b.padded_shape();
     auto num_ones = [](const ttnn::SimpleShape& s) -> uint32_t {
         uint32_t num1s = 0;
         for (uint32_t idx = 0; idx < 4; idx++) {
