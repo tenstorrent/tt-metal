@@ -27,8 +27,13 @@ class ControlPlane {
     void print_routing_tables() const;
     void print_ethernet_channels() const;
 
+    // Return mesh_id, chip_id from physical chip id
     std::pair<mesh_id_t, chip_id_t> get_mesh_chip_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
     chip_id_t get_physical_chip_id_from_mesh_chip_id(const std::pair<mesh_id_t, chip_id_t>& mesh_chip_id) const;
+
+    // Return valid ethernet channels on the specificed routing plane
+    std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
+        mesh_id_t mesh_id, chip_id_t chip_id, routing_plane_id_t routing_plane_id) const;
 
     // Return path from device to device in the fabric
     std::vector<std::pair<chip_id_t, chan_id_t>> get_fabric_route(
@@ -36,7 +41,7 @@ class ControlPlane {
         chip_id_t src_chip_id,
         mesh_id_t dst_mesh_id,
         chip_id_t dst_chip_id,
-        routing_plane_id_t routing_plane_id) const;
+        chan_id_t src_chan_id) const;
 
 private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
@@ -50,6 +55,11 @@ private:
     std::vector<std::vector<std::vector<std::vector<chan_id_t>>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
 
+    // Tries to get a valid downstream channel from the candidate_target_chans
+    // First along same routing plane, but if not available, take round robin from candidates
+    chan_id_t get_downstream_eth_chan_id(
+        chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
+
     std::vector<chip_id_t> get_mesh_physical_chip_ids(
         std::uint32_t mesh_ns_size,
         std::uint32_t mesh_ew_size,
@@ -58,8 +68,8 @@ private:
 
     std::tuple<mesh_id_t, chip_id_t, chan_id_t> get_connected_mesh_chip_chan_ids(
         mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t chan_id) const;
+
     routing_plane_id_t get_routing_plane_id(chan_id_t eth_chan_id) const;
-    chan_id_t get_eth_chan_id(chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
 };
 
 }  // namespace tt::tt_fabric
