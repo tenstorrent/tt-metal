@@ -2063,7 +2063,7 @@ void EnqueueWriteBuffer(
         },
         buffer);
     BufferRegion region(offset, size);
-    EnqueueWriteSubBuffer(cq, buffer, src, region, blocking);
+    EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
 }
 
 void EnqueueWriteSubBuffer(
