@@ -70,6 +70,30 @@ tt::stl::Span<const SubDeviceId> select_sub_device_ids(IDevice* device, tt::stl:
     }
 }
 
+void ValidateBufferRegion(
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, const BufferRegion region) {
+    const auto [is_partial_region, is_valid_region, is_sharded_buffer] = std::visit(
+        [&](auto&& buf) -> std::tuple<bool, bool, bool> {
+            using T = std::decay_t<decltype(buf)>;
+            if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
+                return {
+                    buf.get().is_partial_region(region),
+                    buf.get().is_valid_region(region),
+                    is_sharded(buf.get().buffer_layout())};
+            } else if constexpr (std::is_same_v<T, std::shared_ptr<Buffer>>) {
+                return {buf->is_partial_region(region), buf->is_valid_region(region), is_sharded(buf->buffer_layout())};
+            }
+        },
+        buffer);
+
+    TT_FATAL(is_valid_region, "Buffer region with offset {} and size {} is invalid.", region.offset, region.size);
+
+    if (is_partial_region) {
+        TT_FATAL(
+            !is_sharded_buffer,
+            "Reading from and writing to partial buffer regions is only supported for non-sharded buffers.");
+    }
+}
 }  // namespace detail
 
 enum DispatchWriteOffsets {
@@ -89,6 +113,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     SystemMemoryManager& manager,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
+    uint32_t bank_base_address,
     uint32_t src_page_index,
     std::optional<uint32_t> pages_to_read) :
     command_queue_id(command_queue_id),
@@ -98,6 +123,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     buffer(buffer),
     expected_num_workers_completed(expected_num_workers_completed),
     sub_device_ids(sub_device_ids),
+    bank_base_address(bank_base_address),
     src_page_index(src_page_index),
     pages_to_read(pages_to_read.has_value() ? pages_to_read.value() : buffer.num_pages()) {
     TT_ASSERT(buffer.is_dram() or buffer.is_l1(), "Trying to read an invalid buffer");
@@ -1013,26 +1039,31 @@ void HWCommandQueue::enqueue_read_buffer(
             this->finish(sub_device_ids);
         }
     } else {
-        TT_FATAL(
-            region.offset % buffer.page_size() == 0,
-            "Offset {} must be a multiple of the buffer page size {}.",
-            region.offset,
-            buffer.page_size());
-        TT_FATAL(
-            region.size % buffer.page_size() == 0,
-            "Size {} must be a multiple of the buffer page size {}.",
-            region.size,
-            buffer.page_size());
-        TT_FATAL(
-            (region.size + region.offset) <= buffer.size(),
-            "(Size + offset) {} must be <= the buffer size {}.",
-            region.size + region.offset,
-            buffer.size());
+        if (buffer.is_partial_region(region)) {
+            TT_FATAL(
+                region.offset % buffer.page_size() == 0,
+                "Offset {} must be a multiple of the buffer page size {}.",
+                region.offset,
+                buffer.page_size());
+            TT_FATAL(
+                region.size % buffer.page_size() == 0,
+                "Size {} must be a multiple of the buffer page size {}.",
+                region.size,
+                buffer.page_size());
+            TT_FATAL(
+                (region.size + region.offset) <= buffer.size(),
+                "(Size + offset) {} must be <= the buffer size {}.",
+                region.size + region.offset,
+                buffer.size());
+        }
 
         const uint32_t pages_to_read = region.size / buffer.page_size();
         if (pages_to_read > 0) {
             uint32_t bank_base_address = buffer.address();
             src_page_index = region.offset / buffer.page_size();
+            // Only 4 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
+            // To handle larger page offsets move bank base address up and update page offset to be relative to the new
+            // bank address
             if (src_page_index > 15) {
                 const uint32_t num_banks = this->device->num_banks(buffer.buffer_type());
                 const uint32_t num_pages_per_bank = src_page_index / num_banks;
@@ -1211,6 +1242,23 @@ void HWCommandQueue::enqueue_write_buffer(
             }
         }
     } else {
+        if (buffer.is_partial_region(region)) {
+            TT_FATAL(
+                region.offset % buffer.page_size() == 0,
+                "Offset {} must be divisible by the buffer page size {}.",
+                region.offset,
+                buffer.page_size());
+            TT_FATAL(
+                region.size % buffer.page_size() == 0,
+                "Size {} must be divisible by the buffer page size {}.",
+                region.size,
+                buffer.page_size());
+            TT_FATAL(
+                (region.size + region.offset) <= buffer.size(),
+                "(Size + offset) {} must be <= the buffer size {}.",
+                region.size + region.offset,
+                buffer.size());
+        }
         dst_page_index = region.offset / buffer.page_size();
         uint32_t num_pages = region.size / buffer.page_size();
         uint32_t total_pages_to_write = num_pages;
@@ -1987,6 +2035,8 @@ void EnqueueReadSubBuffer(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
+    detail::ValidateBufferRegion(buffer, region);
+
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_READ_BUFFER,
         .blocking = blocking,
@@ -2023,6 +2073,8 @@ void EnqueueWriteSubBuffer(
     const BufferRegion region,
     bool blocking) {
     detail::DispatchStateCheck(true);
+    detail::ValidateBufferRegion(buffer, region);
+
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER,
         .blocking = blocking,

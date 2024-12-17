@@ -70,7 +70,7 @@ class Command {
 };
 
 class EnqueueReadBufferCommand : public Command {
-   private:
+private:
     SystemMemoryManager& manager;
     void* dst;
     CoreType dispatch_core_type;
@@ -85,8 +85,9 @@ class EnqueueReadBufferCommand : public Command {
     tt::stl::Span<const SubDeviceId> sub_device_ids;
     uint32_t src_page_index;
     uint32_t pages_to_read;
+    uint32_t bank_base_address;
 
-   public:
+public:
     Buffer& buffer;
     EnqueueReadBufferCommand(
         uint32_t command_queue_id,
@@ -97,6 +98,7 @@ class EnqueueReadBufferCommand : public Command {
         SystemMemoryManager& manager,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         tt::stl::Span<const SubDeviceId> sub_device_ids,
+        uint32_t bank_base_address,
         uint32_t src_page_index = 0,
         std::optional<uint32_t> pages_to_read = std::nullopt);
 
@@ -110,8 +112,6 @@ class EnqueueReadBufferCommand : public Command {
 class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
 private:
     void add_prefetch_relay(HugepageDeviceCommand& command) override;
-
-    uint32_t bank_base_address;
 
 public:
     EnqueueReadInterleavedBufferCommand(
@@ -135,19 +135,18 @@ public:
             manager,
             expected_num_workers_completed,
             sub_device_ids,
+            bank_base_address,
             src_page_index,
             pages_to_read) {
-        this->bank_base_address = bank_base_address;
     }
 };
 
 class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
-   private:
+private:
     void add_prefetch_relay(HugepageDeviceCommand& command) override;
     const CoreCoord core;
-    const uint32_t bank_base_address;
 
-   public:
+public:
     EnqueueReadShardedBufferCommand(
         uint32_t command_queue_id,
         IDevice* device,
@@ -170,10 +169,10 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
             manager,
             expected_num_workers_completed,
             sub_device_ids,
+            bank_base_address,
             src_page_index,
             pages_to_read),
-        core(core),
-        bank_base_address(bank_base_address) {}
+        core(core) {}
 };
 
 class EnqueueWriteShardedBufferCommand;
