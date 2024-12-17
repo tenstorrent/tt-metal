@@ -75,4 +75,6 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
 endforeach()
 
+target_link_libraries(test_pgm_dispatch PRIVATE benchmark::benchmark)
+
 add_custom_target(metal_perf_microbenchmark_tests DEPENDS ${PERF_MICROBENCH_TEST_TARGETS})
