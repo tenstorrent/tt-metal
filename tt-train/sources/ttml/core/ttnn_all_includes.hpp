@@ -59,6 +59,9 @@
 #include <ttnn/tensor/host_buffer/functions.hpp>                                                   // NOLINT
 #include <ttnn/tensor/tensor.hpp>                                                                  // NOLINT
 #include <ttnn/tensor/types.hpp>                                                                   // NOLINT
+#include <ttnn/tensor/xtensor/conversion_utils.hpp>                                                // NOLINT
+#include <ttnn/tensor/xtensor/partition.hpp>                                                       // NOLINT
+#include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>                                            // NOLINT
 #include <ttnn/types.hpp>                                                                          // NOLINT
 
 #pragma GCC diagnostic pop

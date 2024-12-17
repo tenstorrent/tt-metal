@@ -9,8 +9,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 
-namespace ttnn::distributed::api {
+namespace ttnn::distributed {
 
 std::shared_ptr<MeshDevice> open_mesh_device(
     const MeshShape& mesh_shape,
@@ -54,11 +55,5 @@ Tensor create_multi_device_tensor(
     const std::vector<Tensor>& tensors,
     tt::tt_metal::StorageType storage_type,
     const tt::tt_metal::DistributedTensorConfig& strategy);
-
-}  // namespace ttnn::distributed::api
-
-namespace ttnn::distributed {
-
-using namespace api;
 
 }  // namespace ttnn::distributed
