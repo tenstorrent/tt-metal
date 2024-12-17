@@ -273,11 +273,13 @@ def complex_from_torch(torch_tensor, dtype, layout, memory_config, device):
 
 
 def get_device_grid_size():
-    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
-    assert device_name in ["wormhole_b0", "grayskull"]
-    if device_name == "grayskull":
+    device = ttnn.open_device(device_id=0)
+    if ttnn.device.is_wormhole_b0(device):
+        y, x = 8, 8
+    elif ttnn.device.is_grayskull(device):
         y, x = 9, 12
     else:
         y, x = 8, 8
-
+    ttnn.close_device(device)
+    del device
     return y, x
