@@ -111,10 +111,11 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;  // bfloat16 tile size
-    uint32_t reader_cb_size = max_block_size * 2;
+    const uint32_t total_num_blocks_in_buffer = 3;        // reader cb is triple buffered
+    uint32_t reader_cb_size = max_block_size * total_num_blocks_in_buffer;
     std::cout << "reader_cb_size " << reader_cb_size << std::endl;
 
-    TT_FATAL(reader_cb_size <= global_cb->size(), "reader_cb_size must not larger than global cb");
+    TT_FATAL(reader_cb_size <= global_cb->size(), "reader_cb_size must not be larger than global cb");
 
     tt::DataFormat reader_cb_data_format = tt::DataFormat::Float16_b;  // TODO: update?
     if (max_tile_size == 2048) {
@@ -168,7 +169,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     /* Compile time args */
 
     // Reader kernel
-    std::vector<uint32_t> reader_ct_args = {num_layers, num_tensors, num_blocks, reader_cb_size, max_block_tiles};
+    std::vector<uint32_t> reader_ct_args = {
+        num_layers, num_tensors, num_blocks, reader_cb_size, max_block_tiles, max_block_size};
 
     auto reader_kernel_id = CreateKernel(
         program,
@@ -219,7 +221,6 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         coalesced_num_pages.push_back(coalesced_num_page);
     }
 
-    uint32_t total_num_blocks_in_buffer = 3;  // TODO: how big should reader CB be? here it's triple buffered
     uint32_t bank_start_id = 1;               // TODO: What is this for?
     std::vector<uint32_t> bank_ids;
     const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);  // TODO: fix order??
@@ -242,8 +243,6 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
                 break;
             }
         }
-
-        const uint32_t total_num_blocks_in_buffer = 3;  // TODO: parametrize this
 
         std::vector<uint32_t> reader_rt_args = {bank_id, vc, total_num_blocks_in_buffer};
         reader_rt_args.insert(reader_rt_args.end(), page_sizes.begin(), page_sizes.end());
