@@ -7,6 +7,7 @@ set(CCL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/common/types/ccl_types_args_emitters.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/uops/ccl_command.cpp
     # CCL Ops
+    ${CMAKE_CURRENT_SOURCE_DIR}/ccl_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather/all_gather.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather/all_gather_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather/device/all_gather_op.cpp
