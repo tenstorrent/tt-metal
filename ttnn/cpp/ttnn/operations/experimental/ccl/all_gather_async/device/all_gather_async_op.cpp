@@ -143,6 +143,7 @@ Tensor all_gather_async(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
+    std::optional<SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
@@ -168,7 +169,10 @@ Tensor all_gather_async(
     std::vector<std::shared_ptr<GlobalSemaphore>> semaphore_handles;
 
     for (const auto& device : devices) {
-        auto handle = GlobalSemaphore::create(device, core_grid, 0);
+        auto subdevice_span = subdevice_id.has_value() ? tt::stl::Span<const SubDeviceId>{subdevice_id.value()}
+                                                       : tt::stl::Span<const SubDeviceId>{};
+
+        auto handle = GlobalSemaphore::create(device, core_grid, 0, BufferType::L1, subdevice_span);
         log_trace(tt::LogOp, "Created semaphore handle at address {} for device {}", handle->address(), device->id());
         semaphore_handles.push_back(handle);
     }

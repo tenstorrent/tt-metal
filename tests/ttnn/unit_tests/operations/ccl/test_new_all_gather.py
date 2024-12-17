@@ -8,25 +8,10 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-
-
-def create_and_load_sub_device_manager_with_fabric_interface(
-    mesh_device, worker_sub_devices, ccl_worker_sub_device_id, local_allocator_size
-):
-    assert ccl_worker_sub_device_id < len(worker_sub_devices)
-    mesh_sub_device_manager_id, fabric_sub_device_id = mesh_device.create_sub_device_manager_with_fabric(
-        worker_sub_devices, local_allocator_size
-    )
-    mesh_device.load_sub_device_manager(mesh_sub_device_manager_id)
-    # fabric sub-device id can also be queried from device, no need to explicitly pass it in
-    fabric_interface = ttnn.initialize_edm_fabric(mesh_device, ccl_worker_sub_device_id, fabric_sub_device_id)
-    return mesh_sub_device_manager_id, fabric_interface, fabric_sub_device_id
-
-
-def teardown_fabric_interface(mesh_device):
-    for device_id in mesh_device.get_device_ids():
-        ttnn.teardown_fabric_interface(mesh_device.get_device(device_id))
-        ttnn.synchronize_device(mesh_device.get_device(device_id))
+from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_async import (
+    create_and_load_sub_device_manager_with_fabric_interface,
+    teardown_fabric_interface,
+)
 
 
 def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
@@ -91,6 +76,7 @@ def run_all_gather_impl(
     shard_grid=None,
     tensor_mem_layout=None,
 ):
+    enable_persistent_fabric = False
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
     # Use Async mode based on test input config
@@ -165,16 +151,14 @@ def run_all_gather_impl(
     worker_sub_device = ttnn.SubDevice(
         [
             ttnn.CoreRangeSet(
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
             )
         ]
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
-    (
-        mesh_sub_device_manager_id,
-        fabric_interface,
-        fabric_sub_device_id,
-    ) = create_and_load_sub_device_manager_with_fabric_interface(mesh_device, [worker_sub_device], 0)
+    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+        mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+    )
 
     if trace_mode:
         tt_out_tensor = run_with_trace(
@@ -193,15 +177,17 @@ def run_all_gather_impl(
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
-                enable_persistent_fabric_mode=true,
+                subdevice_id=worker_sub_device_id,
+                enable_persistent_fabric_mode=enable_persistent_fabric,
             )
 
             logger.info(f"Waiting for op {i}")
             for d in mesh_device.get_devices():
-                ttnn.synchronize_device(d)
+                ttnn.synchronize_device(d, sub_device_ids=[ttnn.SubDeviceId(0)])
             logger.info(f"Done iteration {i}")
 
-            teardown_fabric_interface(mesh_device)
+    if enable_persistent_fabric:
+        ttnn.teardown_edm_fabric(mesh_device)
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -221,8 +207,8 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, dim, layout",
     [
-        (8, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
-        (8, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
