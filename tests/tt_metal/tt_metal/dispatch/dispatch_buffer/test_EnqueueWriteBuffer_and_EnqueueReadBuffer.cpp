@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <memory>
 
 #include "command_queue_fixture.hpp"
@@ -601,8 +602,6 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBuffer) {
 TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBufferLargeOffset) {
     const uint32_t page_size = 4;
     const uint32_t buffer_size = (0xFFFF + 50000) * 2 * page_size;
-    // const uint32_t offset = ((2 * 0xFFFF) + 25000) * page_size;
-    // const uint32_t size = 32;
     const BufferRegion region(((2 * 0xFFFF) + 25000) * page_size, 32);
     for (Device* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
@@ -612,6 +611,80 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBufferLargeOffset) {
         vector<uint32_t> result;
         EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
         EXPECT_EQ(src, result);
+    }
+}
+
+TEST_F(CommandQueueSingleCardBufferFixture, TestReadBufferWriteSubBuffer) {
+    const uint32_t page_size = 128;
+    const uint32_t buffer_size = 100 * page_size;
+    const uint32_t buffer_region_offset = 50 * page_size;
+    const uint32_t buffer_region_size = 128;
+    const BufferRegion region(buffer_region_offset, buffer_region_size);
+    for (Device* device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
+        auto src = local_test_functions::generate_arange_vector(buffer_region_size);
+        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
+        vector<uint32_t> read_buf_result;
+        EnqueueReadBuffer(device->command_queue(), *buffer, read_buf_result, true);
+        vector<uint32_t> result;
+        for (uint32_t i = buffer_region_offset / sizeof(uint32_t);
+             i < (buffer_region_offset + buffer_region_size) / sizeof(uint32_t);
+             i++) {
+            result.push_back(read_buf_result[i]);
+        }
+        EXPECT_EQ(src, result);
+    }
+}
+
+TEST_F(CommandQueueSingleCardBufferFixture, TestReadSubBufferWriteBuffer) {
+    const uint32_t page_size = 128;
+    const uint32_t buffer_size = 100 * page_size;
+    const uint32_t buffer_region_offset = 50 * page_size;
+    const uint32_t buffer_region_size = 128;
+    const BufferRegion region(buffer_region_offset, buffer_region_size);
+    for (Device* device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
+        auto src = local_test_functions::generate_arange_vector(buffer_size);
+        EnqueueWriteBuffer(device->command_queue(), *buffer, src, false);
+        vector<uint32_t> result;
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
+        vector<uint32_t> expected_result;
+        for (uint32_t i = buffer_region_offset / sizeof(uint32_t);
+             i < (buffer_region_offset + buffer_region_size) / sizeof(uint32_t);
+             i++) {
+            expected_result.push_back(src[i]);
+        }
+        EXPECT_EQ(expected_result, result);
+    }
+}
+
+TEST_F(CommandQueueSingleCardBufferFixture, TestReadSubBufferInvalidRegion) {
+    const uint32_t page_size = 4;
+    const uint32_t buffer_size = 100 * page_size;
+    const uint32_t buffer_region_offset = 25 * page_size;
+    const uint32_t buffer_region_size = buffer_size;
+    const BufferRegion region(buffer_region_offset, buffer_region_size);
+    for (Device* device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
+        vector<uint32_t> result;
+        EXPECT_ANY_THROW(EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true));
+    }
+}
+
+TEST_F(CommandQueueSingleCardBufferFixture, TestWriteSubBufferInvalidRegion) {
+    const uint32_t page_size = 4;
+    const uint32_t buffer_size = 100 * page_size;
+    const uint32_t buffer_region_offset = 25 * page_size;
+    const uint32_t buffer_region_size = buffer_size;
+    const BufferRegion region(buffer_region_offset, buffer_region_size);
+    for (Device* device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
+        auto src = local_test_functions::generate_arange_vector(buffer_region_size);
+        EXPECT_ANY_THROW(EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, true));
     }
 }
 
