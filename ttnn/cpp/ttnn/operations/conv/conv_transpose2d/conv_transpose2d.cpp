@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -190,7 +191,7 @@ Result conv_transpose2d(
 
 
         //Call Halo Transpose
-        auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] =
+        auto [input_tensor_post_tm, parallel_config, output_parallel_config, use_non_tile_height] =
             shard_or_reshard_tensor_if_required(
                 device,
                 input_tensor,
@@ -205,15 +206,6 @@ Result conv_transpose2d(
             );
 
         uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
-
-        if (tensor_manipulated) {
-            if (conv_config.deallocate_activation) {
-                ttnn::Tensor input_tensor_ = input_tensor;  // TODO: allow in place modification of inputs to the op
-                input_tensor_.deallocate();
-                // ttnn::operations::core::deallocate(input_tensor_);
-            }
-            conv_config.deallocate_activation = true;
-        }
 
         Tensor halo_output;
         if (!mm_conv) {
@@ -232,12 +224,12 @@ Result conv_transpose2d(
                 input_tensor_post_tm.memory_config());
 
             if(conv_config.deallocate_activation) {
-                input_tensor_post_tm.deallocate();
+                input_tensor_post_tm.deallocate(/*force*/true);
                 log_debug(tt::LogOp, "Deallocate Input Tensor");
             }
+
             if (conv_config.reallocate_halo_output) {
-                auto move_output = ttnn::operations::core::reallocate(halo_output, halo_output.memory_config());
-                halo_output = move_output;
+                halo_output = ttnn::move(halo_output);
                 log_debug(tt::LogOp, "Reallocate Halo Output");
             }
         }
@@ -293,12 +285,12 @@ Result conv_transpose2d(
                 input_width);
         }
         if (mm_conv) {
-            Tensor matmul_input = ttnn::to_layout(
+            input_tensor_post_tm = ttnn::to_layout(
                 input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), device);
             std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
             std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
 
-            if (matmul_input.is_sharded()) {
+            if (input_tensor_post_tm.is_sharded()) {
                 uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
                 program_config = determine_matmul_op_config_from_conv_op_config(
                     opt_conv_op_parallel_config,
@@ -310,7 +302,7 @@ Result conv_transpose2d(
                 mm_output_memory_config = conv_out_memory_config;
             }
             Tensor matmul_output = ttnn::linear(
-                matmul_input,
+                input_tensor_post_tm,
                 weight_tensor_on_device,
                 bias_tensor_on_device,
                 false,
@@ -318,10 +310,6 @@ Result conv_transpose2d(
                 mm_output_memory_config,
                 std::nullopt,
                 program_config);
-
-            if (conv_config.deallocate_activation) {
-                ttnn::operations::core::deallocate(matmul_input);
-            }
 
             if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
                 matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
