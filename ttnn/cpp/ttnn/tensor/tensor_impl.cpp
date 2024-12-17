@@ -634,43 +634,6 @@ Tensor to_host<bfloat8_b>(
 }
 
 // ======================================================================================
-//                                  .to_host_sharded()
-// ======================================================================================
-
-template <typename T>
-Tensor to_host_sharded(const Tensor& tensor) {
-    TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
-    auto device_buffer = tensor.buffer();
-    auto device = tensor.device();
-    TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
-    std::vector<T> data_vec;
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        TT_THROW("FAST_DISPATCH is not supported for to_host_sharded!");
-    }
-    ::detail::ReadFromBuffer(*device_buffer, data_vec, true);
-    auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
-    return Tensor(OwnedStorage{output_buffer}, tensor.get_tensor_spec());
-}
-
-template Tensor to_host_sharded<bfloat16>(const Tensor& tensor);
-template Tensor to_host_sharded<float>(const Tensor& tensor);
-template Tensor to_host_sharded<int32_t>(const Tensor& tensor);
-template Tensor to_host_sharded<uint32_t>(const Tensor& tensor);
-template Tensor to_host_sharded<uint16_t>(const Tensor& tensor);
-template Tensor to_host_sharded<uint8_t>(const Tensor& tensor);
-
-template <>
-Tensor to_host_sharded<bfloat4_b>(const Tensor& tensor) {
-    return to_host_sharded<uint32_t>(tensor);
-}
-
-template <>
-Tensor to_host_sharded<bfloat8_b>(const Tensor& tensor) {
-    return to_host_sharded<uint32_t>(tensor);
-}
-
-// ======================================================================================
 //                               .to_device() details
 // ======================================================================================
 
