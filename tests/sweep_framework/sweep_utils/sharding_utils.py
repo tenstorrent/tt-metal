@@ -124,7 +124,10 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                             mul_32_y //= 2
 
                     min_shard_size_x = mul_32_x
-                    min_shard_size_y = mul_32_y * x * y
+                    if shard_height_mul_of_32 and sharding_strategy == "HEIGHT":
+                        min_shard_size_y = mul_32_y
+                    else:
+                        min_shard_size_y = mul_32_y * x * y
 
                 rest_volume = random.randint(1, max_tensor_size // (min_shard_size_x * min_shard_size_y))
                 input_shape = random.choice(_gen_reshape_args_from_volume(rest_volume, step=1, out_dims=rank))
