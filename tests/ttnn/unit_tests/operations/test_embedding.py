@@ -176,6 +176,94 @@ def test_embedding_tiled_input(
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+def reverse_embedding_output(output_tensor, weights_tensor):
+    """
+    Reverse the embedding operation by finding the indices of rows in the output tensor
+    that match rows in the weights tensor.
+
+    Args:
+        output_tensor (torch.Tensor): The output tensor from the embedding operation.
+        weights_tensor (torch.Tensor): The weights tensor used in the embedding operation.
+
+    Returns:
+        torch.Tensor: A tensor containing the indices corresponding to the rows in the output tensor.
+    """
+    reversed_indices = torch.empty(output_tensor.size(0), output_tensor.size(1), dtype=torch.long)
+
+    for i in range(output_tensor.size(0)):  # Iterate over batch dimension
+        for j in range(output_tensor.size(1)):  # Iterate over sentence dimension
+            # Compare each row of the output tensor with the weights tensor
+            matching_row = (weights_tensor == output_tensor[i, j]).all(dim=1)
+            index = torch.where(matching_row)[0]
+            if index.numel() > 0:
+                reversed_indices[i, j] = index.item()  # Fill the matching index
+            else:
+                reversed_indices[i, j] = -1  # Use -1 if no matching row is found (edge case)
+
+    return reversed_indices
+
+
+@pytest.mark.parametrize("batch_size", [4])
+@pytest.mark.parametrize("sentence_size", [64])
+@pytest.mark.parametrize("hidden_embedding_dim", [4])  # Bert_Num_Cols_768, Llama_Num_Cols
+@pytest.mark.parametrize(
+    "vocabulary_size", [10]
+)  # Bert_Position_Embeddings_512, Bert_Word_Embeddings_30528, Llama_Position_Embeddings,
+@pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+def test_tiled(
+    device,
+    batch_size,
+    sentence_size,
+    hidden_embedding_dim,
+    vocabulary_size,
+    input_mem_config,
+    output_mem_config,
+    layout,
+):
+    torch.manual_seed(1234)
+
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
+    # torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    row_indices = torch.arange(0, vocabulary_size, dtype=torch.float32)
+    torch_weights = row_indices.unsqueeze(1).expand(-1, hidden_embedding_dim)
+    print(torch_weights)
+    # torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    torch_embedding = torch.nn.Embedding.from_pretrained(torch_weights)
+    torch_output_tensor = torch_embedding(torch_input_tensor)
+
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT),
+        device,
+        memory_config=input_mem_config,
+    )
+    weights = ttnn.to_device(
+        ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        device,
+        memory_config=input_mem_config,
+    )
+
+    # output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        embeddings_type=ttnn.EmbeddingsType.GENERIC,  # Default embeddings type
+        dtype=ttnn.bfloat16,
+        memory_config=output_mem_config,  # Default memory config
+        queue_id=0,  # Default queue id
+        layout=layout,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    print("Reversed ttnn Tensor:")
+    print(reverse_embedding_output(output_tensor, torch_weights))
+    print("Reversed torch Tensor:")
+    print(reverse_embedding_output(torch_output_tensor, torch_weights))
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
 @pytest.mark.parametrize("batch_size, sentence_size, hidden_embedding_dim, vocabulary_size", [(10, 96, 2048, 128256)])
 @pytest.mark.parametrize(
     "output_memory_layout, num_cores_x, num_cores_y",

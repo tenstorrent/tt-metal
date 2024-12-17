@@ -424,6 +424,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 
     uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
     uint32_t total_cores = num_cores_x * num_cores_y;
+    std::cout << "total_cores: " << total_cores << std::endl;
 
     // Initialize units_per_core and required_cores
     uint32_t units_per_core = alignment;
