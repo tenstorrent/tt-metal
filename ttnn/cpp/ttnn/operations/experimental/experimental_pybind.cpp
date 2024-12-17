@@ -36,9 +36,6 @@
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce/all_reduce_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
-
-#include "ttnn/operations/experimental/reshape/reshape_pybind.hpp"
-
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
@@ -79,13 +76,10 @@ void py_module(py::module& module) {
 
     plusone::detail::bind_experimental_plusone_operation(module);
 
-    reshape::detail::py_bind_view(module);
-
     // CCL ops
     auto m_experimental_ccl = module.def_submodule("ccl", "experiemental collective communication operations");
     ccl::py_bind_all_gather_matmul(m_experimental_ccl);
     ccl::py_bind_all_reduce(m_experimental_ccl);
-
 }
 
 }  // namespace ttnn::operations::experimental
