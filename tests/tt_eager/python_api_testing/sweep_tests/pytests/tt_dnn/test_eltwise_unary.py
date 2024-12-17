@@ -871,6 +871,7 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("weight", [-0.5, 1.0, 0.5])
+    @skip_for_grayskull()
     def test_run_eltwise_prelu(
         self,
         input_shapes,

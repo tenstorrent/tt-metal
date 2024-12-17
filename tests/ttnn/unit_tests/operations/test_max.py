@@ -54,6 +54,26 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("dim", [-2, -1, 0, 1])
+def test_max_2d(device, h, w, dim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random((h, w), -100, 100, dtype=torch.bfloat16)
+    torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim, keepdim=True)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.max(input_tensor, dim=dim)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
 @pytest.mark.parametrize("batch_size", [1, 16, 1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])

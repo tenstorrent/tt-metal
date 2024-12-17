@@ -11,7 +11,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
-from tests.sweep_framework.sweep_utils.conv2d_common import run_full, get_input_specs, mesh_device_fixture
+from tests.sweep_framework.sweep_utils.conv2d_common import run_conv2d_full_sweep, get_input_specs, mesh_device_fixture
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -109,7 +109,7 @@ def run(
     *,
     device,
 ) -> list:
-    return run_full(
+    return run_conv2d_full_sweep(
         input_specs,
         input_channels,
         output_channels,

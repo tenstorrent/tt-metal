@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -35,7 +35,8 @@ TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
         const auto output_tensor = input_tensor + param.scalar;
         const auto expected_tensor =
             ttnn::operations::creation::full(shape, param.scalar, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-        TT_FATAL(ttnn::numpy::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
+        TT_FATAL(
+            ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
     }
     ttnn::close_device(device);
 }

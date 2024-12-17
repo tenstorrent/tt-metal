@@ -86,7 +86,7 @@ jobs:
             echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
             exit 1
           fi
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -99,7 +99,7 @@ jobs:
         id: generate-docker-tag
         uses: ./.github/actions/generate-docker-tag
         with:
-          image: ${{ inputs.os }}
+          image: tt-metalium/${{ inputs.os }}
       - name: Docker login
         uses: docker/login-action@v3
         with:
@@ -124,6 +124,7 @@ jobs:
             -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
             -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
             -e ARCH_NAME=${{ matrix.arch }}
+            -e CARGO_HOME=${{ github.workspace }}/.cargo
             -w ${{ github.workspace }}
           run: |
             set -eu # basic shell hygiene
@@ -136,7 +137,7 @@ jobs:
             # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
             ccache -z
 
-            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests --build-programming-examples --enable-ccache"
+            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-all --enable-ccache"
             echo "${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"
@@ -150,7 +151,7 @@ jobs:
           cat build/ccache.stats >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
       - name: 'Tar files'
-        run: tar -cvf ttm_${{ matrix.arch }}.tar build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
+        run: tar -cvhf ttm_${{ matrix.arch }}.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:

@@ -8,7 +8,10 @@ inputs:
   docker_os_arch:
     description: 'Docker image architecture'
     required: false
-    default: ubuntu-20.04-amd64
+    default: tt-metalium/ubuntu-20.04-amd64
+  docker_version:
+    description: 'Specify version for the Docker image tag to use.'
+    required: false
   docker_username:
     description: docker login username
     required: true
@@ -38,6 +41,7 @@ runs:
       uses: ./.github/actions/generate-docker-tag
       with:
         image: ${{ inputs.docker_os_arch }}
+        version: ${{ inputs.docker_version }}
     - name: Set
       shell: bash
       run: |
@@ -86,8 +90,12 @@ runs:
           ${{ inputs.device }}
           -w ${{ github.workspace }}
         run: |
-          if [ ${{ inputs.install_wheel }} ]; then
+          set -eu
+
+          install_wheel=${{ inputs.install_wheel }}
+          if [ "${install_wheel,,}" == "true" ]; then
             WHEEL_FILENAME=$(ls -1 *.whl)
-            pip3 install $WHEEL_FILENAME
+            pip3 install "$WHEEL_FILENAME"
           fi
+
           ${{ inputs.run_args }}

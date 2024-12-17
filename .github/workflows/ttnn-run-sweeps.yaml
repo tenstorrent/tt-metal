@@ -12,7 +12,9 @@ on:
           - ALL SWEEPS (Nightly)
           - add
           - tilize
+          - tilize_with_val_padding
           - untilize
+          - untilize_with_unpadding
           - ccl.line_all_gather
           - ccl.all_gather_n300
           - ccl.all_gather_n300_focused
@@ -42,9 +44,11 @@ on:
           - eltwise.unary.rsqrt.rsqrt_pytorch2
           - eltwise.unary.rdiv.rdiv
           - eltwise.unary.frac.frac
+          - eltwise.unary.frac.frac_sharded
           - eltwise.unary.ceil.ceil
           - eltwise.unary.ceil.ceil_pytorch2
           - eltwise.unary.trunc.trunc
+          - eltwise.unary.trunc.trunc_sharded
           - eltwise.unary.floor.floor
           - eltwise.unary.floor.floor_pytorch2
           - eltwise.unary.clone.clone
@@ -110,6 +114,8 @@ on:
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
+          - eltwise.unary.selu.selu
+          - eltwise.unary.softshrink.softshrink_sharded
           - eltwise.unary_backward.fill_zero_bw
           - eltwise.unary_backward.log_sigmoid_bw
           - eltwise.unary_backward.logit_bw
@@ -164,20 +170,34 @@ on:
           - eltwise.unary_backward.hardswish_bw.hardswish_bw
           - eltwise.unary_backward.rpow_bw.rpow_bw
           - eltwise.unary_complex.conj
+          - eltwise.unary_complex.is_real
+          - eltwise.unary_complex.is_imag
           - eltwise.unary_complex.reciprocal
           - eltwise.unary_complex.reciprocal_bw
           - eltwise.binary_complex.div_bw.div_bw
           - eltwise.binary_complex.add_bw.add_bw
-          - eltwise.unary.lgamma
-          - eltwise.unary.logit
-          - eltwise.unary.mish
-          - eltwise.unary.multigammaln
-          - eltwise.unary.isfinite
-          - eltwise.unary.isinf
-          - eltwise.unary.isnan
-          - eltwise.unary.isneginf
-          - eltwise.unary.isposinf
+          - eltwise.binary_complex.sub_bw.sub_bw
+          - eltwise.binary_complex.mul_bw.mul_bw
+          - eltwise.unary.lgamma.lgamma
+          - eltwise.unary.lgamma.lgamma_sharded
+          - eltwise.unary.logit.logit
+          - eltwise.unary.logit.logit_sharded
+          - eltwise.unary.mish.mish
+          - eltwise.unary.mish.mish_sharded
+          - eltwise.unary.multigammaln.multigammaln
+          - eltwise.unary.multigammaln.multigammaln_sharded
+          - eltwise.unary.isfinite.isfinite
+          - eltwise.unary.isfinite.isfinite_sharded
+          - eltwise.unary.isinf.isinf
+          - eltwise.unary.isinf.isinf_sharded
+          - eltwise.unary.isnan.isnan
+          - eltwise.unary.isnan.isnan_sharded
+          - eltwise.unary.isneginf.isneginf
+          - eltwise.unary.isneginf.isneginf_sharded
+          - eltwise.unary.isposinf.isposinf
+          - eltwise.unary.isposinf.isposinf_sharded
           - eltwise.binary.add.add_all_pytorch2
+          - eltwise.binary.add.add_set2_pytorch2
           - eltwise.binary.add.add_different_memory_configs
           - eltwise.unary.gtz.gtz
           - eltwise.unary.ltz.ltz
@@ -193,6 +213,7 @@ on:
           - eltwise.unary_complex.angle.angle
           - eltwise.unary_complex.polar_bw.polar_bw
           - eltwise.unary_complex.angle_bw.angle_bw
+          - eltwise.unary_complex.conj_bw
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.multiply.multiply
@@ -229,10 +250,9 @@ on:
           - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
-          - eltwise.binary_backward.ldexp_bw
+          - eltwise.binary_backward.ldexp_bw.ldexp_bw
           - eltwise.binary_backward.logaddexp_bw
           - eltwise.binary_backward.logaddexp2_bw
-          - eltwise.binary_backward.embedding_bw.embedding_bw
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
@@ -263,6 +283,9 @@ on:
           - eltwise.ternary_backward.addcmul_bw
           - eltwise.ternary_backward.addcdiv_bw
           - embedding.embedding
+          - embedding_bw.embedding_bw
+          - fused.softmax_traces
+          - fused.layer_norm_traces
           - reduction.backward.prod_bw.prod_bw
           - reduction.topk.topk
           - reduction.argmax.argmax
@@ -271,6 +294,11 @@ on:
           - reduction.var.var
           - reduction.std.std
           - reduction.mean.mean
+          - reduction.traces.argmax_traces
+          - reduction.traces.max_traces
+          - reduction.traces.mean_traces
+          - reduction.traces.sum_traces
+          - reduction.traces.topk_traces
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
@@ -281,6 +309,7 @@ on:
           - matmul.short.matmul_user_program_config_mcast_1d
           - matmul.short.matmul_user_program_config_mcast_2d
           - matmul.short.matmul_user_program_config
+          - matmul.short.matmul_traces
           - matmul.short.matmul
           - losses.l1_loss
           - losses.mse_loss
@@ -305,14 +334,23 @@ on:
           - data_movement.reshape.reshape
           - data_movement.repeat_interleave.repeat_interleave
           - data_movement.nonzero.nonzero
+          - data_movement.backward.concat_bw.concat_bw
+          - conv_transpose2d.short.conv_transpose2d_short_sweep
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding
           - conv2d.full.conv2d_sliding_window
           - conv2d.short.conv2d_short_sweep
+          - pooling.global_avg_pool2d
+          - pooling.max_pool2d
           - max_pool2d.short.max_pool2d_short_sweep
+          - max_pool2d.full.max_pool2d_params
+          - max_pool2d.full.max_pool2d_large_dims
           - transformer.concatenate_heads.concatenate_heads
           - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads
           - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads_kv_input
+          - transformer.attention_softmax.attention_softmax
+          - transformer.attention_softmax.attention_softmax_
+          - transformer.rotary_embedding.rotary_embedding
           - data_movement.stack.stack_pytorch2
           - data_movement.repeat.repeat_pytorch2
           - data_movement.split.split_pytorch2
@@ -320,6 +358,8 @@ on:
           - data_movement.squeeze.squeeze_pytorch2
           - data_movement.embedding.embedding_pytorch2
           - data_movement.view.view_pytorch2
+          - data_movement.view.view_tt_torch
+          - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
@@ -339,7 +379,7 @@ jobs:
     timeout-minutes: 30
     runs-on: [build, in-service]
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -399,7 +439,7 @@ jobs:
     timeout-minutes: 720
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV

@@ -7,7 +7,6 @@
 #include "ethernet/dataflow_api.h"
 #include <array>
 
-
 struct addr_sem_pair {
     uint32_t addr;
     uint32_t sem_addr;
@@ -26,9 +25,7 @@ FORCE_INLINE void roundtrip_ping(
     uint32_t eth_noc_x,
     uint32_t eth_noc_y,
     uint32_t eth_channel_sync_ack_addr,
-    bool is_ring_start
-    ) {
-
+    bool is_ring_start) {
     if (is_ring_start) {
         if constexpr (measure) {
             {
@@ -43,8 +40,8 @@ FORCE_INLINE void roundtrip_ping(
                     noc_semaphore_inc(send_sem_noc_addr, 1);
                 }
 
-                // We need to wait for the write packet to flush out of L1 otherwise this may no longer be a particularly
-                // realistic microbenchmark (although it's unlikely this causes any latency degredation)
+                // We need to wait for the write packet to flush out of L1 otherwise this may no longer be a
+                // particularly realistic microbenchmark (although it's unlikely this causes any latency degredation)
                 if constexpr (DISABLE_CONTEXT_SWITCHING) {
                     noc_async_writes_flushed();
                 } else {
@@ -52,9 +49,9 @@ FORCE_INLINE void roundtrip_ping(
                 }
 
                 for (uint32_t i = 0; i < max_concurrent_samples; i++) {
-                    if constexpr(DISABLE_CONTEXT_SWITCHING) {
-                        while(eth_channel_syncs[i]->bytes_sent == 0) {
-                            asm volatile ("");
+                    if constexpr (DISABLE_CONTEXT_SWITCHING) {
+                        while (eth_channel_syncs[i]->bytes_sent == 0) {
+                            asm volatile("");
                         }
                     } else {
                         eth_wait_for_bytes_on_channel(page_size, i);
@@ -82,9 +79,9 @@ FORCE_INLINE void roundtrip_ping(
             }
 
             for (uint32_t i = 0; i < max_concurrent_samples; i++) {
-                if constexpr(DISABLE_CONTEXT_SWITCHING) {
-                    while(eth_channel_syncs[i]->bytes_sent == 0) {
-                        asm volatile ("");
+                if constexpr (DISABLE_CONTEXT_SWITCHING) {
+                    while (eth_channel_syncs[i]->bytes_sent == 0) {
+                        asm volatile("");
                     }
                 } else {
                     eth_wait_for_bytes_on_channel(page_size, i);
@@ -95,13 +92,12 @@ FORCE_INLINE void roundtrip_ping(
                 }
                 send_eth_receiver_channel_done(eth_channel_syncs[i]);
             }
-
         }
     } else {
         for (uint32_t i = 0; i < max_concurrent_samples; i++) {
             if constexpr (DISABLE_CONTEXT_SWITCHING) {
-                while(eth_channel_syncs[i]->bytes_sent == 0) {
-                    asm volatile ("");
+                while (eth_channel_syncs[i]->bytes_sent == 0) {
+                    asm volatile("");
                 }
             } else {
                 eth_wait_for_bytes_on_channel(page_size, i);
@@ -157,7 +153,7 @@ void kernel_main() {
     const uint32_t init_handshake_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     ASSERT(max_concurrent_samples <= 8);
-    volatile eth_channel_sync_t *last_channel_sync_addr = 0;
+    volatile eth_channel_sync_t* last_channel_sync_addr = 0;
     for (uint32_t i = 0; i < max_concurrent_samples; i++) {
         channels_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
         ASSERT(last_channel_sync_addr + sizeof(eth_channel_sync_t) <= channels_addrs[i]);
@@ -168,8 +164,6 @@ void kernel_main() {
         channels_sem_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
 
-
-
     eth_setup_handshake(handshake_addr, false);
     // We reuse the handshake address to send back acks to the sender core.
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[0] = 1;
@@ -177,8 +171,8 @@ void kernel_main() {
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[2] = 0;
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[3] = 0;
     uint32_t eth_channel_sync_ack_addr = handshake_addr;
-    // Delete me when migrating to FD2 - for now we require a worker core to act as intermediary between local chip eriscs
-    // because CreateSemaphore doesn't reliably worker on ethernet cores prior to FD2
+    // Delete me when migrating to FD2 - for now we require a worker core to act as intermediary between local chip
+    // eriscs because CreateSemaphore doesn't reliably worker on ethernet cores prior to FD2
     *start_semaphore = 0;
     // Delete me when migrating to FD2
     uint64_t init_handshake_noc_addr = get_noc_addr(init_handshake_noc_x, init_handshake_noc_y, init_handshake_addr);
@@ -188,11 +182,29 @@ void kernel_main() {
     eth_noc_semaphore_wait(start_semaphore, 1);
 
     // Clear the ring
-    roundtrip_ping<false>(channels_addrs, channels_sem_addrs, channels_syncs_addrs, max_concurrent_samples, 16, eth_noc_x, eth_noc_y, eth_channel_sync_ack_addr, is_ring_start);
+    roundtrip_ping<false>(
+        channels_addrs,
+        channels_sem_addrs,
+        channels_syncs_addrs,
+        max_concurrent_samples,
+        16,
+        eth_noc_x,
+        eth_noc_y,
+        eth_channel_sync_ack_addr,
+        is_ring_start);
 
     {
         for (uint32_t i = 0; i < num_samples; i++) {
-            roundtrip_ping<true>(channels_addrs, channels_sem_addrs, channels_syncs_addrs, max_concurrent_samples, transfer_size, eth_noc_x, eth_noc_y, eth_channel_sync_ack_addr, is_ring_start);
+            roundtrip_ping<true>(
+                channels_addrs,
+                channels_sem_addrs,
+                channels_syncs_addrs,
+                max_concurrent_samples,
+                transfer_size,
+                eth_noc_x,
+                eth_noc_y,
+                eth_channel_sync_ack_addr,
+                is_ring_start);
             if (is_ring_start) {
                 for (uint32_t i = 0; i < 10000; i++) {
                     asm volatile("nop");
@@ -206,5 +218,4 @@ void kernel_main() {
             DeviceZoneScopedN("ZONE-SCOPE_OVERHEAD");
         }
     }
-
 }

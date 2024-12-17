@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "alignment.hpp"
 #include "size.hpp"
 #include "page_config.hpp"
@@ -18,17 +17,22 @@ namespace tt::tt_metal {
 using Strides = std::vector<size_t>;
 
 // TensorLayout describes how a tensor is laid out in memory
-// It takes datatype, layout (eg. TILE vs. RM), memory (eg. DRAM vs. L1), sharding (ie. how you want to cut your logical shape)
-// And provides information required to physically lay out the tensor in memory
+// It takes datatype, layout (eg. TILE vs. RM), memory (eg. DRAM vs. L1), sharding (ie. how you want to cut your logical
+// shape) And provides information required to physically lay out the tensor in memory
 class TensorLayout {
 public:
     TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
 
-    // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a constructor
+    // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a
+    // constructor
     [[deprecated("Use of Legacy Padded Shape is deprecated")]]
-    static TensorLayout fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Shape& legacy_shape);
+    static TensorLayout fromLegacyPaddedShape(
+        DataType dtype,
+        const PageConfig& page_config,
+        const MemoryConfig& memory_config,
+        const ttnn::Shape& legacy_shape);
 
-    Layout get_layout() const { return page_config_.is_row_major() ? Layout::ROW_MAJOR : Layout::TILE; }
+    Layout get_layout() const { return page_config_.get_layout(); }
     PageConfig get_page_config() const { return page_config_; }
     DataType get_data_type() const { return dtype_; }
     const MemoryConfig& get_memory_config() const { return memory_config_; }
@@ -51,9 +55,30 @@ public:
     //  H is all dimensions except W multiplied and aligned to tile and shard height
     Size compute_physical_shape(const ttnn::SimpleShape& shape) const;
 
+    // Returns logical shard shape from shard spec shape
+    Size get_logical_shard_shape() const;
+
+    // Returns physical shard shape based on ShardMode, shard shape, and alignment
+    Size get_physical_shard_shape() const;
+
+    TensorLayout with_memory_config(MemoryConfig memory_config) const {
+        TensorLayout result = *this;
+        result.memory_config_ = std::move(memory_config);
+        return result;
+    }
+
+    bool operator==(const TensorLayout&) const = default;
+    bool operator!=(const TensorLayout&) const = default;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("dtype", "page_config", "memory_config", "alignment");
+    const auto attribute_values() const {
+        return std::forward_as_tuple(dtype_, page_config_, memory_config_, alignment_);
+    }
+
 private:
     // Private to not expose alignment parameter to the public API
-    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
+    TensorLayout(
+        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
     void initialize_alignment();
     void validate_alignment() const;
@@ -67,4 +92,4 @@ private:
     Alignment alignment_;
 };
 
-} // tt::tt_metal
+}  // namespace tt::tt_metal

@@ -24,7 +24,7 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 class N300TestDevice {
-   public:
+public:
     N300TestDevice() : device_open(false) {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (not slow_dispatch) {
@@ -64,7 +64,7 @@ class N300TestDevice {
     tt::ARCH arch_;
     size_t num_devices_;
 
-   private:
+private:
     bool device_open;
 };
 
@@ -86,7 +86,7 @@ bool RunWriteBWTest(
     const uint32_t max_num_transaction_buffers,
     uint32_t num_bytes_per_send = 16
 
-    ) {
+) {
     bool pass = true;
     log_debug(
         tt::LogTest,
@@ -140,22 +140,18 @@ bool RunWriteBWTest(
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {
-                uint32_t(num_bytes_per_send),         // 0
-                uint32_t(num_bytes_per_send >> 4),    // 1
-                uint32_t(num_messages_to_send),       // 2
-                uint32_t(max_num_transaction_buffers),// 3
-                uint32_t(source_is_dram)              // 4
-                }
-            });
+                uint32_t(num_bytes_per_send),           // 0
+                uint32_t(num_bytes_per_send >> 4),      // 1
+                uint32_t(num_messages_to_send),         // 2
+                uint32_t(max_num_transaction_buffers),  // 3
+                uint32_t(source_is_dram)                // 4
+            }});
 
     tt_metal::SetRuntimeArgs(
         sender_program,
         eth_sender_kernel,
         eth_sender_core,
-        {
-            uint32_t(src_eth_l1_byte_address),
-            uint32_t(dst_eth_l1_byte_address)
-        });
+        {uint32_t(src_eth_l1_byte_address), uint32_t(dst_eth_l1_byte_address)});
 
     ////////////////////////////////////////////////////////////////////////////
     //                           Receiver Device
@@ -169,21 +165,18 @@ bool RunWriteBWTest(
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {
-                uint32_t(num_bytes_per_send),         // 0
-                uint32_t(num_bytes_per_send >> 4),    // 1
-                uint32_t(num_messages_to_send),       // 2
-                uint32_t(max_num_transaction_buffers),// 3
-                uint32_t(dest_is_dram)                // 4
-            }});  // probably want to use NOC_1 here
+                uint32_t(num_bytes_per_send),           // 0
+                uint32_t(num_bytes_per_send >> 4),      // 1
+                uint32_t(num_messages_to_send),         // 2
+                uint32_t(max_num_transaction_buffers),  // 3
+                uint32_t(dest_is_dram)                  // 4
+            }});                                        // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
         eth_receiver_kernel,
         eth_receiver_core,
-        {
-            uint32_t(src_eth_l1_byte_address),
-            uint32_t(dst_eth_l1_byte_address)
-        });
+        {uint32_t(src_eth_l1_byte_address), uint32_t(dst_eth_l1_byte_address)});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -194,12 +187,8 @@ bool RunWriteBWTest(
 
     std::cout << "Running..." << std::endl;
 
-    std::thread th2 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(receiver_device, receiver_program);
-    });
-    std::thread th1 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(sender_device, sender_program);
-    });
+    std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, receiver_program); });
+    std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, sender_program); });
 
     th2.join();
     std::cout << "receiver done" << std::endl;
@@ -219,12 +208,11 @@ bool RunWriteBWTest(
     return pass;
 }
 
-
 int main(int argc, char** argv) {
     // argv[0]: program
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
-    assert (argc == 6);
+    assert(argc == 6);
     const uint32_t buffer_size_bytes = std::stoi(argv[1]);
     const uint32_t num_messages_to_send = std::stoi(argv[2]);
     const uint32_t max_num_transaction_buffers = std::stoi(argv[3]);
@@ -252,11 +240,11 @@ int main(int argc, char** argv) {
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    assert (active_eth_cores.size() > 0);
+    assert(active_eth_cores.size() > 0);
     auto eth_sender_core_iter = active_eth_cores.begin();
-    assert (eth_sender_core_iter != active_eth_cores.end());
+    assert(eth_sender_core_iter != active_eth_cores.end());
     eth_sender_core_iter++;
-    assert (eth_sender_core_iter != active_eth_cores.end());
+    assert(eth_sender_core_iter != active_eth_cores.end());
     const auto& eth_sender_core = *eth_sender_core_iter;
     auto [device_id, eth_receiver_core] = device_0->get_connected_ethernet_core(eth_sender_core);
 
@@ -281,5 +269,4 @@ int main(int argc, char** argv) {
         buffer_size_bytes);
 
     test_fixture.TearDown();
-
 }

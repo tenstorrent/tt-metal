@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -109,7 +110,7 @@ CclOpTensorConfig::CclOpTensorConfig(Tensor const& tensor) :
     buffer_start_address(tensor.buffer()->address()),
     df(tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype())) {
     if (tensor.get_layout() == Layout::TILE) {
-        this->tile = tensor.get_tile();
+        this->tile = tensor.get_tensor_spec().tile();
         this->page_size =this->tile.get_tile_size(this->df);
         this->tile_size = this->tile.get_tile_hw();
     } else {
@@ -171,7 +172,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
             auto eth_sender_core = topology_config.eth_sender_cores.at(i);
             log_trace(tt::LogOp, "EDM CLOCKWISE KERNEL RT ARGS: ");
             auto eth_sender_kernel =
-                ccl::generate_edm_kernel(program, device, clockwise_edm_builders.at(i), eth_sender_core, sender_noc);
+                generate_edm_kernel(program, device, clockwise_edm_builders.at(i), eth_sender_core, sender_noc);
             log_trace(
                 tt::LogOp,
                 "RingIndex: {}. Link {}. Clockwise EDM Core (x={},y={})",
@@ -185,7 +186,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
         if (is_counter_clockwise_direction_edm_enabled) {
             log_trace(tt::LogOp, "EDM COUNTER CLOCKWISE KERNEL RT ARGS: ");
             auto eth_receiver_core = topology_config.eth_receiver_cores.at(i);
-            auto eth_receiver_kernel = ccl::generate_edm_kernel(
+            auto eth_receiver_kernel = generate_edm_kernel(
                 program, device, counter_clockwise_edm_builders.at(i), eth_receiver_core, receiver_noc);
             log_trace(
                 tt::LogOp,
@@ -198,40 +199,66 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     }
 }
 
-
-KernelHandle generate_edm_kernel(
-   tt::tt_metal::Program& program,
+template <typename EDMBuilder>
+KernelHandle generate_edm_kernel_impl(
+    tt::tt_metal::Program& program,
     Device const* device,
-    ccl::EriscDatamoverBuilder const& edm_builder,
+    EDMBuilder const& edm_builder,
+    std::string const& kernel_path,
     CoreCoord const& eth_core,
     NOC noc_id) {
     edm_builder.dump_to_log();
 
-    std::vector<uint32_t> const& edm_clockwise_kernel_rt_args = edm_builder.emit_runtime_args();
+    std::vector<uint32_t> const edm_kernel_rt_args = edm_builder.get_runtime_args();
     // Ethernet Kernels
-    std::vector<uint32_t> eth_sender_ct_args = edm_builder.emit_compile_time_args();
+    std::vector<uint32_t> const eth_sender_ct_args = edm_builder.get_compile_time_args();
     log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
     log_trace(tt::LogOp, "CT ARGS:");
     for (auto const& s : eth_sender_ct_args) {
         log_trace(tt::LogOp, "\t{}", s);
     }
 
-    auto eth_sender_kernel =tt::tt_metal::CreateKernel(
+    auto eth_sender_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
+        kernel_path,
         eth_core,
-       tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args});
+        tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args});
 
-   tt::tt_metal::SetRuntimeArgs(program, eth_sender_kernel, eth_core, edm_clockwise_kernel_rt_args);
+    tt::tt_metal::SetRuntimeArgs(program, eth_sender_kernel, eth_core, edm_kernel_rt_args);
 
     std::stringstream ss;
     ss << "EDM ARGS:\n";
-    for (auto const& s : edm_clockwise_kernel_rt_args) {
+    for (auto const& s : edm_kernel_rt_args) {
         ss << "\t" << s << "\n";
     }
     log_trace(tt::LogOp, "{}", ss.str());
 
     return eth_sender_kernel;
+}
+
+KernelHandle generate_edm_kernel(
+    tt::tt_metal::Program& program,
+    Device const* device,
+    ccl::FabricEriscDatamoverBuilder const& edm_builder,
+    CoreCoord const& eth_core,
+    NOC noc_id) {
+    return generate_edm_kernel_impl(
+        program,
+        device,
+        edm_builder,
+        "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+        eth_core,
+        noc_id);
+}
+
+KernelHandle generate_edm_kernel(
+    tt::tt_metal::Program& program,
+    Device const* device,
+    ccl::EriscDatamoverBuilder const& edm_builder,
+    CoreCoord const& eth_core,
+    NOC noc_id) {
+    return generate_edm_kernel_impl(
+        program, device, edm_builder, "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp", eth_core, noc_id);
 }
 
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
@@ -300,8 +327,9 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
                 output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) -
             num_rows;
     } else {
-        const uint32_t num_tiles_x = input_tensor.get_legacy_shape()[-1] / input_tensor.get_tile().get_width();
-        uint32_t num_tiles_y = (input_tensor.get_legacy_shape()[-2] / input_tensor.get_tile().get_height());
+        auto input_tile = input_tensor.get_tensor_spec().tile();
+        const uint32_t num_tiles_x = input_tensor.get_legacy_shape()[-1] / input_tile.get_width();
+        uint32_t num_tiles_y = (input_tensor.get_legacy_shape()[-2] / input_tile.get_height());
         for (std::size_t i = 0; input_tensor.get_legacy_shape().rank() > 2 && i < input_tensor.get_legacy_shape().rank() - 2; i++) {
             num_tiles_y *= input_tensor.get_legacy_shape()[i];
         }
@@ -342,11 +370,12 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
             input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] *
                 input_tensor.get_legacy_shape()[2]};
     } else {
+        auto input_tile = input_tensor.get_tensor_spec().tile();
         this->flattened_tensor_shape = tt_xy_pair{
-            input_tensor.get_legacy_shape()[3] /input_tensor.get_tile().get_width(),
+            input_tensor.get_legacy_shape()[3] / input_tile.get_width(),
             (input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] *
                 input_tensor.get_legacy_shape()[2]) /
-               input_tensor.get_tile().get_height()};
+               input_tile.get_height()};
     }
 
     this->worker_slice_offsets = DERIVED_SLICER_T::compute_worker_slice_offsets(this->worker_slice_shapes, this->tensor_slice_shape);

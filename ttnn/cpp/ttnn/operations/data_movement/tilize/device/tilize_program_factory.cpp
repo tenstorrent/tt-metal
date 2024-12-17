@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <math.h>
 
 #include "ttnn/operations/cb_utils.hpp"
@@ -14,6 +13,7 @@
 #include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
                               .set_page_size(src0_cb_index, input_single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = num_tiles_per_block;
     auto cb_output_config = tt::tt_metal::CircularBufferConfig(
                                 num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
@@ -95,7 +95,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     // Reader compile-time args
     uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)log2(stick_size) : 0;
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)std::log2<decltype(stick_size)>(stick_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
 
     uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -104,7 +104,8 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
+        "reader_unary_stick_layout_split_rows_interleaved.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -173,10 +174,10 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, nblocks);
 
-    create_cb(tt::CB::c_in0, program, all_cores, input_single_tile_size, ntiles_per_block, input_cb_data_format);
+    create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, ntiles_per_block, input_cb_data_format);
 
-    auto [output_cb_index, _] =
-        create_cb(tt::CB::c_out0, program, all_cores, output_single_tile_size, ntiles_per_block, output_cb_data_format);
+    auto [output_cb_index, _] = create_cb(
+        tt::CBIndex::c_16, program, all_cores, output_single_tile_size, ntiles_per_block, output_cb_data_format);
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -190,7 +191,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     std::vector<uint32_t> reader_ct_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
+        "reader_unary_stick_layout_split_rows_interleaved.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
@@ -332,7 +334,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
     uint32_t num_cores = all_cores.num_cores();
 
     auto [src0_cb_index, cb_src0] = create_cb(
-        tt::CB::c_in0,
+        tt::CBIndex::c_0,
         program,
         all_cores,
         input_single_tile_size,
@@ -341,7 +343,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
         input.buffer());
 
     auto [output_cb_index, cb_output] = create_cb(
-        tt::CB::c_out0,
+        tt::CBIndex::c_16,
         program,
         all_cores,
         output_single_tile_size,
@@ -370,7 +372,8 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {uint32_t(num_tiles_per_shard / num_tiles_per_row), uint32_t(num_tiles_per_row)};
+    std::vector<uint32_t> compute_args = {
+        uint32_t(num_tiles_per_shard / num_tiles_per_row), uint32_t(num_tiles_per_row)};
 
     auto untilize_kernel_id = tt::tt_metal::CreateKernel(
         program,

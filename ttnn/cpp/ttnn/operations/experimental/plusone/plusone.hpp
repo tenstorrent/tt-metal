@@ -12,13 +12,9 @@ namespace ttnn {
 namespace operations::experimental {
 
 struct PlusOneOperation {
-    static ttnn::Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor);
+    static ttnn::Tensor invoke(uint8_t queue_id, const Tensor& input_tensor);
 
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor);
-
+    static ttnn::Tensor invoke(const Tensor& input_tensor);
 };
 
 }  // namespace operations::experimental

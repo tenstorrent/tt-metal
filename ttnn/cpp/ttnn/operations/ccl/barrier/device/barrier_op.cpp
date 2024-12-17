@@ -10,18 +10,18 @@
 namespace ttnn {
 
 void Barrier::validate(const std::vector<Tensor>& input_tensors) const {
-    //Validate the input tensor
+    // Validate the input tensor
     TT_FATAL(this->topology == ccl::Topology::Ring, "We currently only support Ring topologies on the barrier op");
 }
 
 std::vector<SimpleShape> Barrier::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    //For a Barrier the output shape should match the input
+    // For a Barrier the output shape should match the input
     SimpleShape shape = input_tensors[0].get_logical_shape();
     return std::vector<SimpleShape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> Barrier::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    //Tensor is unmodified, return what was passed in
+    // Tensor is unmodified, return what was passed in
     return input_tensors;
 }
 
@@ -38,11 +38,10 @@ operation::ProgramWithCallbacks Barrier::create_program(
         this->topology);
 }
 
-void Barrier::update_structure (const Tensor& input_tensor)
-{
-    //Need to resolve the neighbours of this tensor
-    //Can only be done in launch_op as it differs for different input tensors
-    const auto devices = this -> devices;
+void Barrier::update_structure(const Tensor& input_tensor) {
+    // Need to resolve the neighbours of this tensor
+    // Can only be done in launch_op as it differs for different input tensors
+    const auto devices = this->devices;
     const bool is_linear = (topology == ttnn::ccl::Topology::Linear);
     const uint32_t num_devices = this->ring_size;
     uint32_t device_index = 0;
@@ -53,46 +52,39 @@ void Barrier::update_structure (const Tensor& input_tensor)
             bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
             bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
             device_index = i;
-            receiver_device_id = is_last_chip_in_clockwise_direction ?
-                std::nullopt :
-                std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
-            sender_device_id = is_last_chip_in_counter_clockwise_direction ?
-                std::nullopt :
-                std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
+            receiver_device_id = is_last_chip_in_clockwise_direction
+                                     ? std::nullopt
+                                     : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+            sender_device_id = is_last_chip_in_counter_clockwise_direction
+                                   ? std::nullopt
+                                   : std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
             break;
         }
     }
-    this ->receiver_device_id = receiver_device_id;
-    this ->sender_device_id = sender_device_id;
-    this -> ring_index = device_index;
-    this -> is_starting_core = device_index==0;
+    this->receiver_device_id = receiver_device_id;
+    this->sender_device_id = sender_device_id;
+    this->ring_index = device_index;
+    this->is_starting_core = device_index == 0;
 }
-namespace operations::ccl{
+namespace operations::ccl {
 
-
-Tensor barrier_function(
-    const Tensor& input_tensor,
-    const ttnn::Barrier& barrier_struct)
-{
+Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier_struct) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op
-    (
+    operation::launch_op(
         [barrier_struct](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor>
-            {
-                const Tensor& input_tensor = input_tensors.at(0);
-                // need to copy and update barrier struct for this particular tensor
-                ttnn::Barrier new_barrier_struct = barrier_struct;
-                new_barrier_struct.update_structure(input_tensor);
-                return operation::run(new_barrier_struct,{input_tensor});
-            },
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            const Tensor& input_tensor = input_tensors.at(0);
+            // need to copy and update barrier struct for this particular tensor
+            ttnn::Barrier new_barrier_struct = barrier_struct;
+            new_barrier_struct.update_structure(input_tensor);
+            return operation::run(new_barrier_struct, {input_tensor});
+        },
         {input_tensor},
-        output_tensors
-    );
+        output_tensors);
     return output_tensors.at(0);
 }
 
-} //namespace operations::ccl
-} // namespace ttnn
+}  // namespace operations::ccl
+}  // namespace ttnn

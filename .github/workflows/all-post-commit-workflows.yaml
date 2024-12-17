@@ -2,6 +2,11 @@ name: "All post-commit tests"
 
 on:
   workflow_call:
+    inputs:
+      build-type:
+        required: false
+        default: Release
+        type: string
   workflow_dispatch:
     inputs:
       build-type:
@@ -73,21 +78,6 @@ jobs:
       build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
     secrets: inherit
-  # UMD Unit Tests
-  umd-unit-tests:
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: grayskull, runner-label: E150 },
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/umd-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     needs: build-artifact
@@ -118,6 +108,7 @@ jobs:
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
+      os: ubuntu-20.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
@@ -165,6 +156,27 @@ jobs:
           { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+  code-analysis:
+    needs: build-docker-image-2204
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      os: ubuntu-22.04-amd64
+  tt-train-cpp-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          # Disabled due to https://github.com/tenstorrent/tt-metal/issues/16012
+          # { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}

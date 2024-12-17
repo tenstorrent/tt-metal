@@ -23,8 +23,7 @@ void MAIN {
 
     pack_untilize_init<Wt>(in_cb, untilized_in_cb);
 
-    for (uint32_t  h = 0; h < num_batched_heads; ++h) {
-
+    for (uint32_t h = 0; h < num_batched_heads; ++h) {
         cb_wait_front(in_cb, Wt);
         cb_reserve_back(untilized_in_cb, Wt);
         pack_untilize_block<Wt>(in_cb, 1, untilized_in_cb);
@@ -32,7 +31,7 @@ void MAIN {
         cb_pop_front(in_cb, Wt);
 
         reconfig_data_format_srca(in_cb, cache_cb);
-        for(uint32_t u = 0; u < u_count; ++u) {
+        for (uint32_t u = 0; u < u_count; ++u) {
             pack_untilize_init_short<Wt>(cache_cb, untilized_cache_cb);
 
             for (uint32_t g = 0; g < granularity; ++g) {
@@ -66,4 +65,4 @@ void MAIN {
         pack_untilize_init_short<Wt>(in_cb, untilized_in_cb);
     }
 }
-} // NAMESPACE
+}  // namespace NAMESPACE

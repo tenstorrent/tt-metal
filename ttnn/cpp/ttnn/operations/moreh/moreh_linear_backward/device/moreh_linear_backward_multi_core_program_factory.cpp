@@ -50,7 +50,8 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     auto grid = device->compute_with_storage_grid_size();
     auto arch = device->arch();
     const auto num_cores_y = grid.y;
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] = get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     const auto
         [num_cores_to_be_used,
          all_cores,
@@ -75,12 +76,12 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
         program,
         all_cores,
         cb_data_format,
-        {{CB::c_in0, in0_t},    // output_grad
-         {CB::c_in1, in1_t},    // scaler
-         {CB::c_in2, in2_t},    // mask_h_w
-         {CB::c_out0, out0_t},  // bias_grad
-         {CB::c_intermed0, im0_t},
-         {CB::c_intermed1, im1_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format}});
+        {{CBIndex::c_0, in0_t},    // output_grad
+         {CBIndex::c_1, in1_t},    // scaler
+         {CBIndex::c_2, in2_t},    // mask_h_w
+         {CBIndex::c_16, out0_t},  // bias_grad
+         {CBIndex::c_24, im0_t},
+         {CBIndex::c_25, im1_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -89,8 +90,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(is_dram(output_grad)), packed_scaler_value};
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(bias_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(bias_grad))};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_h.cpp";
@@ -98,10 +98,8 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
 
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -113,7 +111,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
-        unpack_to_dest_mode[tt::CB::c_intermed1] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_25] = UnpackToDestMode::UnpackToDestFp32;
     }
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_multi_core_h.cpp";

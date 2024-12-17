@@ -12,7 +12,11 @@ on:
       timeout:
         required: false
         type: number
-        default: 60
+        default: 35
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
   workflow_dispatch:
     inputs:
       arch:
@@ -33,45 +37,66 @@ on:
       timeout:
         required: false
         type: number
-        default: 60
+        default: 35
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
 
 jobs:
-  models:
+  cpp-unit-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         test-group: [
-          {name: C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
+          {name: All C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
+          {name: tools, cmd: ./tests/scripts/run_tools_tests.sh},
+
+          {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
+          {name: api, cmd: "./build/test/tt_metal/unit_tests_api"},
+          {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools"},
+          {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
+          {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},
+          {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
+          {name: llk, cmd: "./build/test/tt_metal/unit_tests_llk"},
+          {name: stl, cmd: "./build/test/tt_metal/unit_tests_stl"},
+          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=MeshDeviceSuite.*"},
+
+          {name: dispatch multicmd queue, cmd: "TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*"},
+
           {name: ttnn cpp tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
           {name: ttnn ccl cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
       - in-service
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/prepare-metal-run
         with:
           arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ inputs.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+          run_args: |
+            pip install --force-reinstall pip==21.2.4
+            pip install -r tt_metal/python_env/requirements-dev.txt
+            pip install -e .
+            ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

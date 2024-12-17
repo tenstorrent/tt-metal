@@ -11,11 +11,11 @@ inline namespace v0 {
 class Device;
 class Tensor;
 
-} // namespace v0
+}  // namespace v0
 
 namespace distributed {
 
 class MeshDevice;
 
-} // namespace tt::tt_metal::distributed
-} // namespace tt::tt_metal
+}  // namespace distributed
+}  // namespace tt::tt_metal

@@ -43,7 +43,6 @@ target_precompile_headers(
 target_include_directories(
     tt_metal
     PUBLIC
-        ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}
         include

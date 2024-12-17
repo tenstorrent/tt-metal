@@ -72,7 +72,7 @@ endif()
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.6)
+CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7)
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt
@@ -85,3 +85,29 @@ CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
 ############################################################################################################################
 
 CPMAddPackage(NAME range-v3 GITHUB_REPOSITORY ericniebler/range-v3 GIT_TAG 0.12.0)
+
+############################################################################################################################
+# pybind11 : https://github.com/pybind/pybind11
+############################################################################################################################
+
+CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84)
+
+############################################################################################################################
+# nlohmann/json : https://github.com/nlohmann/json
+############################################################################################################################
+
+CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.9.1)
+
+############################################################################################################################
+# xtensor : https://github.com/xtensor-stack/xtensor
+############################################################################################################################
+
+CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.7.7 OPTIONS "XTL_ENABLE_TESTS OFF")
+CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.25.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
+CPMAddPackage(
+    NAME xtensor-blas
+    GITHUB_REPOSITORY xtensor-stack/xtensor-blas
+    GIT_TAG 0.21.0
+    OPTIONS
+        "XTENSOR_ENABLE_TESTS OFF"
+)

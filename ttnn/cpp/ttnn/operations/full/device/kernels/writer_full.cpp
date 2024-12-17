@@ -30,19 +30,19 @@ void kernel_main() {
     uint32_t write_addr = get_write_ptr(cb_value);
 
 #ifdef OUTPUT_DTYPE_BFLOAT16
-    auto ptr = reinterpret_cast<uint16_t *>(write_addr);
+    auto ptr = reinterpret_cast<uint16_t*>(write_addr);
     for (uint32_t i = 0; i < 1024; ++i) {
         ptr[i] = val.u >> 16;
     }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
-    auto ptr = reinterpret_cast<uint32_t *>(write_addr);
+    auto ptr = reinterpret_cast<uint32_t*>(write_addr);
     for (uint32_t i = 0; i < 1024; ++i) {
         ptr[i] = fill_value;
     }
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
-    auto ptr = reinterpret_cast<float *>(write_addr);
+    auto ptr = reinterpret_cast<float*>(write_addr);
     for (uint32_t i = 0; i < 1024; ++i) {
         ptr[i] = val.f;
     }

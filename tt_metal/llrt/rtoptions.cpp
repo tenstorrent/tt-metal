@@ -19,7 +19,7 @@ namespace tt {
 
 namespace llrt {
 
-const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
+const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DPRINT",
     "READ_DEBUG_DELAY",
     "WRITE_DEBUG_DELAY",
@@ -27,24 +27,19 @@ const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DISABLE_L1_DATA_CACHE",
 };
 
-const char *RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
+const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
-static const char *TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
-static const char *TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
-
-// Note: global initialization order is non-deterministic
-// This is ok so long as this gets initialized before decisions are based on
-// env state
-RunTimeOptions OptionsG;
+static const char* TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
+static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 
 RunTimeOptions::RunTimeOptions() {
-    const char *root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
+    const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->is_root_dir_env_var_set = true;
         this->root_dir = std::string(root_dir_str) + "/";
     }
 
-    const char *kernel_dir_str = std::getenv(TT_METAL_KERNEL_PATH_ENV_VAR);
+    const char* kernel_dir_str = std::getenv(TT_METAL_KERNEL_PATH_ENV_VAR);
     if (kernel_dir_str != nullptr) {
         this->is_kernel_dir_env_var_set = true;
         this->kernel_dir = std::string(kernel_dir_str) + "/";
@@ -66,19 +61,19 @@ RunTimeOptions::RunTimeOptions() {
     profiler_sync_enabled = false;
     profiler_buffer_usage_enabled = false;
 #if defined(TRACY_ENABLE)
-    const char *profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
+    const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
         profiler_enabled = true;
-        const char *profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
+        const char* profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
         if (profile_dispatch_str != nullptr && profile_dispatch_str[0] == '1') {
             profile_dispatch_cores = true;
         }
-        const char *profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
+        const char* profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
         if (profiler_enabled && profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
             profiler_sync_enabled = true;
         }
     }
-    const char *profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
+    const char* profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
     if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
         profiler_buffer_usage_enabled = true;
     }
@@ -90,44 +85,50 @@ RunTimeOptions::RunTimeOptions() {
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
 
     clear_l1 = false;
-    const char *clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
+    const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
     if (clear_l1_enabled_str != nullptr) {
-        if (clear_l1_enabled_str[0] == '0')
+        if (clear_l1_enabled_str[0] == '0') {
             clear_l1 = false;
-        if (clear_l1_enabled_str[0] == '1')
+        }
+        if (clear_l1_enabled_str[0] == '1') {
             clear_l1 = true;
+        }
     }
 
-    const char *riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
+    const char* riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
     set_riscv_debug_info_enabled(riscv_debug_info_enabled_str != nullptr);
 
-    const char *validate_kernel_binaries = std::getenv("TT_METAL_VALIDATE_PROGRAM_BINARIES");
+    const char* validate_kernel_binaries = std::getenv("TT_METAL_VALIDATE_PROGRAM_BINARIES");
     set_validate_kernel_binaries(validate_kernel_binaries != nullptr && validate_kernel_binaries[0] == '1');
 
-    const char *num_cqs = getenv("TT_METAL_GTEST_NUM_HW_CQS");
+    const char* num_cqs = getenv("TT_METAL_GTEST_NUM_HW_CQS");
     if (num_cqs != nullptr) {
         try {
             set_num_hw_cqs(std::stoi(num_cqs));
-        } catch (const std::invalid_argument &ia) {
+        } catch (const std::invalid_argument& ia) {
             TT_THROW("Invalid TT_METAL_GTEST_NUM_HW_CQS: {}", num_cqs);
         }
     }
 
-    const char *dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
+    const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {
         enable_dispatch_data_collection = true;
     }
 
     if (getenv("TT_METAL_GTEST_ETH_DISPATCH")) {
-        this->dispatch_core_type = tt_metal::DispatchCoreType::ETH;
+        this->dispatch_core_config.set_dispatch_core_type(tt_metal::DispatchCoreType::ETH);
     }
 
     if (getenv("TT_METAL_SKIP_LOADING_FW")) {
         this->skip_loading_fw = true;
     }
+
+    if (getenv("TT_METAL_SKIP_DELETING_BUILT_CACHE")) {
+        this->skip_deleting_built_cache = true;
+    }
 }
 
-const std::string &RunTimeOptions::get_root_dir() {
+const std::string& RunTimeOptions::get_root_dir() {
     if (!this->is_root_dir_specified()) {
         TT_THROW("Env var {} is not set.", TT_METAL_HOME_ENV_VAR);
     }
@@ -135,7 +136,7 @@ const std::string &RunTimeOptions::get_root_dir() {
     return root_dir;
 }
 
-const std::string &RunTimeOptions::get_kernel_dir() const {
+const std::string& RunTimeOptions::get_kernel_dir() const {
     if (!this->is_kernel_dir_specified()) {
         TT_THROW("Env var {} is not set.", TT_METAL_KERNEL_PATH_ENV_VAR);
     }
@@ -145,7 +146,7 @@ const std::string &RunTimeOptions::get_kernel_dir() const {
 
 void RunTimeOptions::ParseWatcherEnv() {
     watcher_interval_ms = 0;
-    const char *watcher_enable_str = getenv("TT_METAL_WATCHER");
+    const char* watcher_enable_str = getenv("TT_METAL_WATCHER");
     watcher_enabled = (watcher_enable_str != nullptr);
     if (watcher_enabled) {
         int sleep_val = 0;
@@ -156,13 +157,13 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_interval_ms = sleep_val;
     }
 
-    const char *watcher_dump_all_str = getenv("TT_METAL_WATCHER_DUMP_ALL");
+    const char* watcher_dump_all_str = getenv("TT_METAL_WATCHER_DUMP_ALL");
     watcher_dump_all = (watcher_dump_all_str != nullptr);
 
-    const char *watcher_append_str = getenv("TT_METAL_WATCHER_APPEND");
+    const char* watcher_append_str = getenv("TT_METAL_WATCHER_APPEND");
     watcher_append = (watcher_append_str != nullptr);
 
-    const char *watcher_noinline_str = getenv("TT_METAL_WATCHER_NOINLINE");
+    const char* watcher_noinline_str = getenv("TT_METAL_WATCHER_NOINLINE");
     watcher_noinline = (watcher_noinline_str != nullptr);
 
     // Auto unpause is for testing only, no env var.
@@ -177,7 +178,7 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_ring_buffer_str,
         watcher_stack_usage_str,
         watcher_dispatch_str};
-    for (std::string feature : all_features) {
+    for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
         if (getenv(env_var.c_str()) != nullptr) {
@@ -185,7 +186,7 @@ void RunTimeOptions::ParseWatcherEnv() {
         }
     }
 
-    const char *watcher_debug_delay_str = getenv("TT_METAL_WATCHER_DEBUG_DELAY");
+    const char* watcher_debug_delay_str = getenv("TT_METAL_WATCHER_DEBUG_DELAY");
     if (watcher_debug_delay_str != nullptr) {
         sscanf(watcher_debug_delay_str, "%u", &watcher_debug_delay);
         // Assert watcher is also enabled (TT_METAL_WATCHER=1)
@@ -207,24 +208,30 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS");
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
     ParseFeatureOneFilePerRisc(feature, feature_env_prefix + "_ONE_FILE_PER_RISC");
+    ParseFeaturePrependDeviceCoreRisc(feature, feature_env_prefix + "_PREPEND_DEVICE_CORE_RISC");
 
     // Set feature enabled if the user asked for any feature cores
     feature_targets[feature].enabled = false;
-    for (auto &core_type_and_all_flag : feature_targets[feature].all_cores)
-        if (core_type_and_all_flag.second != RunTimeDebugClassNoneSpecified)
+    for (auto& core_type_and_all_flag : feature_targets[feature].all_cores) {
+        if (core_type_and_all_flag.second != RunTimeDebugClassNoneSpecified) {
             feature_targets[feature].enabled = true;
-    for (auto &core_type_and_cores : feature_targets[feature].cores)
-        if (core_type_and_cores.second.size() > 0)
+        }
+    }
+    for (auto& core_type_and_cores : feature_targets[feature].cores) {
+        if (core_type_and_cores.second.size() > 0) {
             feature_targets[feature].enabled = true;
+        }
+    }
 
-    const char *print_noc_xfers = std::getenv("TT_METAL_RECORD_NOC_TRANSFER_DATA");
-    if (print_noc_xfers != nullptr)
+    const char* print_noc_xfers = std::getenv("TT_METAL_RECORD_NOC_TRANSFER_DATA");
+    if (print_noc_xfers != nullptr) {
         record_noc_transfer_data = true;
+    }
 };
 
 void RunTimeOptions::ParseFeatureCoreRange(
-    RunTimeDebugFeatures feature, const std::string &env_var, CoreType core_type) {
-    char *str = std::getenv(env_var.c_str());
+    RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type) {
+    char* str = std::getenv(env_var.c_str());
     std::vector<CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
@@ -271,8 +278,9 @@ void RunTimeOptions::ParseFeatureCoreRange(
                     cores.push_back({x, y});
                     str = strchr(str, ',');
                     str = strchr(str + 1, ',');
-                    if (str != nullptr)
+                    if (str != nullptr) {
                         str++;
+                    }
                 }
             }
         } else {
@@ -284,9 +292,9 @@ void RunTimeOptions::ParseFeatureCoreRange(
     feature_targets[feature].cores[core_type] = cores;
 }
 
-void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var) {
+void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var) {
     std::vector<int> chips;
-    char *env_var_str = std::getenv(env_var.c_str());
+    char* env_var_str = std::getenv(env_var.c_str());
 
     // If the environment variable is not empty, parse it.
     while (env_var_str != nullptr) {
@@ -296,19 +304,21 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         }
         chips.push_back(chip);
         env_var_str = strchr(env_var_str, ',');
-        if (env_var_str != nullptr)
+        if (env_var_str != nullptr) {
             env_var_str++;
+        }
     }
 
     // Default is no chips are specified is chip 0.
-    if (chips.size() == 0)
+    if (chips.size() == 0) {
         chips.push_back(0);
+    }
     feature_targets[feature].chip_ids = chips;
 }
 
-void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var) {
+void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var) {
     uint32_t riscv_mask = 0;
-    char *env_var_str = std::getenv(env_var.c_str());
+    char* env_var_str = std::getenv(env_var.c_str());
 
     if (env_var_str != nullptr) {
         if (strstr(env_var_str, "BR")) {
@@ -341,14 +351,20 @@ void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const s
     feature_targets[feature].riscv_mask = riscv_mask;
 }
 
-void RunTimeOptions::ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var) {
-    char *env_var_str = std::getenv(env_var.c_str());
+void RunTimeOptions::ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var) {
+    char* env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].file_name = (env_var_str != nullptr) ? std::string(env_var_str) : "";
 }
 
-void RunTimeOptions::ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string &env_var) {
-    char *env_var_str = std::getenv(env_var.c_str());
+void RunTimeOptions::ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var) {
+    char* env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].one_file_per_risc = (env_var_str != nullptr);
+}
+
+void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string &env_var) {
+    char *env_var_str = std::getenv(env_var.c_str());
+    feature_targets[feature].prepend_device_core_risc =
+        (env_var_str != nullptr) ? (strcmp(env_var_str, "1") == 0) : true;
 }
 
 }  // namespace llrt

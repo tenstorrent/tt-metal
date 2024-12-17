@@ -6,8 +6,7 @@
 
 #include "pybind11/pybind_fwd.hpp"
 
-
 namespace ttnn::operations::experimental::transformer::detail {
 
 void bind_nlp_create_qkv_heads_falcon7b(pybind11::module& module);
-} // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::transformer::detail

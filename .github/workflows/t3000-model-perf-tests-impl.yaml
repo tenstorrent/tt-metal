@@ -18,10 +18,9 @@ jobs:
           { name: "t3k LLM falcon7b model perf tests", model: "falcon7b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 75, owner_id: U05RWH3QUPM}, # Salar Hosseini
           { name: "t3k LLM mixtral model perf tests", model: "mixtral", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 75, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "t3k LLM llama2-70B model perf tests", model: "llama2-70b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_llama2_70b_tests, timeout: 75, owner_id: U03FJB5TM5Y}, # Colman Glagovich
-          { name: "t3k LLM llama3-70B model perf tests", model: "llama3-70b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_llama3_70b_tests, timeout: 60, owner_id: U03FJB5TM5Y}, # Colman Glagovich
-          { name: "t3k LLM llama3 model perf tests", model: "llama3", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_llama3_tests, timeout: 60, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "t3k LLM falcon40b model perf tests", model: "falcon40b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 75, owner_id: U053W15B6JF}, # Djordje Ivanovic
           { name: "t3k CNN resnet50 model perf tests", model: "resnet50", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 75, owner_id: U013121KDH9}, # Austin Ho
+          { name: "t3k CCL perf tests", arch: wormhole_b0, cmd: run_t3000_ccl_all_gather_perf_tests && run_t3000_ccl_reduce_scatter_perf_tests, timeout: 75, tracy: true, owner_id: ULMEPM2MA}, # Sean Nijjar
           #{ name: "t3k CNN model perf tests ", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_cnn_tests, timeout: 120, owner_id: }, #No tests are being run?
         ]
     name: ${{ matrix.test-group.name }}
@@ -36,7 +35,7 @@ jobs:
       - pipeline-perf
       - ${{ inputs.extra-tag }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Enable performance mode
         run: |
           sudo cpupower frequency-set -g performance
@@ -45,13 +44,25 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - name: Download profiler build artifact
+        id: download-profiler-artifact
+        if: ${{ matrix.test-group.tracy }}
+        uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}_profiler
+        continue-on-error: true
+      - name: Download build artifact
+        id: download-artifact
+        if: ${{ !matrix.test-group.tracy }}
+        uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
+        if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
         run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run model perf regression tests
+        if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
         shell: bash {0}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
@@ -63,18 +74,51 @@ jobs:
           env python models/perf/merge_perf_results.py
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy) }}
         run: |
-          ls -hal
-          export PERF_REPORT_FILENAME="Models_Perf_$(date +%Y_%m_%d).csv"
-          ls -hal $PERF_REPORT_FILENAME
-          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-      - name: Upload perf report
-        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
+          TODAY=$(date +%Y_%m_%d)
+          PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
+          PERF_REPORT_FILENAME_CCL_ALL_GATHER="CCL_all_gather_Perf_${TODAY}.csv"
+          PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER="CCL_reduce_scatter_Perf_${TODAY}.csv"
+          if [ "${{ matrix.test-group.tracy }}" == "true" ]; then
+            found_reports=false
+            if [ -f "$PERF_REPORT_FILENAME_CCL_ALL_GATHER" ]; then
+              echo "Found CCL AllGather Perf report: $PERF_REPORT_FILENAME_CCL_ALL_GATHER"
+              echo "perf_report_filename_all_gather=$PERF_REPORT_FILENAME_CCL_ALL_GATHER" >> "$GITHUB_OUTPUT"
+              found_reports=true
+            fi
+            if [ -f "$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" ]; then
+              echo "Found CCL ReduceScatter Perf report: $PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER"
+              echo "perf_report_filename_reduce_scatter=$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" >> "$GITHUB_OUTPUT"
+              found_reports=true
+            fi
+            if [ "$found_reports" = false ]; then
+              echo "No CCL perf report found for today."
+              exit 1
+            fi
+          else
+            if [ -f "$PERF_REPORT_FILENAME_MODELS" ]; then
+              echo "Found Models Perf report: $PERF_REPORT_FILENAME_MODELS"
+              echo "perf_report_filename=$PERF_REPORT_FILENAME_MODELS" >> "$GITHUB_OUTPUT"
+            else
+              echo "No Models perf report found for today."
+              exit 1
+            fi
+          fi
+      - name: Upload Models perf report
+        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && !matrix.test-group.tracy}}
         uses: actions/upload-artifact@v4
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+      - name: Upload CCL perf report
+        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && matrix.test-group.tracy}}
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
+          path: |
+            ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
+            ${{ steps.check-perf-report.outputs.perf_report_filename_reduce_scatter }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

@@ -34,7 +34,7 @@ struct ConfigBufferSync {
 //   call alloc with the new sync values to allocate the memory for each CoreType
 //
 class WorkerConfigBufferMgr {
-  public:
+public:
     WorkerConfigBufferMgr();
 
     void init_add_buffer(uint32_t base_addr, uint32_t size);
@@ -46,12 +46,12 @@ class WorkerConfigBufferMgr {
     // Test/Debug
     uint32_t get_last_slot_addr(HalProgrammableCoreType programmable_core_type) const;
 
-  private:
+private:
     std::vector<uint32_t> base_addrs_;
     std::vector<uint32_t> end_addrs_;
     std::vector<std::vector<ConfigBufferEntry>> entries_;  // ring buffer of allocated space
-    std::vector<uint32_t> alloc_index_;  // always points to a valid entry
-    std::vector<uint32_t> free_index_;   // points to the next entry to free
+    std::vector<uint32_t> alloc_index_;                    // always points to a valid entry
+    std::vector<uint32_t> free_index_;                     // points to the next entry to free
 
     std::vector<ConfigBufferEntry> reservation_;
 };

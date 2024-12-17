@@ -10,4 +10,4 @@ namespace ttnn::operations::data_movement::detail {
 
 void bind_indexed_fill(pybind11::module& module);
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::detail

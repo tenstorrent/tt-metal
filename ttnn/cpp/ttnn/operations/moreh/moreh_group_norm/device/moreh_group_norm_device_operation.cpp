@@ -85,11 +85,7 @@ MorehGroupNormOperation::shape_return_value_t MorehGroupNormOperation::compute_o
     const auto output_shape = tensor_args.input.get_logical_shape();
     const auto N = output_shape[0];
     const auto num_groups = operation_attributes.num_groups;
-    SmallVector<uint32_t> mean_rstd_origin_shape{
-        1,
-        1,
-        N,
-        num_groups};
+    SmallVector<uint32_t> mean_rstd_origin_shape{1, 1, N, num_groups};
 
     SimpleShape mean_rstd_shape(std::move(mean_rstd_origin_shape));
     return {output_shape, mean_rstd_shape, mean_rstd_shape};
@@ -140,12 +136,12 @@ MorehGroupNormOperation::invoke(
     const Tensor& input,
     const uint32_t num_groups,
     const float eps,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor> output,
-    const std::optional<const Tensor> mean,
-    const std::optional<const Tensor> rstd,
+    const std::optional<const Tensor>& output,
+    const std::optional<const Tensor>& mean,
+    const std::optional<const Tensor>& rstd,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<MemoryConfig>& mean_memory_config,
     const std::optional<MemoryConfig>& rstd_memory_config,

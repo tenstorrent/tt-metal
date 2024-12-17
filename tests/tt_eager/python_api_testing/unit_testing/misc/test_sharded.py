@@ -11,7 +11,14 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.utility_functions import is_wormhole_b0, is_wormhole_b0, is_blackhole, skip_for_blackhole
+from models.utility_functions import (
+    is_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
+    skip_for_blackhole,
+    skip_for_grayskull,
+    run_for_wormhole_b0,
+)
 from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 
@@ -101,6 +108,7 @@ def test_sharded_tile(
 
 
 # TODO (7735): Switch to new interleaved_to_sharded with sharded_mem_config input and re-enable BLOCK sharded tests
+@skip_for_blackhole("WIP")
 @pytest.mark.parametrize(
     "input_shape, shard_scheme, shard_size, num_cores",
     [
@@ -180,7 +188,7 @@ def test_sharded_rm(
     assert passing
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
+@skip_for_blackhole("BH LLK issue with untilize, #14594")
 @pytest.mark.parametrize("H, num_cores", [[100352, 98], [25088, 98]])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
@@ -256,7 +264,7 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, 
     assert passing
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
+@skip_for_blackhole("Mismatching on BH, see #14609")
 @pytest.mark.parametrize("H, num_cores", [[25088, 98]])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defaults):
@@ -681,8 +689,7 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     if in0_height_sharded:
-        compute_with_storage_grid_size = device.compute_with_storage_grid_size()
-        device_grid_size = ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
+        device_grid_size = ttnn.CoreGrid(y=8, x=8) if num_cores == 64 else ttnn.CoreGrid(y=1, x=1)
 
         tt_in0_height_sharded = ttnn.to_memory_config(
             tt_in0_dram,
@@ -895,6 +902,7 @@ def test_partial_sharded_op_binary(
     assert passing
 
 
+@pytest.mark.skipif(is_blackhole(), reason="BH ND hang, see issue #14745")
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("in1_sharded", [True, False], ids=["in1_sharded", "in1_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
@@ -1335,6 +1343,7 @@ def test_sharded_matmul_2d_transposed(
     assert passing
 
 
+@pytest.mark.skipif(is_blackhole(), reason="BH ND hang, see issue #14745")
 def test_resharded_binary_to_matmul(device, function_level_defaults):
     grid_size_binary = device.compute_with_storage_grid_size()
     num_cores_binary = 98
@@ -1426,6 +1435,7 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
     assert passing
 
 
+@pytest.mark.skipif(is_blackhole(), reason="BH ND hang, see issue #14745")
 @pytest.mark.parametrize("in_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -1501,6 +1511,7 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, dtype, device, f
     assert passing
 
 
+@pytest.mark.skipif(is_blackhole(), reason="BH ND hang, see issue #14745")
 @pytest.mark.parametrize("in_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
 @pytest.mark.parametrize("activations_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -1691,6 +1702,7 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
         "unbatched_16_shape_out_interleaved",
     ],
 )
+@skip_for_blackhole("BH Issue with untilize LLK, see #14594")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_width_sharded_untilize_with_unpadding(
     shape, output_H, in_sharded, out_sharded, dtype, device, function_level_defaults
@@ -1761,7 +1773,7 @@ def test_width_sharded_untilize_with_unpadding(
     assert passing
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
+@skip_for_blackhole("BH LLK Issue with tilize, #14609")
 @pytest.mark.parametrize("input_shape", [[8, 1, 49, 2048], [1, 1, 8, 2048], [16, 1, 49, 2048], [1, 1, 16, 2048]])
 @pytest.mark.parametrize("sharding_config", [(True, True), (False, False)], ids=["both_sharded", "both_interleaved"])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -1833,7 +1845,6 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
     assert passing
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("N", [8, 16])
 @pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
@@ -2064,6 +2075,7 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
     assert passing
 
 
+@pytest.mark.skipif(is_blackhole(), reason="BH ND hang, see issue #14745")
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("in1_sharded", [True, False], ids=["in1_sharded", "in1_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
@@ -2411,3 +2423,137 @@ def test_interleaved_2_sharded_DRAM(device, dtype, y):
     )
 
     yt = ttnn.interleaved_to_sharded(xt, shard_grid, (y // 8, 18 * 32), shard_scheme, ttnn.ShardOrientation.ROW_MAJOR)
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "seq_len",
+    (32,),
+)
+def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_program_cache):
+    dim_in = 4096
+    dim_hidden = int(3.5 * dim_in / 4)  # 3584
+    dim_out = dim_in
+    # Create random input tensor
+    input_tensor = torch.randn(1, 1, int(seq_len), dim_in)
+    # Create random weight matrices
+    w1 = torch.randn(dim_hidden, dim_in)
+    w2 = torch.randn(dim_out, dim_hidden)
+    # Pytorch reference implementation
+    ## First linear layer
+    hidden = torch.matmul(input_tensor, w1.t())
+    ## Second linear layer
+    output_w2 = torch.matmul(hidden, w2.t())
+    ## Add residual connection
+    reference_output = output_w2 + input_tensor
+    # TTNN implementation
+    input_mem_config = ttnn.create_sharded_memory_config(
+        (
+            32,
+            128,
+        ),  # Shard shape: [32, 128] -> 1 shard per core
+        ttnn.CoreGrid(x=8, y=4),
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    w1_out_reshard_mem_config = ttnn.create_sharded_memory_config(
+        (
+            32,
+            128,
+        ),  # Shard shape: [32, 128] -> 1 shard per core
+        ttnn.CoreGrid(x=7, y=4),
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    dram_core_range_set = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(11, 0),
+            ),
+        }
+    )
+    w1_w3_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_core_range_set, (4096, 320), ttnn.ShardOrientation.ROW_MAJOR, False),
+    )
+    w2_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_core_range_set, (3584, 352), ttnn.ShardOrientation.ROW_MAJOR, False),
+    )
+    pc_1 = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=4,
+        per_core_M=1,
+        per_core_N=4,
+        fused_activation=None,
+    )
+    pc_2 = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=4,
+        per_core_M=1,
+        per_core_N=5,
+        fused_activation=None,
+    )
+    ## convert input tensor and weights to TTNN tensors
+    tt_input = ttnn.from_torch(
+        input_tensor,
+        device=device,
+        dtype=ttnn.bfloat8_b,
+        memory_config=input_mem_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    as_sharded_tensor = lambda w, type, dim, mem_config: ttnn.as_tensor(
+        w,  # Grab only the wX part of the name
+        dtype=type,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=mem_config,
+    )
+    # Sharded weights
+    tt_w1 = as_sharded_tensor(w1.t(), ttnn.bfloat8_b, dim=-1, mem_config=w1_w3_mem_config)
+    tt_w2 = as_sharded_tensor(w2.t(), ttnn.bfloat8_b, dim=-2, mem_config=w2_mem_config)
+    ## MLP takes replicated inputs and produces fractured outputs
+    logger.info(f"tt_input shape: {tt_input.shape}")
+    logger.info(f"tt_input memory config: {tt_input.memory_config()}")
+    w1_out = ttnn.linear(
+        tt_input,
+        tt_w1,
+        core_grid=None,
+        dtype=ttnn.bfloat16,
+        program_config=pc_1,
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+    )
+    logger.info(f"w1_out shape: {w1_out.shape}")
+    logger.info(f"w1_out memory config: {w1_out.memory_config()}")
+    w1_out = ttnn.reshard(w1_out, w1_out_reshard_mem_config)
+    w2_out = ttnn.linear(
+        w1_out,
+        tt_w2,
+        core_grid=None,
+        dtype=ttnn.bfloat16,
+        program_config=pc_2,
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+    )
+    logger.info(f"w2_out shape: {w2_out.shape}")
+    logger.info(f"w2_out memory config: {w2_out.memory_config()}")
+    w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.L1_MEMORY_CONFIG)
+    tt_input = ttnn.sharded_to_interleaved(tt_input, ttnn.L1_MEMORY_CONFIG)
+
+    # ## Add residual connection
+    tt_input_torch = ttnn.to_torch(tt_input)
+    tt_w2_out_torch = ttnn.to_torch(w2_out)
+    tt_output = ttnn.add(tt_input, w2_out)
+    tt_output_torch = ttnn.to_torch(tt_output)
+    pcc_required = 0.99
+    passing_w2_out, pcc_message_w2_out = comp_pcc(output_w2, tt_w2_out_torch)
+    passing_input, pcc_message_input = comp_pcc(input_tensor, tt_input_torch)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+    logger.info(f"w2_out PCC: {pcc_message_w2_out}")
+    logger.info(f"input PCC: {pcc_message_input}")
+    logger.info(f"residual PCC: {pcc_message}")
+    assert passing_w2_out
+    assert passing_input
+    assert passing

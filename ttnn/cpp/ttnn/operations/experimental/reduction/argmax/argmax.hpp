@@ -33,12 +33,12 @@ struct ArgminOperation {
 namespace experimental {
 
 constexpr auto argmax = ttnn::register_operation_with_auto_launch_op<
-  "ttnn::experimental::argmax",
-  ttnn::operations::experimental::reduction::ArgmaxOperation>();
+    "ttnn::experimental::argmax",
+    ttnn::operations::experimental::reduction::ArgmaxOperation>();
 
 constexpr auto argmin = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::argmin",
     ttnn::operations::experimental::reduction::ArgminOperation>();
 
-}
+}  // namespace experimental
 }  // namespace ttnn

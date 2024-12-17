@@ -32,6 +32,7 @@
 
 // FIXME: ARCH_NAME specific
 #include "dev_msgs.h" // RUN_MSG_DONE
+#include "dev_mem_map.h" // MEM_IERISC_FIRMWARE_BASE
 #include "eth_l1_address_map.h" // address_map
 
 
@@ -44,44 +45,22 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id,
-    ll_api::memory::PackSpans span_type, ll_api::memory::Relocate relo_type) {
-
-    static const uint32_t processor_to_fw_base_addr[] = {
-        MEM_BRISC_FIRMWARE_BASE,
-        MEM_NCRISC_FIRMWARE_BASE,
-        MEM_TRISC0_FIRMWARE_BASE,
-        MEM_TRISC1_FIRMWARE_BASE,
-        MEM_TRISC2_FIRMWARE_BASE,
-        eth_l1_mem::address_map::FIRMWARE_BASE,
-        MEM_IERISC_FIRMWARE_BASE,
-#ifdef ARCH_BLACKHOLE
-        MEM_SLAVE_IERISC_FIRMWARE_BASE,
-#endif
-    };
-
+ll_api::memory const& get_risc_binary(
+    string const& path,
+    ll_api::memory::Loading loading) {
     static struct {
-      std::unordered_map<std::string, std::unique_ptr<ll_api::memory>> map;
+      std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
       std::condition_variable cvar;
     } cache;
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(path);
+    ll_api::memory const* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      auto *ptr = new ll_api::memory(path, relo_type);
-
-      // TODO: pass pack_spans into reader, generate text/data sizes
-      // from segment sizes and pack there
-      if (span_type == ll_api::memory::PackSpans::PACK) {
-          uint64_t data_start = MEM_LOCAL_BASE;
-          uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
-              0 :
-              processor_to_fw_base_addr[riscv_id];
-          ptr->pack_data_into_text(text_start, data_start);
-      }
+      ptr = new ll_api::memory(path, loading);
 
       lock.lock();
       // maps have iterator stability, so SLOT is still valid.
@@ -89,22 +68,26 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id,
       // We can't wake just those waiting on this slot, so wake them
       // all. Should be a rare event anyway.
       cache.cvar.notify_all();
-    } else if (!slot->second) {
-        // Someone else is creating the initial entry, wait for them.
-        cache.cvar.wait(lock, [=] { return bool(slot->second); });
+    } else {
+        if (!slot->second) {
+            // Someone else is creating the initial entry, wait for them.
+            cache.cvar.wait(lock, [=] { return bool(slot->second); });
+        }
+        ptr = slot->second.get();
+        TT_ASSERT(ptr->get_loading() == loading);
     }
 
-    return *slot->second.get();
+    return *ptr;
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, const std::vector<uint32_t>& hex_vec, uint64_t addr, bool small_access) {
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, tt::stl::Span<const uint8_t> hex_vec, uint64_t addr, bool small_access) {
     // the API is named "write_core", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
-    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(uint32_t), tt_cxy_pair(chip, core), addr, small_access);
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size(), tt_cxy_pair(chip, core), addr, small_access);
 }
 
 std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
@@ -113,9 +96,8 @@ std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &co
     return read_hex_vec;
 }
 
-CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &physical_core) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
+CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ethernet_core) {
+    return tt::Cluster::instance().get_logical_ethernet_core_from_virtual(chip_id, ethernet_core);
 }
 
 void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
@@ -133,8 +115,9 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     }
 }
 
+static const uint32_t ERISC_APP_FW_ON_CORE_FLAG = 0x1;
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
-    llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+    llrt::write_hex_vec_to_core(chip, core, tt::stl::Span(&ERISC_APP_FW_ON_CORE_FLAG, 1), eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 }
 
 void print_worker_cores(chip_id_t chip_id) {
@@ -149,7 +132,7 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
 
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
         tt::Cluster::instance().read_core(&*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
     });
     return read_mem;
@@ -184,30 +167,24 @@ uint32_t generate_risc_startup_addr(bool is_eth_core) {
 
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     std::vector<uint32_t> jump_to_fw;
-    jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id)));
-    write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
+    jump_to_fw.push_back(generate_risc_startup_addr(tt::Cluster::instance().is_ethernet_core(core, chip_id)));
+    write_hex_vec_to_core(chip_id, core, tt::stl::Span<const uint32_t>(jump_to_fw.data(), jump_to_fw.size()), 0);
 }
 
-bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
-    assert(is_worker_core(core, chip_id) or is_ethernet_core(core, chip_id));
+bool test_load_write_read_risc_binary(
+    ll_api::memory const& mem,
+    chip_id_t chip_id,
+    const CoreCoord& core,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx) {
+    assert(tt::Cluster::instance().is_worker_core(core, chip_id) or tt::Cluster::instance().is_ethernet_core(core, chip_id));
 
-    uint64_t local_init_addr;
-    switch (riscv_id) {
-        case 0: local_init_addr = MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 1: local_init_addr = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 2: local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH; break;
-        case 5: local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE; break;
-        case 6: local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-#ifdef ARCH_BLACKHOLE
-        case 7: local_init_addr = MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
-#endif
-    }
+    uint64_t local_init_addr = tt::tt_metal::hal.get_binary_local_init_addr(core_type_idx, processor_class_idx, processor_type_idx);
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
 
         tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });
@@ -224,14 +201,7 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
     return true;
 }
 
-bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id) {
-
-    assert(triscv_id >= 0 and triscv_id <= 2);
-    return test_load_write_read_risc_binary(mem, chip_id, core, triscv_id + 2);
-}
-
-void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address) {
-
+void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address) {
     log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
@@ -245,7 +215,7 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 namespace internal_ {
 
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
-    bool is_eth_core = is_ethernet_core(core, chip_id);
+    bool is_eth_core = tt::Cluster::instance().is_ethernet_core(core, chip_id);
     bool is_active_eth_core = false;
     bool is_inactive_eth_core = false;
 
@@ -328,8 +298,8 @@ void wait_until_cores_done(
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.
-        if (llrt::OptionsG.get_watcher_enabled() ||
-            llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
+        if (llrt::RunTimeOptions::get_instance().get_watcher_enabled() ||
+            llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }

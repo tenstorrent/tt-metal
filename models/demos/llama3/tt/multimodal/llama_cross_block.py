@@ -114,9 +114,6 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def compute_xattn_kv_cache(self, xattn_tokens):
-        return self.attention.compute_xattn_kv_cache(xattn_tokens)
-
     def forward(
         self,
         x_11SH,
@@ -126,9 +123,13 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         full_text_row_masked_out_mask_1NSH,
         xattn_cache,
         mode,
+        user_id=0,
+        vision_tokens=None,
     ):
-        seq_len = x_11SH.shape[-2]
-        # assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        assert (
+            x_11SH.memory_config() == skip_mem_cfg
+        ), f"decoder input memcfg mismatch: {x_11SH.memory_config()} != {skip_mem_cfg}"
 
         attn_out = self.attention(
             x_11SH=self.attention_norm(x_11SH, mode=mode),
@@ -136,11 +137,18 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             xattn_cache=xattn_cache,
             full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
             mode=mode,
+            user_id=user_id,
+            vision_tokens=vision_tokens,
         )
+        # FIXME: DRAM workaround for No circular buffer with id error
+        attn_out = ttnn.to_memory_config(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 
         res = ttnn.add(x_11SH, attn_out)
         mlp_out = self.feed_forward(self.ffn_norm(res, mode=mode), mode=mode)
+        # FIXME: DRAM workaround for No circular buffer with id error
+        mlp_out = ttnn.to_memory_config(mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         if mode == "prefill":
             mlp_out = ttnn.mul(mlp_out, full_text_row_masked_out_mask_11SD)
         mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffwd))

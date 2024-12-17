@@ -49,8 +49,9 @@ void MorehSumBackwardOperation::validate_inputs(
             log_debug(tt::LogOp, "reduced_dims[{}] = {}", i, reduced_dims[i]);
             bool is_tile_dim = (i == input_rank - 1 || i == input_rank - 2);
             // batch dims
-            if (reduced_dims[i] && !is_tile_dim)
+            if (reduced_dims[i] && !is_tile_dim) {
                 continue;
+            }
             uint32_t s = input_shape_wo_padding[i];
             // tile dims are not reduced
             if (reduced_dims[i] && is_tile_dim) {
@@ -104,10 +105,10 @@ MorehSumBackwardOperation::tensor_return_value_t MorehSumBackwardOperation::crea
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_grad = tensor_args.input_grad;
     if (input_grad.has_value()) {
-            return input_grad.value();
+        return input_grad.value();
     }
     auto input = tensor_args.input;
-    TT_FATAL(input.has_value(), "input tensor should not be std::nullopt." );
+    TT_FATAL(input.has_value(), "input tensor should not be std::nullopt.");
 
     auto dtype = input->dtype();
     Layout layout{Layout::TILE};

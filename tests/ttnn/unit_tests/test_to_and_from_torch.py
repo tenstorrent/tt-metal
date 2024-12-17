@@ -76,3 +76,11 @@ def test_to_and_from_2D(height, width, dtype, layout):
         if dtype == ttnn.bfloat8_b:
             allclose_kwargs["atol"] = 1e-2
         assert torch.allclose(torch_input_tensor, torch_output_tensor, **allclose_kwargs)
+
+
+@pytest.mark.skip(reason="GH Issue #15719")
+def test_from_torch_large(device):
+    torch_x = torch.rand((2048, 1024, 32, 32), dtype=torch.bfloat16)
+    x_tensor = ttnn.from_torch(torch_x, layout=ttnn.TILE_LAYOUT)
+    x_tensor = ttnn.to_torch(x_tensor)
+    assert torch.allclose(torch_x, x_tensor)

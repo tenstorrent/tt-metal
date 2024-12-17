@@ -16,6 +16,8 @@
 #include "impl/kernels/kernel_types.hpp"
 #include "ttnn/tensor/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::expand {
 ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::ExpandRowMajorFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -106,14 +108,14 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
     const auto sram_buffer_length = 32;
 
     // Scratch SRAM buffer
-    uint32_t scratch_buf_id = tt::CB::c_intermed0;
+    uint32_t scratch_buf_id = tt::CBIndex::c_24;
     auto scratch_config =
         CircularBufferConfig(unexpanded_row_size * sram_buffer_length, {{scratch_buf_id, data_format}})
             .set_page_size(scratch_buf_id, unexpanded_row_size);
     auto scratch_handle = CreateCircularBuffer(program, all_cores, scratch_config);
 
     // IO SRAM Buffer
-    uint32_t io_buf_id = tt::CB::c_out0;
+    uint32_t io_buf_id = tt::CBIndex::c_16;
     auto io_config = CircularBufferConfig(expanded_row_size * sram_buffer_length, {{io_buf_id, data_format}})
                          .set_page_size(io_buf_id, expanded_row_size);
     auto io_handle = CreateCircularBuffer(program, all_cores, io_config);

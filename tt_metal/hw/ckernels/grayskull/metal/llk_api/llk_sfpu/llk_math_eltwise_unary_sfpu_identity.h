@@ -15,9 +15,7 @@ namespace ckernel {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_identity(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_identity<APPROXIMATE,4>,
-        dst_index,
-        vector_mode);
+        ckernel::sfpu::calculate_identity<APPROXIMATE, 4>, dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
@@ -30,4 +28,4 @@ inline void llk_math_eltwise_unary_sfpu_identity_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
 
-}
+}  // namespace ckernel

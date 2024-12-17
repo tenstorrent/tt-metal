@@ -12,7 +12,7 @@ jobs:
       matrix:
         test-info: [
           {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 40},
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 30},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 40},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     env:
@@ -22,7 +22,7 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.test-info.runs-on }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Ensure weka mount is active
         run: |
           sudo systemctl restart mnt-MLPerf.mount

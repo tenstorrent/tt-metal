@@ -6,11 +6,11 @@
 
 // A helper function to exercise print features.
 inline void print_test_data() {
-    uint8_t  my_uint8  = 101;
+    uint8_t my_uint8 = 101;
     uint16_t my_uint16 = 555;
     uint32_t my_uint32 = 123456;
     uint64_t my_uint64 = 9123456789;
-    int8_t  my_int8  = -17;
+    int8_t my_int8 = -17;
     int16_t my_int16 = -343;
     int32_t my_int32 = -44444;
     int64_t my_int64 = -5123456789;
@@ -30,17 +30,17 @@ inline void print_test_data() {
 #if !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
     // Eth cores don't have CBs, so don't try TSLICE printing.
     DPRINT << "SLICE:\n";
-    cb_wait_front(tt::CB::c_in0, 1);
+    cb_wait_front(tt::CBIndex::c_0, 1);
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
     // Since brisc is writing to the CB before printing, should look at read pointer
-    DPRINT << TSLICE(tt::CB::c_in0, 0, SliceRange::hw0_32_8(), TSLICE_INPUT_CB, TSLICE_RD_PTR);
-    DPRINT << TSLICE(tt::CB::c_in0, 0, SliceRange::hw0_32_4(), TSLICE_INPUT_CB, TSLICE_RD_PTR);
+    DPRINT << TSLICE(tt::CBIndex::c_0, 0, SliceRange::hw0_32_8(), TSLICE_INPUT_CB, TSLICE_RD_PTR) << ENDL();
+    DPRINT << TSLICE(tt::CBIndex::c_0, 0, SliceRange::hw0_32_4(), TSLICE_INPUT_CB, TSLICE_RD_PTR) << ENDL();
     // This one has an unsupported data type, should show a warning instead of data
-    DPRINT << TSLICE(tt::CB::c_in1, 0, SliceRange::hw0_32_4(), TSLICE_INPUT_CB, TSLICE_RD_PTR);
+    DPRINT << TSLICE(tt::CBIndex::c_1, 0, SliceRange::hw0_32_4(), TSLICE_INPUT_CB, TSLICE_RD_PTR) << ENDL();
 #else
-    DPRINT << TSLICE(tt::CB::c_in0, 0, SliceRange::hw0_32_8());
-    DPRINT << TSLICE(tt::CB::c_in0, 0, SliceRange::hw0_32_4());
-    DPRINT << TSLICE(tt::CB::c_in1, 0, SliceRange::hw0_32_4());
+    DPRINT << TSLICE(tt::CBIndex::c_0, 0, SliceRange::hw0_32_8()) << ENDL();
+    DPRINT << TSLICE(tt::CBIndex::c_0, 0, SliceRange::hw0_32_4()) << ENDL();
+    DPRINT << TSLICE(tt::CBIndex::c_1, 0, SliceRange::hw0_32_4()) << ENDL();
 #endif
 #endif
 }

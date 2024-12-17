@@ -16,25 +16,28 @@ class ShapeBase {
 public:
     using Container = SmallVector<uint32_t>;
 
-    ShapeBase() = default;
+    ShapeBase() { init(); };
     explicit ShapeBase(const Container& shape) : value_(shape) { init(); }
     explicit ShapeBase(Container&& shape) : value_(std::move(shape)) { init(); }
     explicit ShapeBase(std::initializer_list<uint32_t> ilist) : value_(ilist) { init(); }
-    template<std::size_t N>
-    explicit ShapeBase(const std::array<uint32_t, N>& arr) : value_(arr.begin(), arr.end()) { init(); }
+    template <std::size_t N>
+    explicit ShapeBase(const std::array<uint32_t, N>& arr) : value_(arr.begin(), arr.end()) {
+        init();
+    }
+    explicit ShapeBase(std::span<const uint32_t> span) : value_(span.begin(), span.end()) { init(); }
 
-    template<std::size_t N>
-    bool operator==(const std::array<uint32_t, N> &other) const {
+    template <std::size_t N>
+    bool operator==(const std::array<uint32_t, N>& other) const {
         bool same_size = value_.size() == N;
         return same_size && std::equal(value_.begin(), value_.end(), other.begin());
     }
 
-    bool operator==(const ShapeBase &other) const;
-    bool operator==(const Container &other) const;
-    bool operator==(const std::vector<uint32_t> &other) const;
+    bool operator==(const ShapeBase& other) const;
+    bool operator==(const Container& other) const;
+    bool operator==(const std::vector<uint32_t>& other) const;
 
     uint32_t operator[](int32_t index) const;
-    uint32_t &operator[](int32_t index);
+    uint32_t& operator[](int32_t index);
 
     Container::const_iterator cbegin() const;
     Container::const_iterator cend() const;
@@ -53,4 +56,4 @@ private:
     size_t original_size_ = 0;
 };
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

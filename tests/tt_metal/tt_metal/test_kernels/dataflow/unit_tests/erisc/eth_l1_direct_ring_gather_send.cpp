@@ -26,7 +26,11 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_transfers; ++i) {
         eth_send_bytes(
-            local_eth_l1_curr_src_addr, remote_eth_l1_dst_addr, num_bytes, num_bytes_per_send, num_bytes_per_send_word_size);
+            local_eth_l1_curr_src_addr,
+            remote_eth_l1_dst_addr,
+            num_bytes,
+            num_bytes_per_send,
+            num_bytes_per_send_word_size);
         if (sender_idx == 0) {
             sender_idx = num_transfers;
             local_eth_l1_curr_src_addr = local_eth_l1_src_addr_end;
@@ -39,8 +43,6 @@ void kernel_main() {
             receiver_semaphore_noc_addr,
             receiver_data_noc_addr,
             local_eth_l1_curr_src_addr,
-            num_bytes
-        );
-
+            num_bytes);
     }
 }

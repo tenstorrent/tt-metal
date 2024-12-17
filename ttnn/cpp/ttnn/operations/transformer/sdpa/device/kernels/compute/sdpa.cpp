@@ -16,9 +16,8 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 
-
 namespace NAMESPACE {
-template<uint32_t in0, uint32_t in1, uint32_t num_tiles>
+template <uint32_t in0, uint32_t in1, uint32_t num_tiles>
 void max_block_inplace() {
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
@@ -41,7 +40,14 @@ void max_block_inplace() {
     }
 }
 
-template<PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t out_cb, uint32_t rows, uint32_t cols>
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t in0_cb,
+    uint32_t scale_cb,
+    uint32_t out_cb,
+    uint32_t rows,
+    uint32_t cols>
 void reduce_c() {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
@@ -62,7 +68,7 @@ void reduce_c() {
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
         for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i*cols+j, 0, reduce_dst_idx);
+            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
         }
 
         cb_reserve_back(out_cb, 1);
@@ -71,7 +77,7 @@ void reduce_c() {
         release_dst();
     }
 
-   reduce_revert_delta<reduce_dim>(out_cb);
+    reduce_revert_delta<reduce_dim>(out_cb);
 }
 
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
@@ -93,7 +99,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     }
 }
 
-template<uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
+template <uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
 void sub_exp_block_bcast_cols_inplace() {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -102,14 +108,13 @@ void sub_exp_block_bcast_cols_inplace() {
 
     sub_bcast_cols_init_short(in0_cb, in1_cb);
     exp_tile_init<true>();
-    cb_wait_front(in0_cb, rows*cols);
+    cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
-
 
     constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
     constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
     for (uint32_t i = 0; i < rows; ++i) {
-        for(uint32_t u = 0; u < granularity; u++) {
+        for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
@@ -152,7 +157,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     cb_pop_front(in1_cb, rows);
 }
 
-template<uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t num_tiles>
+template <uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t num_tiles>
 void mul_block_bcast_scalar_inplace() {
     // Precondition: in0_cb has num_tiles produced
     // Precondition: in1_scalar_cb has 1 produced
@@ -232,7 +237,6 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     cb_reserve_back(out_cb, num_tiles);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
-
         acquire_dst();
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
@@ -257,10 +261,10 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_wait_front(in_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
 
-    #pragma GCC unroll 0
+#pragma GCC unroll 0
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
-        copy_tile(in_cb, i, 0/*dst*/);
+        copy_tile(in_cb, i, 0 /*dst*/);
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
         release_dst();
@@ -268,14 +272,27 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_pop_front(in_cb, num_tiles);
 }
 
-void matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_t& out_cb, const uint32_t& M, const uint32_t& N, const uint32_t& K, const uint32_t& num_blocks, const uint32_t& in0_num_subblocks, const uint32_t& in1_num_subblocks,
-                    const uint32_t& in0_block_w, const uint32_t& subblock_h, const uint32_t& subblock_w, const bool& transpose) {
+void matmul_blocks(
+    const uint32_t& in0_cb,
+    const uint32_t& in1_cb,
+    const uint32_t& out_cb,
+    const uint32_t& M,
+    const uint32_t& N,
+    const uint32_t& K,
+    const uint32_t& num_blocks,
+    const uint32_t& in0_num_subblocks,
+    const uint32_t& in1_num_subblocks,
+    const uint32_t& in0_block_w,
+    const uint32_t& subblock_h,
+    const uint32_t& subblock_w,
+    const bool& transpose) {
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 
-    mm_block_init_short(in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+    mm_block_init_short(
+        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     reconfig_data_format(in1_cb, in0_cb);
     cb_wait_front(in1_cb, K * N);
@@ -283,7 +300,6 @@ void matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
-
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
@@ -295,10 +311,10 @@ void matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
+                matmul_block(
+                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
                 in0_index++;
                 in1_index += N;
-
             }
             tile_regs_commit();
 
@@ -320,7 +336,7 @@ void MAIN {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t St = get_compile_time_arg_val(3);
+    constexpr uint32_t Skt = get_compile_time_arg_val(3);
     constexpr uint32_t DHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
@@ -344,42 +360,41 @@ void MAIN {
 
     constexpr uint32_t is_causal = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(24) == 1;
 
-    const uint32_t core_id    = get_arg_val<uint32_t>(0);
+    const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
     const uint32_t local_batch_end = get_arg_val<uint32_t>(2);
     const uint32_t local_nh_start = get_arg_val<uint32_t>(3);
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
-
+    const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
-
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
 
-    constexpr uint32_t cb_q_in = tt::CB::c_in0;
-    constexpr uint32_t cb_k_in = tt::CB::c_in1;
-    constexpr uint32_t cb_v_in = tt::CB::c_in2;
-    constexpr uint32_t cb_mask_in = tt::CB::c_in3;
-    constexpr uint32_t cb_scale_in = tt::CB::c_in4;
-    constexpr uint32_t cb_identity_scale_in = tt::CB::c_in5;
+    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
+    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
+    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
 
-    constexpr uint32_t cb_qk_im = tt::CB::c_intermed0;
-    constexpr uint32_t cb_out_im = tt::CB::c_intermed1;
-    constexpr uint32_t cb_out_accumulate_im = tt::CB::c_intermed2;
-    constexpr uint32_t cb_cur_max = tt::CB::c_intermed3;
-    constexpr uint32_t cb_prev_max = tt::CB::c_intermed4;
-    constexpr uint32_t cb_cur_sum = tt::CB::c_intermed5;
-    constexpr uint32_t cb_prev_sum = tt::CB::c_intermed6;
-    constexpr uint32_t cb_exp_max_diff = tt::CB::c_intermed7;
+    constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
+    constexpr uint32_t cb_out_im = tt::CBIndex::c_25;
+    constexpr uint32_t cb_out_accumulate_im = tt::CBIndex::c_26;
+    constexpr uint32_t cb_cur_max = tt::CBIndex::c_27;
+    constexpr uint32_t cb_prev_max = tt::CBIndex::c_28;
+    constexpr uint32_t cb_cur_sum = tt::CBIndex::c_29;
+    constexpr uint32_t cb_prev_sum = tt::CBIndex::c_30;
+    constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
 
-    constexpr uint32_t cb_out = tt::CB::c_out0;
-
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     mm_init();
 
@@ -387,25 +402,29 @@ void MAIN {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
                 uint32_t q_chunk;
-                #if defined BALANCED_Q_PARALLEL
+#if defined BALANCED_Q_PARALLEL
                 uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-                if (q_iter < q_chunk_div_2) { // bottom half
+                if (q_iter < q_chunk_div_2) {  // bottom half
                     q_chunk = local_q_start + q_iter;
                 } else {
-                    uint32_t back_q_iter = q_iter - q_chunk_div_2; // Back half should start at 0
+                    uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
                     q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
                 }
-                #else
+#else
                 q_chunk = local_q_start + q_iter;
-                #endif
+#endif
 
                 // Get Q chunk
-                const uint32_t q_low_idx = q_chunk * Sq_chunk_t; // This is the sequence index of the first tile of this chunk
+                if constexpr (is_chunked) {
+                    q_chunk = chunked_q_chunk_offset + q_chunk;
+                }
+                uint32_t q_low_idx =
+                    q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                 uint32_t q_high_idx;
                 if constexpr (is_causal) {
                     q_high_idx = q_low_idx + Sq_chunk_t;
                 } else {
-                    q_high_idx = St;
+                    q_high_idx = Skt;
                 }
                 cb_wait_front(cb_q_in, q_chunk_tiles);
 
@@ -416,7 +435,20 @@ void MAIN {
 
                     /* QK = Q_CHUNK @ K_CHUNK */
                     pack_reconfig_data_format(cb_qk_im);
-                    matmul_blocks(cb_q_in, cb_k_in, cb_qk_im, Sq_chunk_t, Sk_chunk_t, DHt, qk_num_blocks, qk_in0_num_subblocks, qk_in1_num_subblocks, qk_in0_block_w, qk_subblock_h, qk_subblock_w, true /*transpose*/);
+                    matmul_blocks(
+                        cb_q_in,
+                        cb_k_in,
+                        cb_qk_im,
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        DHt,
+                        qk_num_blocks,
+                        qk_in0_num_subblocks,
+                        qk_in1_num_subblocks,
+                        qk_in0_block_w,
+                        qk_subblock_h,
+                        qk_subblock_w,
+                        true /*transpose*/);
 
                     /* QK *= SCALE */
                     mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
@@ -441,7 +473,14 @@ void MAIN {
                     }
 
                     reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
+                    reduce_c<
+                        PoolType::MAX,
+                        ReduceDim::REDUCE_ROW,
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        cb_cur_max,
+                        Sq_chunk_t,
+                        Sk_chunk_t>();
 
                     if (k_chunk > 0) {
                         max_block_inplace<cb_cur_max, cb_prev_max, Sq_chunk_t>();
@@ -452,10 +491,31 @@ void MAIN {
                     sub_exp_block_bcast_cols_inplace<cb_qk_im, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
 
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
-                    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_sum, Sq_chunk_t, Sk_chunk_t>();
+                    reduce_c<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_ROW,
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        cb_cur_sum,
+                        Sq_chunk_t,
+                        Sk_chunk_t>();
 
                     /* OUT_IM = QK @ V_CHUNK */
-                    matmul_blocks(cb_qk_im, cb_v_in, cb_out_im, Sq_chunk_t, DHt, Sk_chunk_t, out_num_blocks, out_in0_num_subblocks, out_in1_num_subblocks, out_in0_block_w, out_subblock_h, out_subblock_w, false /*transpose*/);
+                    matmul_blocks(
+                        cb_qk_im,
+                        cb_v_in,
+                        cb_out_im,
+                        Sq_chunk_t,
+                        DHt,
+                        Sk_chunk_t,
+                        out_num_blocks,
+                        out_in0_num_subblocks,
+                        out_in1_num_subblocks,
+                        out_in0_block_w,
+                        out_subblock_h,
+                        out_subblock_w,
+                        false /*transpose*/);
+
                     reconfig_data_format_srca(cb_out_im);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
@@ -501,7 +561,5 @@ void MAIN {
             }
         }
     }
-
-
 }
-}
+}  // namespace NAMESPACE

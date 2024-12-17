@@ -10,7 +10,18 @@ from models.demos.llama3.tt.distributed_norm import DistributedNorm
 
 
 class TtTransformerBlock(LightweightModule):
-    def __init__(self, args, mesh_device, dtype, state_dict, layer_num, weight_cache_path):
+    def __init__(
+        self,
+        args,
+        mesh_device,
+        dtype,
+        state_dict,
+        layer_num,
+        weight_cache_path,
+        transformation_mats,
+        paged_attention_config=None,
+        use_paged_kv_cache=False,
+    ):
         super().__init__()
 
         self.state_dict = state_dict
@@ -25,7 +36,6 @@ class TtTransformerBlock(LightweightModule):
         self.max_batch_size = args.max_batch_size
         self.n_kv_heads = args.n_kv_heads
         self.current = 0
-        self.sliding_window = args.sliding_window
         self.model_config = args.get_model_config()
 
         self.layer_num = layer_num
@@ -36,7 +46,10 @@ class TtTransformerBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
             dtype=dtype,
+            transformation_mats=transformation_mats,
             configuration=args,
+            paged_attention_config=paged_attention_config,
+            use_paged_kv_cache=use_paged_kv_cache,
         )
         self.feed_forward = TtLlamaMLP(
             mesh_device=mesh_device,
@@ -61,6 +74,7 @@ class TtTransformerBlock(LightweightModule):
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
             ),
             args,
+            TG=args.is_galaxy,
         )
         self.ff_norm = DistributedNorm(
             RMSNorm(
@@ -76,50 +90,54 @@ class TtTransformerBlock(LightweightModule):
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
             ),
             args,
+            TG=args.is_galaxy,
         )
 
     def forward(
         self,
         x: ttnn.Tensor,
         current_pos,
-        rot_mat=None,
-        transformation_mats=None,
+        rot_mats=None,
         user_id=0,
         mode="decode",
         page_table=None,
+        kv_cache=None,
     ) -> ttnn.Tensor:
-        # x is fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
-        # FIXME: move to sharded residuals once support for this is added
-        # FIXME: Currently, for decode mode, we are using DRAM intereleaved as L1 interleaved results in h being corrupted in MLP
-        skip_mem_cfg = (
-            ttnn.DRAM_MEMORY_CONFIG
-            # self.model_config["DEC_SKIP_OUTPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-        )
-
+        TG = self.args.is_galaxy
+        # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
+        skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        assert (
+            x.memory_config() == skip_mem_cfg
+        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
-            rot_mat,
-            transformation_mats,
+            rot_mats,
             user_id,
             mode,
-            page_table,
+            page_table=page_table,
+            kv_cache=kv_cache,
         )
-
         # Here x and attn_out are both fractured across devices
-        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
-
-        # TODO: This deallocate may cause ND output. The reason seems to be related to either the input being on DRAM/L1 and the sharded spec in MLP using 32 cores instead of 16.
-        # ttnn.deallocate(attn_out)
+        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
+        ttnn.deallocate(attn_out)
+        if mode == "prefill":
+            x.deallocate(True)
 
         # Norms take fractured inputs and output replicated across devices
         ff_in = self.ff_norm(h, mode)
+        if TG and mode == "decode":
+            ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in, mode)
         # ff_out and h are both fractured across devices
-        out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)
-
+        out = ttnn.add(
+            h,
+            ff_out,
+            memory_config=skip_mem_cfg,
+            dtype=self.args.ccl_dtype if TG and not self.args.is_distributed_norm(mode) else ttnn.bfloat16,
+        )
         return out  # fractured across devices

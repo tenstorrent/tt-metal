@@ -17,7 +17,6 @@ void pack_field_without_header(ttnn::ccl::cmd::args_elem_t* args, ttnn::ccl::Sha
     args[i++] = out.x;
 }
 
-
 }  // namespace cmd
 }  // namespace ccl
 }  // namespace ttnn

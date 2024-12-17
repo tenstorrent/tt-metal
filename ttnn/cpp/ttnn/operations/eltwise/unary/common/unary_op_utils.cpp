@@ -7,15 +7,17 @@
 #include "tt_metal/common/assert.hpp"
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::unary::utils {
 
 namespace {
 union Converter {
-   public:
+public:
     float f;
     uint32_t u;
 
-    Converter(float f_) : f(f_){};
+    Converter(float f_) : f(f_) {};
 
     static std::string to_hex(float f_) {
         Converter obj(f_);
@@ -24,7 +26,6 @@ union Converter {
         return ss.str();
     }
 };
-
 
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
@@ -48,6 +49,10 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::DIV_UNARY_SFPU: defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1"; break;
         case UnaryOpType::IDENTITY:
         case UnaryOpType::IDENTITY_UINT32: defines["SFPU_OP_IDENTITY_INCLUDE"] = "1"; break;
+        case UnaryOpType::FLOOR:
+        case UnaryOpType::FLOOR_FLOAT32: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
+        case UnaryOpType::CEIL:
+        case UnaryOpType::CEIL_FLOAT32: defines["SFPU_OP_CEIL_INCLUDE"] = "1"; break;
         case UnaryOpType::RDIV: break;
         case UnaryOpType::RSUB: defines["SFPU_OP_REVERSE_FAMILY_INCLUDE"] = "1";
         case UnaryOpType::ISINF:
@@ -57,19 +62,19 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::ISFINITE: defines["SFPU_OP_ISINF_ISNAN_INCLUDE"] = "1"; break;
         case UnaryOpType::LOGICAL_NOT_UNARY: defines["SFPU_OP_LOGICAL_NOT_NOTI_INCLUDE"] = "1"; break;
         case UnaryOpType::I0: defines["SFPU_OP_I0_INCLUDE"] = "1"; break;
+        case UnaryOpType::I1: defines["SFPU_OP_I1_INCLUDE"] = "1"; break;
         case UnaryOpType::COS:
         case UnaryOpType::SIN:
         case UnaryOpType::TAN: defines["SFPU_OP_TRIG_FAMILY_INCLUDE"] = "1"; break;
         case UnaryOpType::NEG: defines["SFPU_OP_NEG_INCLUDE"] = "1"; break;
         case UnaryOpType::SOFTPLUS: defines["SFPU_OP_SOFTPLUS_INCLUDE"] = "1"; break;
+        case UnaryOpType::PRELU_SFPU: defines["SFPU_OP_PRELU_INCLUDE"] = "1"; break;
         case UnaryOpType::TYPECAST: defines["SFPU_OP_TYPECAST_INCLUDE"] = "1"; break;
         case UnaryOpType::BITWISE_XOR: defines["SFPU_OP_BITWISE_XOR_INCLUDE"] = "1"; break;
         case UnaryOpType::BITWISE_NOT: defines["SFPU_OP_BITWISE_NOT_INCLUDE"] = "1"; break;
         case UnaryOpType::BITWISE_AND: defines["SFPU_OP_BITWISE_AND_INCLUDE"] = "1"; break;
         case UnaryOpType::BITWISE_OR: defines["SFPU_OP_BITWISE_OR_INCLUDE"] = "1"; break;
         case UnaryOpType::RIGHT_SHIFT: defines["SFPU_OP_RIGHT_SHIFT_INCLUDE"] = "1"; break;
-        case UnaryOpType::FLOOR: defines["SFPU_OP_FLOOR_INCLUDE"] = "1"; break;
-        case UnaryOpType::CEIL: defines["SFPU_OP_CEIL_INCLUDE"] = "1"; break;
         case UnaryOpType::LEFT_SHIFT: defines["SFPU_OP_LEFT_SHIFT_INCLUDE"] = "1"; break;
         case UnaryOpType::REMAINDER: defines["SFPU_OP_REMAINDER_INCLUDE"] = "1"; break;
         case UnaryOpType::FMOD: defines["SFPU_OP_FMOD_INCLUDE"] = "1"; break;
@@ -124,15 +129,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         case UnaryOpType::BITWISE_XOR:
             op_init_and_name = {
-                "bitwise_xor_tile_init();", fmt::format("bitwise_xor_tile({}, {}u);", idst, std::to_string((uint)param0))};
+                "bitwise_xor_tile_init();",
+                fmt::format("bitwise_xor_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::BITWISE_AND:
             op_init_and_name = {
-                "bitwise_and_tile_init();", fmt::format("bitwise_and_tile({}, {}u);", idst, std::to_string((uint)param0))};
+                "bitwise_and_tile_init();",
+                fmt::format("bitwise_and_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::BITWISE_OR:
             op_init_and_name = {
-                "bitwise_or_tile_init();", fmt::format("bitwise_or_tile({}, {}u);", idst, std::to_string((uint)param0))};
+                "bitwise_or_tile_init();",
+                fmt::format("bitwise_or_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::RIGHT_SHIFT:
             op_init_and_name = {
@@ -156,7 +164,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::FMOD:
             op_init_and_name = {
                 "fmod_tile_init();",
-                fmt::format("fmod_tile({}, {}u, {}u);", idst, Converter::to_hex(param0), Converter::to_hex(1.0f/param0))};
+                fmt::format(
+                    "fmod_tile({}, {}u, {}u);", idst, Converter::to_hex(param0), Converter::to_hex(1.0f / param0))};
             break;
         case UnaryOpType::EXP:
             op_init_and_name = {
@@ -223,6 +232,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     Converter::to_hex(param1))};
             break;
         }
+        case UnaryOpType::PRELU_SFPU: {
+            op_init_and_name = {
+                "prelu_tile_init();", fmt::format("prelu_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
+        }
         case UnaryOpType::TYPECAST:
             TT_ASSERT(params.size() == 2, "Expected eltwise_typecast to take 2 parameters");
             op_init_and_name = {
@@ -237,14 +251,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_ASSERT(params.size() == 3, "Expected Dropout to take 3 parameters: seed, probability and scale factor");
             float prob = params[1];
             float scale = params[2];
-            uint32_t uprob = static_cast<uint32_t>((double)INT_MAX * prob); // kernel requirement, please read it in the kernel comments
-            op_init_and_name = {
-                // DO NOT ADD seed support till runtime args support will be added.
-                // Current approach doesn't work with dropout unary op because we will compile a new file for each new seed
-                "",//fmt::format("dropout_tile_init({}u);", (uint32_t)param0),
+            uint32_t uprob = static_cast<uint32_t>(
+                (double)INT_MAX * prob);  // kernel requirement, please read it in the kernel comments
+            op_init_and_name = {          // DO NOT ADD seed support till runtime args support will be added.
+                                // Current approach doesn't work with dropout unary op because we will compile a new
+                                // file for each new seed
+                                "",  // fmt::format("dropout_tile_init({}u);", (uint32_t)param0),
 
-                fmt::format("dropout_tile({}, {}u, {}u);", idst, uprob, Converter::to_hex(scale))
-            };
+                                fmt::format("dropout_tile({}, {}u, {}u);", idst, uprob, Converter::to_hex(scale))};
             break;
         }
         default: TT_ASSERT(false && "unexpected parameterized type");
@@ -256,8 +270,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
     std::pair<std::string, std::string> op_init_and_name;
     switch (op_type) {
         case UnaryOpType::BITWISE_NOT:
-            op_init_and_name = {
-                "bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
+            op_init_and_name = {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
             break;
         case UnaryOpType::RECIP: op_init_and_name = {"recip_tile_init();", fmt::format("recip_tile({});", idst)}; break;
         case UnaryOpType::RELU: op_init_and_name = {"relu_tile_init();", fmt::format("relu_tile({});", idst)}; break;
@@ -270,8 +283,6 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
         case UnaryOpType::SIGNBIT:
             op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)};
             break;
-        case UnaryOpType::FLOOR: op_init_and_name = {"floor_tile_init();", fmt::format("floor_tile({});", idst)}; break;
-        case UnaryOpType::CEIL: op_init_and_name = {"ceil_tile_init();", fmt::format("ceil_tile({});", idst)}; break;
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
         case UnaryOpType::ISFINITE:
@@ -289,6 +300,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
             op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
             break;
         case UnaryOpType::I0: op_init_and_name = {"i0_tile_init();", fmt::format("i0_tile({});", idst)}; break;
+        case UnaryOpType::I1: op_init_and_name = {"i1_tile_init();", fmt::format("i1_tile({});", idst)}; break;
         case UnaryOpType::ERFINV:
             op_init_and_name = {"erfinv_tile_init();", fmt::format("erfinv_tile({});", idst)};
             break;
@@ -328,6 +340,16 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
         case UnaryOpType::IDENTITY_UINT32:
             op_init_and_name = {"identity_tile_init();", fmt::format("identity_tile_uint32({});", idst)};
             break;
+        case UnaryOpType::FLOOR:
+            op_init_and_name = {"floor_tile_init();", fmt::format("floor_tile({});", idst)};
+            break;
+        case UnaryOpType::FLOOR_FLOAT32:
+            op_init_and_name = {"floor_tile_init();", fmt::format("floor_tile_float32({});", idst)};
+            break;
+        case UnaryOpType::CEIL: op_init_and_name = {"ceil_tile_init();", fmt::format("ceil_tile({});", idst)}; break;
+        case UnaryOpType::CEIL_FLOAT32:
+            op_init_and_name = {"ceil_tile_init();", fmt::format("ceil_tile_float32({});", idst)};
+            break;
         case UnaryOpType::RELU6:
             op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
             break;
@@ -342,7 +364,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
 std::map<string, string> get_defines_impl(
     UnaryOpType op_type,
     const std::vector<float>& params,
-    std::string idst,
+    const std::string& idst,
     std::string init_def,
     std::string func_def) {
     std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, params, idst);
@@ -350,7 +372,7 @@ std::map<string, string> get_defines_impl(
     update_macro_defines(op_type, defines);
     return defines;
 }
-}
+}  // namespace
 
 bool get_op_approx_mode(UnaryOpType op_type) {
     switch (op_type) {
@@ -359,52 +381,57 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 }
 
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
-    if (name == "relu")
+    if (name == "relu") {
         return UnaryWithParam(UnaryOpType::RELU);
-    else if (name == "gelu")
+    } else if (name == "gelu") {
         return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(true));
-    else if (name == "silu")
+    } else if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
-    else if (name == "sigmoid")
+    } else if (name == "sigmoid") {
         return UnaryWithParam(UnaryOpType::SIGMOID);
-    else if (name == "sqrt")
+    } else if (name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT);
-    else if (name == "exp")
+    } else if (name == "exp") {
         return UnaryWithParam(UnaryOpType::EXP, static_cast<float>(true));
-    else if (name == "recip")
+    } else if (name == "recip") {
         return UnaryWithParam(UnaryOpType::RECIP);
-    else if (name == "log")
+    } else if (name == "log") {
         return UnaryWithParam(UnaryOpType::LOG);
-    else if (name == "tanh")
+    } else if (name == "tanh") {
         return UnaryWithParam(UnaryOpType::TANH);
-    else if (name == "log2")
+    } else if (name == "log2") {
         return UnaryWithParam(UnaryOpType::LOG2);
-    else if (name == "log10")
+    } else if (name == "log10") {
         return UnaryWithParam(UnaryOpType::LOG10);
-    else if (name == "sin")
+    } else if (name == "sin") {
         return UnaryWithParam(UnaryOpType::SIN);
-    else if (name == "cos")
+    } else if (name == "cos") {
         return UnaryWithParam(UnaryOpType::COS);
-    else if (name == "abs")
+    } else if (name == "abs") {
         return UnaryWithParam(UnaryOpType::ABS);
-    else if (name == "sign")
+    } else if (name == "sign") {
         return UnaryWithParam(UnaryOpType::SIGN);
-    else if (name == "square")
+    } else if (name == "square") {
         return UnaryWithParam(UnaryOpType::SQUARE);
-    else if (name == "softplus")
+    } else if (name == "softplus") {
         return UnaryWithParam(UnaryOpType::SOFTPLUS);
+    }
     TT_THROW("Unknown unary op: {}", name);
 }
 
 std::map<string, string> get_defines(
-    UnaryOpType op_type, const std::optional<std::vector<float>>& params, const std::string& id, const std::string& idst) {
+    UnaryOpType op_type,
+    const std::optional<std::vector<float>>& params,
+    const std::string& id,
+    const std::string& idst) {
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
     return get_defines_impl(
         op_type, params.has_value() ? params.value() : std::vector<float>{}, idst, init_def, func_def);
 }
 
-std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
+std::pair<string, string> get_op_init_and_func(
+    UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
     return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst)
                              : get_op_init_and_func_default(op_type, idst);
 }
@@ -424,4 +451,4 @@ std::map<string, string> get_block_defines(
     return block_defines;
 }
 
-}
+}  // namespace ttnn::operations::unary::utils

@@ -7,6 +7,8 @@
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
 #include "tt_metal/common/constants.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ssm {
 
 void RepeatAndInterleaveEltwiseMul::validate(const std::vector<Tensor>& input_tensors) const {

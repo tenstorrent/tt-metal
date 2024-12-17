@@ -21,7 +21,6 @@ def _nearest_32(x):
 
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-get_conv_padded_input_shape_and_mem_config = ttnn._ttnn.operations.conv.get_conv_padded_input_shape_and_mem_config
 OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv.OptimizedConvParallelizationConfig
 OptimizedConvBlockConfig = ttnn._ttnn.operations.conv.OptimizedConvBlockConfig
 
@@ -31,6 +30,82 @@ def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
     Returns the output dimension of a convolution operation.
     """
     return (input + (2 * pad) - dilation * (window - 1) - 1) // stride + 1
+
+
+def prepare_conv_weights(
+    *,
+    weight_tensor,
+    input_memory_config,
+    input_layout,
+    weights_format,
+    in_channels,
+    out_channels,
+    batch_size,
+    input_height,
+    input_width,
+    kernel_size,
+    stride,
+    padding,
+    dilation,
+    groups,
+    device,
+    conv_config=None,
+):
+    return ttnn._ttnn.operations.conv.prepare_conv_weights(
+        weight_tensor=weight_tensor,
+        input_memory_config=input_memory_config,
+        input_tensor_layout=input_layout,
+        weights_format=weights_format,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        kernel_size=list(kernel_size),
+        stride=list(stride),
+        padding=list(padding),
+        dilation=list(dilation),
+        groups=groups,
+        device=device,
+        conv_config=conv_config,
+    )
+
+
+def prepare_conv_bias(
+    *,
+    bias_tensor,
+    input_memory_config,
+    input_layout,
+    in_channels,
+    out_channels,
+    batch_size,
+    input_height,
+    input_width,
+    kernel_size,
+    stride,
+    padding,
+    dilation,
+    groups,
+    device,
+    conv_config=None,
+):
+    return ttnn._ttnn.operations.conv.prepare_conv_bias(
+        bias_tensor=bias_tensor,
+        input_memory_config=input_memory_config,
+        input_tensor_layout=input_layout,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        kernel_size=list(kernel_size),
+        stride=list(stride),
+        padding=list(padding),
+        dilation=list(dilation),
+        groups=groups,
+        device=device,
+        conv_config=conv_config,
+    )
 
 
 def convert_conv_weight_tensor_to_tiled_layout(conv_weight_tensor, in1_block_h, in1_block_w, output_dtype=None):
@@ -101,11 +176,20 @@ def conv2d(
     groups: int = 1,
     bias_tensor: ttnn.Tensor = None,
     conv_config: Conv2dConfig = None,  # config overrides by user
+    compute_config=None,  # compute config overrides by user
     memory_config: ttnn.MemoryConfig = None,  # memory config overrides by user
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,  # ignored
+    return_output_dim=False,
+    return_weights_and_bias=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    return ttnn._ttnn.operations.conv.conv2d(
+    (
+        conv_output,
+        output_height,
+        output_width,
+        prepared_device_weight,
+        prepared_device_bias,
+    ) = ttnn._ttnn.operations.conv.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight_tensor,
         device=device,
@@ -121,8 +205,18 @@ def conv2d(
         groups=groups,
         bias_tensor=bias_tensor,
         conv_config=conv_config,
+        compute_config=compute_config,
         memory_config=memory_config,
     )
+
+    if return_output_dim and return_weights_and_bias:
+        return conv_output, [output_height, output_width], [prepared_device_weight, prepared_device_bias]
+    elif return_weights_and_bias:
+        return conv_output, [prepared_device_weight, prepared_device_bias]
+    elif return_output_dim:
+        return conv_output, [output_height, output_width]
+    else:
+        return conv_output
 
 
 __all__ = []

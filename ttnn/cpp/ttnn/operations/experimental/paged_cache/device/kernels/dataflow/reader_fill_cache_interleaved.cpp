@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    const uint32_t src_addr  = get_arg_val<uint32_t>(0);
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile_id = get_arg_val<uint32_t>(1);
     const uint32_t num_rows = get_arg_val<uint32_t>(2);
 
@@ -18,10 +18,7 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id_in);
 
     const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     // uint32_t end_id = start_id + num_tiles;

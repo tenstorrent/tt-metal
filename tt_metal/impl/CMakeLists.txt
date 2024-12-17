@@ -1,9 +1,13 @@
 set(IMPL_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_handle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer_types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
@@ -22,6 +26,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/event/event.cpp
 )
 
 add_library(impl OBJECT ${IMPL_SRC})

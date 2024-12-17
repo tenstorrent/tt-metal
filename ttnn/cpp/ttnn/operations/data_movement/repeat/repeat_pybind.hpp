@@ -4,11 +4,10 @@
 
 #pragma once
 
-
 #include "pybind11/pybind_fwd.hpp"
 
 namespace ttnn::operations::data_movement {
 
 void py_bind_repeat(pybind11::module& module);
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement

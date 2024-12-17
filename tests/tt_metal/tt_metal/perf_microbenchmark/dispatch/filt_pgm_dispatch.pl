@@ -49,6 +49,14 @@ while (my $line = <$info>) {
         $data->[$j][$i] = $bw;
         $j++;
     }
+
+    # output bw from test_rw_buffer
+    if ($line =~ /Best/) {
+        my @parts = split(' ', $line);
+        my $bw = $parts[8];
+        $data->[$j][$i] = $bw;
+        $j++;
+    }
 }
 
 for (my $y = 0; $y < $maxj; $y++) {

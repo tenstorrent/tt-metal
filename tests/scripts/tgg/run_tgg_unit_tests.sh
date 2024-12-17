@@ -5,10 +5,10 @@ run_tgg_tests() {
 
   echo "LOG_METAL: running run_tgg_unit_tests"
 
-  TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
+  TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*"
   ./build/test/ttnn/galaxy_unit_tests_ttnn
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_galaxy --gtest_filter="GalaxyFixture.*:TGGFixture.*"
-  ./build/test/tt_metal/unit_tests_galaxy --gtest_filter="GalaxyFixture.*:TGGFixture.*"
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGGFixture.*"
+  ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGGFixture.*"
   pytest -s tests/ttnn/distributed/test_mesh_device_TGG.py
 }
 

@@ -11,7 +11,7 @@ show_help() {
     echo
     echo "Options:"
     echo "  -d, --debug        Enable debug mode to show real-time output."
-    echo "  -t, --target       Specify the target configuration (t3000 or n300). Default is n300."
+    echo "  -t, --target       Specify the target configuration (t3000 or n300 or tg). Default is n300."
     echo "  -h, --help         Display this help message."
     echo
     echo "Example:"
@@ -42,8 +42,8 @@ while [ $# -gt 0 ]; do
             shift 2
 
             # Validate the target value
-            if [ "$TARGET" != "t3000" ] && [ "$TARGET" != "n300" ]; then
-                echo "Error: Invalid target configuration: $TARGET. Must be either 't3000' or 'n300'."
+            if [ "$TARGET" != "t3000" ] && [ "$TARGET" != "tg" ] && [ "$TARGET" != "n300" ]; then
+                echo "Error: Invalid target configuration: $TARGET. Must be either 't3000', 'n300', 'tg."
                 exit 1
             fi
             ;;
@@ -72,24 +72,36 @@ run_profile_and_extract_csv() {
 
     if [ -n "$csv_path" ]; then
         echo "CSV path found: $csv_path"
+        echo "Generating performance report..."
 
-        # Run the Python script to generate performance report
-        average_values=$(PYTHONPATH="$MODULE_DIR" python3 -c "
+        tmp_file="/tmp/perf_report_output.log"
+        PYTHONPATH="$MODULE_DIR" python3 -c "
+import sys
 import pandas as pd
 from perf_csv import perf_report
 from tabulate import tabulate
 
-# Generate the report and convert it to a DataFrame
-average_df = perf_report('$csv_path')
-# Print the DataFrame in a pretty table format
-print(tabulate(average_df, headers='keys', tablefmt='pretty'))
-")
+try:
+    # Generate the report and convert it to a DataFrame
+    average_df, utilization = perf_report('$csv_path')
+    # Print the DataFrame in a pretty table format
+    print('Min - Avg - Max by Common Runs:')
+    print(tabulate(average_df, headers='keys', tablefmt='pretty'))
+    print('Device Utilization:')
+    print(tabulate(utilization, headers='keys', tablefmt='pretty'))
+except Exception as e:
+    print(f'Error in performance report generation: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1 | tee "$tmp_file"
 
-        # Print the output
-        echo "Min - Avg - Max by Common Runs:"
-        echo "$average_values"
+        if grep -q "Error in performance report generation" "$tmp_file"; then
+            echo "Error: Performance report generation failed."
+            exit 1
+        fi
+
     else
         echo "CSV path not found in the command output."
+        exit 1
     fi
 }
 

@@ -9,23 +9,30 @@ inputs:
     description: 'Docker image to run commands in - follows os-arch format'
     required: false
     default: ubuntu-20.04-amd64
-
+  version:
+    description: 'Docker image version'
+    required: false
 runs:
   using: "composite"
   steps:
     - name: Determine Docker Tag
       shell: bash
       run: |
-        if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-          echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+        # If the version was provided use it, otherwise, determine what the version should be.
+        if [ "${{ inputs.version }}" != "" ]; then
+          echo "IMAGE_TAG=${{ inputs.version }}" >> $GITHUB_ENV
         else
-          echo "IMAGE_TAG=dev-${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=dev-${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
+          fi
         fi
     - name: Determine Full Docker Image Tag
       shell: bash
       run: |
-        echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/tt-metalium/${{ inputs.image }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
-        echo "TT_METAL_REF_IMAGE_TAG=ghcr.io/${{ github.repository }}/tt-metalium/${{ inputs.image }}:latest" >> $GITHUB_ENV
+        echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ inputs.image }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
+        echo "TT_METAL_REF_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ inputs.image }}:latest" >> $GITHUB_ENV
     - name: Output Docker Image Tag
       shell: bash
       run: |

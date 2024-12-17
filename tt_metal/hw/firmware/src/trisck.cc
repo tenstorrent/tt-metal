@@ -15,6 +15,10 @@
 
 #include "tools/profiler/kernel_profiler.hpp"
 
+#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS or defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
+#include "circular_buffer_init.h"
+#endif
+
 // Global vars
 uint32_t unp_cfg_context = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
@@ -33,9 +37,6 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 };
 }
 
-extern uint32_t __kernel_init_local_l1_base[];
-extern uint32_t __fw_export_end_text[];
-
 void kernel_launch(uint32_t kernel_base_addr)
 {
   DeviceZoneScopedMainChildN("TRISC-KERNEL");
@@ -44,12 +45,21 @@ void kernel_launch(uint32_t kernel_base_addr)
     ckernel::wait(KERNEL_RUN_TIME);
 #endif
 #else
-    firmware_kernel_common_init((void tt_l1_ptr *)(kernel_base_addr + (uint32_t) __kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
+  extern uint32_t __kernel_init_local_l1_base[];
+  extern uint32_t __fw_export_end_text[];
+  do_crt1((
+      uint32_t tt_l1_ptr *)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
 
 #if defined(UCK_CHLKC_UNPACK)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
     memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
 #endif
+#if !defined(UCK_CHLKC_MATH) and defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+    ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+#endif
     run_kernel();
+#if !defined(UCK_CHLKC_MATH) and defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
+    UPDATE_REMOTE_CB_CONFIGS_IN_L1
+#endif
 #endif
 }
