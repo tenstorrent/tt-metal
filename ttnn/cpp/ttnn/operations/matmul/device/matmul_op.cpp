@@ -606,8 +606,9 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 out_block_w = mutlti_dim_per_core_factor[1];
                 in0_block_w = mutlti_dim_per_core_factor[2];
 
+                bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
                 auto subblock_hw =
-                    bmm_op_utils::get_matmul_subblock_params(out_block_h, out_block_w, false, false, false);
+                    bmm_op_utils::get_matmul_subblock_params(out_block_h, out_block_w, false, false, fp32_dest_acc_en);
                 out_subblock_h = std::get<0>(subblock_hw);
                 out_subblock_w = std::get<1>(subblock_hw);
             }
@@ -625,15 +626,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 .fuse_batch = false,
             };
         }
-        // If we don't need padding, use the default multi_core reuse/reuse_mcast
-        else if (Mt % per_core_M == 0 and Nt % per_core_N == 0) {
-            return MatmulMultiCoreNonOptimizedReuseProgramConfig{};
-        } else {
-            return MatmulMultiCoreProgramConfig{};
-        }
-    } else {
-        return MatmulMultiCoreProgramConfig{};
     }
+    return MatmulMultiCoreProgramConfig{};
 }
 
 MatmulProgramConfig create_matmul_program_config(
