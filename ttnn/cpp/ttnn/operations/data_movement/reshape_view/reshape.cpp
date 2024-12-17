@@ -139,7 +139,7 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_3D_TILE(
     //Collapse into the third last dimension
     TT_FATAL((shape.rank()!=0), "can't do reshape to rank 0 tensor");
     uint32_t third_dim = 1;
-    for (int i=0; i <shape.rank()-2; i++)
+    for (int64_t i = 0; i < static_cast<int64_t>(shape.rank()) - 2; ++i)
     {
         third_dim = third_dim * shape[i];
     }
