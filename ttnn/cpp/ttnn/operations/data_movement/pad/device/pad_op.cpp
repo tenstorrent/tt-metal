@@ -45,7 +45,6 @@ void Pad::validate_with_output_tensors(
             input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16,
             "Cannot pad tilized tensor with specified format");
     } else if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(this->output_tensor_shape[3] % 2 == 0, "RM padding requires output X dim to be a multiple of 2");
         TT_FATAL(
             input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16,
             "Cannot pad RM tensor with specified format");
