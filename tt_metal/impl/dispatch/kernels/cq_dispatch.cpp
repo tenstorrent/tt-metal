@@ -573,6 +573,18 @@ void process_write_packed(
     // dst_addr << " " << ENDL();
     uint32_t writes = 0;
     uint32_t mcasts = 0;
+    auto wait_for_barrier = [&]() {
+        if (!mcast) {
+            return;
+        }
+        noc_nonposted_writes_num_issued[noc_index] += writes;
+        noc_nonposted_writes_acked[noc_index] += mcasts;
+        writes = 0;
+        mcasts = 0;
+        // Workaround mcast path reservation hangs by always waiting for a write
+        // barrier before doing an mcast that isn't linked to a previous mcast.
+        noc_async_write_barrier();
+    };
     WritePackedSubCmd* sub_cmd_ptr = (WritePackedSubCmd*)l1_cache;
     while (count != 0) {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
@@ -587,6 +599,7 @@ void process_write_packed(
             if (cb_fence == block_next_start_addr[rd_block_idx]) {
                 orphan_size = cb_fence - data_ptr;
                 if (orphan_size != 0) {
+                    wait_for_barrier();
                     cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, orphan_size, num_dests);
                     writes++;
                     mcasts += num_dests;
@@ -620,6 +633,7 @@ void process_write_packed(
                 uint32_t remainder_xfer_size = xfer_size - orphan_size;
                 // Creating full NOC addr not needed as we are not programming the noc coords
                 uint32_t remainder_dst_addr = dst_addr + orphan_size;
+                wait_for_barrier();
                 cq_noc_async_write_with_state<CQ_NOC_SnDL>(
                     data_ptr, remainder_dst_addr, remainder_xfer_size, num_dests);
                 // Reset values expected below
@@ -634,6 +648,7 @@ void process_write_packed(
             }
         }
 
+        wait_for_barrier();
         cq_noc_async_write_with_state<CQ_NOC_SNdl>(data_ptr, dst, xfer_size, num_dests);
         writes++;
         mcasts += num_dests;
@@ -684,12 +699,26 @@ void process_write_packed_large(
     CQDispatchWritePackedLargeSubCmd* sub_cmd_ptr = (CQDispatchWritePackedLargeSubCmd*)l1_cache;
 
     bool init_state = true;
+    bool must_barrier = true;
     while (count != 0) {
         uint32_t dst_addr = sub_cmd_ptr->addr + local_write_offset;
         uint32_t length = sub_cmd_ptr->length;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align(length, alignment) - length;
         uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
+        auto wait_for_barrier = [&]() {
+            if (!must_barrier) {
+                return;
+            }
+            noc_nonposted_writes_num_issued[noc_index] += writes;
+
+            mcasts += num_dests * writes;
+            noc_nonposted_writes_acked[noc_index] = mcasts;
+            writes = 0;
+            // Workaround mcast path reservation hangs by always waiting for a write
+            // barrier before doing an mcast that isn't linked to a previous mcast.
+            noc_async_write_barrier();
+        };
 
         // Only re-init state after we have unlinked the last transaction
         // Otherwise we assume NOC coord hasn't changed
@@ -697,8 +726,8 @@ void process_write_packed_large(
         // to determine linking
         if (init_state) {
             uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
-            // TODO: Linking should be set to true once atomic txn is handled properly
             cq_noc_async_write_init_state<CQ_NOC_sNdl, true, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
+            must_barrier = true;
         }
 
         sub_cmd_ptr++;
@@ -731,10 +760,13 @@ void process_write_packed_large(
             uint32_t xfer_size;
             if (length > available_data) {
                 xfer_size = available_data;
+                wait_for_barrier();
                 cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_dests);
+                must_barrier = false;
             } else {
                 xfer_size = length;
                 if (unlink) {
+                    wait_for_barrier();
                     uint32_t rem_xfer_size =
                         cq_noc_async_write_with_state_any_len<false>(data_ptr, dst_addr, xfer_size, num_dests);
                     // Unset Link flag
@@ -742,8 +774,12 @@ void process_write_packed_large(
                     uint32_t data_offset = xfer_size - rem_xfer_size;
                     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_wait>(
                         data_ptr + data_offset, dst_addr + data_offset, rem_xfer_size, num_dests);
+                    // Later writes must barrier, but the `must_barrier = true` in the `if (init_state)` block above
+                    // will see to that.
                 } else {
+                    wait_for_barrier();
                     cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_dests);
+                    must_barrier = false;
                 }
             }
             writes += div_up(xfer_size, NOC_MAX_BURST_SIZE);

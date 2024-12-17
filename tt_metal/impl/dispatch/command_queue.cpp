@@ -3056,8 +3056,7 @@ void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
         }
         // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
         // previous launch message.
-        // TODO(jbauman): Give correct number once async bug is fixed.
-        this->config_buffer_mgr[i].init_add_buffer(0, 1);
+        this->config_buffer_mgr[i].init_add_buffer(0, launch_msg_buffer_num_entries - 1);
     }
 }
 

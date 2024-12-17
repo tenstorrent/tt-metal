@@ -38,6 +38,8 @@ for arg in "$@"; do
     esac
 done
 
+set -x
+
 # brisc only
 echo "###" brisc only
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 256 -n -t $trace_option $eth_dispatch_option
