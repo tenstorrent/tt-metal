@@ -58,7 +58,4 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value);
 
 Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_shape);
 
-Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape);
-Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape);
-
 }  // namespace tt::tt_metal::tensor_ops
