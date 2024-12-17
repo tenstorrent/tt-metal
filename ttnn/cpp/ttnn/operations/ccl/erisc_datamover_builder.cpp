@@ -154,7 +154,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     size_t sender_channel_1_buffer_index_semaphore_id,
 
     FabricEriscDatamoverConfig const& config,
-    bool enable_persistent_mode) :
+    bool enable_persistent_mode,
+    bool build_in_worker_connection_mode) :
     my_eth_core_logical(my_eth_core_logical),
     my_noc_x(my_noc_x),
     my_noc_y(my_noc_y),
@@ -187,7 +188,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     local_receiver_channel_buffer_address(config.receiver_channel_base_address),
 
     termination_signal_ptr(FabricEriscDatamoverConfig::termination_signal_address),
-    enable_persistent_mode(enable_persistent_mode) {}
+    enable_persistent_mode(enable_persistent_mode),
+    build_in_worker_connection_mode(build_in_worker_connection_mode) {}
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
@@ -251,7 +253,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     chip_id_t local_chip_id,
     chip_id_t peer_chip_id,
     FabricEriscDatamoverConfig const& config,
-    bool enable_persistent_mode) {
+    bool enable_persistent_mode,
+    bool build_in_worker_connection_mode) {
     if (enable_persistent_mode) {
         auto sender_channel_0_buffer_index_semaphore_address =
             FabricEriscDatamoverConfig::sender_channel_0_buffer_index_semaphore_address;
@@ -261,13 +264,13 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             FabricEriscDatamoverConfig::sender_channel_0_connection_semaphore_address;
 
         std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_address =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+            build_in_worker_connection_mode ? 0: tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
         auto sender_channel_1_flow_control_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+            build_in_worker_connection_mode ? 0: tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
         auto sender_channel_1_connection_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+            build_in_worker_connection_mode ? 0: tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
         auto sender_channel_1_buffer_index_semaphore_id =
-            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+            build_in_worker_connection_mode ? 0: tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
 
         return FabricEriscDatamoverBuilder(
             ethernet_core,
@@ -285,7 +288,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             sender_channel_1_buffer_index_semaphore_id,
 
             config,
-            enable_persistent_mode);
+            enable_persistent_mode,
+            build_in_worker_connection_mode);
 
     } else {
         std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id = tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
@@ -360,6 +364,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
 }
 
 void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamoverBuilder const& downstream_edm) {
+    TT_FATAL(!this->build_in_worker_connection_mode, "Tried to connect two EDMs to each other in worker connection mode");
     auto const adapter_spec = downstream_edm.build_connection_to_fabric_channel();
 
     log_trace(tt::LogTest, "Connecting to downstream EDM at x={}, y={}", adapter_spec.edm_noc_x, adapter_spec.edm_noc_y);
@@ -377,7 +382,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     std::vector<Device*> const& device_sequence,
     std::vector<Program*> const& program_sequence,
     bool enable_persistent_mode,
-    std::optional<size_t> desired_num_links) :
+    std::optional<size_t> desired_num_links,
+    bool build_in_worker_connection_mode) :
     device_sequence(device_sequence), programs(program_sequence) {
     static constexpr std::size_t edm_buffer_size = 4096 + sizeof(tt::fabric::PacketHeader);
     auto const config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
@@ -428,7 +434,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 src_device->id(),
                 dest_device->id(),
                 config,
-                enable_persistent_mode));
+                enable_persistent_mode,
+                build_in_worker_connection_mode));
 
             log_trace(tt::LogOp, "Building backward direction EDM on chip {} on link {}", dest_device->id(), edm_builders_backward_direction[dest_device->id()].size());
             edm_builders_backward_direction[dest_device->id()].push_back(FabricEriscDatamoverBuilder::build(
@@ -438,7 +445,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 dest_device->id(),
                 src_device->id(),
                 config,
-                enable_persistent_mode));
+                enable_persistent_mode,
+                build_in_worker_connection_mode));
 
             a_builder = &edm_builders_backward_direction[dest_device->id()].front();
         }
@@ -446,15 +454,17 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         this->buffer_size_bytes = a_builder->channel_buffer_size;
     }
 
-    // Establish local connections between EDMs on the same chips to establish the lin fabric
-    for (size_t i = 1; i < device_sequence.size() - 1; i++) {
-        const size_t num_links = edm_builders_forward_direction.at(device_sequence[i]->id()).size();
-        auto& forward_direction_edm = edm_builders_forward_direction.at(device_sequence[i]->id());
-        auto& backward_direction_edm = edm_builders_backward_direction.at(device_sequence[i]->id());
+    if (!build_in_worker_connection_mode) {
+        // Establish local connections between EDMs on the same chips to establish the lin fabric
+        for (size_t i = 1; i < device_sequence.size() - 1; i++) {
+            const size_t num_links = edm_builders_forward_direction.at(device_sequence[i]->id()).size();
+            auto& forward_direction_edm = edm_builders_forward_direction.at(device_sequence[i]->id());
+            auto& backward_direction_edm = edm_builders_backward_direction.at(device_sequence[i]->id());
 
-        for (size_t l = 0; l < num_links; l++) {
-            forward_direction_edm.at(l).connect_to_downstream_edm(backward_direction_edm.at(l));
-            backward_direction_edm.at(l).connect_to_downstream_edm(forward_direction_edm.at(l));
+            for (size_t l = 0; l < num_links; l++) {
+                forward_direction_edm.at(l).connect_to_downstream_edm(backward_direction_edm.at(l));
+                backward_direction_edm.at(l).connect_to_downstream_edm(forward_direction_edm.at(l));
+            }
         }
     }
 }
@@ -467,7 +477,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     std::optional<Device*> backward_device,
     Program* program,
     bool enable_persistent_mode,
-    std::optional<size_t> desired_num_links) :
+    std::optional<size_t> desired_num_links,
+    bool build_in_worker_connection_mode) :
     device_sequence({local_device}), programs({program}) {
     static constexpr std::size_t edm_buffer_size = 4096 + sizeof(tt::fabric::PacketHeader);
     auto const config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
@@ -522,7 +533,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     device_pairs[i].first->id(),
                     device_pairs[i].second.value()->id(),
                     config,
-                    enable_persistent_mode));
+                    enable_persistent_mode,
+                    build_in_worker_connection_mode));
         }
         if (!counted_num_links.has_value()) {
             TT_FATAL(!obtained_channel_buffer_size.has_value(), "No channel buffer size was counted");
@@ -536,14 +548,16 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     TT_FATAL(obtained_channel_buffer_size.has_value(), "No channel buffer size was counted");
     this->buffer_size_bytes = obtained_channel_buffer_size.value();
 
-    // Establish local connections between EDMs on the same chips to establish the line fabric
-    if (forward_device.has_value() && backward_device.has_value()) {
-        auto& forward_direction_edm = edm_builders_forward_direction.at(local_device->id());
-        auto& backward_direction_edm = edm_builders_backward_direction.at(local_device->id());
+    if (!build_in_worker_connection_mode) {
+        // Establish local connections between EDMs on the same chips to establish the line fabric
+        if (forward_device.has_value() && backward_device.has_value()) {
+            auto& forward_direction_edm = edm_builders_forward_direction.at(local_device->id());
+            auto& backward_direction_edm = edm_builders_backward_direction.at(local_device->id());
 
-        for (size_t l = 0; l < this->num_links; l++) {
-            forward_direction_edm.at(l).connect_to_downstream_edm(backward_direction_edm.at(l));
-            backward_direction_edm.at(l).connect_to_downstream_edm(forward_direction_edm.at(l));
+            for (size_t l = 0; l < this->num_links; l++) {
+                forward_direction_edm.at(l).connect_to_downstream_edm(backward_direction_edm.at(l));
+                backward_direction_edm.at(l).connect_to_downstream_edm(forward_direction_edm.at(l));
+            }
         }
     }
 }
@@ -561,6 +575,24 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(Device
     TT_FATAL(edm_builders.size() > 0, "No EDM builders found for device {}", device->id());
     TT_FATAL(next_link < edm_builders.size(), "Next link index {} is out of bounds for device {}", next_link, device->id());
     return edm_builders.at(next_link).build_connection_to_worker_channel();
+}
+
+EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+    std::vector<Device*> const& device_sequence,
+    std::vector<Program*> const& program_sequence,
+    bool enable_persistent_mode,
+    std::optional<size_t> desired_num_links) {
+    return EdmLineFabricOpInterface(device_sequence, program_sequence, enable_persistent_mode, desired_num_links, true);
+}
+
+EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+    Device* local_device,
+    std::optional<Device*> forward_device,
+    std::optional<Device*> backward_device,
+    Program* program,
+    bool enable_persistent_mode,
+    std::optional<size_t> desired_num_links) {
+    return EdmLineFabricOpInterface(local_device, forward_device, backward_device, program, enable_persistent_mode, desired_num_links, true);
 }
 
 void EdmLineFabricOpInterface::build_kernels() const {
@@ -687,7 +719,6 @@ void EdmLineFabricOpInterface::teardown_from_host(tt::fabric::TerminationSignal 
 }
 
 void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
-    static std::unordered_set<chip_id_t> built_chips;
     auto build = [](std::vector<Device*> const& line_view) {
         std::vector<Program> programs(line_view.size());
         std::vector<Program*> program_ptrs;
@@ -696,15 +727,13 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
         EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true);
         edm_fabric.build_kernels();
         for (size_t i = 0; i < line_view.size(); i++) {
-            TT_FATAL(built_chips.find(line_view[i]->id()) == built_chips.end(), "Chip {} was already built", line_view.front()->id());
-            built_chips.insert(line_view[i]->id());
 
             tt::tt_metal::detail::CompileProgram(line_view[i], programs[i]);
         }
         for (size_t i = 0; i < line_view.size(); i++) {
             Device *device = line_view[i];
             Program &program = programs[i];
-            tt::tt_metal::EnqueueProgram(device->command_queue(), program, true);
+            tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);
         }
     };
 

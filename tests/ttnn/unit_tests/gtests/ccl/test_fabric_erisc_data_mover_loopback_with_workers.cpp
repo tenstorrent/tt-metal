@@ -2980,7 +2980,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     // build a line of devices
     std::vector<Device*> devices = {
-        view->get_device(0, 1), view->get_device(0, 2), view->get_device(1, 2), view->get_device(1, 1)};
+        view->get_device(0, 0), view->get_device(0, 1), view->get_device(0, 2), view->get_device(0, 3)};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,

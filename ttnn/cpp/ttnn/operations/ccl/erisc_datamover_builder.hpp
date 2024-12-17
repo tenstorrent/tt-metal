@@ -142,7 +142,8 @@ class FabricEriscDatamoverBuilder {
         size_t sender_channel_1_buffer_index_semaphore_id,
 
         FabricEriscDatamoverConfig const& config,
-        bool enable_persistent_mode);
+        bool enable_persistent_mode,
+        bool build_in_worker_connection_mode=false);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::Device* device,
@@ -151,7 +152,8 @@ class FabricEriscDatamoverBuilder {
         chip_id_t local_chip_id,
         chip_id_t peer_chip_id,
         FabricEriscDatamoverConfig const& config,
-        bool enable_persistent_mode);
+        bool enable_persistent_mode,
+        bool build_in_worker_connection_mode=false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel() const;
@@ -212,6 +214,7 @@ class FabricEriscDatamoverBuilder {
     std::optional<size_t> downstream_edm_worker_location_info_address;
     std::optional<size_t> downstream_sender_channel_buffer_index_semaphore_id;
     bool enable_persistent_mode = false;
+    bool build_in_worker_connection_mode = false;
 };
 
 
@@ -228,11 +231,14 @@ class EdmLineFabricOpInterface {
 
 
     //   The constructor will assemble/connect the line across the specified device sequence, for all available links.
-    EdmLineFabricOpInterface (std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
+    EdmLineFabricOpInterface (std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt, bool build_in_worker_connection_mode = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
-    EdmLineFabricOpInterface (Device* local_device, std::optional<Device*> forward_device, std::optional<Device*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links);
+    EdmLineFabricOpInterface (Device* local_device, std::optional<Device*> forward_device, std::optional<Device*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links, bool build_in_worker_connection_mode = false);
+
+    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
+    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(Device* local_device, std::optional<Device*> forward_device, std::optional<Device*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
 
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique connections

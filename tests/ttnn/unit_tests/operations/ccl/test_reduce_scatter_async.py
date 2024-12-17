@@ -270,7 +270,7 @@ def run_reduce_scatter_test(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("enable_async", [False])
 def test_line_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
