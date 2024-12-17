@@ -15,8 +15,6 @@ from tests.sweep_framework.sweep_utils.sharding_utils import (
     gen_sharded_spec_unary,
     parse_sharding_spec,
     invalidate_vector_sharding,
-    roundup,
-    divup,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
