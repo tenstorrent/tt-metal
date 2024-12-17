@@ -1,0 +1,79 @@
+
+namespace tt.tt_metal.flatbuf;
+
+// TODO: move to a more appropriate location.
+enum BufferType: ushort {
+    INVALID = 0,
+    DRAM = 1,
+    L1 = 2,
+    SYSTEM_MEMORY = 3,
+    L1_SMALL = 4,
+    TRACE = 5,
+}
+
+enum Layout: ushort {
+    INVALID = 0,
+    ROW_MAJOR = 1,
+    TILE = 2,
+}
+
+struct Tile {
+    height: uint;
+    width: uint;
+    transpose: bool;
+}
+
+table PageConfig {
+    layout: Layout (id: 0);
+    tile: Tile (id: 1);
+}
+
+enum DataType: ushort {
+    INVALID = 0,
+    UINT8 = 1,
+    UINT16 = 2,
+    UINT32 = 3,
+    INT32 = 4,
+    BFLOAT4_B = 5,
+    BFLOAT8_B = 6,
+    BFLOAT16 = 7,
+    FLOAT32 = 8,
+}
+
+enum TensorMemoryLayout: ushort {
+  None = 0,
+  Interleaved = 1,
+  SingleBank = 2,
+  HeightSharded = 3,
+  WidthSharded = 4,
+  BlockSharded = 5,
+}
+
+table MemoryConfig {
+    memory_layout: TensorMemoryLayout (id: 0);
+    buffer_type: BufferType (id: 1);
+    // TODO: shard spec.
+}
+
+table TensorShape {
+  values: [uint] (id: 0);
+}
+
+table TensorSpec {
+    shape: TensorShape (id: 0);
+    data_type: DataType (id: 1);
+    page_config: PageConfig (id: 2);
+    memory_config: MemoryConfig (id: 3);
+}
+
+// TODO: decide what to do in case of distributed tensors:
+// 1. encode distribution strategy.
+// 2. encode sub-tensor shapes.
+table TensorBuffer {
+    data: [ubyte] (id: 0);
+}
+
+table Tensor {
+    spec: TensorSpec (id: 0);
+    buffers: [TensorBuffer] (id: 1);
+}

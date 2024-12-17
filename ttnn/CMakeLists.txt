@@ -567,8 +567,18 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/expand/device/expand_device_operation.cpp
 )
 
-#Split src and python bindings
-#We only build python bindings optionally
+# Include helper functions and generate headers from flatbuffer schemas
+include(${PROJECT_SOURCE_DIR}/cmake/flatbuffers.cmake)
+
+set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/serialization/tensor.fbs)
+
+foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE})
+    list(APPEND ALL_TTNN_SRCS ${FBS_GENERATED_HEADER})
+endforeach()
+
+# Split src and python bindings
+# We only build python bindings optionally
 set(TTNN_SRC)
 
 set(PYBIND_SRC
@@ -609,8 +619,10 @@ set(TTNN_PUBLIC_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR} # ${PROJECT_SOURCE_DIR}/ttnn
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/deprecated # symlink to tt_eager; should become native folder once merge complete
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers_gen
 )
 set(TTNN_PUBLIC_LINK_LIBRARIES
+    FlatBuffers::FlatBuffers
     metal_common_libs
     Metalium::Metal
     Boost::container

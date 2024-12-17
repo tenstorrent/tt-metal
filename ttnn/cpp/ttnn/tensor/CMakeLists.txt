@@ -5,6 +5,7 @@ set(TENSOR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuf_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shape/shape_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shape/shape.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layout/alignment.cpp
