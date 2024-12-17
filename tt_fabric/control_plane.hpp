@@ -47,26 +47,7 @@ private:
         std::uint32_t num_ports_per_side,
         std::uint32_t nw_chip_physical_chip_id);
 
-    chan_id_t get_eth_chan_id(chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const {
-        std::uint32_t num_eth_ports_per_direction =
-            routing_table_generator_->get_chip_spec().num_eth_ports_per_direction;
-        // Explicitly map router plane channels based on mod
-        //   - chan 0,4,8,12 talk to each other
-        //   - chan 1,5,9,13 talk to each other
-        //   - chan 2,6,10,14 talk to each other
-        //   - chan 3,7,11,15 talk to each other
-        std::uint32_t src_chan_mod = src_chan_id % num_eth_ports_per_direction;
-        for (const auto& target_chan_id : candidate_target_chans) {
-            if (src_chan_mod == target_chan_id % num_eth_ports_per_direction) {
-                return target_chan_id;
-            }
-        }
-        // If no match found, return a channel from candidate_target_chans
-        while (src_chan_mod >= candidate_target_chans.size()) {
-            src_chan_mod = src_chan_mod % candidate_target_chans.size();
-        }
-        return candidate_target_chans[src_chan_mod];
-    };
+    chan_id_t get_eth_chan_id(chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
 };
 
 }  // namespace tt::tt_fabric

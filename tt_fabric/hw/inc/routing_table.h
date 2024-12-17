@@ -34,9 +34,8 @@ static_assert(MAX_MESH_SIZE == MAX_NUM_MESHES, "MAX_MESH_SIZE must be equal to M
 static_assert((sizeof(std::uint32_t) / sizeof(chan_id_t)) == NUM_CHANNELS_PER_UINT32, "LOG_BASE_2_NUM_CHANNELS_PER_UINT32 must be equal to log2(sizeof(std::uint32_t) / sizeof(chan_id_t))");
 
 enum eth_chan_magic_values {
-  INVALID_DIRECTION = 0xDD,
-  ROUTE_TO_LOCAL_CHIP = 0xEE,
-  OUTGOING_ETH_LINK = 0xFF,
+    INVALID_DIRECTION = 0xDD,
+    DEFAULT_ROUTING_TABLE_ENTRY = 0xFF,
 };
 
 struct routing_table_t {
