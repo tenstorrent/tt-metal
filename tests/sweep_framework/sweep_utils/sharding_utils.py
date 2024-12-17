@@ -17,6 +17,24 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import (
 )
 
 
+def divup(a, b):
+    return (a + b - 1) // b
+
+
+def roundup(a, b):
+    result = divup(a, b) * b
+    return result
+
+
+def divdown(a, b):
+    return (a - b - 1) // b
+
+
+def roundown(a, b):
+    result = divdown(a, b) * b
+    return result
+
+
 Y, X = get_device_grid_size()
 
 
@@ -109,12 +127,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                 else:  # if layout == "ROW_MAJOR_LAYOUT":
                     # Shard Size must be multiple of input_tile_size
                     # Shard width should be multiple of 16 to satisfy L1 alignment
-                    if shard_height_mul_of_32 and sharding_strategy == "HEIGHT":
-                        mul_32_y = random.randint(1, 1024)
-                        if (mul_32_y * x * y) % 16 == 0 or (mul_32_y * x * y) > 1024:
-                            mul_32_y = random.randint(1, 1024)
-                    else:
-                        mul_32_y = random.choice([16, 32, 64, 128, 256, 512, 1024])
+                    mul_32_y = random.choice([16, 32, 64, 128, 256, 512, 1024])
                     mul_32_x = 1024 // mul_32_y
 
                     if sharding_strategy == "HEIGHT":
@@ -125,6 +138,8 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
 
                     min_shard_size_x = mul_32_x
                     if shard_height_mul_of_32 and sharding_strategy == "HEIGHT":
+                        while round_up(mul_32_y, x * y) // 16 < 1 or round_up(mul_32_y, x * y) % 16 != 0:
+                            mul_32_y = random.randint(1, roundown(max_tensor_size // min_shard_size_x, x * y))
                         min_shard_size_y = mul_32_y
                     else:
                         min_shard_size_y = mul_32_y * x * y
