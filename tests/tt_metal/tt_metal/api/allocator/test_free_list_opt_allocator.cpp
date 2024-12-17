@@ -296,3 +296,47 @@ TEST(FreeListOptTest, LowestOccupiedAddressWithAllocateAt) {
     loa = allocator.lowest_occupied_address();
     ASSERT_FALSE(loa.has_value());
 }
+
+TEST(FreeListOptTest, FirstFit) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB, tt::tt_metal::allocator::FreeListOpt::SearchPolicy::FIRST);
+    auto a = allocator.allocate(1_KiB);
+    auto b = allocator.allocate(3_KiB);
+    auto c = allocator.allocate(1_KiB);
+    auto d = allocator.allocate(1_KiB);
+    auto e = allocator.allocate(1_KiB);
+
+    ASSERT_TRUE(a.has_value());
+    ASSERT_EQ(a.value(), 0);
+    ASSERT_TRUE(b.has_value());
+    ASSERT_EQ(b.value(), 1_KiB);
+    ASSERT_TRUE(c.has_value());
+    ASSERT_EQ(c.value(), 4_KiB);
+    ASSERT_TRUE(d.has_value());
+    ASSERT_EQ(d.value(), 5_KiB);
+    ASSERT_TRUE(e.has_value());
+    ASSERT_EQ(e.value(), 6_KiB);
+
+    allocator.deallocate(b.value());
+    allocator.deallocate(d.value());
+
+    auto f = allocator.allocate(1_KiB);
+    ASSERT_TRUE(f.has_value());
+    ASSERT_EQ(f.value(), 1_KiB);
+}
+
+TEST(FreeListOptTest, FirstFitAllocateAtAddressInteractions) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB, tt::tt_metal::allocator::FreeListOpt::SearchPolicy::FIRST);
+    auto wedge = allocator.allocate_at_address(32_KiB, 1_KiB);
+
+    auto a = allocator.allocate(1_KiB);
+    ASSERT_TRUE(a.has_value());
+    ASSERT_EQ(a.value(), 0);
+
+    auto z = allocator.allocate(1_KiB, false);
+    ASSERT_TRUE(z.has_value());
+    ASSERT_EQ(z.value(), 1_GiB - 1_KiB);
+
+    auto b = allocator.allocate(1_KiB);
+    ASSERT_TRUE(b.has_value());
+    ASSERT_EQ(b.value(), 1_KiB);
+}
