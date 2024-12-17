@@ -44,10 +44,15 @@ inline bool use_multicore_device_tilize(
 
 bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     auto tile = tensor.get_tensor_spec().tile();
-    TensorSpec upd_spec(
-        tensor.logical_shape(),
+    if (layout == Layout::ROW_MAJOR) {
+        // There shouldn't be extra paddings for Row Major layout
+        return tensor.logical_shape() != tensor.padded_shape();
+    }
+    // It's okay for conversion to tile layout to preserve arbitrary padding as long as it satisfies the alignment
+    TensorSpec padded_spec(
+        tensor.padded_shape(),
         TensorLayout(tensor.dtype(), PageConfig(layout, std::move(tile)), tensor.memory_config()));
-    return tensor.get_padded_shape().volume() != upd_spec.padded_shape().volume();
+    return tensor.get_padded_shape() != padded_spec.padded_shape();
 }
 
 template <typename T>
