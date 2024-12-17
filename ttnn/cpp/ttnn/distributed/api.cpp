@@ -156,13 +156,13 @@ std::vector<Device*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_d
         }
         return workers;
     };
-    if (mesh_device.get_view() != nullptr and std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
+    if (std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
         const auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
 
         return std::visit(
             tt::stl::overloaded{
                 [&](const ShardTensor2D& s) {
-                    return mesh_device.get_view()->get_devices(MeshShape{s.shard_mesh.y, s.shard_mesh.x});
+                    return mesh_device.get_view().get_devices(MeshShape{s.shard_mesh.y, s.shard_mesh.x});
                 },
                 [&](const auto&) { return get_workers_for_tensor(); }},
             host_storage.strategy);
