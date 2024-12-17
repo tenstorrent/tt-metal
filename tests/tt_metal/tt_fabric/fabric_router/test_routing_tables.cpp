@@ -35,6 +35,8 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
         std::filesystem::path(tt::llrt::OptionsG.get_root_dir()) /
         "tt_fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(t3k_mesh_graph_desc_path.string());
+    auto path1 = control_plane->get_fabric_route(0, 0, 0, 7, 0);
+    auto path2 = control_plane->get_fabric_route(0, 0, 0, 7, 1);
 }
 
 }  // namespace fabric_router_tests

@@ -28,7 +28,15 @@ class ControlPlane {
     void print_ethernet_channels() const;
 
     std::pair<mesh_id_t, chip_id_t> get_mesh_chip_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
-    chip_id_t get_physical_chip_id_from_mesh_chip_id(std::pair<mesh_id_t, chip_id_t> mesh_chip_id) const;
+    chip_id_t get_physical_chip_id_from_mesh_chip_id(const std::pair<mesh_id_t, chip_id_t>& mesh_chip_id) const;
+
+    // Return path from device to device in the fabric
+    std::vector<std::pair<chip_id_t, chan_id_t>> get_fabric_route(
+        mesh_id_t src_mesh_id,
+        chip_id_t src_chip_id,
+        mesh_id_t dst_mesh_id,
+        chip_id_t dst_chip_id,
+        routing_plane_id_t routing_plane_id) const;
 
 private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
@@ -48,6 +56,9 @@ private:
         std::uint32_t num_ports_per_side,
         std::uint32_t nw_chip_physical_chip_id);
 
+    std::tuple<mesh_id_t, chip_id_t, chan_id_t> get_connected_mesh_chip_chan_ids(
+        mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t chan_id) const;
+    routing_plane_id_t get_routing_plane_id(chan_id_t eth_chan_id) const;
     chan_id_t get_eth_chan_id(chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
 };
 

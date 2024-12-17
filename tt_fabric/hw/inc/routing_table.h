@@ -21,6 +21,7 @@
 namespace tt::tt_fabric {
 
 using chan_id_t = std::uint8_t;
+using routing_plane_id_t = std::uint8_t;
 
 static constexpr std::uint32_t MAX_MESH_SIZE = 1024;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
@@ -35,7 +36,7 @@ static_assert((sizeof(std::uint32_t) / sizeof(chan_id_t)) == NUM_CHANNELS_PER_UI
 
 enum eth_chan_magic_values {
     INVALID_DIRECTION = 0xDD,
-    DEFAULT_ROUTING_TABLE_ENTRY = 0xFF,
+    INVALID_ROUTING_TABLE_ENTRY = 0xFF,
 };
 
 struct routing_table_t {
