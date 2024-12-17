@@ -12,13 +12,11 @@
 #include "kernels/tt_fabric_traffic_gen_test.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
 #include "tt_metal/hw/inc/wormhole/eth_l1_address_map.h"
-// #include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_fabric/hw/inc/tt_fabric_interface.h"
 
 using std::vector;
 using namespace tt;
 using json = nlohmann::json;
-
-constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 
 int main(int argc, char **argv) {
 
@@ -376,7 +374,9 @@ int main(int argc, char **argv) {
             (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
             tunneler_test_results_addr,        // 1: test_results_addr
             tunneler_test_results_size,        // 2: test_results_size
-            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+            1,                                 // 3: number of active fabric routers
+            (0x1 << tunneler_logical_core.y),  // 4: active fabric router mask
+            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 5: timeout_cycles
         };
 
         auto tunneler_l_kernel = tt_metal::CreateKernel(
@@ -387,10 +387,12 @@ int main(int argc, char **argv) {
                 .noc = tt_metal::NOC::NOC_0, .compile_args = tunneler_l_compile_args, .defines = defines});
 
         std::vector<uint32_t> tunneler_r_compile_args = {
-            (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
-            tunneler_test_results_addr,        // 1: test_results_addr
-            tunneler_test_results_size,        // 2: test_results_size
-            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+            (tunneler_queue_size_bytes >> 4),    // 0: rx_queue_size_words
+            tunneler_test_results_addr,          // 1: test_results_addr
+            tunneler_test_results_size,          // 2: test_results_size
+            1,                                   // 3: number of active fabric routers
+            (0x1 << r_tunneler_logical_core.y),  // 4: active fabric router mask
+            0,                                   // timeout_mcycles * 1000 * 1000 * 4, // 5: timeout_cycles
         };
 
         auto tunneler_r_kernel = tt_metal::CreateKernel(
@@ -402,9 +404,21 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Starting test...");
 
+        // Initialize tt_fabric router sync semaphore to 0. Routers on each device
+        // increment once handshake with ethernet peer has been completed.
+        std::vector<uint32_t> zero_buf(1, 0);
+        tt::llrt::write_hex_vec_to_core(test_device_id_l, tunneler_phys_core, zero_buf, FABRIC_ROUTER_SYNC_SEM);
+        tt::llrt::write_hex_vec_to_core(test_device_id_r, r_tunneler_phys_core, zero_buf, FABRIC_ROUTER_SYNC_SEM);
+
         auto start = std::chrono::system_clock::now();
         tt_metal::detail::LaunchProgram(device, program, false);
         tt_metal::detail::LaunchProgram(device_r, program_r, false);
+
+        std::vector<uint32_t> tx_start(1, 1);
+        for (uint32_t i = 0; i < num_src_endpoints; i++) {
+            tt::llrt::write_hex_vec_to_core(test_device_id_l, tx_phys_core[i], tx_start, tx_queue_start_addr);
+        }
+
         tt_metal::detail::WaitProgramDone(device, program);
         tt_metal::detail::WaitProgramDone(device_r, program_r);
         auto end = std::chrono::system_clock::now();

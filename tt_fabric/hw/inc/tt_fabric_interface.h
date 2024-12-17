@@ -187,6 +187,11 @@ typedef struct chan_payload_ptr {
 
 static_assert(sizeof(chan_payload_ptr) == CHAN_PTR_SIZE_BYTES);
 
-constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+constexpr uint32_t FABRIC_ROUTER_MISC_START = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+constexpr uint32_t FABRIC_ROUTER_MISC_SIZE = 256;
+constexpr uint32_t FABRIC_ROUTER_SYNC_SEM = FABRIC_ROUTER_MISC_START;
+constexpr uint32_t FABRIC_ROUTER_SYNC_SEM_SIZE = 16;
+
+constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FABRIC_ROUTER_MISC_START + FABRIC_ROUTER_MISC_SIZE;
 constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_SIZE = sizeof(chan_req_buf);
 constexpr uint32_t FABRIC_ROUTER_DATA_BUF_START = FABRIC_ROUTER_REQ_QUEUE_START + FABRIC_ROUTER_REQ_QUEUE_SIZE;

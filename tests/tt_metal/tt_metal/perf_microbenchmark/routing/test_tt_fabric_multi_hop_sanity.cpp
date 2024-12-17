@@ -12,12 +12,11 @@
 #include "kernels/tt_fabric_traffic_gen_test.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
 #include "tt_metal/hw/inc/wormhole/eth_l1_address_map.h"
+#include "tt_fabric/hw/inc/tt_fabric_interface.h"
 
 using std::vector;
 using namespace tt;
 using json = nlohmann::json;
-
-constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 
 int main(int argc, char** argv) {
     constexpr uint32_t default_tx_x = 0;
@@ -239,24 +238,21 @@ int main(int argc, char** argv) {
         }
 
         std::map<chip_id_t, tt_metal::Device*> device_map;
-        device_map[7] = tt_metal::CreateDevice(7);
-        device_map[8] = tt_metal::CreateDevice(8);
-        device_map[9] = tt_metal::CreateDevice(9);
-        device_map[10] = tt_metal::CreateDevice(10);
-        device_map[11] = tt_metal::CreateDevice(11);
-        device_map[12] = tt_metal::CreateDevice(12);
-        device_map[13] = tt_metal::CreateDevice(13);
-        device_map[4] = tt_metal::CreateDevice(4);
+        for (uint32_t i = 4; i < 36; i++) {
+            device_map[i] = tt_metal::CreateDevice(i);
+        }
+
+        log_info(LogTest, "Created Devices ...");
 
         std::map<chip_id_t, tt_metal::Program> program_map;
-        program_map[4] = tt_metal::CreateProgram();
-        program_map[7] = tt_metal::CreateProgram();
-        program_map[8] = tt_metal::CreateProgram();
-        program_map[9] = tt_metal::CreateProgram();
-        program_map[10] = tt_metal::CreateProgram();
-        program_map[11] = tt_metal::CreateProgram();
-        program_map[12] = tt_metal::CreateProgram();
-        program_map[13] = tt_metal::CreateProgram();
+
+        for (uint32_t i = 4; i < 36; i++) {
+            program_map[i] = tt_metal::CreateProgram();
+        }
+
+        log_info(LogTest, "Created Programs ...");
+
+        std::map<chip_id_t, std::vector<CoreCoord>> device_router_map;
 
         auto const& device_active_eth_cores = device_map[test_device_id_l]->get_active_ethernet_cores();
 
@@ -293,6 +289,9 @@ int main(int argc, char** argv) {
         CoreCoord router_phys_core;
         for (auto device : device_map) {
             auto neighbors = device.second->get_ethernet_connected_device_ids();
+            std::vector<CoreCoord> device_router_cores;
+            std::vector<CoreCoord> device_router_phys_cores;
+            uint32_t router_mask = 0;
             for (auto neighbor : neighbors) {
                 if (device_map.contains(neighbor)) {
                     if (!router_core_found && device.first == test_device_id_l) {
@@ -304,33 +303,43 @@ int main(int argc, char** argv) {
                     }
                     auto connected_logical_cores = device.second->get_ethernet_sockets(neighbor);
                     for (auto logical_core : connected_logical_cores) {
-                        std::vector<uint32_t> router_compile_args = {
-                            (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
-                            tunneler_test_results_addr,        // 1: test_results_addr
-                            tunneler_test_results_size,        // 2: test_results_size
-                            0,  // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
-                        };
-
-                        auto router_kernel = tt_metal::CreateKernel(
-                            program_map[device.first],
-                            "tt_fabric/impl/kernels/tt_fabric_router.cpp",
-                            logical_core,
-                            tt_metal::EthernetConfig{
-                                .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = defines});
-                        log_info(
-                            LogTest,
-                            "Device {} router added for Neighbor Device {} on physical core {}",
-                            device.first,
-                            neighbor,
+                        device_router_cores.push_back(logical_core);
+                        device_router_phys_cores.push_back(
                             device.second->ethernet_core_from_logical_core(logical_core));
+                        router_mask += 0x1 << logical_core.y;
                     }
                 } else {
-                    log_info(
+                    log_debug(
                         LogTest,
                         "Device {} skiping Neighbor Device {} since it is not in test device map.",
                         device.first,
                         neighbor);
                 }
+            }
+
+            log_info(LogTest, "Device {} router_mask = 0x{:04X}", device.first, router_mask);
+            uint32_t sem_count = device_router_cores.size();
+            device_router_map[device.first] = device_router_phys_cores;
+            for (auto logical_core : device_router_cores) {
+                std::vector<uint32_t> router_compile_args = {
+                    (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+                    tunneler_test_results_addr,        // 1: test_results_addr
+                    tunneler_test_results_size,        // 2: test_results_size
+                    sem_count,                         // 3: number of active fabric routers
+                    router_mask,                       // 4: active fabric router mask
+                    0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 5: timeout_cycles
+                };
+                auto router_kernel = tt_metal::CreateKernel(
+                    program_map[device.first],
+                    "tt_fabric/impl/kernels/tt_fabric_router.cpp",
+                    logical_core,
+                    tt_metal::EthernetConfig{
+                        .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = defines});
+                log_debug(
+                    LogTest,
+                    "Device {} router added on physical core {}",
+                    device.first,
+                    device.second->ethernet_core_from_logical_core(logical_core));
             }
         }
 
@@ -364,7 +373,7 @@ int main(int argc, char** argv) {
                 fabric_command,                                                         // 18: fabric command
                 target_address,
                 atomic_increment,
-                (dev_r_mesh_id << 16 | dev_r_chip_id),  // 19: receiver/dest device/mesh id
+                (dev_r_mesh_id << 16 | dev_r_chip_id),  // 21: receiver/dest device/mesh id
 
             };
 
@@ -387,26 +396,38 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Starting test...");
 
         auto start = std::chrono::system_clock::now();
+
+        // Initialize tt_fabric router sync semaphore to 0. Routers on each device
+        // increment once handshake with ethernet peer has been completed.
+        std::vector<uint32_t> zero_buf(1, 0);
+        for (auto [device_id, router_phys_cores] : device_router_map) {
+            for (auto phys_core : router_phys_cores) {
+                tt::llrt::write_hex_vec_to_core(device_id, phys_core, zero_buf, FABRIC_ROUTER_SYNC_SEM);
+            }
+        }
+
         for (auto device : device_map) {
             log_info(LogTest, "Launching on {}", device.first);
             tt_metal::detail::LaunchProgram(device.second, program_map[device.first], false);
+        }
+
+        // Once all the kernels have been launched on all devices, set the tx_start signal
+        // to trigger tx kernels to start sending data.
+        std::vector<uint32_t> tx_start(1, 1);
+        for (uint32_t i = 0; i < num_src_endpoints; i++) {
+            tt::llrt::write_hex_vec_to_core(test_device_id_l, tx_phys_core[i], tx_start, tx_queue_start_addr);
         }
 
         for (auto device : device_map) {
             tt_metal::detail::WaitProgramDone(device.second, program_map[device.first]);
         }
 
-        // tt_metal::detail::LaunchProgram(device_map[test_device_id_l], program, false);
-        // tt_metal::detail::LaunchProgram(device_map[test_device_id_r], program_r, false);
-        // tt_metal::detail::WaitProgramDone(device_map[test_device_id_l], program);
-        // tt_metal::detail::WaitProgramDone(device_map[test_device_id_r], program_r);
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end - start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
         vector<vector<uint32_t>> tx_results;
-        // vector<vector<uint32_t>> rx_results;
 
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             tx_results.push_back(tt::llrt::read_hex_vec_from_core(
@@ -419,6 +440,8 @@ int main(int argc, char** argv) {
             pass &= (tx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
         }
         /*
+            TODO: Need to add these once control plane api is available to
+                  get the first and last hop fabric router core.
                 vector<uint32_t> router_results =
                     tt::llrt::read_hex_vec_from_core(
                         device_map[test_device_id_l]->id(), tunneler_phys_core, tunneler_test_results_addr, 128);
@@ -436,8 +459,6 @@ int main(int argc, char** argv) {
         for (auto active_device : device_map) {
             pass &= tt_metal::CloseDevice(active_device.second);
         }
-        // pass &= tt_metal::CloseDevice(device);
-        // pass &= tt_metal::CloseDevice(device_r);
 
         if (pass) {
             double total_tx_bw = 0.0;

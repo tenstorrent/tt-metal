@@ -274,12 +274,10 @@ void kernel_main() {
         max_packet_size_mask = (max_packet_size_mask << 1) + 1;
     }
 
-/*
-    if (!wait_all_src_dest_ready(NULL, 0, output_queue_ptr, 1, timeout_cycles)) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
-        return;
-    }
-*/
+    // wait till test sends start signal. This is set by test
+    // once tt_fabric kernels have been launched on all the test devices.
+    while (*(volatile uint32_t*)data_buffer_start_addr == 0);
+
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
 
     uint64_t data_words_sent = 0;
