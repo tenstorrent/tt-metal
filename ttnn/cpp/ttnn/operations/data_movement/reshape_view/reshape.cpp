@@ -271,11 +271,12 @@ ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shape, c
         return tensor;
     }
     if (tensor.get_layout() == ttnn::TILE_LAYOUT &&
-        (shape[-1] % tile_first_dim != 0 || shape.rank() == 1 || shape[-2] % tile_second_dim != 0)) {
-        // Correct the output shape to add padding metadata before reshape (view)
+        (shape[-1]%tile_first_dim!=0 || shape.rank()==1 || shape[-2]%tile_second_dim!=0 ))
+    {
+        //Correct the output shape to add padding metadata before reshape (view)
         return ttnn::experimental::view(tensor, tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
     }
-    // Perform a reshape (view)
+    //Perform a reshape (view)
     return ttnn::experimental::view(tensor, shape);
 }
 
@@ -343,12 +344,11 @@ ttnn::Tensor ReshapeViewOperation::invoke(
 
     // Just edit shape if shape has a 0 dimension
     if (tensor.get_logical_volume() == 0) {
-        TT_FATAL(shape.logical_shape().volume() == 0, "Tensor volume is 0, but shape's volume is not");
-        TT_FATAL(
-            (tensor.storage_type() != StorageType::MULTI_DEVICE &&
-             tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
-            "Reshaping a multi-device tensor with 0 volume is not supported");
-        return ttnn::experimental::view(tensor, shape);
+        TT_FATAL(shape.logical_shape().volume() == 0 , "Tensor volume is 0, but shape's volume is not");
+        TT_FATAL((tensor.storage_type() != StorageType::MULTI_DEVICE &&
+                  tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
+                  "Reshaping a multi-device tensor with 0 volume is not supported");
+        return tensor.reshape(shape);
     }
     TT_FATAL(shape.logical_shape().volume() != 0, "Tensor volume is not 0, but shape volume is 0");
 
