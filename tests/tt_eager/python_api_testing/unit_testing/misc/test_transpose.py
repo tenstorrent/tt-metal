@@ -655,18 +655,16 @@ def test_transpose_hc(dtype, shape, device):
 )
 @pytest.mark.parametrize(
     "shape",
-    [(9216, 128), (1, 32), (1, 12), (1, 35), (16, 32), (34, 8)],
+    [(9216, 128), (1, 32), (1, 12), (1, 35), (16, 32), (34, 8), [21843, 768]],
 )
 @pytest.mark.parametrize(
     "layout",
-    [ttnn.TILE_LAYOUT],
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
 )
 def test_transpose_2D(dtype, shape, layout, device):
     torch.manual_seed(2005)
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and (shape[-1] % 2 or shape[-2] % 2):
-        pytest.skip("Skipping RM odd inner dim test cases")
 
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(0, 1)
