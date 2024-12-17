@@ -19,6 +19,7 @@ class Conv:
         activation="",
         groups=1,
         dtype=ttnn.bfloat8_b,
+        output_layout=ttnn.TILE_LAYOUT,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
@@ -35,6 +36,7 @@ class Conv:
         self.shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
+        self.output_layout = output_layout
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
@@ -49,6 +51,7 @@ class Conv:
             reallocate_halo_output=True,
             enable_act_double_buffer=True,
             enable_split_reader=False,
+            output_layout=self.output_layout,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
