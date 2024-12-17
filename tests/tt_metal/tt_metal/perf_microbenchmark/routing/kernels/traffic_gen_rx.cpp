@@ -50,6 +50,9 @@ constexpr uint32_t timeout_cycles = get_compile_time_arg_val(17);
 
 constexpr uint32_t disable_header_check = get_compile_time_arg_val(18);
 
+constexpr uint32_t traffic_gen_input_ptrs_addr = get_compile_time_arg_val(19);
+constexpr uint32_t traffic_gen_input_remote_ptrs_addr = get_compile_time_arg_val(20);
+
 // predicts size and payload of packets from each destination, should have
 // the same random seed as the corresponding traffic_gen_tx
 input_queue_rnd_state_t src_rnd_state[num_src_endpoints];
@@ -74,8 +77,8 @@ void kernel_main() {
 
     packet_input_queue_state_t* input_queue = &(input_queues[input_queue_id]);
 
-    input_queue->init(input_queue_id, queue_start_addr_words, queue_size_words,
-                      remote_tx_x, remote_tx_y, remote_tx_queue_id,
+    input_queue->init(input_queue_id, queue_start_addr_words, queue_size_words, traffic_gen_input_ptrs_addr,
+                      remote_tx_x, remote_tx_y, remote_tx_queue_id, traffic_gen_input_remote_ptrs_addr,
                       rx_rptr_update_network_type);
 
     if (!wait_all_input_output_ready<input_queue_network_sequence, input_queue_cb_mode_sequence, NoNetworkTypeSequence, NoCBModeTypeSequence>(input_queues, NULL, timeout_cycles)) {

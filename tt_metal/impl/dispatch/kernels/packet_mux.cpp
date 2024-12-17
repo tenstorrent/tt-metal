@@ -134,6 +134,24 @@ constexpr uint32_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(24) >> 24) & 0xFF
     };
 
+constexpr uint32_t mux_input_ptr_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(25),
+        get_compile_time_arg_val(26),
+        get_compile_time_arg_val(27),
+        get_compile_time_arg_val(28)
+    };
+constexpr uint32_t mux_input_remote_ptr_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(29),
+        get_compile_time_arg_val(30),
+        get_compile_time_arg_val(31),
+        get_compile_time_arg_val(32)
+    };
+
+constexpr uint32_t mux_output_ptr_buffer = get_compile_time_arg_val(33);
+constexpr uint32_t mux_output_remote_ptr_buffer = get_compile_time_arg_val(34);
+
 packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
 using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
 using input_queue_cb_mode_sequence = CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;
@@ -149,15 +167,15 @@ void kernel_main() {
     write_test_results(test_results, PQ_TEST_MISC_INDEX+1, 0xaa000000 | mux_fan_in);
 
     for (uint32_t i = 0; i < mux_fan_in; i++) {
-        input_queues[i].init(i, rx_queue_start_addr_words + i*rx_queue_size_words, rx_queue_size_words,
-                             remote_rx_x[i], remote_rx_y[i], remote_rx_queue_id[i], remote_rx_network_type[i],
+        input_queues[i].init(i, rx_queue_start_addr_words + i*rx_queue_size_words, rx_queue_size_words, mux_input_ptr_buffers[i],
+                             remote_rx_x[i], remote_rx_y[i], remote_rx_queue_id[i], mux_input_remote_ptr_buffers[i], remote_rx_network_type[i],
                              input_packetize[i], input_packetize_log_page_size[i],
                              input_packetize_local_sem[i], input_packetize_upstream_sem[i],
                              input_packetize_src_endpoint[i], input_packetize_dest_endpoint[i]);
     }
 
-    output_queue.init(mux_fan_in, remote_tx_queue_start_addr_words, remote_tx_queue_size_words,
-                      remote_tx_x, remote_tx_y, remote_tx_queue_id, tx_network_type,
+    output_queue.init(mux_fan_in, remote_tx_queue_start_addr_words, remote_tx_queue_size_words, mux_output_ptr_buffer,
+                      remote_tx_x, remote_tx_y, remote_tx_queue_id, mux_output_remote_ptr_buffer, tx_network_type,
                       input_queues, mux_fan_in,
                       output_depacketize, output_depacketize_log_page_size,
                       output_depacketize_downstream_sem, output_depacketize_local_sem,

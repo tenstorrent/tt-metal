@@ -52,6 +52,8 @@ constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
 constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 
+constexpr uint32_t k_WorkerL1Size = 1024 * 1024;
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
 //
@@ -1875,7 +1877,7 @@ void configure_for_single_chip(
                                    (((prefetch_d_buffer_pages << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE) +
                                      noc_read_alignment - 1) /
                                     noc_read_alignment * noc_read_alignment);
-        TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
+        TT_ASSERT(scratch_db_base < k_WorkerL1Size);
 
         prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
         prefetch_compile_args[11] = prefetch_d_buffer_base;
@@ -1928,6 +1930,28 @@ void configure_for_single_chip(
             // Packetized path buffer, can be at any available address.
             uint32_t prefetch_relay_demux_queue_start_addr = l1_unreserved_base;
             constexpr uint32_t prefetch_relay_demux_queue_size_bytes = 0x10000;
+
+            // mux / demux pointers
+            const auto prefetch_relax_mux_queue0_ptrs =
+                prefetch_relay_mux_queue_start_addr + prefetch_relay_mux_queue_size_bytes;
+            const auto prefetch_relax_mux_queue1_ptrs = prefetch_relax_mux_queue0_ptrs + packet_queue_ptr_buffer_size;
+            const auto prefetch_relax_mux_queue2_ptrs = prefetch_relax_mux_queue1_ptrs + packet_queue_ptr_buffer_size;
+            const auto prefetch_relax_mux_queue3_ptrs = prefetch_relax_mux_queue2_ptrs + packet_queue_ptr_buffer_size;
+            const auto prefetch_relax_mux_queue4_ptrs = prefetch_relax_mux_queue3_ptrs + packet_queue_ptr_buffer_size;
+
+            const auto prefetch_relay_demux_queue0_ptrs =
+                prefetch_relay_demux_queue_start_addr + prefetch_relay_demux_queue_size_bytes;
+            const auto prefetch_relay_demux_queue1_ptrs =
+                prefetch_relay_demux_queue0_ptrs + packet_queue_ptr_buffer_size;
+            const auto prefetch_relay_demux_queue2_ptrs =
+                prefetch_relay_demux_queue1_ptrs + packet_queue_ptr_buffer_size;
+            const auto prefetch_relay_demux_queue3_ptrs =
+                prefetch_relay_demux_queue2_ptrs + packet_queue_ptr_buffer_size;
+            const auto prefetch_relay_demux_queue4_ptrs =
+                prefetch_relay_demux_queue3_ptrs + packet_queue_ptr_buffer_size;
+
+            TT_ASSERT(prefetch_relax_mux_queue4_ptrs + packet_queue_ptr_buffer_size < k_WorkerL1Size);
+            TT_ASSERT(prefetch_relay_demux_queue4_ptrs + packet_queue_ptr_buffer_size < k_WorkerL1Size);
 
             // For tests with checkers enabled, packetized path may time out and
             // cause the test to fail.
@@ -1991,6 +2015,18 @@ void configure_for_single_chip(
                 packet_switch_4B_pack(0, 0, 0, 0),                       // 22: input 3 packetize info
                 packet_switch_4B_pack(src_endpoint_start_id, 0, 0, 0),   // 23: packetized input src id
                 packet_switch_4B_pack(dest_endpoint_start_id, 0, 0, 0),  // 24: packetized input dest id
+                prefetch_relax_mux_queue0_ptrs,                          // 25: mux_input_ptr_buffers[0]
+                prefetch_relax_mux_queue1_ptrs,                          // 26: mux_input_ptr_buffers[1]
+                prefetch_relax_mux_queue2_ptrs,                          // 27: mux_input_ptr_buffers[2]
+                prefetch_relax_mux_queue3_ptrs,                          // 28: mux_input_ptr_buffers[3]
+
+                0,  // 29: mux_input_remote_ptr_buffers[0] unused. input is cb_mode
+                0,  // 30: mux_input_remote_ptr_buffers[1]
+                0,  // 31: mux_input_remote_ptr_buffers[2]
+                0,  // 32: mux_input_remote_ptr_buffers[3]
+
+                prefetch_relax_mux_queue4_ptrs,    // 33: mux_output_ptr_buffer
+                prefetch_relay_demux_queue0_ptrs,  // 34: mux_output_remote_ptr_buffer
             };
 
             log_info(
@@ -2065,6 +2101,18 @@ void configure_for_single_chip(
                 packet_switch_4B_pack(0, 0, 0, 0),  // 27: output 1 packetize info
                 packet_switch_4B_pack(0, 0, 0, 0),  // 28: output 2 packetize info
                 packet_switch_4B_pack(0, 0, 0, 0),  // 29: output 3 packetize info
+                prefetch_relay_demux_queue0_ptrs,   // 30: demux_input_ptr_buffer
+                prefetch_relax_mux_queue4_ptrs,     // 31: demux_input_remote_ptr_buffer
+
+                prefetch_relay_demux_queue1_ptrs,  // 32: demux_output_ptr_buffers[0]
+                prefetch_relay_demux_queue2_ptrs,  // 33: demux_output_ptr_buffers[1]
+                prefetch_relay_demux_queue3_ptrs,  // 34: demux_output_ptr_buffers[2]
+                prefetch_relay_demux_queue4_ptrs,  // 35: demux_output_ptr_buffers[3]
+
+                0,  // 36: demux_output_remote_ptr_buffers[0] unused. output is cb_mode
+                0,  // 37: demux_output_remote_ptr_buffers[1]
+                0,  // 38: demux_output_remote_ptr_buffers[2]
+                0,  // 39: demux_output_remote_ptr_buffers[3]
             };
 
             log_info(
@@ -2087,7 +2135,7 @@ void configure_for_single_chip(
     } else {
         uint32_t scratch_db_base =
             cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
-        TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
+        TT_ASSERT(scratch_db_base < k_WorkerL1Size);
         prefetch_compile_args[13] = scratch_db_base;
 
         configure_kernel_variant<true, true>(
@@ -2205,6 +2253,28 @@ void configure_for_single_chip(
             uint32_t dispatch_relay_demux_queue_start_addr = l1_unreserved_base;
             constexpr uint32_t dispatch_relay_demux_queue_size_bytes = 0x10000;
 
+            // mux / demux pointers
+            const auto dispatch_relax_mux_queue0_ptrs =
+                dispatch_relay_mux_queue_start_addr + dispatch_relay_mux_queue_size_bytes;
+            const auto dispatch_relax_mux_queue1_ptrs = dispatch_relax_mux_queue0_ptrs + packet_queue_ptr_buffer_size;
+            const auto dispatch_relax_mux_queue2_ptrs = dispatch_relax_mux_queue1_ptrs + packet_queue_ptr_buffer_size;
+            const auto dispatch_relax_mux_queue3_ptrs = dispatch_relax_mux_queue2_ptrs + packet_queue_ptr_buffer_size;
+            const auto dispatch_relax_mux_queue4_ptrs = dispatch_relax_mux_queue3_ptrs + packet_queue_ptr_buffer_size;
+
+            const auto dispatch_relay_demux_queue0_ptrs =
+                dispatch_relay_demux_queue_start_addr + dispatch_relay_demux_queue_size_bytes;
+            const auto dispatch_relay_demux_queue1_ptrs =
+                dispatch_relay_demux_queue0_ptrs + packet_queue_ptr_buffer_size;
+            const auto dispatch_relay_demux_queue2_ptrs =
+                dispatch_relay_demux_queue1_ptrs + packet_queue_ptr_buffer_size;
+            const auto dispatch_relay_demux_queue3_ptrs =
+                dispatch_relay_demux_queue2_ptrs + packet_queue_ptr_buffer_size;
+            const auto dispatch_relay_demux_queue4_ptrs =
+                dispatch_relay_demux_queue3_ptrs + packet_queue_ptr_buffer_size;
+
+            TT_ASSERT(dispatch_relax_mux_queue4_ptrs + packet_queue_ptr_buffer_size < k_WorkerL1Size);
+            TT_ASSERT(dispatch_relay_demux_queue4_ptrs + packet_queue_ptr_buffer_size < k_WorkerL1Size);
+
             // For tests with checkers enabled, packetized path may time out and
             // cause the test to fail.
             // To save inner loop cycles, presently the packetized components have
@@ -2267,6 +2337,18 @@ void configure_for_single_chip(
                 packet_switch_4B_pack(0, 0, 0, 0),                       // 22: input 3 packetize info
                 packet_switch_4B_pack(src_endpoint_start_id, 0, 0, 0),   // 23: packetized input src id
                 packet_switch_4B_pack(dest_endpoint_start_id, 0, 0, 0),  // 24: packetized input dest id
+                dispatch_relax_mux_queue0_ptrs,                          // 25: mux_input_ptr_buffers[0]
+                dispatch_relax_mux_queue1_ptrs,                          // 26: mux_input_ptr_buffers[1]
+                dispatch_relax_mux_queue2_ptrs,                          // 27: mux_input_ptr_buffers[2]
+                dispatch_relax_mux_queue3_ptrs,                          // 28: mux_input_ptr_buffers[3]
+
+                0,  // 29: mux_input_remote_ptr_buffers[0] unused. input is cb_mode
+                0,  // 30: mux_input_remote_ptr_buffers[1]
+                0,  // 31: mux_input_remote_ptr_buffers[2]
+                0,  // 32: mux_input_remote_ptr_buffers[3]
+
+                dispatch_relax_mux_queue4_ptrs,    // 33: mux_output_ptr_buffer
+                dispatch_relay_demux_queue0_ptrs,  // 34: mux_output_remote_ptr_buffer
             };
 
             log_info(
@@ -2341,6 +2423,18 @@ void configure_for_single_chip(
                 packet_switch_4B_pack(0, 0, 0, 0),  // 27: output 1 packetize info
                 packet_switch_4B_pack(0, 0, 0, 0),  // 28: output 2 packetize info
                 packet_switch_4B_pack(0, 0, 0, 0),  // 29: output 3 packetize info
+                dispatch_relay_demux_queue0_ptrs,   // 30: demux_input_ptr_buffer
+                dispatch_relax_mux_queue4_ptrs,     // 31: demux_input_remote_ptr_buffer
+
+                dispatch_relay_demux_queue1_ptrs,  // 32: demux_output_ptr_buffers[0]
+                dispatch_relay_demux_queue2_ptrs,  // 33: demux_output_ptr_buffers[1]
+                dispatch_relay_demux_queue3_ptrs,  // 34: demux_output_ptr_buffers[2]
+                dispatch_relay_demux_queue4_ptrs,  // 35: demux_output_ptr_buffers[3]
+
+                0,  // 36: demux_output_remote_ptr_buffers[0] unused. output is cb_mode
+                0,  // 37: demux_output_remote_ptr_buffers[1]
+                0,  // 38: demux_output_remote_ptr_buffers[2]
+                0,  // 39: demux_output_remote_ptr_buffers[3]
             };
 
             log_info(
@@ -2590,7 +2684,7 @@ void configure_for_multi_chip(
                                    (((prefetch_d_buffer_pages << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE) +
                                      noc_read_alignment - 1) /
                                     noc_read_alignment * noc_read_alignment);
-        TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
+        TT_ASSERT(scratch_db_base < k_WorkerL1Size);
 
         prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
         prefetch_compile_args[11] = prefetch_d_buffer_base;
@@ -2955,7 +3049,7 @@ void configure_for_multi_chip(
     } else {
         uint32_t scratch_db_base =
             cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
-        TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
+        TT_ASSERT(scratch_db_base < k_WorkerL1Size);
         prefetch_compile_args[13] = scratch_db_base;
 
         configure_kernel_variant<true, true>(

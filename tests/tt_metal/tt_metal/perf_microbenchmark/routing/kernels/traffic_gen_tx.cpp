@@ -57,6 +57,12 @@ constexpr pkt_dest_size_choices_t pkt_dest_size_choice = static_cast<pkt_dest_si
 constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(20);
 constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(21);
 
+constexpr uint32_t traffic_gen_input_ptrs_addr = get_compile_time_arg_val(22);
+constexpr uint32_t traffic_gen_input_mock_remote_ptrs_addr = get_compile_time_arg_val(23); // Dummy
+
+constexpr uint32_t traffic_gen_output_ptrs_addr = get_compile_time_arg_val(24);
+constexpr uint32_t traffic_gen_output_remote_ptrs_addr = get_compile_time_arg_val(25);
+
 constexpr uint32_t input_queue_id = 0;
 constexpr uint32_t output_queue_id = 1;
 
@@ -150,19 +156,23 @@ void kernel_main() {
         input_queue_id,
         queue_start_addr_words,
         queue_size_words,
+        traffic_gen_input_ptrs_addr,
         // remote_x, remote_y, remote_queue_id, remote_update_network_type:
         0,
         0,
         0,
+        traffic_gen_input_mock_remote_ptrs_addr,
         DispatchRemoteNetworkType::NONE);
 
     output_queue_ptr->init(
         output_queue_id,
         remote_rx_queue_start_addr_words,
         remote_rx_queue_size_words,
+        traffic_gen_output_ptrs_addr,
         remote_rx_x,
         remote_rx_y,
         remote_rx_queue_id,
+        traffic_gen_output_remote_ptrs_addr,
         tx_network_type,
         input_queue_ptr,
         1);

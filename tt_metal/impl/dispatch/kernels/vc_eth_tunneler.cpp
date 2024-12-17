@@ -175,6 +175,58 @@ tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(46);
 constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(47);
 
+constexpr uint32_t vc_eth_tunneler_input_ptr_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(48),
+    get_compile_time_arg_val(49),
+    get_compile_time_arg_val(50),
+    get_compile_time_arg_val(51),
+    get_compile_time_arg_val(52),
+    get_compile_time_arg_val(53),
+    get_compile_time_arg_val(54),
+    get_compile_time_arg_val(55),
+    get_compile_time_arg_val(56),
+    get_compile_time_arg_val(57),
+};
+
+constexpr uint32_t vc_eth_tunneler_input_remote_ptr_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(58),
+    get_compile_time_arg_val(59),
+    get_compile_time_arg_val(60),
+    get_compile_time_arg_val(61),
+    get_compile_time_arg_val(62),
+    get_compile_time_arg_val(63),
+    get_compile_time_arg_val(64),
+    get_compile_time_arg_val(65),
+    get_compile_time_arg_val(66),
+    get_compile_time_arg_val(67),
+};
+
+constexpr uint32_t vc_eth_tunneler_output_ptr_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(68),
+    get_compile_time_arg_val(69),
+    get_compile_time_arg_val(70),
+    get_compile_time_arg_val(71),
+    get_compile_time_arg_val(72),
+    get_compile_time_arg_val(73),
+    get_compile_time_arg_val(74),
+    get_compile_time_arg_val(75),
+    get_compile_time_arg_val(76),
+    get_compile_time_arg_val(77),
+};
+
+constexpr uint32_t vc_eth_tunneler_output_remote_ptr_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(78),
+    get_compile_time_arg_val(79),
+    get_compile_time_arg_val(80),
+    get_compile_time_arg_val(81),
+    get_compile_time_arg_val(82),
+    get_compile_time_arg_val(83),
+    get_compile_time_arg_val(84),
+    get_compile_time_arg_val(85),
+    get_compile_time_arg_val(86),
+    get_compile_time_arg_val(87),
+};
+
 packet_input_queue_state_t input_queues[MAX_TUNNEL_LANES];
 using input_queue_network_sequence = NetworkTypeSequence<remote_sender_network_type[0],
                                                          remote_sender_network_type[1],
@@ -235,9 +287,11 @@ void kernel_main() {
             i,
             in_queue_start_addr_words + i * in_queue_size_words,
             in_queue_size_words,
+            vc_eth_tunneler_input_ptr_buffers[i],
             remote_sender_x[i],
             remote_sender_y[i],
             remote_sender_queue_id[i],
+            vc_eth_tunneler_input_remote_ptr_buffers[i],
             remote_sender_network_type[i]);
     }
 
@@ -246,9 +300,11 @@ void kernel_main() {
             i + tunnel_lanes, //MAX_TUNNEL_LANES,
             remote_receiver_queue_start_addr_words[i],
             remote_receiver_queue_size_words[i],
+            vc_eth_tunneler_output_ptr_buffers[i],
             remote_receiver_x[i],
             remote_receiver_y[i],
             remote_receiver_queue_id[i],
+            vc_eth_tunneler_output_remote_ptr_buffers[i],
             remote_receiver_network_type[i],
             &input_queues[i],
             1);
@@ -276,6 +332,23 @@ void kernel_main() {
         process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto input_network_type, auto input_cb_mode, auto sequence_i>(auto) -> bool {
             using remote_input_networks = NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
             using remote_input_cb_modes = CBModeTypeSequence<false>;
+
+            if constexpr (remote_sender_network_type[sequence_i] == DispatchRemoteNetworkType::ETH) {
+                input_queues[sequence_i].handle_recv();
+                // Stall
+                if (input_queues[sequence_i].queue_is_waiting()) {
+                    all_outputs_finished = false;
+                    return true;
+                }
+            }
+            if constexpr (remote_receiver_network_type[sequence_i] == DispatchRemoteNetworkType::ETH) {
+                output_queues[sequence_i].handle_recv();
+                // Stall
+                if (output_queues[sequence_i].queue_is_waiting()) {
+                    all_outputs_finished = false;
+                    return true;
+                }
+            }
 
             if (input_queues[sequence_i].template get_curr_packet_valid<input_cb_mode>()) {
                 bool full_packet_sent;
