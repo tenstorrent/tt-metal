@@ -93,4 +93,6 @@ foreach(arch ${ARCHITECTURES})
     endforeach()
 endforeach()
 
+target_link_libraries(test_pgm_dispatch PRIVATE benchmark::benchmark)
+
 add_custom_target(metal_perf_microbenchmark_tests DEPENDS ${PERF_MICROBENCH_TEST_TARGETS})
