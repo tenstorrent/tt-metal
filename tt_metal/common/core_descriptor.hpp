@@ -17,6 +17,9 @@ struct core_descriptor_t {
     std::vector<RelativeCoreCoord> relative_storage_cores;
     std::optional<uint32_t> storage_core_bank_size = std::nullopt;
     std::vector<RelativeCoreCoord> relative_dispatch_cores;
+    std::vector<CoreCoord> logical_compute_cores;
+    std::vector<CoreCoord> logical_storage_cores;
+    std::vector<CoreCoord> logical_dispatch_cores;
 };
 
 inline std::string get_core_descriptor_file(
@@ -64,7 +67,7 @@ inline std::string get_core_descriptor_file(
     return "";
 }
 
-inline const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_rows) {
+inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested_rows) {
     const static std::map<tt::ARCH, std::map<uint32_t, std::string>> product_name = {
         {tt::ARCH::GRAYSKULL, {{0, "E150"}, {2, "E75"}}},
         {tt::ARCH::WORMHOLE_B0, {{0, "galaxy"}, {1, "nebula_x1"}, {2, "nebula_x2"}}},
@@ -95,29 +98,11 @@ inline std::optional<uint32_t> get_storage_core_bank_size(
 
 inline const std::vector<CoreCoord>& get_logical_storage_cores(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    static std::unordered_map<chip_id_t, std::unordered_map<uint8_t, std::vector<CoreCoord>>>
-        logical_storage_cores_by_device;
-    static CoreType previous_dispatch_core_type;
-    if (previous_dispatch_core_type != dispatch_core_config.get_core_type()) {
-        logical_storage_cores_by_device.clear();
-        previous_dispatch_core_type = dispatch_core_config.get_core_type();
-    }
-    auto& logical_storage_cores_by_cq = logical_storage_cores_by_device[device_id];
-    if (auto it = logical_storage_cores_by_cq.find(num_hw_cqs); it != logical_storage_cores_by_cq.end()) {
-        return it->second;
-    }
-    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).worker_grid_size;
-    std::vector<CoreCoord>& logical_storage_cores = logical_storage_cores_by_cq[num_hw_cqs];
     const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
-    std::transform(
-        core_desc.relative_storage_cores.cbegin(),
-        core_desc.relative_storage_cores.cend(),
-        std::back_inserter(logical_storage_cores),
-        [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
-    return logical_storage_cores;
+    return core_desc.logical_storage_cores;
 }
 
-inline CoreCoord get_compute_grid_size(
+inline const CoreCoord& get_compute_grid_size(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.compute_grid_size;
@@ -125,50 +110,14 @@ inline CoreCoord get_compute_grid_size(
 
 inline const std::vector<CoreCoord>& get_logical_compute_cores(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    static std::unordered_map<chip_id_t, std::unordered_map<uint8_t, std::vector<CoreCoord>>>
-        logical_compute_cores_by_device;
-    static CoreType previous_dispatch_core_type;
-    if (previous_dispatch_core_type != dispatch_core_config.get_core_type()) {
-        logical_compute_cores_by_device.clear();
-        previous_dispatch_core_type = dispatch_core_config.get_core_type();
-    }
-    auto& logical_compute_cores_by_cq = logical_compute_cores_by_device[device_id];
-    if (auto it = logical_compute_cores_by_cq.find(num_hw_cqs); it != logical_compute_cores_by_cq.end()) {
-        return it->second;
-    }
-    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).worker_grid_size;
-    std::vector<CoreCoord>& logical_compute_cores = logical_compute_cores_by_cq[num_hw_cqs];
     const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
-    std::transform(
-        core_desc.relative_compute_cores.cbegin(),
-        core_desc.relative_compute_cores.cend(),
-        std::back_inserter(logical_compute_cores),
-        [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
-    return logical_compute_cores;
+    return core_desc.logical_compute_cores;
 }
 
 inline const std::vector<CoreCoord>& get_logical_dispatch_cores(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    static std::unordered_map<chip_id_t, std::unordered_map<uint8_t, std::vector<CoreCoord>>>
-        logical_dispatch_cores_by_device;
-    static CoreType previous_dispatch_core_type;
-    if (previous_dispatch_core_type != dispatch_core_config.get_core_type()) {
-        logical_dispatch_cores_by_device.clear();
-        previous_dispatch_core_type = dispatch_core_config.get_core_type();
-    }
-    auto& logical_dispatch_cores_by_cq = logical_dispatch_cores_by_device[device_id];
-    if (auto it = logical_dispatch_cores_by_cq.find(num_hw_cqs); it != logical_dispatch_cores_by_cq.end()) {
-        return it->second;
-    }
-    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).worker_grid_size;
-    std::vector<CoreCoord>& logical_dispatch_cores = logical_dispatch_cores_by_cq[num_hw_cqs];
     const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
-    std::transform(
-        core_desc.relative_dispatch_cores.cbegin(),
-        core_desc.relative_dispatch_cores.cend(),
-        std::back_inserter(logical_dispatch_cores),
-        [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
-    return logical_dispatch_cores;
+    return core_desc.logical_dispatch_cores;
 }
 
 }  // namespace tt
