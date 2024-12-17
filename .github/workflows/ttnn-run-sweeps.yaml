@@ -305,6 +305,7 @@ on:
           - eltwise.composite.binary.minimum.minimum_forge
           - eltwise.composite.binary.maximum.maximum
           - eltwise.composite.binary.maximum.maximum_pytorch2
+          - eltwise.composite.binary.maximum.maximum_forge
           - eltwise.composite.binary.pow.pow_pytorch2
           - eltwise.composite.binary.pow.pow_scalar_pytorch2
           - eltwise.composite.binary.pow.pow_tensor_pytorch2
