@@ -72,11 +72,6 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     const auto num_rows = n;
     const auto num_inner_tiles = (num_channels)*Ht * Wt;
 
-    // const auto f_c = static_cast<float>(num_channels);
-    // const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
-    // const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
-    // auto scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * std::sqrt(f_c * f_ht * f_wt));
-
     const bool gamma_has_value = gamma.has_value();
     const bool beta_has_value = beta.has_value();
     const bool mean_has_value = mean.has_value();
@@ -128,11 +123,6 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     const auto cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    const auto cb_usage =
-        (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out1_t + out2_t + im1_t + im0_t + im2_t) *
-        single_tile_size;
-    const auto available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
-
     CreateCircularBuffer(
         program,
         all_cores,
@@ -158,7 +148,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm_small.cpp";
+        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp";
 
     const std::string writer_kernel_file(
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp");
