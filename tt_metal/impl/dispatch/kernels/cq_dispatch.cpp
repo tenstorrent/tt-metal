@@ -879,6 +879,7 @@ static void process_wait() {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (!wrap_ge(*sem_addr, count));
     }
+    DPRINT << " DISPATCH WAIT DONE" << ENDL();
     WAYPOINT("PWD");
 
     if (clear_count) {

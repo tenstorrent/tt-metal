@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_helpers.hpp"
 
@@ -204,7 +203,12 @@ constexpr uint8_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
     };
 
 packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
+using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
+using input_queue_cb_mode_sequence = CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;
+
 packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
+using output_queue_network_sequence = NetworkTypeSequence<remote_tx_network_type[0], remote_tx_network_type[1], remote_tx_network_type[2], remote_tx_network_type[3]>;
+using output_queue_cb_mode_sequence = CBModeTypeSequence<output_depacketize[0], output_depacketize[1], output_depacketize[2], output_depacketize[3]>;
 
 void kernel_main() {
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
@@ -226,14 +230,16 @@ void kernel_main() {
                               output_depacketize_remove_header[i]);
     }
 
-    if (!wait_all_src_dest_ready(input_queues, router_lanes, output_queues, router_lanes, timeout_cycles)) {
+    if (!wait_all_input_output_ready<input_queue_network_sequence,
+                                     input_queue_cb_mode_sequence,
+                                     output_queue_network_sequence,
+                                     output_queue_cb_mode_sequence>(input_queues, output_queues, timeout_cycles)) {
         write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
 
-    uint32_t curr_input = 0;
     bool timeout = false;
     bool all_outputs_finished = false;
     uint64_t data_words_sent = 0;
@@ -243,7 +249,6 @@ void kernel_main() {
     uint32_t heartbeat = 0;
     while (!all_outputs_finished && !timeout) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-        iter++;
         if (timeout_cycles > 0) {
             uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
             if (cycles_since_progress > timeout_cycles) {
@@ -251,46 +256,51 @@ void kernel_main() {
                 break;
             }
         }
-        if (input_queues[curr_input].get_curr_packet_valid()) {
-            bool full_packet_sent;
-            uint32_t words_sent = output_queues[curr_input].forward_data_from_input(0, full_packet_sent, input_queues[curr_input].get_end_of_cmd());
-            data_words_sent += words_sent;
-            if ((words_sent > 0) && (timeout_cycles > 0)) {
-                progress_timestamp = get_timestamp_32b();
+
+        // Loop through router lanes
+        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto, auto, auto sequence_i>(auto) -> bool {
+            iter++;
+            if (input_queues[sequence_i].template get_curr_packet_valid<input_packetize[sequence_i]>()) {
+                bool full_packet_sent;
+                const auto words_sent = output_queues[sequence_i].template forward_data_from_input<remote_tx_network_type[sequence_i], output_depacketize[sequence_i], remote_rx_network_type[sequence_i], input_packetize[sequence_i]>(0, full_packet_sent, input_queues[sequence_i].get_end_of_cmd());
+                data_words_sent += words_sent;
+                if ((words_sent > 0) && (timeout_cycles > 0)) {
+                    progress_timestamp = get_timestamp_32b();
+                }
             }
-        }
 
-        output_queues[curr_input].prev_words_in_flight_check_flush();
+            // Flush for all inputs of this output queue (only 1 input)
+            output_queues[sequence_i].template prev_words_in_flight_check_flush<output_depacketize[sequence_i], NetworkTypeSequence<remote_rx_network_type[sequence_i]>, CBModeTypeSequence<input_packetize[sequence_i]>>();
 
-        if ((iter & 0xFF) == 0) {
-            all_outputs_finished = true;
-            for (uint32_t i = 0; i < router_lanes; i++) {
-                all_outputs_finished &= output_queues[i].is_remote_finished();
+
+            if ((iter & 0xFF) == 0) {
+                all_outputs_finished = true;
+                for (uint32_t i = 0; i < router_lanes; i++) {
+                    all_outputs_finished &= output_queues[i].is_remote_finished();
+                }
             }
-        }
 
-        curr_input++;
-        if (curr_input == router_lanes) {
-            curr_input = 0;
-        }
+            return true;
+        });
     }
 
     if (!timeout) {
         write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
-        for (uint32_t i = 0; i < router_lanes; i++) {
-            if (!output_queues[i].output_barrier(timeout_cycles)) {
+        process_queues<output_queue_network_sequence, output_queue_cb_mode_sequence>([&]<auto network_type, auto cb_mode, auto sequence_i>(auto) -> bool {
+            if (!output_queues[sequence_i].template output_barrier<cb_mode, input_queue_network_sequence, input_queue_cb_mode_sequence>(timeout_cycles)) {
                 timeout = true;
-                break;
             }
-        }
+            return true;
+        });
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     if (!timeout) {
         write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
-        for (uint32_t i = 0; i < router_lanes; i++) {
-            input_queues[i].send_remote_finished_notification();
-        }
+        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto network_type, auto cb_mode, auto sequence_i>(auto) -> bool {
+            input_queues[sequence_i].template send_remote_finished_notification<network_type, cb_mode>();
+            return true;
+        });
     }
 
     set_64b_result(kernel_status, data_words_sent, PQ_TEST_WORD_CNT_INDEX);

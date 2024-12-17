@@ -119,9 +119,9 @@ void FDKernel::configure_kernel_variant(
     if (tt::llrt::RunTimeOptions::get_instance().watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (!tt::DPrintServerReadsDispatchCores(device_)) {
-        defines["FORCE_DPRINT_OFF"] = "1";
-    }
+    // if (!tt::DPrintServerReadsDispatchCores(device_)) {
+    //     defines["FORCE_DPRINT_OFF"] = "1";
+    // }
     defines.insert(defines_in.begin(), defines_in.end());
 
     if (GetCoreType() == CoreType::WORKER) {
