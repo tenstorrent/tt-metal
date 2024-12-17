@@ -265,7 +265,7 @@ struct registered_operation_t {
             detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(std::forward<args_t>(args)...);
 
         bool enable_autoformat = false;
-        operation::launch_op(
+        tt::tt_metal::operation::launch_op(
             [args...](
                 const Tensors& input_tensors,
                 const OptionalConstTensors& optional_input_tensors,
