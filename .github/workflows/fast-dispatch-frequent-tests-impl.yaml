@@ -21,7 +21,7 @@ jobs:
               name: "WH N300 pgm dispatch nightly",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              cmd: ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.sh,
+              cmd: ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py,
               timeout: 10
             },
           ]
@@ -57,3 +57,9 @@ jobs:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            bench.json
+          prefix: "bench_json_"

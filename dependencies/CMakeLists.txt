@@ -111,3 +111,6 @@ CPMAddPackage(
     OPTIONS
         "XTENSOR_ENABLE_TESTS OFF"
 )
+
+
+CPMAddPackage(NAME benchmark GITHUB_REPOSITORY google/benchmark GIT_TAG v1.9.1)

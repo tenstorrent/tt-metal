@@ -108,6 +108,7 @@ tests/tt_metal/test_utils/env_vars.hpp
 tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp
 tests/tt_metal/tt_metal/api/test_global_semaphores.cpp
 tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp
+tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/pgm_dispatch_golden.json
 tests/tt_metal/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
 tests/tt_metal/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_rx.cpp
