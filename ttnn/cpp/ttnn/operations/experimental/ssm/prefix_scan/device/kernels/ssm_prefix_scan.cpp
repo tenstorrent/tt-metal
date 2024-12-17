@@ -50,7 +50,7 @@ FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, ui
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
-    tilize_init_short(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
+    tilize_init_short(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
 
     cb_wait_front(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
     cb_reserve_back(cb_out, num_tiles);
@@ -60,7 +60,7 @@ FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, ui
     cb_push_back(cb_out, num_tiles);
     cb_pop_front(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
 
-    tilize_uninit(cb_in);
+    tilize_uninit(cb_in, cb_out);
 }
 
 FORCE_INLINE void mul(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
@@ -149,7 +149,7 @@ void MAIN {
     const uint32_t total_tiles_per_col = get_arg_val<uint32_t>(2);
     const uint32_t num_chunks_per_row = get_arg_val<uint32_t>(3);
 
-    binary_op_init_common(cb_a_in, cb_bx_in);
+    binary_op_init_common(cb_a_in, cb_bx_in, tt::CBIndex::c_16);
     const uint32_t num_tiles_last_chunk = total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK == 0
                                               ? NUM_TILES_IN_TILIZED_CHUNK
                                               : total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK;

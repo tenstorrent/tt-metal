@@ -16,7 +16,7 @@ void MAIN {
     bool remap = get_compile_time_arg_val(1) != 0;
     bool swizzle = get_compile_time_arg_val(2) != 0;
 
-    unary_op_init_common(tt::CBIndex::c_0);
+    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #ifdef ARCH_BLACKHOLE
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(remap);
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(swizzle);

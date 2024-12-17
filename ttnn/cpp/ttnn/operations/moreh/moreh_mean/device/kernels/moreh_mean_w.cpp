@@ -26,7 +26,7 @@ void MAIN {
     constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
 
-    binary_op_init_common(cb_input, cb_input);
+    binary_op_init_common(cb_input, cb_input, cb_out);
 
     cb_wait_front(cb_scaler, 1);  // scaler tile from the reader
 

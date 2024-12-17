@@ -37,7 +37,7 @@ void MAIN {
     const uint32_t my_cos_sin_tiles = my_seq_tiles * Wt;
 
     mm_init();
-    binary_op_init_common(rotated_in_interm_cb, cos_cb);  // General Init for all binary ops
+    binary_op_init_common(rotated_in_interm_cb, cos_cb, out_cb);  // General Init for all binary ops
 
     // Get the trans_mat
     cb_wait_front(trans_mat_cb, onetile);
