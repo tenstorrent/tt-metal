@@ -90,7 +90,7 @@ void kernel_main() {
     uint32_t in_w_padded = in_w + 2 * pad_w;
 
     if (reader_id == 0) {
-        print_pages(in_l1_read_base_addr, 64, 24);
+        print_pages(in_l1_read_base_addr, 64, 25);
     }
 
     uint32_t npages_to_reserve = 1;

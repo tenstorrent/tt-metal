@@ -167,7 +167,6 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
                              config.input_hw.first - 2 * config.pad_hw.first;
             ceil_padding_w = config.stride_hw.second * (output_shape[2] - 1) + config.window_hw.second -
                              config.input_hw.second - 2 * config.pad_hw.second;
-            printf("ceil_padding_h: %d, ceil_padding_w: %d\n", ceil_padding_h, ceil_padding_w);
         }
         uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first + ceil_padding_h;
         uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
@@ -189,12 +188,6 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
 
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
     Shape output_shape = config.get_output_shape();
-    printf(
-        "generate_op_trace_metadata output_shape: %d %d %d %d\n",
-        output_shape[0],
-        output_shape[1],
-        output_shape[2],
-        output_shape[3]);
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
 
@@ -222,23 +215,16 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
                              config.input_hw.first - 2 * config.pad_hw.first;
             ceil_padding_w = config.stride_hw.second * (output_shape[2] - 1) + config.window_hw.second -
                              config.input_hw.second - 2 * config.pad_hw.second;
-            printf("ceil_padding_h: %d, ceil_padding_w: %d\n", ceil_padding_h, ceil_padding_w);
         }
 
         uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first + ceil_padding_h;
         uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
-        printf("padded_input_h: %d, padded_input_w: %d\n", padded_input_h, padded_input_w);
-        printf(
-            "config.stride_hw.first: %d, config.stride_hw.second: %d\n",
-            config.stride_hw.first,
-            config.stride_hw.second);
         uint32_t i = 0;
         for (uint32_t b = 0; b < output_shape[0]; ++b) {
             for (uint32_t h = 0; h < output_shape[1]; ++h) {
                 for (uint32_t w = 0; w < output_shape[2]; ++w) {
                     uint32_t input_index = b * padded_input_h * padded_input_w +
                                            h * config.stride_hw.first * padded_input_w + w * config.stride_hw.second;
-                    printf("input_index: %d, b: %d, h: %d, w: %d\n", input_index, b, h, w);
                     op_trace_metadata[i++] = input_index;
                 }
             }
@@ -259,12 +245,10 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
         // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
         ceil_padding_w = config.stride_hw.second * (output_shape[2] - 1) + config.window_hw.second -
                          config.input_hw.second - 2 * config.pad_hw.second;
-        printf("ceil_padding_w: %d\n", ceil_padding_w);
     }
     uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
 
     uint32_t max_index = op_trace_metadata.size();
-    printf("max_index: %d\n", max_index);
     if (config.is_transpose) {
         padded_input_w = config.get_transposed_full_input_shape()[2];
     }
@@ -272,8 +256,6 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
     uint32_t dilated_window_w =
         config.window_hw.second + (config.dilation_hw.second - 1) * (config.window_hw.second - 1);
     uint32_t halo_with_pad_len = (dilated_window_h - 1) * padded_input_w + dilated_window_w - 1;
-
-    printf("halo_with_pad_len: %d\n", halo_with_pad_len);
 
     if (config.is_bilinear) {
         halo_with_pad_len = (config.window_hw.first) * padded_input_w;
@@ -472,25 +454,25 @@ generate_halo_kernel_config_tensors(
             if (remote_read) {
                 CoreCoord noc_xy = core_id_to_noc_coords(src_core_id);
                 remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
-                printf(
-                    "remote_config[%d]: %ld %ld -> (%d, %d, %d)\n",
-                    dst_core_id,
-                    noc_xy.x,
-                    noc_xy.y,
-                    std::get<0>(data[0]),
-                    std::get<1>(data[0]),
-                    std::get<2>(data[0]));
+                // printf(
+                //     "remote_config[%d]: %ld %ld -> (%d, %d, %d)\n",
+                //     dst_core_id,
+                //     noc_xy.x,
+                //     noc_xy.y,
+                //     std::get<0>(data[0]),
+                //     std::get<1>(data[0]),
+                //     std::get<2>(data[0]));
             } else {
                 CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
                 remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
-                printf(
-                    "remote_config[%d]: %ld %ld -> (%d, %d, %d)\n",
-                    src_core_id,
-                    noc_xy.x,
-                    noc_xy.y,
-                    std::get<0>(data[0]),
-                    std::get<1>(data[0]),
-                    std::get<2>(data[0]));
+                // printf(
+                //     "remote_config[%d]: %ld %ld -> (%d, %d, %d)\n",
+                //     src_core_id,
+                //     noc_xy.x,
+                //     noc_xy.y,
+                //     std::get<0>(data[0]),
+                //     std::get<1>(data[0]),
+                //     std::get<2>(data[0]));
             }
         }
     }
@@ -759,7 +741,7 @@ std::string SlidingWindowConfig::to_string() const {
            std::to_string(std::get<1>(stride_hw)) + "_" + std::to_string(std::get<0>(pad_hw)) + "_" +
            std::to_string(std::get<1>(pad_hw)) + "_" + std::to_string(std::get<0>(dilation_hw)) + "_" +
            std::to_string(std::get<1>(dilation_hw)) + "_" + std::to_string(num_cores_nhw) + "_" +
-           std::to_string(num_cores_c) + "_" + core_range_set.str();
+           std::to_string(num_cores_c) + "_" + std::to_string(ceil_mode) + "_" + core_range_set.str();
 }
 
 }  // namespace ttnn::operations::sliding_window
