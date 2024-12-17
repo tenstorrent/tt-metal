@@ -51,6 +51,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     const std::optional<UnaryWithParam>& fused_activation,
     bool mcast_in0,
     bool gather_in0,
+    CoreRangeSet hop_cores,
     bool untilize_out,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers
@@ -144,6 +145,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::optional<UnaryWithParam> fused_activation;
     bool mcast_in0;
     bool gather_in0;
+    CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers;
 };
 

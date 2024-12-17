@@ -2127,6 +2127,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fused_activation,
                     program_config.mcast_in0,
                     program_config.gather_in0,
+                    program_config.hop_cores,
                     this->untilize_out,
                     this->global_cb,
                     program_config.num_global_cb_receivers);

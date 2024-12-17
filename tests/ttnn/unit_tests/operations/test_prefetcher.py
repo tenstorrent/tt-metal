@@ -13,7 +13,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import run_multi_core_matmul_1d
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
+    run_multi_core_matmul_1d,
+    PREFETCHER_NOC1_GRID,
+)
 
 """
 Things to test:
@@ -270,6 +273,11 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
         (1, 9),
     ]
 
+    mm_optimised_ring_cores = PREFETCHER_NOC1_GRID[::-1]
+    hop_grid = [
+        (3, 6),
+    ]
+
     dram_cores = all_dram_cores[:num_reader_cores]
     sender_cores = all_sender_cores[:num_reader_cores]
     receiver_cores_list = all_receiver_cores_list[: num_reader_cores * num_global_cb_receivers]
@@ -283,6 +291,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
         receiver_cores,
         worker_cores_range_set,
         mm_optimised_ring_cores,
+        hop_grid,
     )
 
 
@@ -346,6 +355,7 @@ def test_run_prefetcher(
         receiver_cores,
         worker_cores_range_set,
         mm_optimised_ring_cores,
+        hop_grid,
     ) = get_core_ranges(num_reader_cores, num_global_cb_receivers)
 
     if num_reader_cores != 12:
@@ -516,6 +526,16 @@ def test_run_prefetcher(
         ]
     )
 
+    hop_core_range_set = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(x, y),
+                ttnn.CoreCoord(x, y),
+            )
+            for x, y in hop_grid
+        }
+    )
+
     print(f"num_cores: {num_cores}")
 
     output_mem_configs = []
@@ -578,6 +598,7 @@ def test_run_prefetcher(
             mcast_in0=False,
             gather_in0=True,
             num_global_cb_receivers=num_global_cb_receivers,
+            hop_cores=hop_core_range_set,  # Only use with noc1 grid
         )
         program_configs.append(program_config)
 
@@ -636,3 +657,5 @@ def test_run_prefetcher(
 
     device.clear_loaded_sub_device_manager()
     device.remove_sub_device_manager(sub_device_manager)
+
+    assert all_passing
