@@ -15,7 +15,6 @@ struct ExecutePermute {
         const ttnn::Tensor& input_tensor,
         tt::stl::Span<const int64_t> dims,
         const std::optional<MemoryConfig>& memory_config,
-        bool composite = true,
         const std::optional<float>& pad_value = 0.0f);
 
     static ttnn::Tensor invoke(

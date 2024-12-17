@@ -30,6 +30,8 @@ public:
     [[nodiscard]] size_t rank() const;
     [[nodiscard]] uint64_t volume() const;
 
+    const uint32_t get_normalized_index(std::int64_t index) const;
+
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(this->value_); }
