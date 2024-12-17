@@ -88,6 +88,7 @@ def run(
 
     start_time = start_measuring_time()
     result = ttnn.ge(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    # ToDo: Update it once the tensor layout support with rank < 2 is supported in mid of Jan
     output_tensor = ttnn.to_torch(result, torch_rank=len(input_shape))
     e2e_perf = stop_measuring_time(start_time)
 

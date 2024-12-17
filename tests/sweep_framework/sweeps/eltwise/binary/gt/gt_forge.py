@@ -88,7 +88,7 @@ def run(
 
     start_time = start_measuring_time()
     result = ttnn.gt(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(result, torch_rank=len(input_shape))
+    output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

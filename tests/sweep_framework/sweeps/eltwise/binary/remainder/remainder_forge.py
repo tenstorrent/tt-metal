@@ -21,7 +21,7 @@ from models.utility_functions import torch_random
 
 parameters = {
     "nightly": {
-        "input_shape": [[1, 10]],
+        "input_shape": [[1]],
         "input_a_dtype": [ttnn.int32],
         "input_b_dtype": [ttnn.int32],
         "input_a_layout": [ttnn.TILE_LAYOUT],
@@ -61,13 +61,13 @@ def run(
     torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.int32), input_a_dtype
     )(input_shape)
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.int32), input_b_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.ne)
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
@@ -87,8 +87,9 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.ne(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(result)
+    result = ttnn.remainder(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    # ToDo: Update it once the tensor layout support with rank < 2 is supported in mid of Jan
+    output_tensor = ttnn.to_torch(result, torch_rank=len(input_shape))
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
