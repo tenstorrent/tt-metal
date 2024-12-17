@@ -87,34 +87,41 @@ void kernel_main() {
 #else
     volatile tt_l1_ptr uint32_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
 #endif
+    bool printed = false;
     auto read_block = [&](const uint32_t& token_idx, const uint32_t& width_size) {
         cb_reserve_back(cb_id_in0, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        uint32_t weight_l1_addr = get_write_ptr(cb_id_in0);
+        volatile tt_l1_ptr uint16_t* weight_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(weight_l1_addr);
         uint64_t src_noc_addr;
         uint32_t token = input_l1_ptr[token_idx];
         DPRINT << "Token: " << token << ENDL();
 
-        for (int r_f = 0; r_f < 2; r_f++) {
-            for (int i = 0; i < 105; i++) {
-                DPRINT << "_";
-            }
-            uint32_t r_f_offset = r_f * 2 * 16 * 16;
-            for (int r = 0; r < 16; c++) {
-                uint32_t r_offset = r * 16;
-                DPRINT << "[";
-                for (int i = 0; i < 16; i++) {
-                    DPRINT << input_l1_ptr[i + r_f_offset + r_offset] << ", ";
+        if (!printed) {
+            for (int r_f = 0; r_f < 2; r_f++) {
+                for (int i = 0; i < 105; i++) {
+                    DPRINT << "_";
                 }
-                DPRINT << "] | ";
-                DPRINT << "[";
-                for (int i = 0; i < 16; i++) {
-                    DPRINT << input_l1_ptr[i + r_f_offset + r_offset + (16 * 16)] << ", ";
+                DPRINT << ENDL();
+                uint32_t r_f_offset = r_f * 2 * 16 * 16;
+                for (int r = 0; r < 16; r++) {
+                    uint32_t r_offset = r * 16;
+                    DPRINT << "[";
+                    for (int i = 0; i < 16; i++) {
+                        DPRINT << input_l1_ptr[i + r_f_offset + r_offset] << ", ";
+                    }
+                    DPRINT << "] | ";
+                    DPRINT << "[";
+                    for (int i = 0; i < 16; i++) {
+                        DPRINT << input_l1_ptr[i + r_f_offset + r_offset + (16 * 16)] << ", ";
+                    }
+                    DPRINT << "]" << ENDL();
                 }
-                DPRINT << "]" << ENDL();
+                for (int i = 0; i < 105; i++) {
+                    DPRINT << "_";
+                }
+                DPRINT << ENDL();
             }
-            for (int i = 0; i < 105; i++) {
-                DPRINT << "_";
-            }
+            printed = true;
         }
 #if defined PADDED
         if (token == pad_token) {
@@ -141,8 +148,13 @@ void kernel_main() {
         src_noc_addr = get_noc_addr(token, weights);
 #endif
 #endif
-        noc_async_read(src_noc_addr, l1_write_addr, width_size);
+        noc_async_read(src_noc_addr, weight_l1_addr, width_size);
         noc_async_read_barrier();
+        DPRINT << "Weight: [" << ENDL();
+        for (uint32_t i = 0; i < weight_stick_size / 2; i++) {
+            DPRINT << BF16(weight_l1_ptr[i]) << ", ";
+        }
+        DPRINT << "]" << ENDL();
         cb_push_back(cb_id_in0, 1);
     };
 
@@ -152,8 +164,9 @@ void kernel_main() {
     bool read_indices = true;
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
-            uint64_t noc_input_src_addr = get_noc_addr(curr_row, input) + offset;
-            noc_async_read(noc_input_src_addr, input_l1_addr, input_block_size_bytes);
+            DPRINT << "Offset: " << offset << ENDL();  // 120 + 72 = 192 + 256 = 448
+            uint64_t noc_input_src_addr = get_noc_addr(curr_row, input) + (offset * 4);
+            noc_async_read(noc_input_src_addr, input_l1_addr, 32 * 32 * 4);
             noc_async_read_barrier();
             read_indices = false;
         }
@@ -164,10 +177,10 @@ void kernel_main() {
             index = 0;
             read_indices = true;
             offset += input_block_size_bytes;
-            if (offset == input_page_size) {
-                offset = 0;
-                curr_row++;
-            }
+            // if (offset == input_page_size) {
+            // offset = 0;
+            // curr_row++;
+            // }
         }
     }
 }
