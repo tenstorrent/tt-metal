@@ -65,17 +65,6 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
-void init_sync_registers() {
-    volatile tt_reg_ptr uint* tiles_received_ptr;
-    volatile tt_reg_ptr uint* tiles_acked_ptr;
-    for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
-        tiles_received_ptr = get_cb_tiles_received_ptr(operand);
-        tiles_received_ptr[0] = 0;
-        tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-        tiles_acked_ptr[0] = 0;
-    }
-}
-
 int main() {
     conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
@@ -107,14 +96,28 @@ int main() {
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
     while (1) {
-        init_sync_registers();
         // Wait...
         go_msg_t* go_msg_address = &(mailboxes->go_message);
         DPRINT << "Waiting for go signal at " << (uint32_t)go_msg_address << ENDL();
         debug_addr_ptr[0] = 0x1234ABCD;
         WAYPOINT("GW");
-        while (mailboxes->go_message.signal != RUN_MSG_GO) {
+
+        uint8_t go_message_signal = RUN_MSG_DONE;
+        while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
+            // While the go signal for kernel execution is not sent, check if the worker was signalled
+            // to reset its launch message read pointer.
+            if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                // Set the rd_ptr on workers to specified value
+                mailboxes->launch_msg_rd_ptr = 0;
+                uint64_t dispatch_addr = NOC_XY_ADDR(
+                    NOC_X(mailboxes->go_message.master_x),
+                    NOC_Y(mailboxes->go_message.master_y),
+                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                mailboxes->go_message.signal = RUN_MSG_DONE;
+                // Notify dispatcher that this has been done
+                internal_::notify_dispatch_core_done(dispatch_addr);
+            }
         }
         DPRINT << "Done waiting for go signal" << ENDL();
         WAYPOINT("GD");
@@ -140,19 +143,18 @@ int main() {
 
             DPRINT << "in aerisc enables is " << HEX() << uint32_t(enables) << DEC() << ENDL();
 
-            // Run the ERISC kernel
+            // Run the ERISC kernel, no kernel config buffer on active eth
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
-                DPRINT << "about to run the kernel" << ENDL();
                 WAYPOINT("R");
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
-                uint32_t tt_l1_ptr* cb_l1_base =
-                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.cb_offset);
-                int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
-                    kernel_config_base +
-                    mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
-                (*kernel_address)((uint32_t)kernel_address);
+                int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
+                DPRINT << "about to run the kernel " << kernel_config_base << ENDL();
+                // void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+                //     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                // void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(kernel_config_base);
+                // void(kernel_address)(uint32_t) = (void()(uint32_t))(0x3b30);
+                kernel_init((uint32_t)0x3b30);
                 RECORD_STACK_USAGE();
                 WAYPOINT("D");
             } else {

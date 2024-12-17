@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or
@@ -17,10 +18,14 @@ void kernel_main() {
     std::uint32_t dram_buffer_size = get_arg_val<uint32_t>(2);
     std::uint32_t local_eth_l1_addr_base = get_arg_val<uint32_t>(3);
 
+    DPRINT << "in the kernel!" << ENDL();
+
     std::uint32_t dram_buffer_src_addr = dram_buffer_src_addr_base;
     // DRAM NOC src address
     std::uint64_t dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, dram_buffer_src_addr);
 
     noc_async_read(dram_buffer_src_noc_addr, local_eth_l1_addr_base, dram_buffer_size);
+    DPRINT << "about to barrier" << ENDL();
     noc_async_read_barrier();
+    DPRINT << "done kernel!" << ENDL();
 }
