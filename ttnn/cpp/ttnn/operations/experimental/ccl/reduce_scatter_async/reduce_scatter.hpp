@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -22,7 +23,8 @@ struct ExecuteReduceScatter {
         ttnn::operations::reduction::ReduceType math_op,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-        const std::optional<size_t> num_links = std::nullopt);
+        const std::optional<size_t> num_links = std::nullopt,
+        std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt);
 };
 
 }  // namespace ccl
