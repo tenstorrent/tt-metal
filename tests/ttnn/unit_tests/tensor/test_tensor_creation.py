@@ -130,36 +130,38 @@ grid_size = [8, 7]
     [
         (ttnn.ROW_MAJOR_LAYOUT, None),
         (ttnn.TILE_LAYOUT, ttnn.Tile([32, 32])),
+        (ttnn.TILE_LAYOUT, ttnn.Tile([16, 16])),
+        (ttnn.TILE_LAYOUT, ttnn.Tile([32, 16])),
+        (ttnn.TILE_LAYOUT, ttnn.Tile([16, 16])),
     ],
 )
 @pytest.mark.parametrize(
     "tt_dtype",
     [
+        ttnn.uint8,
+        ttnn.uint16,
+        ttnn.uint32,
+        ttnn.int32,
+        ttnn.float32,
         ttnn.bfloat16,
         ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
     ],
 )
 @pytest.mark.parametrize(
     "shape, memory_config",
     [
         (
-            (2, 3, 64, 96),
+            (1, 2, 3, 4),
             ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.num_cores_to_corerangeset(18, grid_size, True),
-                    [64, 64],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
-                    ttnn.ShardMode.LOGICAL,
-                ),
+                ttnn.TensorMemoryLayout.INTERLEAVED,
+                ttnn.BufferType.DRAM,
             ),
         ),
         (
             (1, 48, 56, 32),
             ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     ttnn.num_cores_to_corerangeset(56, grid_size, True),
@@ -171,14 +173,55 @@ grid_size = [8, 7]
             ),
         ),
         (
-            (1, 2, 3, 4),
+            (1, 2, 10, 5),
             ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED,
-                ttnn.BufferType.DRAM,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.num_cores_to_corerangeset(3, grid_size, True),
+                    [20, 2],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                    ttnn.ShardMode.LOGICAL,
+                ),
+            ),
+        ),
+        (
+            (2, 3, 64, 96),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 5))}),
+                    [64, 64],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                    ttnn.ShardMode.LOGICAL,
+                ),
+            ),
+        ),
+        (
+            (1, 8, 36, 32),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 5))}),
+                    [48, 10],
+                    [64, 64],  # NOTE: This value is compatible with all PageConfigs in this sweep
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
             ),
         ),
     ],
-    ids=["test1", "test2", "test3"],
+    ids=[
+        "interleaved",
+        "height_sharded",
+        "width_sharded",
+        "block_sharded",
+        "block_sharded_with_custom_physical_shard_shape",
+    ],
 )
 def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layout, tile, device):
     torch.manual_seed(0)

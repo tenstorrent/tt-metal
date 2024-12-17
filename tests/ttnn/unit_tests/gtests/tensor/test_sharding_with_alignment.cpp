@@ -943,7 +943,7 @@ INSTANTIATE_TEST_SUITE_P(
                         .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
                         .buffer_type = BufferType::L1,
                         .shard_spec = ShardSpec{
-                            num_cores_to_corerangeset(tt::div_up(8 * 36, 48) * tt::div_up(32, 10), grid_size, /*row_wise=*/true),
+                            CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{3, 5})),
                             {48, 10},
                             {64, 48},
                             ShardOrientation::ROW_MAJOR,
@@ -967,7 +967,7 @@ INSTANTIATE_TEST_SUITE_P(
                         .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
                         .buffer_type = BufferType::L1,
                         .shard_spec = ShardSpec{
-                            num_cores_to_corerangeset(tt::div_up(2 * 10, 5) * tt::div_up(5, 2), grid_size, /*row_wise=*/true),
+                            CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{2, 3})),
                             {5, 2},
                             {7, 3},
                             ShardOrientation::ROW_MAJOR,
