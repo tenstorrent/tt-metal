@@ -2,6 +2,11 @@ name: "[internal] Single-card Device perf regressions impl"
 
 on:
   workflow_call:
+    inputs:
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
 
 jobs:
   device-perf:
@@ -22,22 +27,20 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.test-info.runs-on }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Ensure weka mount is active
         run: |
           sudo systemctl restart mnt-MLPerf.mount
           sudo /etc/rc.local
           ls -al /mnt/MLPerf/bit_error_tests
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: TTMetal_build_${{ matrix.test-info.arch }}_profiler
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
-      - name: Run device performance regressions
+          arch: ${{ matrix.test-info.arch }}
+          is_profiler: 'true'
+      - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-info.timeout }}
         run: |
           source python_env/bin/activate
