@@ -23,7 +23,7 @@ struct Pad {
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     static constexpr auto attribute_names = std::forward_as_tuple(
         "output_tensor_shape", "input_tensor_start", "pad_value", "output_mem_config", "use_multicore");

@@ -79,8 +79,8 @@ inline auto create_async_output_tensors(
         Tensors output_tensors;
         output_tensors.reserve(std::tuple_size_v<execute_on_worker_thread_return_t>);
         for (auto index = 0; index < std::tuple_size_v<execute_on_worker_thread_return_t>; index++) {
-            output_tensors.emplace_back(
-                Tensor(operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
+            output_tensors.emplace_back(Tensor(
+                tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
         }
         return output_tensors;
     } else {

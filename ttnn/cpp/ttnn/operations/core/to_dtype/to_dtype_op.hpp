@@ -73,9 +73,9 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
     return std::visit(
         [&](auto&& buffer) -> Tensor {
             using T = std::decay_t<decltype(buffer)>;
-            if constexpr (std::is_same_v<T, OwnedBuffer>) {
+            if constexpr (std::is_same_v<T, tt::tt_metal::OwnedBuffer>) {
                 return Tensor{OwnedStorage{buffer}, input_tensor.get_shape(), input_dtype, input_tensor.get_layout()};
-            } else if constexpr (std::is_same_v<T, BorrowedBuffer>) {
+            } else if constexpr (std::is_same_v<T, tt::tt_metal::BorrowedBuffer>) {
                 return Tensor{
                     BorrowedStorage{buffer, []() {}, []() {}},
                     input_tensor.get_shape(),
@@ -89,7 +89,7 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
 }
 
 template <typename NewT, typename OldT>
-inline std::vector<NewT> cast(const borrowed_buffer::Buffer<OldT>& input_buffer) {
+inline std::vector<NewT> cast(const tt::tt_metal::borrowed_buffer::Buffer<OldT>& input_buffer) {
     std::vector<NewT> output_vector(input_buffer.size());
     for (auto index = 0; index < input_buffer.size(); ++index) {
         auto convert_value = [](auto&& value) {
@@ -109,14 +109,14 @@ inline std::vector<NewT> cast(const borrowed_buffer::Buffer<OldT>& input_buffer)
 
 template <typename T>
 Tensor create_owned_tensor(std::vector<T>&& data, const Shape& shape, DataType data_type, Layout layout) {
-    auto buffer = owned_buffer::create(std::move(data));
+    auto buffer = tt::tt_metal::owned_buffer::create(std::move(data));
     auto storage = OwnedStorage{std::move(buffer)};
     return Tensor(std::move(storage), shape, data_type, layout);
 }
 
 template <typename T>
 inline Tensor create_tensor_from_buffer(
-    const borrowed_buffer::Buffer<T>& input_buffer,
+    const tt::tt_metal::borrowed_buffer::Buffer<T>& input_buffer,
     const Shape& shape,
     const Layout& input_layout,
     const DataType& dtype) {
@@ -144,15 +144,15 @@ inline Tensor create_tensor_from_buffer(
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             auto data = cast<float, T>(input_buffer);
-            auto buffer = owned_buffer::create<float>(std::move(data));
+            auto buffer = tt::tt_metal::owned_buffer::create<float>(std::move(data));
             auto tensor =
                 Tensor(OwnedStorage{std::move(buffer)}, shape, DataType::FLOAT32, Layout::ROW_MAJOR).to(Layout::TILE);
-            auto output_float_data = owned_buffer::get_as<float>(tensor).get();
+            auto output_float_data = tt::tt_metal::owned_buffer::get_as<float>(tensor).get();
             auto output_packed_data =
                 dtype == DataType::BFLOAT8_B
                     ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
                     : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+            auto output_buffer = tt::tt_metal::owned_buffer::create<uint32_t>(std::move(output_packed_data));
             return Tensor(
                 OwnedStorage{std::move(output_buffer)}, shape, dtype, Layout::TILE);  // has to be in tile layout
         }

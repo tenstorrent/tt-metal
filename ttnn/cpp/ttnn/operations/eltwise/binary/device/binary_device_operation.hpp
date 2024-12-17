@@ -147,15 +147,15 @@ struct BinaryDeviceOperation {
 
     struct BroadcastHeightAndWidthMultiCore {
         struct shared_variables_t {
-            KernelHandle binary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
-            KernelHandle bcast_kernel_id;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle bcast_kernel_id;
             CoreCoord compute_with_storage_grid_size;
-            CBHandle cb_src0;
+            tt::tt_metal::CBHandle cb_src0;
             uint32_t src0_single_tile_size;
             uint32_t src1_single_tile_size;
             uint32_t dst_single_tile_size;
-            CBHandle cb_output;
+            tt::tt_metal::CBHandle cb_output;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -173,10 +173,10 @@ struct BinaryDeviceOperation {
 
     struct BroadcastHeightMultiCoreSharded {
         struct shared_variables_t {
-            KernelHandle binary_reader_kernel_id;
-            KernelHandle bcast_kernel_id;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id;
+            tt::tt_metal::KernelHandle bcast_kernel_id;
             uint32_t cb_src0;
-            CBHandle out_cb;
+            tt::tt_metal::CBHandle out_cb;
             uint32_t ncores_x;
         };
 
@@ -196,10 +196,10 @@ struct BinaryDeviceOperation {
 
     struct BroadcastHeightMultiCoreShardedOptimized {
         struct shared_variables_t {
-            KernelHandle binary_reader_kernel_id;
-            KernelHandle bcast_kernel_id;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id;
+            tt::tt_metal::KernelHandle bcast_kernel_id;
             uint32_t cb_src0;
-            CBHandle out_cb;
+            tt::tt_metal::CBHandle out_cb;
             uint32_t ncores_x;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -237,7 +237,7 @@ struct BinaryDeviceOperation {
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    static operation::OpPerformanceModel create_op_performance_model(
+    static tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
         const operation_attributes_t& attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);

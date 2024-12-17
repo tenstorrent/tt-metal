@@ -43,7 +43,7 @@ struct OptimizedConvBlockConfig {
     uint32_t out_subblock_w_ntiles;
 };
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const Tensor& a, const Tensor &b, const std::optional<const Tensor>& bias,
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const Tensor& a, const Tensor &b, const std::optional<const Tensor>& bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
@@ -109,9 +109,9 @@ struct OptimizedConvNew {
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
 
-    operation::OpPerformanceModel create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const;
+    tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<Tensor> &output_tensors) const;
 
     static constexpr auto attribute_names = std::make_tuple(
         "parallelization_config",

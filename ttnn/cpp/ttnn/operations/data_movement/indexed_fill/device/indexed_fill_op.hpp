@@ -15,11 +15,11 @@ struct IndexedFill {
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
-operation::ProgramWithCallbacks indexed_fill_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks indexed_fill_multi_core(
     const Tensor& batch_ids, const Tensor& input_a, const Tensor& input_b, const Tensor& output);
 
 }  // namespace ttnn::operations::data_movement
