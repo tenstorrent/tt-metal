@@ -23,7 +23,11 @@ using ttnn::operations::unary::UnaryWithParam;
 
 namespace reuse_mcast_1d_optimized_helpers {
 
-uint32_t get_preferred_noc(const ttnn::CoreCoord src, const ttnn::CoreCoord dst, const tt_metal::Device* device) {
+uint32_t get_preferred_noc(
+    const ttnn::CoreCoord src,
+    const ttnn::CoreCoord dst,
+    const tt_metal::Device* device,
+    const bool use_hop_cores = false) {
     /*
         NOC0: Preferred +x -> +y
         NOC1: Preferred -y -> -x
@@ -51,7 +55,7 @@ uint32_t get_preferred_noc(const ttnn::CoreCoord src, const ttnn::CoreCoord dst,
     // std::cout << "src: (" << src_x << ", " << src_y << "), dst: (" << dst_x << ", " << dst_y << "), noc: " << noc <<
     // std::endl;
 
-    return noc;
+    return use_hop_cores ? 1 : noc;
 }
 
 operation::ProgramWithCallbacks create_program_mcast_in0(
@@ -1701,6 +1705,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
+    bool dst_full_sync_en,
     CoreCoord compute_with_storage_grid_size,
     uint32_t B,
     uint32_t M,
@@ -1713,6 +1718,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t per_core_M,
     uint32_t per_core_N,
     std::optional<UnaryWithParam> fused_activation,
+    CoreRangeSet hop_cores,
     tt_metal::Buffer* in0_buffer,
     tt_metal::Buffer* in1_buffer,
     tt_metal::Buffer* out_buffer,
@@ -1745,8 +1751,16 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     /* Core setup */
     constexpr bool row_major = true;
     CoreRangeSet all_cores = a.shard_spec().value().grid;
+    std::vector<CoreRange> ring_list = all_cores.ranges();
+    std::vector<CoreRange> hop_list = hop_cores.ranges();
+    ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
+
+    CoreRangeSet ring_cores = CoreRangeSet(ring_list);
     const uint32_t num_cores = all_cores.num_cores();
     const uint32_t ring_size = num_cores;
+
+    uint32_t num_hop_cores = hop_cores.num_cores();
+    bool use_hop_cores = num_hop_cores > 0;
 
     /* in0 */
     uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
@@ -1774,7 +1788,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
 
     /* semaphores */
-    auto in0_signal_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_signal_semaphore_id = tt_metal::CreateSemaphore(program, ring_cores, INVALID);
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -1857,7 +1871,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
-        all_cores,
+        ring_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
@@ -1882,6 +1896,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines});
@@ -1893,7 +1908,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .set_page_size(src0_cb_index, in0_single_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile)
             .set_globally_allocated_address(*in0_buffer);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, ring_cores, src0_cb_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     CBHandle cb_src1;
@@ -1936,7 +1951,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in2_single_tile_size)
             .set_tile_dims(src2_cb_index, in0_tile);
-    auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
+    auto cb_src2 = tt_metal::CreateCircularBuffer(program, ring_cores, src2_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16
     uint32_t interm0_cb_index = tt::CBIndex::c_24;
@@ -1978,21 +1993,32 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     /* Runtime args */
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+    const auto& hcores = corerange_to_cores(hop_cores, std::nullopt, row_major);
+
     for (uint32_t i = 0; i < num_cores; ++i) {
+        bool send_to_hop_core = i == 0 && use_hop_cores;
+
         const auto& core = cores[i];
         const auto& core_noc = device->worker_core_from_logical_core(core);
 
         /* in0 */
-        uint32_t next_i = i == 0 ? num_cores - 1 : i - 1;
-        const auto& next_core = cores[next_i % num_cores];
+        CoreCoord next_core;
+        if (send_to_hop_core) {
+            next_core = hcores[0];  // Send to first hop core
+        } else {
+            uint32_t next_i = i == 0 ? num_cores - 1 : i - 1;
+            next_core = cores[next_i % num_cores];
+        }
         const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
-        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_hop_cores);
 
         std::vector<uint32_t> mm_in0_args = {
             i,                // ring_index
             next_core_noc.x,  // next_core_noc_x
             next_core_noc.y,  // next_core_noc_y
             noc,
+            (std::uint32_t)false,  // is_hop_core
+            (std::uint32_t)false,  // end_of_hop
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
 
@@ -2009,6 +2035,28 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         };
 
         tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_compute_args);
+    }
+
+    for (uint32_t i = 0; i < num_hop_cores; ++i) {
+        bool end_of_hop = i == num_hop_cores - 1;
+
+        const auto& core = hcores[i];
+        const auto& core_noc = device->worker_core_from_logical_core(core);
+
+        /* in0 */
+        CoreCoord next_core = end_of_hop ? cores[num_cores - 1] : hcores[i + 1];
+        const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_hop_cores);
+
+        std::vector<uint32_t> mm_in0_args = {
+            0,                // ring_index
+            next_core_noc.x,  // next_core_noc_x
+            next_core_noc.y,  // next_core_noc_y
+            noc,
+            (std::uint32_t)true,        // is_hop_core
+            (std::uint32_t)end_of_hop,  // end_of_hop
+        };
+        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
     }
 
     auto override_runtime_arguments_callback =
@@ -2074,6 +2122,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     const std::optional<UnaryWithParam>& fused_activation,
     bool mcast_in0,
     bool gather_in0,
+    CoreRangeSet hop_cores,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
@@ -2167,6 +2216,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
         TT_FATAL(!untilize_out, "Untilize out is not suported wit gather_in0 mode");
     }
 
+    if (!gather_in0) {
+        TT_FATAL(hop_cores.empty(), "Hop cores are not supported for any mode besides gather_in0.");
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -2186,6 +2239,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             fp32_dest_acc_en,
             math_approx_mode,
             packer_l1_acc,
+            dst_full_sync_en,
             compute_with_storage_grid_size,
             B,
             Mt,
@@ -2198,6 +2252,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             per_core_M,
             per_core_N,
             fused_activation,
+            hop_cores,
             in0_buffer,
             in1_buffer,
             out_buffer,
@@ -2311,6 +2366,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const std::optional<UnaryWithParam>& fused_activation,
     bool mcast_in0,
     bool gather_in0,
+    CoreRangeSet hop_cores,
     bool untilize_out,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers) {
@@ -2337,6 +2393,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
         std::move(fused_activation),
         mcast_in0,
         gather_in0,
+        hop_cores,
         untilize_out,
         empty_fused_op_signaler,
         global_cb,
@@ -2378,6 +2435,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
         config.fused_activation,
         config.mcast_in0,
         config.gather_in0,
+        config.hop_cores,
         untilize_out,
         fused_op_signaler,
         global_cb,
