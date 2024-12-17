@@ -234,6 +234,7 @@ on:
           - eltwise.binary.multiply.multiply_scalar_pytorch2
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
+          - eltwise.binary.div.div_forge
           - eltwise.binary.div_no_nan.div_no_nan
           - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
@@ -247,9 +248,10 @@ on:
           - eltwise.binary.logical_and.logical_and_forge
           - eltwise.binary.polyval.polyval
           - eltwise.binary.remainder.remainder
+          - eltwise.binary.remainder.remainder_scalar_pytorch2
+          - eltwise.binary.remainder.remainder_forge
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
-          - eltwise.binary.remainder.remainder_scalar_pytorch2
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
           - eltwise.binary.eq.eq_scalar_pytorch2
@@ -300,6 +302,7 @@ on:
           - eltwise.ternary.lerp.lerp
           - eltwise.ternary.where.where
           - eltwise.ternary.where.where_pytorch2
+          - eltwise.ternary.where.where_forge
           - eltwise.ternary_backward.addcmul_bw
           - eltwise.ternary_backward.addcdiv_bw
           - embedding.embedding
