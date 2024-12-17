@@ -22,7 +22,7 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
     const std::optional<DataType>& data_type_arg) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
-    bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
+    bool row_wise = shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;
     std::visit(

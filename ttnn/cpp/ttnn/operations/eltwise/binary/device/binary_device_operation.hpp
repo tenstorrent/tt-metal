@@ -56,8 +56,8 @@ struct BinaryDeviceOperation {
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
             tt::tt_metal::KernelHandle eltwise_binary_kernel_id;
             tt::tt_metal::CBHandle cb_src0;
-            CBHandle cb_src1;
-            CBHandle cb_output;
+            tt::tt_metal::CBHandle cb_src1;
+            tt::tt_metal::CBHandle cb_output;
             CoreCoord compute_with_storage_grid_size;
             uint32_t src0_single_tile_size;
             uint32_t src1_single_tile_size;
@@ -79,12 +79,12 @@ struct BinaryDeviceOperation {
 
     struct ElementWiseMultiCoreSfpu {
         struct shared_variables_t {
-            KernelHandle binary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
-            KernelHandle eltwise_binary_kernel_id;
-            CBHandle cb_src0;
-            CBHandle cb_src1;
-            CBHandle cb_output;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle eltwise_binary_kernel_id;
+            tt::tt_metal::CBHandle cb_src0;
+            tt::tt_metal::CBHandle cb_src1;
+            tt::tt_metal::CBHandle cb_output;
             CoreCoord compute_with_storage_grid_size;
             uint32_t src0_single_tile_size;
             uint32_t src1_single_tile_size;
@@ -105,9 +105,9 @@ struct BinaryDeviceOperation {
     };
     struct BroadcastWidthMultiCore {
         struct shared_variables_t {
-            KernelHandle binary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
-            KernelHandle bcast_kernel_id;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle bcast_kernel_id;
             CoreCoord compute_with_storage_grid_size;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -126,9 +126,9 @@ struct BinaryDeviceOperation {
 
     struct BroadcastHeightMultiCore {
         struct shared_variables_t {
-            KernelHandle binary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
-            KernelHandle bcast_kernel_id;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle bcast_kernel_id;
             CoreCoord compute_with_storage_grid_size;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

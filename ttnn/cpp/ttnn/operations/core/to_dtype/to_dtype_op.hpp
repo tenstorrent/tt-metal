@@ -66,7 +66,7 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
                 .get();
         auto float_unpacked_data =
             unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
+        buffer = tt::tt_metal::owned_buffer::create<float>(std::move(float_unpacked_data));
         input_dtype = DataType::FLOAT32;
     }
 
