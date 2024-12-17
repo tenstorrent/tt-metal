@@ -131,8 +131,6 @@ struct Tensor {
 
     void perform_cleanup_for_async_mode();
 
-    void deepcopy(const Tensor& other);
-
     void populate_buffers_and_metadata(const Tensor& other);
 
     void deallocate(bool force = false);
@@ -208,8 +206,6 @@ struct Tensor {
         bool blocking = true,
         uint8_t cq_id = ttnn::DefaultQueueId,
         const std::vector<SubDeviceId>& sub_device_ids = {}) const;
-
-    Tensor cpu_sharded() const;
 
     Tensor unpad(const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) const;
 
