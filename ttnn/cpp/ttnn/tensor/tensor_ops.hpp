@@ -41,8 +41,6 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
 Tensor tensor_cpu(
     const Tensor& input_tensor, bool blocking, uint8_t cq_id, const std::vector<SubDeviceId>& sub_device_ids);
 
-Tensor tensor_cpu_sharded(const Tensor& input_tensor);
-
 void tensor_print(const Tensor& input_tensor);
 
 Tensor tensor_pad(

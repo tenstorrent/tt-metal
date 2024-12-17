@@ -1161,13 +1161,6 @@ void pytensor_module(py::module& m_tensor) {
 
                 tt_tensor = tt_tensor.cpu()
         )doc")
-        .def("cpu_sharded", &Tensor::cpu_sharded, R"doc(
-            Move TT Tensor from TT accelerator device to host device in sharded orientation.
-
-            .. code-block:: python
-
-                tt_tensor = tt_tensor.cpu_sharded()
-        )doc")
         .def(
             "to",
             py::overload_cast<Layout, Device*>(&Tensor::to, py::const_),

@@ -482,21 +482,9 @@ void Tensor::perform_cleanup_for_async_mode() {
     }
 }
 
-void Tensor::deepcopy(const Tensor& other) {
-    ZoneScoped;
-    // Wait until the tensor being copied is populated
-    other.wait_for_tensor_data_populated();
-    // Populate tensor metadata
-    this->set_storage(other.get_storage());
-    this->set_tensor_spec(other.get_tensor_spec());
-    // Set metadata populated flag for getters
-    this->tensor_attributes->num_workers_completed++;
-}
-
 void Tensor::populate_buffers_and_metadata(const Tensor& other) {
     ZoneScoped;
-    // Similar to deepcopy, but to be applied on a tensor that has an empty storage
-    // container initialized. Require tensor storage to be correctly initialized.
+    // Applied on a tensor that has an empty storage container initialized.
     this->set_tensor_spec(other.get_tensor_spec());
     // Populate storage container with buffers + shapes
     std::visit(
@@ -697,8 +685,6 @@ Tensor Tensor::to(
 Tensor Tensor::cpu(bool blocking, uint8_t cq_id, const std::vector<SubDeviceId>& sub_device_ids) const {
     return tensor_ops::tensor_cpu(*this, blocking, cq_id, sub_device_ids);
 }
-
-Tensor Tensor::cpu_sharded() const { return tensor_ops::tensor_cpu_sharded(*this); }
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
