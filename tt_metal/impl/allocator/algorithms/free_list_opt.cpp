@@ -4,6 +4,7 @@
 
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 #include "common/assert.hpp"
+#include "llrt/hal.hpp"
 #include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -39,7 +40,12 @@ namespace tt_metal {
 namespace allocator {
 
 FreeListOpt::FreeListOpt(
-    DeviceAddr max_size_bytes, DeviceAddr offset_bytes, DeviceAddr min_allocation_size, DeviceAddr alignment) :
+    DeviceAddr max_size_bytes,
+    DeviceAddr offset_bytes,
+    DeviceAddr min_allocation_size,
+    DeviceAddr alignment,
+    SearchPolicy policy) :
+    policy_(policy),
     size_segregated_count((num_segerated_classes(max_size_bytes, size_segregated_base))),
     Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment) {
     // Reduce reallocations by reserving memory for free list components
@@ -103,27 +109,44 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     TT_ASSERT(size_segregated_index < size_segregated_count, "Size segregated index out of bounds");
     std::vector<size_t>* segregated_list = nullptr;
     size_t segregated_item_index = 0;
+    DeviceAddr best_address = bottom_up ? ~(DeviceAddr)0 : 0;
 
     for (size_t i = size_segregated_index; i < free_blocks_segregated_by_size_.size(); i++) {
         auto& free_blocks = free_blocks_segregated_by_size_[i];
         ssize_t increment = bottom_up ? 1 : -1;
         for (ssize_t j = bottom_up ? 0 : free_blocks.size() - 1; j >= 0 && j < free_blocks.size(); j += increment) {
             size_t block_index = free_blocks[j];
-            if (block_size_[block_index] == alloc_size) {
-                target_block_index = block_index;
-                segregated_list = &free_blocks;
-                segregated_item_index = j;
-                break;
-            } else if (
-                block_size_[block_index] >= alloc_size &&
-                (target_block_index == -1 || block_size_[block_index] < block_size_[target_block_index])) {
-                target_block_index = block_index;
-                segregated_list = &free_blocks;
-                segregated_item_index = j;
+            if (policy_ == SearchPolicy::BEST) {
+                if (block_size_[block_index] == alloc_size) {
+                    target_block_index = block_index;
+                    segregated_list = &free_blocks;
+                    segregated_item_index = j;
+                    break;
+                } else if (
+                    block_size_[block_index] >= alloc_size &&
+                    (target_block_index == -1 || block_size_[block_index] < block_size_[target_block_index])) {
+                    target_block_index = block_index;
+                    segregated_list = &free_blocks;
+                    segregated_item_index = j;
+                }
+                if (target_block_index != -1) {
+                    break;
+                }
+            } else {
+                if (block_size_[block_index] < alloc_size) {
+                    continue;
+                }
+
+                bool address_better =
+                    bottom_up ? block_address_[block_index] < best_address : block_address_[block_index] > best_address;
+                if (target_block_index == -1 || address_better) {
+                    target_block_index = block_index;
+                    segregated_list = &free_blocks;
+                    segregated_item_index = j;
+                    best_address = block_address_[block_index];
+                    break;
+                }
             }
-        }
-        if (target_block_index != -1) {
-            break;
         }
     }
 

@@ -22,8 +22,16 @@ namespace allocator {
 // - Metadata reuse to avoid allocations
 class FreeListOpt : public Algorithm {
 public:
+    enum class SearchPolicy {
+        FIRST,
+        BEST,
+    };
     FreeListOpt(
-        DeviceAddr max_size_bytes, DeviceAddr offset_bytes, DeviceAddr min_allocation_size, DeviceAddr alignment);
+        DeviceAddr max_size_bytes,
+        DeviceAddr offset_bytes,
+        DeviceAddr min_allocation_size,
+        DeviceAddr alignment,
+        SearchPolicy policy = SearchPolicy::BEST);
     void init() override;
 
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const override;
@@ -107,6 +115,10 @@ private:
     std::optional<size_t> get_and_remove_from_alloc_table(DeviceAddr address);
 
     void update_lowest_occupied_address(DeviceAddr address);
+
+    size_t find_free_block(DeviceAddr size, bool bottom_up);
+
+    SearchPolicy policy_;
 };
 
 }  // namespace allocator
