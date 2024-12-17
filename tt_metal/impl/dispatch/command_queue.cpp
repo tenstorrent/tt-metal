@@ -258,7 +258,6 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
             command_sequence.add_data((char*)this->src + src_address_offset, page_size_to_copy, this->padded_page_size);
             src_address_offset += page_size_to_copy;
         }
-        // try passing in second parameter - pass in start addr or start idx?
     } else {
         uint32_t unpadded_src_offset = (((buffer_addr_offset / this->padded_page_size) * num_banks) +
                                         (this->dst_page_index - this->orig_dst_page_index)) *
@@ -274,7 +273,7 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
                 src_address_offset += this->buffer.page_size();
             }
         } else {
-            command_sequence.add_data((char*)this->src + unpadded_src_offset, data_size_bytes, data_size_bytes/* + (this->dst_page_index * this->buffer.page_size())*/);
+            command_sequence.add_data((char*)this->src + unpadded_src_offset, data_size_bytes, data_size_bytes);
         }
     }
 }
@@ -335,7 +334,6 @@ void EnqueueWriteBufferCommand::process() {
         cmd_sequence_sizeB += hal.get_alignment(HalMemType::HOST) * num_worker_counters;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
     }
 
-    // const uint32_t offset_size_bytes = this->dst_page_index * this->padded_page_size;
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
@@ -1584,7 +1582,6 @@ void HWCommandQueue::copy_into_user_space(
 
         remaining_bytes_to_read -= bytes_xfered;
 
-        // interleaved case + height sharded case
         if (buffer_page_mapping == nullptr) {
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
             if (page_size == padded_page_size) {
