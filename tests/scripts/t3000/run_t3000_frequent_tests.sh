@@ -67,6 +67,9 @@ run_t3000_llama3_tests() {
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
+  # Run chunked prefill test for llama3-1B
+  LLAMA_DIR=$llama1b WH_ARCH_YAML=$wh_arch_yaml pytest models/demos/llama3/tests/test_llama_chunked_generation.py; fail+=$?
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
