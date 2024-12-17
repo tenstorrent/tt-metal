@@ -30,6 +30,7 @@ on:
           - N150
           - N300
           - BH
+          - BH-P150
       timeout:
         required: false
         type: number
