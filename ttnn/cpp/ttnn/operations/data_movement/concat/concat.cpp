@@ -145,8 +145,8 @@ MassagedConcat build_untilize_rm_retilize_concat(
             if (output.get_layout() != ttnn::TILE_LAYOUT) {
                 auto padded = pad_to_tile_vol(queue_id, output, 0.0f, true, output.memory_config());
                 concat_db_print(true, "[DEBUG] padded to tile layout, now tilizing.");
-                auto tilized =
-                    ttnn::tilize_with_val_padding(padded, padded.get_legacy_shape(), 0.0f, output.memory_config());
+                auto tilized = ttnn::tilize_with_val_padding(
+                    padded, ttnn::SimpleShape(padded.get_legacy_shape()), 0.0f, output.memory_config());
                 concat_db_print(true, "[DEBUG] tilized");
                 // need to reshape tilized result to logical concat output shape
                 auto reshaped = ttnn::reshape(

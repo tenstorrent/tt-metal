@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement {
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::LegacyShape& output_tensor_shape,
+    const ttnn::SimpleShape& output_tensor_shape,
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -36,13 +36,74 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::LegacyShape& output_tensor_shape,
+    const ttnn::SimpleShape& output_tensor_shape,
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
     return invoke(
         DefaultQueueId, input_tensor, output_tensor_shape, pad_value, memory_config, output_dtype, use_multicore);
+}
+
+ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+    uint8_t queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<uint32_t>& output_tensor_shape,
+    const PadValue pad_value,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    bool use_multicore) {
+    return operation::run(
+               TilizeWithValPadding{
+                   ttnn::SimpleShape(output_tensor_shape),
+                   pad_value,
+                   memory_config.value_or(input_tensor.memory_config()),
+                   output_dtype.value_or(input_tensor.get_dtype()),
+                   use_multicore},
+               {input_tensor},
+               {},
+               {},
+               queue_id)
+        .at(0);
+}
+
+ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<uint32_t>& output_tensor_shape,
+    const PadValue pad_value,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    bool use_multicore) {
+    return invoke(
+        DefaultQueueId, input_tensor, output_tensor_shape, pad_value, memory_config, output_dtype, use_multicore);
+}
+
+ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+    uint8_t queue_id,
+    const ttnn::Tensor& input_tensor,
+    const PadValue pad_value,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    bool use_multicore) {
+    using namespace tt::constants;
+    std::array<uint32_t, 4> shape;
+    auto input_shape = input_tensor.get_shape();
+    shape[0] = input_shape[0];
+    shape[1] = input_shape[1];
+    shape[2] = tt::round_up(shape[2], TILE_HEIGHT);
+    shape[3] = tt::round_up(shape[3], TILE_WIDTH);
+
+    return invoke(
+        queue_id, input_tensor, ttnn::SimpleShape(shape), pad_value, memory_config, output_dtype, use_multicore);
+}
+
+ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+    const ttnn::Tensor& input_tensor,
+    const PadValue pad_value,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    bool use_multicore) {
+    return invoke(DefaultQueueId, input_tensor, pad_value, memory_config, output_dtype, use_multicore);
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
@@ -52,8 +113,10 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     std::optional<DataType> output_dtype,
     bool use_multicore) {
     using namespace tt::constants;
-    auto shape = input_tensor.get_legacy_shape();
-
+    std::array<uint32_t, 4> shape;
+    auto input_shape = input_tensor.get_shape();
+    shape[0] = input_shape[0];
+    shape[1] = input_shape[1];
     shape[2] = tt::round_up(shape[2], TILE_HEIGHT);
     shape[3] = tt::round_up(shape[3], TILE_WIDTH);
 
@@ -64,7 +127,7 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
         pad_value = (uint32_t)0;
     }
     return ExecuteTilizeWithValPadding::invoke(
-        queue_id, input_tensor, shape, pad_value, memory_config, output_dtype, use_multicore);
+        queue_id, input_tensor, ttnn::SimpleShape(shape), pad_value, memory_config, output_dtype, use_multicore);
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
