@@ -68,6 +68,11 @@ void log_external_operation(
 
 template <typename T>
 Tensor create_owned_tensor(T* data_ptr, const ttnn::TensorSpec& tensor_spec) {
+    if (tensor_spec.memory_config().is_sharded()) {
+        TT_FATAL(
+            tensor_spec.memory_config().shard_spec.has_value(),
+            "Sharded tensors must have a shard spec when converting to tt tensors!");
+    }
     std::size_t num_elements = tensor_spec.logical_shape().volume();
     auto logical_data = std::vector<T>(data_ptr, data_ptr + num_elements);
 
@@ -472,6 +477,12 @@ Tensor convert_python_tensors_to_tt_tensors(
 template <typename T>
 owned_buffer::Buffer<T> create_row_major_owned_buffer(
     owned_buffer::Buffer<T> owned_buffer, const ttnn::TensorSpec& tensor_spec, const bool legacy_output) {
+    if (tensor_spec.memory_config().is_sharded()) {
+        TT_FATAL(
+            tensor_spec.memory_config().shard_spec.has_value(),
+            "Sharded tensors must have a shard spec when converting from tt tensors!");
+    }
+
     if (legacy_output) {
         if (tensor_spec.layout() == Layout::TILE) {
             auto data = tensor_impl::convert_layout_tile_to_row_major(

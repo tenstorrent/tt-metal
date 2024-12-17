@@ -152,6 +152,7 @@ grid_size = [8, 7]
                     [64, 64],
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
+                    ttnn.ShardMode.LOGICAL,
                 ),
             ),
         ),
@@ -169,8 +170,15 @@ grid_size = [8, 7]
                 ),
             ),
         ),
+        (
+            (1, 2, 3, 4),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.INTERLEAVED,
+                ttnn.BufferType.DRAM,
+            ),
+        ),
     ],
-    ids=["test1", "test2"],
+    ids=["test1", "test2", "test3"],
 )
 def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layout, tile, device):
     torch.manual_seed(0)
@@ -185,16 +193,18 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
     else:
         py_tensor = torch.rand(shape, dtype=dtype)
 
-    tt_tensor = ttnn.Tensor(py_tensor, tt_dtype, device, layout, memory_config, tile)
-    # tt_tensor = ttnn.from_torch(py_tensor, tt_dtype, device=device, layout=layout, memory_config=memory_config, tile=tile)
+    tt_tensor_1 = ttnn.Tensor(py_tensor, tt_dtype, device, layout, memory_config, tile)
+    tt_tensor_2 = ttnn.from_torch(
+        py_tensor, tt_dtype, device=device, layout=layout, memory_config=memory_config, tile=tile
+    )
 
-    tt_tensor = tt_tensor.cpu()
+    tt_tensor_1 = tt_tensor_1.cpu()
+    tt_tensor_2 = tt_tensor_2.cpu()
 
-    py_tensor_after_round_trip = tt_tensor.to_torch_with_logical_shape()
-    # py_tensor_after_round_trip = ttnn.to_torch(tt_tensor)
-
-    assert py_tensor.dtype == py_tensor_after_round_trip.dtype
-    assert py_tensor.shape == py_tensor_after_round_trip.shape
+    py_tensor_after_round_trip_1 = tt_tensor_1.to_torch_with_logical_shape()
+    py_tensor_after_round_trip_2 = tt_tensor_2.to_torch_with_logical_shape()
+    py_tensor_after_round_trip_3 = ttnn.to_torch(tt_tensor_1)
+    py_tensor_after_round_trip_4 = ttnn.to_torch(tt_tensor_2)
 
     allclose_kwargs = {}
     if tt_dtype == ttnn.bfloat8_b:
@@ -202,5 +212,8 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
     elif tt_dtype == ttnn.bfloat4_b:
         allclose_kwargs = dict(atol=0.2)
 
-    passing = torch.allclose(py_tensor, py_tensor_after_round_trip, **allclose_kwargs)
+    passing = torch.allclose(py_tensor, py_tensor_after_round_trip_1, **allclose_kwargs)
+    passing = torch.allclose(py_tensor, py_tensor_after_round_trip_2, **allclose_kwargs)
+    passing = torch.allclose(py_tensor, py_tensor_after_round_trip_3, **allclose_kwargs)
+    passing = torch.allclose(py_tensor, py_tensor_after_round_trip_4, **allclose_kwargs)
     assert passing
