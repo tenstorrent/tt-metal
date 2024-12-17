@@ -172,7 +172,10 @@ class TtTransformer(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-        rope_idxs = self.rope_setup.get_rot_idxs(current_pos, on_host=True)
+        rot_current_pos = torch.maximum(
+            current_pos, torch.tensor(0, dtype=torch.int64)
+        )  # Ensure position indices are non-negative
+        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,

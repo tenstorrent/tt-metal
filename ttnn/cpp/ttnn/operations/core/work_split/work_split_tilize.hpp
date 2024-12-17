@@ -183,11 +183,7 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     uint32_t blocks_per_core,
     bool has_cliff,
     uint32_t nblocks_per_core_cliff) {
-    TT_FATAL(
-        padding.rank() >= 2 && padding.rank() <= 4,
-        "Only 2D, 3D, and 4D tensors are supported. Shape: {} {}",
-        logical_shape,
-        padding);
+    TT_FATAL(padding.rank() >= 2 && padding.rank() <= 4, "Rank needs to be >=2. Shape: {} {}", logical_shape, padding);
 
     auto input_w = logical_shape.rank() >= 4 ? logical_shape[-4] : 1;
     auto input_z = logical_shape.rank() >= 3 ? logical_shape[-3] : 1;
