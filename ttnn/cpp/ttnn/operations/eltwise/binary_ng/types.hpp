@@ -10,7 +10,6 @@ enum class BinaryOpType {
     ADD,
     SUB,
     MUL,
-    DIV,
     GT,
     LT,
     LTE,
@@ -19,11 +18,13 @@ enum class BinaryOpType {
     NE,
     SQUARED_DIFFERENCE,
     BIAS_GELU,
+    LOGADDEXP,
     LOGICAL_AND,
     LOGICAL_OR,
     LOGICAL_XOR,
     LDEXP,
-    LOGADDEXP,
     LOGADDEXP2,
+    DIV_FAST
 };
+
 }
