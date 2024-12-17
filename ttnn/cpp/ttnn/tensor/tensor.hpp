@@ -131,13 +131,49 @@ struct Tensor {
 
     void perform_cleanup_for_async_mode();
 
-    void deepcopy(const Tensor& other);
-
     void populate_buffers_and_metadata(const Tensor& other);
 
     void deallocate(bool force = false);
 
     std::vector<Device*> get_workers(bool blocking = false) const;
+
+    // Converts a buffer of elements of type `T` to a `Tensor`.
+    // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
+    // elements have to match `spec`.
+    //
+    // The data in the buffer is copied into a tensor with an owned storage.
+    //
+    // IMPORTANT: this function supports a limited subset of types (float32, bfloat16, uint32_t, int32_t),
+    // and only row-major layout.
+    //
+    // TODO:
+    //   1. add support for returning a tensor with a borrowed storage based off the buffer.
+    //   2. add support for sharding.
+    //   3. add support for block float formats.
+    //   4. add support for tilized layouts.
+    //   5. add support for on-device tensor creation.
+    template <typename T>
+    static Tensor from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec);
+
+    // Same as `from_span`, but takes a vector instead.
+    template <typename T>
+    static Tensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec) {
+        return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), spec);
+    }
+
+    // Converts a `Tensor` to a `std::vector<T>`.
+    // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
+    // the `Tensor`.
+    //
+    // If the tensor resides on a device, it will be brough back to host.
+    //
+    // IMPORTANT: this function supports a limited subset of types (float32, bfloat16, uint32_t, int32_t).
+    //
+    // TODO:
+    //   1. add support for sharding.
+    //   2. add support for block float formats.
+    template <typename T>
+    std::vector<T> to_vector() const;
 
     Tensor to(
         Device* target_device,
@@ -171,8 +207,6 @@ struct Tensor {
         uint8_t cq_id = ttnn::DefaultQueueId,
         const std::vector<SubDeviceId>& sub_device_ids = {}) const;
 
-    Tensor cpu_sharded() const;
-
     Tensor unpad(const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) const;
 
     Tensor pad_to_tile(float pad_value) const;
@@ -188,6 +222,8 @@ struct Tensor {
     // ======================================================================================
     //                                  Low Level APIs
     // ======================================================================================
+    Tensor reshape(const ttnn::SimpleShape& new_shape) const;
+    Tensor reshape(const ttnn::Shape& new_shape) const;
 
     // ======================================================================================
     //                                      Getters

@@ -51,7 +51,8 @@ bool operator==(const AllGatherTensor&, const AllGatherTensor&) {
 }
 bool operator==(const ShardTensor& lhs, const ShardTensor& rhs) { return lhs.shard_dimension == rhs.shard_dimension; }
 bool operator==(const ShardTensor2D& lhs, const ShardTensor2D& rhs) {
-    return lhs.shard_mesh.x == rhs.shard_mesh.x && lhs.shard_mesh.y == rhs.shard_mesh.y;
+    return lhs.shard_mesh.x == rhs.shard_mesh.x &&  //
+           lhs.shard_mesh.y == rhs.shard_mesh.y;
 }
 
 }  // namespace tt::tt_metal

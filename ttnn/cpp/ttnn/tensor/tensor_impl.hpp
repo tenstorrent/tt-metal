@@ -192,9 +192,6 @@ Tensor to_host(
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 template <typename T>
-Tensor to_host_sharded(const Tensor& tensor);
-
-template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     Device* target_device,
