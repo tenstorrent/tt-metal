@@ -123,7 +123,7 @@ Tensor to_layout_impl_on_device(
     }
 
     auto tensor = ttnn::tilize_with_val_padding(
-        tensor_arg, result_spec.shape().value, pad_value_variant, output_memory_config, dtype, use_multicore_tilize);
+        tensor_arg, result_spec.padded_shape(), pad_value_variant, output_memory_config, dtype, use_multicore_tilize);
     return ttnn::reshape(tensor, tensor_arg.logical_shape());
 }
 
