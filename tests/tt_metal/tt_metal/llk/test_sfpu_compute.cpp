@@ -151,7 +151,6 @@ bool run_sfpu_test(tt_metal::Device* device, const SfpuConfig& test_config) {
 
     auto input_dram_buffer = CreateBuffer(input_dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
     auto output_dram_buffer = CreateBuffer(output_dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
@@ -182,15 +181,13 @@ bool run_sfpu_test(tt_metal::Device* device, const SfpuConfig& test_config) {
     // Same runtime args for every core
     vector<uint32_t> reader_rt_args = {
         (uint32_t)input_dram_byte_address,
-        (uint32_t)input_dram_noc_xy.x,
-        (uint32_t)input_dram_noc_xy.y,
+        (uint32_t)0,
         (uint32_t)num_tiles,
     };
 
     vector<uint32_t> writer_rt_args = {
         (uint32_t)output_dram_byte_address,
-        (uint32_t)output_dram_noc_xy.x,
-        (uint32_t)output_dram_noc_xy.y,
+        (uint32_t)0,
         (uint32_t)num_tiles,
     };
 
