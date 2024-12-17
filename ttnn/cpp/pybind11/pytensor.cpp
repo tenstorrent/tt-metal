@@ -21,6 +21,9 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include "ttnn/common/constants.hpp"
+#include "ttnn/operations/core/core.hpp"
+
 using namespace tt::tt_metal;
 
 namespace py = pybind11;
@@ -1725,7 +1728,7 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "reshape",
             [](Tensor& self, int N, int C, int H, int W) {
-                return self.reshape(infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
+                ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
             },
             R"doc(
                 Reshapes TT tensor
@@ -1736,7 +1739,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return self.reshape(shape); },
+            [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return ttnn::reshape(self, shape); },
             R"doc(
                 Reshapes TT tensor
 
@@ -1747,7 +1750,7 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "reshape",
             [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
-                return self.reshape(infer_dims_for_reshape(self, shape));
+                return ttnn::reshape(self, infer_dims_for_reshape(self, shape));
             },
             R"doc(
                 Reshapes TT tensor
