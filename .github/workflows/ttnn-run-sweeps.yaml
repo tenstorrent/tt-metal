@@ -118,6 +118,7 @@ on:
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.relu_max.relu_max_sharded
           - eltwise.unary.softplus.softplus
+          - eltwise.unary.softplus.softplus_sharded
           - eltwise.unary.selu.selu
           - eltwise.unary.softshrink.softshrink_sharded
           - eltwise.unary_backward.fill_zero_bw
