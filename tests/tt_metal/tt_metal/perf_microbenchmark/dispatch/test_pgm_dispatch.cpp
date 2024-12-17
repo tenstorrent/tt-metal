@@ -8,6 +8,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/device.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
+#include <benchmark/benchmark.h>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -24,31 +25,55 @@ constexpr uint32_t MAX_ARGS = 255;
 using std::vector;
 using namespace tt;
 
-uint32_t iterations_g = DEFAULT_ITERATIONS;
-uint32_t warmup_iterations_g = DEFAULT_WARMUP_ITERATIONS;
-CoreRange workers_g = {{0, 0}, {0, 0}};
-uint32_t kernel_size_g;
-uint32_t fast_kernel_cycles_g;
-uint32_t slow_kernel_cycles_g;
-uint32_t nfast_kernels_g;
-uint32_t n_cbs_g;
-uint32_t n_args_g;
-uint32_t n_common_args_g;
-uint32_t n_sems_g;
-uint32_t n_kgs_g;
-bool brisc_enabled_g;
-bool ncrisc_enabled_g;
-bool trisc_enabled_g;
-bool erisc_enabled_g;
-uint32_t erisc_count_g;
-bool lazy_g;
-bool time_just_finish_g;
-bool use_global_g;
-bool use_trace_g;
-bool dispatch_from_eth_g;
+struct TestInfo {
+    uint32_t iterations = DEFAULT_ITERATIONS;
+    uint32_t warmup_iterations = DEFAULT_WARMUP_ITERATIONS;
+    CoreRange workers = {{0, 0}, {0, 0}};
+    uint32_t kernel_size{DEFAULT_KERNEL_SIZE_K * 1024};
+    uint32_t fast_kernel_cycles{0};
+    uint32_t slow_kernel_cycles{0};
+    uint32_t nfast_kernels{0};
+    uint32_t n_cbs{0};
+    uint32_t n_args{0};
+    uint32_t n_common_args{0};
+    uint32_t n_sems{0};
+    uint32_t n_kgs{1};
+    bool brisc_enabled{true};
+    bool ncrisc_enabled{true};
+    bool trisc_enabled{true};
+    bool erisc_enabled{false};
+    uint32_t erisc_count{1};
+    bool lazy{false};
+    bool time_just_finish{false};
+    bool use_global{false};
+    bool use_trace{false};
+    bool dispatch_from_eth{false};
+    bool use_all_cores{false};
+};
 
-void init(int argc, char** argv) {
-    std::vector<std::string> input_args(argv, argv + argc);
+std::tuple<uint32_t, uint32_t> get_core_count() {
+    uint32_t core_x = 0;
+    uint32_t core_y = 0;
+
+    std::string arch_name{getenv("ARCH_NAME")};
+    if (arch_name == "grayskull") {
+        core_x = 11;
+        core_y = 8;
+    } else if (arch_name == "wormhole_b0") {
+        core_x = 7;
+        core_y = 6;
+    } else if (arch_name == "blackhole") {
+        core_x = 12;
+        core_y = 9;
+    } else {
+        log_fatal("Unexpected ARCH_NAME {}", arch_name);
+        exit(0);
+    }
+    return std::make_tuple(core_x, core_y);
+}
+
+void init(const std::vector<std::string>& input_args, TestInfo& info) {
+    auto core_count = get_core_count();
 
     if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
         log_info(LogTest, "Usage:");
@@ -80,64 +105,75 @@ void init(int argc, char** argv) {
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
         log_info(LogTest, " -tr: enable trace (default disabled)");
         log_info(LogTest, " -de: dispatch from eth cores (default tensix)");
+        log_info(
+            LogTest,
+            " -ac: use all viable worker cores (default {}x{})",
+            std::get<0>(core_count),
+            std::get<1>(core_count));
         exit(0);
     }
 
     uint32_t core_x = test_args::get_command_option_uint32(input_args, "-x", 0);
     uint32_t core_y = test_args::get_command_option_uint32(input_args, "-y", 0);
-    warmup_iterations_g = test_args::get_command_option_uint32(input_args, "-w", DEFAULT_WARMUP_ITERATIONS);
-    iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
-    kernel_size_g = test_args::get_command_option_uint32(input_args, "-s", DEFAULT_KERNEL_SIZE_K * 1024);
-    n_cbs_g = test_args::get_command_option_uint32(input_args, "-c", 0);
-    n_args_g = test_args::get_command_option_uint32(input_args, "-a", 0);
-    n_common_args_g = test_args::get_command_option_uint32(input_args, "-ca", 0);
-    n_sems_g = test_args::get_command_option_uint32(input_args, "-S", 0);
-    n_kgs_g = test_args::get_command_option_uint32(input_args, "-kg", 1);
-    lazy_g = test_args::has_command_option(input_args, "-z");
-    use_global_g = test_args::has_command_option(input_args, "-g");
-    time_just_finish_g = test_args::has_command_option(input_args, "-f");
-    fast_kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-rf", 0);
-    slow_kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-rs", 0);
-    nfast_kernels_g = test_args::get_command_option_uint32(input_args, "-nf", 0);
-    use_trace_g = test_args::has_command_option(input_args, "-tr");
-    dispatch_from_eth_g = test_args::has_command_option(input_args, "-de");
-    if (kernel_size_g < MIN_KERNEL_SIZE_BYTES) {
+
+    if (test_args::has_command_option(input_args, "-ac")) {
+        core_x = std::get<0>(core_count);
+        core_y = std::get<1>(core_count);
+    }
+
+    info.warmup_iterations = test_args::get_command_option_uint32(input_args, "-w", DEFAULT_WARMUP_ITERATIONS);
+    info.iterations = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
+    info.kernel_size = test_args::get_command_option_uint32(input_args, "-s", DEFAULT_KERNEL_SIZE_K * 1024);
+    info.n_cbs = test_args::get_command_option_uint32(input_args, "-c", 0);
+    info.n_args = test_args::get_command_option_uint32(input_args, "-a", 0);
+    info.n_common_args = test_args::get_command_option_uint32(input_args, "-ca", 0);
+    info.n_sems = test_args::get_command_option_uint32(input_args, "-S", 0);
+    info.n_kgs = test_args::get_command_option_uint32(input_args, "-kg", 1);
+    info.lazy = test_args::has_command_option(input_args, "-z");
+    info.use_global = test_args::has_command_option(input_args, "-g");
+    info.time_just_finish = test_args::has_command_option(input_args, "-f");
+    info.fast_kernel_cycles = test_args::get_command_option_uint32(input_args, "-rf", 0);
+    info.slow_kernel_cycles = test_args::get_command_option_uint32(input_args, "-rs", 0);
+    info.nfast_kernels = test_args::get_command_option_uint32(input_args, "-nf", 0);
+    info.use_trace = test_args::has_command_option(input_args, "-tr");
+    info.dispatch_from_eth = test_args::has_command_option(input_args, "-de");
+    if (info.kernel_size < MIN_KERNEL_SIZE_BYTES) {
         log_fatal("Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
     }
-    if (n_cbs_g > MAX_CBS) {
+    if (info.n_cbs > MAX_CBS) {
         log_fatal("CB count must be 0..{}", MAX_CBS);
         exit(0);
     }
-    if (n_args_g > MAX_ARGS) {
+    if (info.n_args > MAX_ARGS) {
         log_fatal("Runtime arg count must be 0..{}", MAX_ARGS);
         exit(0);
     }
-    if (n_common_args_g > MAX_ARGS) {
+    if (info.n_common_args > MAX_ARGS) {
         log_fatal("Common Runtime arg count must be 0..{}", MAX_ARGS);
         exit(0);
     }
-    if (n_sems_g > NUM_SEMAPHORES) {
+    if (info.n_sems > NUM_SEMAPHORES) {
         log_fatal("Sem count must be 0..{}", NUM_SEMAPHORES);
         exit(0);
     }
-    if (n_kgs_g > core_x + 1) {
+    if (info.n_kgs > core_x + 1) {
         log_fatal("This test uses columns for kernel groups so number of kernel groups must be <= x core range");
         exit(0);
     }
-    brisc_enabled_g = !test_args::has_command_option(input_args, "-b");
-    ncrisc_enabled_g = !test_args::has_command_option(input_args, "-n");
-    trisc_enabled_g = !test_args::has_command_option(input_args, "-t");
-    erisc_enabled_g = test_args::has_command_option(input_args, "+e");
-    erisc_count_g = test_args::get_command_option_uint32(input_args, "-ec", 1);
+    info.brisc_enabled = !test_args::has_command_option(input_args, "-b");
+    info.ncrisc_enabled = !test_args::has_command_option(input_args, "-n");
+    info.trisc_enabled = !test_args::has_command_option(input_args, "-t");
+    info.erisc_enabled = test_args::has_command_option(input_args, "+e");
+    info.erisc_count = test_args::get_command_option_uint32(input_args, "-ec", 1);
 
-    workers_g = CoreRange({0, 0}, {core_x, core_y});
+    info.workers = CoreRange({0, 0}, {core_x, core_y});
 
-    if (nfast_kernels_g != 0 && slow_kernel_cycles_g <= fast_kernel_cycles_g) {
+    if (info.nfast_kernels != 0 && info.slow_kernel_cycles <= info.fast_kernel_cycles) {
         log_error(
             "The number of fast kernels is non-zero, but slow_kernel_ cycles ({}) is <= fast_kernel_cycles ({})",
-            slow_kernel_cycles_g,
-            fast_kernel_cycles_g);
+            info.slow_kernel_cycles,
+            info.fast_kernel_cycles);
         log_error("For meaningful results, run multiple fast kernels between single slow kernels");
         exit(0);
     }
@@ -153,38 +189,39 @@ void set_runtime_args(
     }
 }
 
-void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, uint32_t run_cycles) {
+bool initialize_program(
+    const TestInfo& info, tt_metal::IDevice* device, tt_metal::Program& program, uint32_t run_cycles) {
     program = tt_metal::CreateProgram();
 
-    std::map<string, string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size_g)}};
+    std::map<string, string> defines = {{"KERNEL_BYTES", std::to_string(info.kernel_size)}};
     if (run_cycles != 0) {
         defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(run_cycles)));
     }
-    if (use_global_g) {
+    if (info.use_global) {
         defines.insert(std::pair<string, string>("KERNEL_GLOBAL", "1"));
     }
 
-    for (uint32_t i = 0; i < n_sems_g; i++) {
-        tt_metal::CreateSemaphore(program, workers_g, 3);
+    for (uint32_t i = 0; i < info.n_sems; i++) {
+        tt_metal::CreateSemaphore(program, info.workers, 3);
     }
 
     vector<uint32_t> args;
-    args.resize(n_args_g);
+    args.resize(info.n_args);
     vector<uint32_t> common_args;
-    common_args.resize(n_common_args_g);
+    common_args.resize(info.n_common_args);
 
-    for (int i = 0; i < n_cbs_g; i++) {
+    for (int i = 0; i < info.n_cbs; i++) {
         tt_metal::CircularBufferConfig cb_config =
             tt_metal::CircularBufferConfig(16, {{i, tt::DataFormat::Float16_b}}).set_page_size(i, 16);
-        auto cb = tt_metal::CreateCircularBuffer(program, workers_g, cb_config);
+        auto cb = tt_metal::CreateCircularBuffer(program, info.workers, cb_config);
     }
 
     // first kernel group is possibly wide, remaining kernel groups are 1 column each
-    CoreRange kg = {workers_g.start_coord, {workers_g.end_coord.x - n_kgs_g + 1, workers_g.end_coord.y}};
-    for (uint32_t i = 0; i < n_kgs_g; i++) {
+    CoreRange kg = {info.workers.start_coord, {info.workers.end_coord.x - info.n_kgs + 1, info.workers.end_coord.y}};
+    for (uint32_t i = 0; i < info.n_kgs; i++) {
         defines.insert(std::pair<string, string>(string("KG_") + std::to_string(i), ""));
 
-        if (brisc_enabled_g) {
+        if (info.brisc_enabled) {
             auto dm0 = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
@@ -197,7 +234,7 @@ void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, u
             tt_metal::SetCommonRuntimeArgs(program, dm0, common_args);
         }
 
-        if (ncrisc_enabled_g) {
+        if (info.ncrisc_enabled) {
             auto dm1 = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
@@ -210,7 +247,7 @@ void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, u
             tt_metal::SetCommonRuntimeArgs(program, dm1, common_args);
         }
 
-        if (trisc_enabled_g) {
+        if (info.trisc_enabled) {
             auto compute = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
@@ -224,17 +261,17 @@ void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, u
         kg.end_coord = kg.start_coord;
     }
 
-    if (erisc_enabled_g) {
+    if (info.erisc_enabled) {
         auto erisc_cores = device->get_active_ethernet_cores(true);
-        if (erisc_count_g > erisc_cores.size()) {
+        if (info.erisc_count > erisc_cores.size()) {
             log_fatal(
                 "Requested number of erisc cores {} exceeds actual erisc core count {}",
-                erisc_count_g,
+                info.erisc_count,
                 erisc_cores.size());
-            exit(0);
+            return false;
         }
         auto erisc_core = erisc_cores.begin();
-        for (uint32_t i = 0; i < erisc_count_g; i++, erisc_core++) {
+        for (uint32_t i = 0; i < info.erisc_count; i++, erisc_core++) {
             auto eth_kernel = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
@@ -248,95 +285,134 @@ void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, u
             tt_metal::SetCommonRuntimeArgs(program, eth_kernel, common_args);
         }
     }
+    return true;
 }
 
-int main(int argc, char** argv) {
-    init(argc, argv);
+struct FakeBenchmarkState {
+    std::vector<int>::iterator begin() { return range.begin(); }
+    std::vector<int>::iterator end() { return range.end(); }
+
+    std::vector<int> range{1};
+};
+
+template <typename T>
+static int pgm_dispatch(T& state, TestInfo info) {
+    if constexpr (std::is_same_v<T, benchmark::State>) {
+        log_info(LogTest, "Running {}", state.name());
+    }
+    if (info.use_all_cores) {
+        auto core_count = get_core_count();
+        info.workers = CoreRange({0, 0}, {std::get<0>(core_count), std::get<1>(core_count)});
+    }
+    if constexpr (std::is_same_v<T, benchmark::State>) {
+        info.kernel_size = state.range(0);
+    }
+
+    if (info.use_trace) {
+        log_info(LogTest, "Running with trace enabled");
+    }
+    log_info(LogTest, "Warmup iterations: {}", info.warmup_iterations);
+    log_info(LogTest, "Iterations: {}", info.iterations);
+    log_info(
+        LogTest,
+        "Grid: ({}-{}) ({} cores)",
+        info.workers.start_coord.str(),
+        info.workers.end_coord.str(),
+        info.workers.size());
+    log_info(LogTest, "Kernel size: {}", info.kernel_size);
+    if (info.nfast_kernels != 0) {
+        log_info(LogTest, "Fast kernel cycles: {}", info.fast_kernel_cycles);
+        log_info(LogTest, "Slow kernel cycles: {}", info.slow_kernel_cycles);
+        log_info(LogTest, "{} fast kernels between slow kernels", info.nfast_kernels);
+    } else {
+        log_info(LogTest, "Kernel cycles: {}", info.slow_kernel_cycles);
+    }
+    log_info(LogTest, "KGs: {}", info.n_kgs);
+    log_info(LogTest, "CBs: {}", info.n_cbs);
+    log_info(LogTest, "UniqueRTArgs: {}", info.n_args);
+    log_info(LogTest, "CommonRTArgs: {}", info.n_common_args);
+    log_info(LogTest, "Sems: {}", info.n_sems);
+    log_info(LogTest, "Lazy: {}", info.lazy);
 
     tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(true);
 
     bool pass = true;
     try {
         const chip_id_t device_id = 0;
-        DispatchCoreType dispatch_core_type = dispatch_from_eth_g ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+        DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         tt_metal::IDevice* device = tt_metal::CreateDevice(
             device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
         CommandQueue& cq = device->command_queue();
 
         tt_metal::Program program[2];
-        initialize_program(device, program[0], slow_kernel_cycles_g);
-        initialize_program(device, program[1], fast_kernel_cycles_g);
+        if (!initialize_program(info, device, program[0], info.slow_kernel_cycles)) {
+            if constexpr (std::is_same_v<T, benchmark::State>) {
+                state.SkipWithError("Program creation failed");
+            }
+            return 1;
+        }
+        if (!initialize_program(info, device, program[1], info.fast_kernel_cycles)) {
+            if constexpr (std::is_same_v<T, benchmark::State>) {
+                state.SkipWithError("Program creation failed");
+            }
+            return 1;
+        }
 
         // Cache stuff
-        for (int i = 0; i < warmup_iterations_g; i++) {
+        for (int i = 0; i < info.warmup_iterations; i++) {
             EnqueueProgram(cq, program[0], false);
-            for (int j = 0; j < nfast_kernels_g; j++) {
+            for (int j = 0; j < info.nfast_kernels; j++) {
                 EnqueueProgram(cq, program[1], false);
             }
         }
 
         auto main_program_loop = [&]() {
-            for (int i = 0; i < iterations_g; i++) {
+            for (int i = 0; i < info.iterations; i++) {
                 EnqueueProgram(cq, program[0], false);
-                for (int j = 0; j < nfast_kernels_g; j++) {
+                for (int j = 0; j < info.nfast_kernels; j++) {
                     EnqueueProgram(cq, program[1], false);
                 }
             }
         };
         uint32_t tid = 0;
-        if (use_trace_g) {
+        if (info.use_trace) {
             tid = BeginTraceCapture(device, cq.id());
             main_program_loop();
             EndTraceCapture(device, cq.id(), tid);
             Finish(cq);
         }
 
-        if (lazy_g) {
-            // Does this do anything?
+        if (info.lazy) {
             tt_metal::detail::SetLazyCommandQueueMode(true);
         }
 
-        auto start = std::chrono::system_clock::now();
-        if (use_trace_g) {
-            EnqueueTrace(cq, tid, false);
-        } else {
-            main_program_loop();
-        }
-        if (time_just_finish_g) {
-            start = std::chrono::system_clock::now();
-        }
-        Finish(cq);
-        auto end = std::chrono::system_clock::now();
+        for (auto _ : state) {
+            auto start = std::chrono::system_clock::now();
+            if (info.use_trace) {
+                EnqueueTrace(cq, tid, false);
+            } else {
+                main_program_loop();
+            }
+            if (info.time_just_finish) {
+                start = std::chrono::system_clock::now();
+            }
+            Finish(cq);
+            auto end = std::chrono::system_clock::now();
 
-        if (use_trace_g) {
-            log_info(LogTest, "Running with trace enabled");
+            if constexpr (std::is_same_v<T, benchmark::State>) {
+                auto elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(end - start);
+                state.SetIterationTime(elapsed_seconds.count());
+            } else {
+                std::chrono::duration<double> elapsed_seconds = (end - start);
+                log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
+                log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / info.iterations);
+            }
         }
-        log_info(LogTest, "Warmup iterations: {}", warmup_iterations_g);
-        log_info(LogTest, "Iterations: {}", iterations_g);
-        log_info(
-            LogTest,
-            "Grid: ({}-{}) ({} cores)",
-            workers_g.start_coord.str(),
-            workers_g.end_coord.str(),
-            workers_g.size());
-        log_info(LogTest, "Kernel size: {}", kernel_size_g);
-        if (nfast_kernels_g != 0) {
-            log_info(LogTest, "Fast kernel cycles: {}", fast_kernel_cycles_g);
-            log_info(LogTest, "Slow kernel cycles: {}", slow_kernel_cycles_g);
-            log_info(LogTest, "{} fast kernels between slow kernels", nfast_kernels_g);
-        } else {
-            log_info(LogTest, "Kernel cycles: {}", slow_kernel_cycles_g);
-        }
-        log_info(LogTest, "KGs: {}", n_kgs_g);
-        log_info(LogTest, "CBs: {}", n_cbs_g);
-        log_info(LogTest, "UniqueRTArgs: {}", n_args_g);
-        log_info(LogTest, "CommonRTArgs: {}", n_common_args_g);
-        log_info(LogTest, "Sems: {}", n_sems_g);
-        log_info(LogTest, "Lazy: {}", lazy_g);
 
-        std::chrono::duration<double> elapsed_seconds = (end - start);
-        log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
-        log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
+        if constexpr (std::is_same_v<T, benchmark::State>) {
+            state.counters["IterationTime"] = benchmark::Counter(
+                info.iterations, benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
+        }
 
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
@@ -350,7 +426,226 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Test Passed");
         return 0;
     } else {
-        log_fatal(LogTest, "Test Failed\n");
+        if constexpr (std::is_same_v<T, benchmark::State>) {
+            state.SkipWithError("Test failed");
+        } else {
+            log_info(LogTest, "Test failed");
+        }
         return 1;
     }
+}
+
+static void BM_pgm_dispatch(benchmark::State& state, TestInfo info) { pgm_dispatch(state, info); }
+
+static void Max12288Args(benchmark::internal::Benchmark* b) {
+    b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
+}
+
+static void Max8192Args(benchmark::internal::Benchmark* b) {
+    b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192);
+}
+
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    brisc_only_trace,
+    TestInfo{.warmup_iterations = 5000, .ncrisc_enabled = false, .trisc_enabled = false, .use_trace = true})
+    ->Apply(Max12288Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    ncrisc_only_trace,
+    TestInfo{.warmup_iterations = 5000, .brisc_enabled = false, .trisc_enabled = false, .use_trace = true})
+    ->Apply(Max12288Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    trisc_only_trace,
+    TestInfo{.warmup_iterations = 5000, .brisc_enabled = false, .ncrisc_enabled = false, .use_trace = true})
+    ->Apply(Max12288Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    brisc_trisc_only_trace,
+    TestInfo{.warmup_iterations = 5000, .ncrisc_enabled = false, .use_trace = true})
+    ->Apply(Max12288Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(BM_pgm_dispatch, all_processors_trace, TestInfo{.warmup_iterations = 5000, .use_trace = true})
+    ->Apply(Max12288Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_trace,
+    TestInfo{.warmup_iterations = 5000, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max12288Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_1cb,
+    TestInfo{.warmup_iterations = 5000, .n_cbs = 1, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_32cb,
+    TestInfo{.warmup_iterations = 5000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch, all_processors_1_core_1_rta, TestInfo{.warmup_iterations = 5000, .n_args = 1, .use_trace = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    one_processor_all_cores_128_rta,
+    TestInfo{
+        .warmup_iterations = 5000,
+        .n_args = 128,
+        .ncrisc_enabled = false,
+        .trisc_enabled = false,
+        .use_trace = true,
+        .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    one_processors_all_cores_1_rta,
+    TestInfo{
+        .warmup_iterations = 5000,
+        .n_args = 1,
+        .ncrisc_enabled = false,
+        .trisc_enabled = false,
+        .use_trace = true,
+        .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_1_rta,
+    TestInfo{.warmup_iterations = 5000, .n_args = 1, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_32_rta,
+    TestInfo{.warmup_iterations = 5000, .n_args = 32, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_128_rta,
+    TestInfo{.warmup_iterations = 5000, .n_args = 128, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    sems_1_core_1_processor_trace,
+    TestInfo{
+        .warmup_iterations = 5000, .n_sems = 4, .ncrisc_enabled = false, .trisc_enabled = false, .use_trace = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    sems_all_cores_1_processor_trace,
+    TestInfo{
+        .warmup_iterations = 5000,
+        .n_sems = 4,
+        .ncrisc_enabled = false,
+        .trisc_enabled = false,
+        .use_trace = true,
+        .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    maxed_config_params_trace,
+    TestInfo{
+        .warmup_iterations = 5000, .n_cbs = 32, .n_args = 128, .n_sems = 4, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    kernel_groups_trace,
+    TestInfo{.warmup_iterations = 5000, .n_kgs = 8, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+int main(int argc, char** argv) {
+    std::vector<std::string> input_args(argv, argv + argc);
+    if (test_args::has_command_option(input_args, "--custom")) {
+        TestInfo info;
+        init(input_args, info);
+        FakeBenchmarkState state;
+        return pgm_dispatch(state, info);
+    }
+
+    auto core_count = get_core_count();
+
+    benchmark::RegisterBenchmark(
+        "BM_pgm_dispatch/kernel_groups_4_shadow",
+        BM_pgm_dispatch,
+        TestInfo{
+            .warmup_iterations = 5000,
+            .slow_kernel_cycles = 40000,
+            .nfast_kernels = 4,
+            .n_kgs = std::get<0>(core_count),
+            .use_trace = true,
+            .use_all_cores = true})
+        ->Apply(Max8192Args)
+        ->UseManualTime();
+    benchmark::RegisterBenchmark(
+        "BM_pgm_dispatch/kernel_groups_5_shadow",
+        BM_pgm_dispatch,
+        TestInfo{
+            .warmup_iterations = 5000,
+            .slow_kernel_cycles = 40000,
+            .nfast_kernels = 5,
+            .n_kgs = std::get<0>(core_count),
+            .use_trace = true,
+            .use_all_cores = true})
+        ->Apply(Max8192Args)
+        ->UseManualTime();
+    if (getenv("ARCH_NAME") == std::string("wormhole_b0")) {
+        benchmark::RegisterBenchmark(
+            "BM_pgm_dispatch/eth_dispatch",
+            BM_pgm_dispatch,
+            TestInfo{
+                .warmup_iterations = 5000,
+                .brisc_enabled = false,
+                .ncrisc_enabled = false,
+                .trisc_enabled = false,
+                .erisc_enabled = true,
+                .use_trace = true})
+            ->Apply(Max8192Args)
+            ->UseManualTime();
+        benchmark::RegisterBenchmark(
+            "BM_pgm_dispatch/tensix_eth_2",
+            BM_pgm_dispatch,
+            TestInfo{
+                .warmup_iterations = 5000,
+                .n_args = 16,
+                .n_kgs = std::get<0>(core_count),
+                .erisc_enabled = true,
+                .use_trace = true,
+                .use_all_cores = true})
+            ->Apply(Max8192Args)
+            ->UseManualTime();
+        benchmark::RegisterBenchmark(
+            "BM_pgm_dispatch/tensix_eth_2_4_shadow",
+            BM_pgm_dispatch,
+            TestInfo{
+                .warmup_iterations = 5000,
+                .slow_kernel_cycles = 40000,
+                .nfast_kernels = 4,
+                .n_args = 16,
+                .n_kgs = std::get<0>(core_count),
+                .erisc_enabled = true,
+                .use_trace = true,
+                .use_all_cores = true})
+            ->Apply(Max8192Args)
+            ->UseManualTime();
+    }
+
+    benchmark::Initialize(&argc, argv);
+    benchmark::RunSpecifiedBenchmarks();
+    benchmark::Shutdown();
+    return 0;
 }
