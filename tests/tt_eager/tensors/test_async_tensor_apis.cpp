@@ -20,7 +20,10 @@
 
 #include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
 
-namespace tt::tt_metal {
+using namespace tt;
+using namespace tt_metal;
+using namespace constants;
+
 namespace {
 
 using ::tt::constants::TILE_HEIGHT;
