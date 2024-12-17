@@ -386,6 +386,19 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     for (size_t i = 0; i < device_sequence.size(); i++) {
         log_trace(tt::LogOp, "device[{}] id={}",  i, device_sequence[i]->id());
     }
+    size_t min_link_count = desired_num_links.value_or(std::numeric_limits<size_t>::max());
+    for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
+        auto src_device = device_sequence[hop];
+        auto dest_device = device_sequence[hop + 1];
+        auto const& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());;
+        auto const& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());;
+        if (src_device_sockets.size() > 0) {
+            min_link_count = std::min(min_link_count, src_device_sockets.size());
+        }
+        if (src_device_sockets.size() > 0) {
+            min_link_count = std::min(min_link_count, dest_device_sockets.size());
+        }
+    }
 
     FabricEriscDatamoverBuilder *a_builder = nullptr;
     // Construct the builders
@@ -400,7 +413,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         std::copy_if(src_device_sockets.begin(), src_device_sockets.end(), std::back_inserter(local_link_cores), [src_device](CoreCoord const& core) { return src_device->is_active_ethernet_core(core, true); });
         std::copy_if(dest_device_sockets.begin(), dest_device_sockets.end(), std::back_inserter(remote_link_cores), [dest_device](CoreCoord const& core) { return dest_device->is_active_ethernet_core(core, true); });
 
-        this->num_links = std::min(desired_num_links.value_or(std::numeric_limits<std::size_t>::max()), local_link_cores.size());
+        this->num_links = min_link_count;
 
         TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
 
@@ -674,10 +687,48 @@ void EdmLineFabricOpInterface::teardown_from_host(tt::fabric::TerminationSignal 
 }
 
 void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
+    auto build = [](std::vector<Device*> const& line_view) {
+        std::vector<Program> programs(line_view.size());
+        std::vector<Program*> program_ptrs;
+        program_ptrs.reserve(programs.size());
+        std::transform(programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
+        EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true);
+        edm_fabric.build_kernels();
+        for (size_t i = 0; i < line_view.size(); i++) {
+            tt::tt_metal::detail::CompileProgram(line_view[i], programs[i]);
+        }
+        for (size_t i = 0; i < line_view.size(); i++) {
+            Device *device = line_view[i];
+            Program &program = programs[i];
+            tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);
+        }
+    };
+
+
+    for (auto const &row_view : mesh_device->get_view()->get_row_views()) {
+        build(row_view);
+    }
+    for (auto const &col_view : mesh_device->get_view()->get_column_views()) {
+        build(col_view);
+    }
 }
 
 void teardown_edm_fabric(distributed::MeshDevice* mesh_device) {
+    auto teardown = [](std::vector<Device*> const& line_view) {
+        std::vector<Program> programs(line_view.size());
+        std::vector<Program*> program_ptrs;
+        program_ptrs.reserve(programs.size());
+        std::transform(programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
+        EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true);
+        edm_fabric.teardown_from_host(tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    };
 
+    for (auto const &row_view : mesh_device->get_view()->get_row_views()) {
+        teardown(row_view);
+    }
+    for (auto const &col_view : mesh_device->get_view()->get_column_views()) {
+        teardown(col_view);
+    }
 }
 
 

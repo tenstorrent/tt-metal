@@ -2864,7 +2864,7 @@ TEST(
 
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "tt_metal/common/bfloat16.hpp"
-TEST(CclAsyncOp, DISABLED_ReduceScatterSmall_PersistentFabric) {
+TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     // JUST MAKE SURE IT DOESN'T HANG - CORRECTNESS CHECKS ARE DONE IN PYTEST
     // HERE WE JUST CHECK THE BASIC PLUMBING IS DONE
     const size_t dim = 3;

@@ -170,9 +170,11 @@ def run_all_gather_impl(
         ]
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
-    mesh_sub_device_manager_id, fabric_interface, fabric_sub_device_id = create_fabric_sub_device_manager_and_interface(
-        mesh_device, [worker_sub_device], 0
-    )
+    (
+        mesh_sub_device_manager_id,
+        fabric_interface,
+        fabric_sub_device_id,
+    ) = create_and_load_sub_device_manager_with_fabric_interface(mesh_device, [worker_sub_device], 0)
 
     if trace_mode:
         tt_out_tensor = run_with_trace(

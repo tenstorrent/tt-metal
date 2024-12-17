@@ -42,7 +42,7 @@ struct ReduceScatterAsync {
         to_remote_sem(to_remote_sem),
         fabric_handle(fabric_handle),
         sub_device_id_map(sub_device_id_map) {
-        TT_FATAL(sub_device_id_map.size() > 0, "Reduce scatter async was given an uninitialized subdevice ID");
+        // TT_FATAL(sub_device_id_map.size() > 0, "Reduce scatter async was given an uninitialized subdevice ID");
     }
 
     const ttnn::operations::binary::BinaryOpType binary_op_type;

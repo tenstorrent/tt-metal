@@ -4,18 +4,12 @@
 
 #pragma once
 
-#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
-#include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 namespace py = pybind11;
 
 namespace ttnn::operations::ccl {
-
-void py_bind_common(pybind11::module& module);
 
 void py_module(py::module& module);
 
