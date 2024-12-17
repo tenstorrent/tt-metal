@@ -2,13 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// clang-format off
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
-// clang-format on
-
-packet_input_queue_state_t input_queues[MAX_TUNNEL_LANES];
-packet_output_queue_state_t output_queues[MAX_TUNNEL_LANES];
 
 constexpr uint32_t endpoint_id_start_index = get_compile_time_arg_val(0);
 constexpr uint32_t tunnel_lanes = get_compile_time_arg_val(1);
@@ -180,7 +175,51 @@ tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(46);
 constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(47);
 
-#define SWITCH_THRESHOLD 16
+packet_input_queue_state_t input_queues[MAX_TUNNEL_LANES];
+using input_queue_network_sequence = NetworkTypeSequence<remote_sender_network_type[0],
+                                                         remote_sender_network_type[1],
+                                                         remote_sender_network_type[2],
+                                                         remote_sender_network_type[3],
+                                                         remote_sender_network_type[4],
+                                                         remote_sender_network_type[5],
+                                                         remote_sender_network_type[6],
+                                                         remote_sender_network_type[7],
+                                                         remote_sender_network_type[8],
+                                                         remote_sender_network_type[9]>;
+using input_queue_cb_mode_sequence = CBModeTypeSequence<false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false,
+                                                        false>;
+
+packet_output_queue_state_t output_queues[MAX_TUNNEL_LANES];
+using output_queue_network_sequence = NetworkTypeSequence<remote_receiver_network_type[0],
+                                                          remote_receiver_network_type[1],
+                                                          remote_receiver_network_type[2],
+                                                          remote_receiver_network_type[3],
+                                                          remote_receiver_network_type[4],
+                                                          remote_receiver_network_type[5],
+                                                          remote_receiver_network_type[6],
+                                                          remote_receiver_network_type[7],
+                                                          remote_receiver_network_type[8],
+                                                          remote_receiver_network_type[9]>;
+using output_queue_cb_mode_sequence = CBModeTypeSequence<false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false,
+                                                         false>;
+
+#define SWITCH_THRESHOLD 32
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -215,7 +254,10 @@ void kernel_main() {
             1);
     }
 
-    if (!wait_all_src_dest_ready(input_queues, tunnel_lanes, output_queues, tunnel_lanes, timeout_cycles)) {
+    if (!wait_all_input_output_ready<input_queue_network_sequence,
+                                     input_queue_cb_mode_sequence,
+                                     output_queue_network_sequence,
+                                     output_queue_cb_mode_sequence>(input_queues, output_queues, timeout_cycles)) {
         write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
@@ -227,36 +269,52 @@ void kernel_main() {
     uint64_t iter = 0;
     uint64_t start_timestamp = get_timestamp();
     uint32_t switch_counter = 0;
+    uint32_t progress_timestamp = start_timestamp & 0xFFFFFFFF;
+    bool timeout = false;
     while (!all_outputs_finished) {
+        if constexpr (timeout_cycles > 0) {
+            uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
+            if (cycles_since_progress > timeout_cycles) {
+                timeout = true;
+                break;
+            }
+        }
         iter++;
         switch_counter++;
         all_outputs_finished = switch_counter >= SWITCH_THRESHOLD;
-        for (uint32_t i = 0; i < tunnel_lanes; i++) {
-            if (input_queues[i].get_curr_packet_valid()) {
+        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto input_network_type, auto input_cb_mode, auto sequence_i>(auto) -> bool {
+            using remote_input_networks = NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
+            using remote_input_cb_modes = CBModeTypeSequence<false>;
+
+            if (input_queues[sequence_i].template get_curr_packet_valid<input_cb_mode>()) {
                 bool full_packet_sent;
-                uint32_t words_sent =
-                    output_queues[i].forward_data_from_input(0, full_packet_sent, input_queues[i].get_end_of_cmd());
+                uint32_t words_sent = output_queues[sequence_i].template forward_data_from_input<remote_receiver_network_type[sequence_i], false, remote_sender_network_type[sequence_i], false>(0, full_packet_sent, input_queues[sequence_i].get_end_of_cmd());
                 data_words_sent += words_sent;
                 if (words_sent > 0) {
                     switch_counter = 0;
                     all_outputs_finished = false;
                 }
             }
-            output_queues[i].prev_words_in_flight_check_flush();
+            output_queues[sequence_i].template prev_words_in_flight_check_flush<false, remote_input_networks, remote_input_cb_modes>();
             if (switch_counter >= SWITCH_THRESHOLD) {
-                bool output_finished = output_queues[i].is_remote_finished();
+                bool output_finished = output_queues[sequence_i].is_remote_finished();
                 if (output_finished) {
                     uint32_t return_vc = (inner_stop_mux_d_bypass >> 24) & 0xFF;
-                    if ((i == return_vc) && (inner_stop_mux_d_bypass != 0)) {
-                        input_queues[i].remote_x = inner_stop_mux_d_bypass & 0xFF;
-                        input_queues[i].remote_y = (inner_stop_mux_d_bypass >> 8) & 0xFF;
-                        input_queues[i].set_remote_ready_status_addr((inner_stop_mux_d_bypass >> 16) & 0xFF);
+                    if ((sequence_i == return_vc) && (inner_stop_mux_d_bypass != 0)) {
+                        input_queues[sequence_i].set_end_remote_queue(
+                            (inner_stop_mux_d_bypass >> 16) & 0xFF, // remote_queue_id
+                            inner_stop_mux_d_bypass & 0xFF, // remote_x
+                            (inner_stop_mux_d_bypass >> 8) & 0xFF // remote_y
+                        );
                     }
-                    input_queues[i].send_remote_finished_notification();
+                    input_queues[sequence_i].template send_remote_finished_notification<input_network_type, input_cb_mode>();
                 }
                 all_outputs_finished &= output_finished;
             }
-        }
+
+            return true;
+        });
+
         uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         tt_l1_ptr launch_msg_t * const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
         if (launch_msg->kernel_config.exit_erisc_kernel) {
@@ -271,10 +329,19 @@ void kernel_main() {
 
     }
 
+    timeout = false;
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
-    for (uint32_t i = 0; i < tunnel_lanes; i++) {
-        output_queues[i].output_barrier();
-    }
+    process_queues<output_queue_network_sequence, output_queue_cb_mode_sequence>([&]<auto network_type, auto cb_mode, auto sequence_i>(auto) -> bool {
+        // inputs for this output queue
+        using remote_input_networks = NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
+        using remote_input_cb_modes = CBModeTypeSequence<false>;
+
+        if (!output_queues[sequence_i].template output_barrier<cb_mode, remote_input_networks, remote_input_cb_modes>(timeout_cycles)) {
+            timeout = true;
+            return false;
+        }
+        return true;
+    });
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
