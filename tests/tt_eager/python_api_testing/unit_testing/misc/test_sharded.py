@@ -1700,8 +1700,6 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
         "unbatched_16_shape_out_interleaved",
     ],
 )
-
-
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_width_sharded_untilize_with_unpadding(
     shape, output_H, in_sharded, out_sharded, dtype, device, function_level_defaults
