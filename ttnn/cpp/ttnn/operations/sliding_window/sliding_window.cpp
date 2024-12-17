@@ -158,15 +158,26 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
         return pad_metadata;
 
     } else {
-        uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first;
-        uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
+        uint32_t ceil_padding_h = 0;
+        uint32_t ceil_padding_w = 0;
+        if (config.ceil_mode) {
+            Shape output_shape = config.get_output_shape();
+            // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
+            ceil_padding_h = config.stride_hw.first * (output_shape[1] - 1) + config.window_hw.first -
+                             config.input_hw.first - 2 * config.pad_hw.first;
+            ceil_padding_w = config.stride_hw.second * (output_shape[2] - 1) + config.window_hw.second -
+                             config.input_hw.second - 2 * config.pad_hw.second;
+            printf("ceil_padding_h: %d, ceil_padding_w: %d\n", ceil_padding_h, ceil_padding_w);
+        }
+        uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first + ceil_padding_h;
+        uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
         std::vector<bool> pad_metadata(config.batch_size * padded_input_h * padded_input_w, false);
 
         for (uint32_t b = 0; b < config.batch_size; ++b) {
             for (uint32_t h = 0; h < padded_input_h; ++h) {
                 for (uint32_t w = 0; w < padded_input_w; ++w) {
-                    if (h < config.pad_hw.first || h >= config.pad_hw.first + config.input_hw.first ||
-                        w < config.pad_hw.second || w >= config.pad_hw.second + config.input_hw.second) {
+                    if (h < config.pad_hw.first || h >= (config.pad_hw.first + config.input_hw.first) ||
+                        w < config.pad_hw.second || w >= (config.pad_hw.second + config.input_hw.second)) {
                         pad_metadata[b * padded_input_h * padded_input_w + h * padded_input_w + w] = true;
                     }
                 }
@@ -202,8 +213,20 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
             }
         }
     } else {
-        uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first;
-        uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
+        uint32_t ceil_padding_h = 0;
+        uint32_t ceil_padding_w = 0;
+        if (config.ceil_mode) {
+            Shape output_shape = config.get_output_shape();
+            // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
+            ceil_padding_h = config.stride_hw.first * (output_shape[1] - 1) + config.window_hw.first -
+                             config.input_hw.first - 2 * config.pad_hw.first;
+            ceil_padding_w = config.stride_hw.second * (output_shape[2] - 1) + config.window_hw.second -
+                             config.input_hw.second - 2 * config.pad_hw.second;
+            printf("ceil_padding_h: %d, ceil_padding_w: %d\n", ceil_padding_h, ceil_padding_w);
+        }
+
+        uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first + ceil_padding_h;
+        uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
         printf("padded_input_h: %d, padded_input_w: %d\n", padded_input_h, padded_input_w);
         printf(
             "config.stride_hw.first: %d, config.stride_hw.second: %d\n",
@@ -229,7 +252,17 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
     std::vector<std::pair<uint32_pair_t, uint32_pair_t>> shard_boundaries;
     uint32_t num_cores = config.num_cores_nhw;
     uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
-    uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
+
+    uint32_t ceil_padding_w = 0;
+    if (config.ceil_mode) {
+        Shape output_shape = config.get_output_shape();
+        // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
+        ceil_padding_w = config.stride_hw.second * (output_shape[2] - 1) + config.window_hw.second -
+                         config.input_hw.second - 2 * config.pad_hw.second;
+        printf("ceil_padding_w: %d\n", ceil_padding_w);
+    }
+    uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
+
     uint32_t max_index = op_trace_metadata.size();
     printf("max_index: %d\n", max_index);
     if (config.is_transpose) {
@@ -400,7 +433,8 @@ generate_halo_kernel_config_tensors(
      *     each element (for core i): [dst_start0, length0, dst_start1, length1, ...]
      * local_config: length num_cores_nhw
      *     each element (for core i): (nocx, nocy, len) -> [src_start0, dst_start0, length0, src_start1, dst_start1,
-     * length1, ...] remote_config: length num_cores_nhw each element (for core i): { (nocx, nocy, len) -> [src_start0,
+     * length1, ...]
+     * remote_config: length num_cores_nhw each element (for core i): { (nocx, nocy, len) -> [src_start0,
      * dst_start0, length0, src_start1, dst_start1, length1, ...], (nocx, nocy, len) -> [src_start0, dst_start0,
      * length0, src_start1, dst_start1, length1, ...], ...}
      */
@@ -420,18 +454,43 @@ generate_halo_kernel_config_tensors(
         if (is_pad) {
             for (auto [src_start, dst_start, length] : data) {
                 pad_config[dst_core_id].push_back({dst_start, length});
+                // printf("pad_config[%d]: %d %d\n", dst_core_id, dst_start, length);
             }
         } else if (is_local) {
             CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
             local_config[src_core_id].first = {noc_xy.x, noc_xy.y, 3 * data.size()};
             local_config[src_core_id].second = data;
+            printf(
+                "local_config[%d]: %ld %ld -> (%d, %d, %d)\n",
+                src_core_id,
+                noc_xy.x,
+                noc_xy.y,
+                std::get<0>(data[0]),
+                std::get<1>(data[0]),
+                std::get<2>(data[0]));
         } else if (is_remote) {
             if (remote_read) {
                 CoreCoord noc_xy = core_id_to_noc_coords(src_core_id);
                 remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
+                printf(
+                    "remote_config[%d]: %ld %ld -> (%d, %d, %d)\n",
+                    dst_core_id,
+                    noc_xy.x,
+                    noc_xy.y,
+                    std::get<0>(data[0]),
+                    std::get<1>(data[0]),
+                    std::get<2>(data[0]));
             } else {
                 CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
                 remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
+                printf(
+                    "remote_config[%d]: %ld %ld -> (%d, %d, %d)\n",
+                    src_core_id,
+                    noc_xy.x,
+                    noc_xy.y,
+                    std::get<0>(data[0]),
+                    std::get<1>(data[0]),
+                    std::get<2>(data[0]));
             }
         }
     }

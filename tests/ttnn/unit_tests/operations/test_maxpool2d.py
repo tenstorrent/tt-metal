@@ -121,15 +121,13 @@ def run_max_pool(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    act = torch.randn(act_shape, dtype=torch.bfloat16)
-    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    # act = torch.ones(act_shape, dtype=torch.bfloat16)
-    # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape)
-    # for n in range(act_shape[0]):
-    #     for c in range(act_shape[1]):
-    #         for h in range(act_shape[2]):
-    #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = 1 + n + h + w + c # + torch.rand(1) * 0.15
+    # act = torch.randn(act_shape, dtype=torch.bfloat16)
+    act = torch.zeros(act_shape, dtype=torch.bfloat16)
+    for n in range(act_shape[0]):
+        for c in range(act_shape[1]):
+            for h in range(act_shape[2]):
+                for w in range(act_shape[3]):
+                    act[n, c, h, w] = h * in_w + w
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
 
