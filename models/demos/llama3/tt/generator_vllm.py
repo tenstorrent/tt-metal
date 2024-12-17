@@ -38,7 +38,7 @@ def input_processor_for_mllama(ctx: InputContext, inputs: Union[DecoderOnlyInput
         inputs["encoder_multi_modal_data"] = {}
         return inputs
 
-    # Set encoder prompt length based on the number of vision tokens so block manager allocates enable blocks (cross block tables).
+    # Set encoder prompt length based on the number of vision tokens so block manager allocates enough blocks (cross block tables).
     hf_config = ctx.model_config.hf_config
     assert hf_config.vision_config.image_size % 14 == 0, "chunk size should be multiple of 14"
     token_per_chunk = nearest_32(
