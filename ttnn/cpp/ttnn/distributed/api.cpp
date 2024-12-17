@@ -11,10 +11,11 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::distributed::api {
+namespace ttnn::distributed {
 
 std::shared_ptr<MeshDevice> open_mesh_device(
     const MeshShape& mesh_shape,
@@ -299,4 +300,4 @@ Tensor create_multi_device_tensor(
     }
 }
 
-}  // namespace ttnn::distributed::api
+}  // namespace ttnn::distributed

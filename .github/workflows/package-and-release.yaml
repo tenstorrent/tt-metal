@@ -161,7 +161,7 @@ jobs:
         with:
           name: changelog
       - name: Assert wheels exist
-        run: ls -arhl metal_libs-*+*.whl
+        run: ls -arhl ttnn-*+*.whl
       - name: Release
         # A major release has not been tagged yet, so we need to do this to avoid
         # Node 16 deprecation warning message
@@ -178,7 +178,7 @@ jobs:
             README.md
             INSTALLING.md
             infra/machine_setup/scripts/setup_hugepages.py
-            metal_libs-*+*.whl
+            ttnn-*+*.whl
           fail_on_unmatched_files: true
   create-docker-release-image:
     needs: [

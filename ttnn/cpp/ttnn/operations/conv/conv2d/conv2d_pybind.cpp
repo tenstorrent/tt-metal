@@ -314,6 +314,8 @@ void py_bind_conv2d(py::module& module) {
         py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);
         py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
 
+        py_conv_config.def("__repr__", [](const Conv2dConfig &config) { return fmt::format("{}", config);} );
+
     py::class_<OptimizedConvParallelizationConfig>(module, "OptimizedConvParallelizationConfig")
         .def(
             py::init<CoreCoord, uint32_t, uint32_t, uint32_t, uint32_t>(),

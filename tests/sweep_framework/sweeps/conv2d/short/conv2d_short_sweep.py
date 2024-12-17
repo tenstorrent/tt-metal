@@ -12,10 +12,14 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
-from tests.sweep_framework.sweep_utils.conv2d_common import run_short, mesh_device_fixture
+from tests.sweep_framework.sweep_utils.conv2d_common import (
+    run_conv2d_short_sweep,
+    run_conv1d_short_sweep,
+    mesh_device_fixture,
+)
 
 parameters = {
-    "short_sweep_suite": {
+    "short_sweep_suite_conv2d": {
         "input_specs": [
             # Contains following params
             # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_x, stride_y, pad_x, pad_y, groups, bias, dilation]
@@ -1566,6 +1570,18 @@ parameters = {
             [1, 320, 960, 64, 64, 1, 1, 1, 1, 0, 0, 1, True, 1],
             [1, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, 1, True, 1],
         ],
+        "is_conv1d": [False],
+    },
+    "short_sweep_suite_conv1d": {
+        "input_specs": [
+            # Contains following params
+            # [batch_size, output_channels, input_channels, input_length, kernel_size, stride, pad, groups, bias, dilation]
+            [1, 256, 1024, 512, 1, 1, 0, 1, True, 1],
+            [1, 1024, 256, 512, 1, 1, 0, 1, True, 1],
+            [1, 768, 768, 3000, 3, 2, 1, 1, True, 1],
+            [1, 768, 80, 3000, 3, 1, 1, 1, True, 1],
+        ],
+        "is_conv1d": [True],
     },
 }
 
@@ -1576,22 +1592,23 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 def run(
     input_specs,
+    is_conv1d=False,
     *,
     device,
 ) -> list:
-    return run_short(
-        input_specs,
-        device,
-    )
+    if is_conv1d:
+        return run_conv1d_short_sweep(input_specs, device)
+    else:
+        return run_conv2d_short_sweep(input_specs, device)
 
 
 import pytest
 
 
-@pytest.mark.parametrize("input_spec", parameters["short_sweep_suite"]["input_specs"])
+@pytest.mark.parametrize("input_spec", parameters["short_sweep_suite_conv2d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv2d_localrun(device, input_spec):
-    run_short(
+    run_conv2d_short_sweep(
         input_spec,
         device,
     )
@@ -1606,48 +1623,17 @@ failing_parameters = [
     [1, 1056, 1056, 96, 96, 3, 3, 2, 2, 1, 1, 4, False, 1],  # 127
     [1, 528, 528, 192, 192, 3, 3, 2, 2, 1, 1, 2, False, 1],  # 220
     [1, 2904, 2904, 48, 48, 3, 3, 2, 2, 1, 1, 11, False, 1],  # 294
-    [1, 1024, 1024, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1407
-    [1, 256, 1024, 128, 128, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1408
-    [1, 1056, 1056, 48, 48, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1417
-    [1, 2904, 1056, 48, 48, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1418
-    [1, 3024, 1232, 14, 14, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1420
     [1, 3024, 1232, 14, 14, 1, 1, 2, 2, 0, 0, 1, False, 1],  # 1421
-    [1, 2520, 1344, 14, 14, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1423
-    [1, 3712, 1392, 14, 14, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1425
-    [1, 1024, 1440, 7, 7, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1427
-    [1, 448, 1632, 12, 12, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1431
-    [1, 2520, 2520, 7, 7, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1442
     [1, 819, 256, 100, 136, 3, 3, 1, 1, 1, 1, 1, True, 1],  # 1443
     [1, 819, 256, 50, 68, 3, 3, 1, 1, 1, 1, 1, True, 1],  # 1447
-    [1, 2904, 264, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1451
-    [1, 264, 2904, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1452
-    [1, 726, 2904, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1453
-    [1, 7392, 2904, 24, 24, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1455
     [1, 1024, 3, 224, 224, 32, 32, 32, 32, 0, 0, 1, True, 1],  # 1458
     [1, 768, 3, 224, 224, 32, 32, 32, 32, 0, 0, 1, False, 1],  # 1460
     [1, 768, 3, 224, 224, 32, 32, 32, 32, 0, 0, 1, True, 1],  # 1461
     [1, 768, 3, 384, 512, 32, 32, 32, 32, 0, 0, 1, True, 1],  # 1464
     [1, 64, 3, 720, 1280, 7, 7, 2, 2, 3, 3, 1, False, 1],  # 1471
     [1, 64, 3, 800, 1088, 7, 7, 2, 2, 3, 3, 1, False, 1],  # 1472
-    [1, 308, 3024, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1473
-    [1, 3024, 3024, 7, 7, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1474
-    [1, 3024, 308, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1475
-    [1, 3712, 348, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1479
-    [1, 348, 3712, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1480
-    [1, 3712, 3712, 7, 7, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1481
-    [1, 1056, 528, 96, 96, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1491
     [1, 1, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, True, 1],  # 1495
     [1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, True, 1],  # 1496
-    [1, 1392, 696, 28, 28, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1497
-    [1, 1920, 720, 14, 14, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1499
-    [1, 2904, 726, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1501
-    [1, 7392, 726, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1502
-    [1, 1024, 728, 19, 19, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1503
-    [1, 726, 7392, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1506
-    [1, 7392, 7392, 12, 12, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1507
-    [1, 1024, 782, 7, 7, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1508
-    [1, 912, 912, 7, 7, 1, 1, 1, 1, 0, 0, 1, False, 1],  # 1509
-    [1, 1280, 960, 1, 1, 1, 1, 1, 1, 0, 0, 1, True, 1],  # 1510
     [1, 640, 1920, 32, 32, 3, 3, 1, 1, 1, 1, 1, True, 1],  # 1522
     [1, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, 1, True, 1],  # 1530
     [1, 320, 640, 64, 64, 3, 3, 1, 1, 1, 1, 1, True, 1],  # 1540
@@ -1658,7 +1644,7 @@ failing_parameters = [
 @pytest.mark.parametrize("input_spec", failing_parameters)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv2d_localrun_fail_only(device, input_spec):
-    run_short(
+    run_conv2d_short_sweep(
         input_spec,
         device,
     )

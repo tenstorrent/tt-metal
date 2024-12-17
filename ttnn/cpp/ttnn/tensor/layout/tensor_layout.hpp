@@ -62,6 +62,12 @@ public:
     //  H is all dimensions except W multiplied and aligned to tile and shard height
     Size compute_physical_shape(const ttnn::SimpleShape& shape) const;
 
+    // Returns logical shard shape from shard spec shape
+    Size get_logical_shard_shape() const;
+
+    // Returns physical shard shape based on ShardMode, shard shape, and alignment
+    Size get_physical_shard_shape() const;
+
     TensorLayout with_memory_config(MemoryConfig memory_config) const {
         TensorLayout result = *this;
         result.memory_config_ = std::move(memory_config);
@@ -86,7 +92,6 @@ private:
 
     Size compute_page_shape(const Size& physical_size) const;
     size_t compute_page_size_bytes(const Size& page_size) const;
-    Size compute_physical_shard_shape(const Size& logical_shard_shape) const;
 
     DataType dtype_ = DataType::BFLOAT16;
     PageConfig page_config_;

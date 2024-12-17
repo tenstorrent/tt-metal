@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "autograd/module_base.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/linear_module.hpp"
@@ -66,8 +67,13 @@ public:
 
 class ModuleBaseParametersTest : public ::testing::Test {
 protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
+        ttml::autograd::ctx().close_device();
     }
 };
 

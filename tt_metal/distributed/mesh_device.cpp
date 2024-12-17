@@ -489,6 +489,24 @@ MeshSubDeviceManagerId MeshDevice::create_sub_device_manager(tt::stl::Span<const
     }
     return mesh_sub_device_manager_id;
 }
+
+std::tuple<MeshSubDeviceManagerId, SubDeviceId> MeshDevice::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    MeshSubDeviceManagerId mesh_sub_device_manager_id(*this);
+    SubDeviceId fabric_sub_device_id;
+    for (uint32_t i = 0; i < this->num_devices(); i++) {
+        auto* device = this->devices[i];
+        auto& sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
+        // All fabric sub-device ids will be the same, since all managers are created with the same sub_devices input
+        device->push_work([device, sub_devices, local_l1_size, &sub_device_manager_id, &fabric_sub_device_id]() {
+            std::tie(sub_device_manager_id, fabric_sub_device_id) = device->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
+        });
+    }
+    for (auto* device : this->devices) {
+        device->synchronize();
+    }
+    return {mesh_sub_device_manager_id, fabric_sub_device_id};
+}
+
 void MeshDevice::load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id) {
     for (uint32_t i = 0; i < this->num_devices(); i++) {
         auto* device = this->devices[i];

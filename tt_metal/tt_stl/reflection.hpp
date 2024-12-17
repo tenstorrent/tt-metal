@@ -6,7 +6,10 @@
 
 #include <fmt/core.h>
 
+#include <algorithm>
+#include <array>
 #include <experimental/type_traits>
+#include <map>
 #include <optional>
 #include <ostream>
 #include <reflect>
@@ -14,13 +17,14 @@
 #include <sstream>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 #include <filesystem>
 
 #include "concepts.hpp"
-#include "third_party/json/json.hpp"
-#include <magic_enum.hpp>
+#include <nlohmann/json.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include "type_name.hpp"
 #include "tt_metal/common/logger.hpp"
 
@@ -443,6 +447,32 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
             os << ", ";
         }
         index++;
+    }
+    os << "}";
+    return os;
+}
+
+template <typename K, typename V>
+std::ostream& operator<<(std::ostream& os, const std::map<K, V>& map) {
+    os << "{";
+    for (auto it = map.begin(); it != map.end(); ++it) {
+        os << it->first << ": " << it->second;
+        if (it != map.end()) {
+            os << ", ";
+        }
+    }
+    os << "}";
+    return os;
+}
+
+template <typename K, typename V>
+std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V>& map) {
+    os << "{";
+    for (auto it = map.begin(); it != map.end(); ++it) {
+        os << it->first << ": " << it->second;
+        if (it != map.end()) {
+            os << ", ";
+        }
     }
     os << "}";
     return os;
@@ -978,6 +1008,30 @@ struct fmt::formatter<std::set<T>> {
     }
 };
 
+template <typename K, typename V>
+struct fmt::formatter<std::map<K, V>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::map<K, V>& map, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << map;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+template <typename K, typename V>
+struct fmt::formatter<std::unordered_map<K, V>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::unordered_map<K, V>& map, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << map;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
 template <typename T>
     requires(
         tt::stl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value or
@@ -1063,7 +1117,7 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing struct {} using compile-time attributes: {}\n", get_type_name<T>(), object);
         }
         constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
-        std::size_t hash = 0;
+        hash_t hash = 0;
         const auto attribute_values = object.attribute_values();
         [&object, &hash, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
@@ -1074,11 +1128,26 @@ inline hash_t hash_object(const T& object) noexcept {
                 ...);
         }(std::make_index_sequence<num_attributes>{});
         return hash;
+    } else if constexpr (is_specialization_v<T, std::tuple>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::tuple of type {}: {}\n", get_type_name<T>(), object);
+        }
+        constexpr auto num_elements = std::tuple_size_v<T>;
+        hash_t hash = 0;
+        [&object, &hash]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&object, &hash] {
+                    const auto& element = std::get<Ns>(object);
+                    hash = hash_objects(hash, element);
+                }(),
+                ...);
+        }(std::make_index_sequence<num_elements>{});
+        return hash;
     } else if constexpr (is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
         }
-        auto hash = 0;
+        hash_t hash = 0;
         for (const auto& element : object) {
             hash = hash_objects(hash, element);
         }
@@ -1087,9 +1156,35 @@ inline hash_t hash_object(const T& object) noexcept {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::set of type {}: {}\n", get_type_name<T>(), object);
         }
-        auto hash = 0;
+        hash_t hash = 0;
         for (const auto& element : object) {
             hash = hash_objects(hash, element);
+        }
+        return hash;
+    } else if constexpr (is_specialization_v<T, std::map>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::map of type {}: {}\n", get_type_name<T>(), object);
+        }
+        hash_t hash = 0;
+        for (const auto& [key, value] : object) {
+            hash = hash_objects(hash, key, value);
+        }
+        return hash;
+    } else if constexpr (is_specialization_v<T, std::unordered_map>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::unordered_map of type {}: {}\n", get_type_name<T>(), object);
+        }
+        // Sort the unordered map by key to make the hash order invariant
+        std::vector<typename T::const_iterator> iterators;
+        iterators.reserve(object.size());
+        for (auto it = object.begin(); it != object.end(); ++it) {
+            iterators.push_back(it);
+        }
+        std::sort(iterators.begin(), iterators.end(), [](const auto& a, const auto& b) { return a->first < b->first; });
+
+        hash_t hash = 0;
+        for (const auto& it : iterators) {
+            hash = hash_objects(hash, it->first, it->second);
         }
         return hash;
     } else if constexpr (is_specialization_v<T, std::optional>) {
@@ -1105,7 +1200,7 @@ inline hash_t hash_object(const T& object) noexcept {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
         }
-        std::size_t hash = 0;
+        hash_t hash = 0;
         reflect::for_each([&hash, &object](auto I) { hash = hash_objects(hash, reflect::get<I>(object)); }, object);
         return hash;
     } else {
@@ -1335,7 +1430,7 @@ struct to_json_t<std::map<K, V>> {
     nlohmann::json operator()(const std::map<K, V>& object) {
         nlohmann::json json_object = nlohmann::json::object();
         for (const auto& [key, value] : object) {
-            json_object[to_json(key)] = to_json(value);
+            json_object[to_json(key).dump()] = to_json(value);
         }
         return json_object;
     }
@@ -1346,7 +1441,29 @@ struct from_json_t<std::map<K, V>> {
     std::map<K, V> operator()(const nlohmann::json& json_object) {
         std::map<K, V> object;
         for (const auto& [key, value] : json_object.items()) {
-            object[from_json<K>(key)] = from_json<V>(value);
+            object[from_json<K>(nlohmann::json::parse(key))] = from_json<V>(value);
+        }
+        return object;
+    }
+};
+
+template <typename K, typename V>
+struct to_json_t<std::unordered_map<K, V>> {
+    nlohmann::json operator()(const std::unordered_map<K, V>& object) {
+        nlohmann::json json_object = nlohmann::json::object();
+        for (const auto& [key, value] : object) {
+            json_object[to_json(key).dump()] = to_json(value);
+        }
+        return json_object;
+    }
+};
+
+template <typename K, typename V>
+struct from_json_t<std::unordered_map<K, V>> {
+    std::map<K, V> operator()(const nlohmann::json& json_object) {
+        std::unordered_map<K, V> object;
+        for (const auto& [key, value] : json_object.items()) {
+            object[from_json<K>(nlohmann::json::parse(key))] = from_json<V>(value);
         }
         return object;
     }

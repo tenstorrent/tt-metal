@@ -400,6 +400,8 @@ constexpr bool implements_get_parallelization_strategy() {
     return std::experimental::is_detected_v<has_get_parallelization_strategy_t, T, const Tensors&>;
 }
 
+}  // namespace detail
+
 template <typename ConcreteOperation>
 auto default_create_output_tensors(
     const ConcreteOperation& operation,
@@ -426,8 +428,6 @@ auto default_create_output_tensors(
     }
     return output_tensors;
 }
-
-}  // namespace detail
 
 template <class OutputTensorsT = Tensors>
 struct DeviceOperation final {
@@ -628,7 +628,7 @@ struct DeviceOperation final {
                         "create_output_tensors");
                     return operation.create_output_tensors(input_tensors);
                 } else if constexpr (detail::implements_compute_output_specs<T>()) {
-                    return detail::default_create_output_tensors(operation, input_tensors, output_tensors);
+                    return default_create_output_tensors(operation, input_tensors, output_tensors);
                 } else {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,

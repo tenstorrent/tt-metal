@@ -10,6 +10,8 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_tensor_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_tensor_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_processor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_trace_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_pybind.cpp
@@ -76,6 +78,8 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_on_device/reshape_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_on_device/device/reshape_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/view/view.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/view/view_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_view/reshape.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_view/reshape_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_view/device/reshape_rm_op.cpp
@@ -127,6 +131,7 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/device/broadcast_height_multi_core_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/device/broadcast_width_multi_core_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/device/broadcast_height_multi_core_sharded_optimized_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/device/broadcast_height_multi_core_sharded_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary_backward/binary_backward.cpp
@@ -609,6 +614,9 @@ set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
     Metalium::Metal
     Boost::container
+    xtensor
+    xtensor-blas
+    xtl
 )
 set(TTNN_PUBLIC_LINK_DIRS "")
 
@@ -649,7 +657,7 @@ if(WITH_PYTHON_BINDINGS)
     list(
         APPEND
         TTNN_PUBLIC_LINK_LIBRARIES
-        pch_pybinds
+        pybind11::module
         ${Python3_LIBRARIES}
     )
 endif()

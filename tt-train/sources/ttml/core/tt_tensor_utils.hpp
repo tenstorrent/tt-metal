@@ -38,7 +38,9 @@ template <class VectorType = float, DataType TensorType = DataType::BFLOAT16>
     const std::vector<xt::xarray<VectorType>>& buffers, const std::unordered_map<std::string, std::string>& config);
 
 template <class T = float>
-[[nodiscard]] std::vector<T> to_vector(const tt::tt_metal::Tensor& tensor);
+[[nodiscard]] std::vector<T> to_vector(const tt::tt_metal::Tensor& tensor) {
+    return tensor.to_vector<T>();
+}
 
 [[nodiscard]] bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor);
 
@@ -47,23 +49,24 @@ template <class T = float>
 template <class T = float, DataType TensorType = DataType::BFLOAT16>
 [[nodiscard]] tt::tt_metal::Tensor from_xtensor(
     const xt::xarray<T>& buffer, ttnn::distributed::MeshDevice* device, Layout layout = Layout::TILE) {
-    auto shape = create_shape(get_shape_4d(buffer));
+    auto shape = ttnn::experimental::xtensor::get_shape_from_xarray(buffer);
     auto buffer_view = xtensor_to_span(buffer);
     return from_vector<T, TensorType>(std::vector<T>(buffer_view.begin(), buffer_view.end()), shape, device, layout);
 }
 
 template <class T = float>
 [[nodiscard]] xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
-    auto vec = to_vector<T>(tensor);
-    auto shape = tensor.get_shape().logical_shape();
-    return span_to_xtensor(std::span<T>(vec.data(), vec.size()), shape);
+    auto vec = tensor.to_vector<T>();
+    const auto& shape = tensor.get_shape().logical_shape();
+    std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
+    return xt::adapt(std::move(vec), shape_vec);
 }
 
 template <class T = float>
 auto to_xtensor(const tt::tt_metal::Tensor& tensor, const MeshToXTensorVariant<T>& composer) {
     auto cpu_tensor = tensor.cpu();
     cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
-    auto cpu_tensors = ttnn::distributed::api::get_device_tensors(cpu_tensor);
+    auto cpu_tensors = ttnn::distributed::get_device_tensors(cpu_tensor);
     std::vector<xt::xarray<T>> res;
     res.reserve(cpu_tensors.size());
     for (const auto& shard : cpu_tensors) {

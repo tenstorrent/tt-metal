@@ -85,7 +85,7 @@ void Hal::initialize_gs() {
     for (uint8_t processor_class_idx = 0; processor_class_idx < NumTensixDispatchClasses; processor_class_idx++) {
         uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
         processor_types.resize(num_processors);
-        for (uint8_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
+        for (size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
             DeviceAddr fw_base, local_init;
             switch (processor_class_idx) {
                 case 0: {
@@ -161,7 +161,10 @@ void Hal::initialize_gs() {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
 
-    num_nocs_ = NUM_NOCS;
+    this->num_nocs_ = NUM_NOCS;
+    this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
+    this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
+    this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
 }
 
 }  // namespace tt_metal

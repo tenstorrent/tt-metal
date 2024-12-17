@@ -106,6 +106,7 @@ ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @jaykru-tt @yugi95
 ttnn/cpp/ttnn/operations/data_movement/fold/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @asandhupatlaTT
+ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @asandhupatlaTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @asandhupatlaTT @sjameelTT
@@ -165,7 +166,7 @@ models/perf/benchmarking_utils.py @skhorasganiTT
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
-docs/source/ttnn/dependencies/tt_lib.rst @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt
+docs/source/ttnn/ttnn/dependencies/tt_lib.rst @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt
 docs/source/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt @razorback3 @dongjin-na
 
 # misc
