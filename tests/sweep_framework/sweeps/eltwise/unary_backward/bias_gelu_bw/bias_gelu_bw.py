@@ -4,7 +4,6 @@
 
 from typing import Optional, Tuple
 from functools import partial
-import itertools
 
 import torch
 import random
@@ -104,27 +103,18 @@ def run(
         memory_config=grad_memory_config,
     )
 
-    sharded_config = ttnn.create_sharded_memory_config(
-        shape=input_shape,
-        core_grid=device_grid_size,
-        strategy=sharding_strategy,
-        orientation=shard_orientation,
-        use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
-    )
-
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
         layout=input_layout,
         device=device,
-        memory_config=sharded_config,
+        memory_config=input_a_memory_config,
     )
 
     start_time = start_measuring_time()
     output_tensor = ttnn.bias_gelu_bw(
         grad_tensor, input_tensor_a, scalar, approximate=approximate, memory_config=output_memory_config
     )[0]
-
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 

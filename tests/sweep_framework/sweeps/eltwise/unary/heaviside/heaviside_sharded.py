@@ -81,6 +81,9 @@ def run(
         shard_height_mul_of_32,
     ) = parse_sharding_spec(input_spec)
 
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        input_shape = sanitize_shape_rm(input_shape)
+
     sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,
         core_grid=core_grid,
@@ -89,9 +92,6 @@ def run(
         use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
         tile_layout=True,
     )
-
-    if input_layout == ttnn.ROW_MAJOR_LAYOUT:
-        input_shape = sanitize_shape_rm(input_shape)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
