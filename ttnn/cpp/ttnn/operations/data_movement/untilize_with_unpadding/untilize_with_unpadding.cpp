@@ -13,11 +13,11 @@
 
 using namespace tt::tt_metal;
 
-LegacyShape squeeze_output_shape(tt::tt_metal::LegacyShape output_shape) {
-    if (output_shape.rank() > 4) {
-        std::vector<uint32_t> output_shape_4d(output_shape.rank());
+std::vector<uint32_t> squeeze_vector_shape(std::vector<uint32_t> output_shape) {
+    if (output_shape.size() > 4) {
+        std::vector<uint32_t> output_shape_4d(output_shape.size());
         output_shape_4d[0] = 1;
-        int extra_rank = output_shape.rank() - 4;
+        int extra_rank = output_shape.size() - 4;
         for (int i = extra_rank; i >= 0; i--) {
             output_shape_4d[0] *= (output_shape[i] + 1);
         }
@@ -25,7 +25,7 @@ LegacyShape squeeze_output_shape(tt::tt_metal::LegacyShape output_shape) {
         output_shape_4d[1] = output_shape[1 + extra_rank];
         output_shape_4d[2] = output_shape[2 + extra_rank];
         output_shape_4d[3] = output_shape[3 + extra_rank];
-        return tt::tt_metal::LegacyShape(output_shape_4d);
+        return output_shape_4d;
     }
     return output_shape;
 }
@@ -45,7 +45,7 @@ MassagedUntilizeVal build_ndiml_untilize_val(BaseUntilizeValType base_untilize) 
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeValArgs {
             *original_shape = input_tensor.get_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_to_le_4D(input_tensor);
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
@@ -58,7 +58,7 @@ MassagedUntilizeVal build_ndiml_untilize_val(BaseUntilizeValType base_untilize) 
 ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::LegacyShape& output_tensor_end,
+    const ttnn::SmallVector<uint32_t>& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     bool use_pack_untilize) {
@@ -66,20 +66,22 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;
 
     std::vector<uint32_t> output_end_vector;
-    tt::tt_metal::LegacyShape output_end = tt::tt_metal::LegacyShape{};
+    std::vector<uint32_t> output_end;
     if (input_tensor.get_shape().rank() > 4) {
         for (auto index = 0; index < input_tensor.get_shape().rank(); ++index) {
             output_end_vector.push_back(input_tensor.get_shape()[index] - 1);
         }
-        output_end = squeeze_output_shape(LegacyShape(output_end_vector));
+        output_end = squeeze_vector_shape(output_end_vector);
     } else {
-        output_end = output_tensor_end;
+        for (auto index = 0; index < output_tensor_end.size(); ++index) {
+            output_end.push_back(output_tensor_end[index]);
+        }
     }
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         return operation::run(
             UntilizeWithUnpadding{
-                output_end,
+                ttnn::SimpleShape(output_end),
                 memory_config.value_or(input_tensor.memory_config()),
                 use_multicore,
                 use_pack_untilize,
@@ -95,7 +97,39 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
 
 ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::LegacyShape& output_tensor_end,
+    const ttnn::SmallVector<uint32_t>& output_tensor_end,
+    const std::optional<MemoryConfig>& memory_config,
+    bool use_multicore,
+    bool use_pack_untilize) {
+    return invoke(DefaultQueueId, input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize);
+}
+
+ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
+    uint8_t queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SimpleShape& output_tensor_end,
+    const std::optional<MemoryConfig>& memory_config,
+    bool use_multicore,
+    bool use_pack_untilize) {
+    bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;
+
+    return operation::run(
+               UntilizeWithUnpadding{
+                   output_tensor_end,
+                   memory_config.value_or(input_tensor.memory_config()),
+                   use_multicore,
+                   use_pack_untilize,
+                   fp32_dest_acc_en},
+               {input_tensor},
+               {},
+               {},
+               queue_id)
+        .at(0);
+}
+
+ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SimpleShape& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     bool use_pack_untilize) {

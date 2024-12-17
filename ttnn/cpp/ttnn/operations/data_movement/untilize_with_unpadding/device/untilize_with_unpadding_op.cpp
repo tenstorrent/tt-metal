@@ -66,7 +66,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> UntilizeWithUnpadding::compute_output_shapes(
+std::vector<ttnn::SimpleShape> UntilizeWithUnpadding::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     SmallVector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
@@ -74,7 +74,7 @@ std::vector<tt::tt_metal::LegacyShape> UntilizeWithUnpadding::compute_output_sha
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->output_tensor_end[i] + 1);
     }
-    tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
+    ttnn::SimpleShape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
 
@@ -85,7 +85,7 @@ std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(
         input_tensor_a.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.get_dtype();
     if (input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded()) {
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-        uint32_t fused_height = tt::tt_metal::compute_volume(output_shape) / output_shape[-1];
+        uint32_t fused_height = output_shape.volume() / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
         std::array<uint32_t, 2> shard_shape;
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
