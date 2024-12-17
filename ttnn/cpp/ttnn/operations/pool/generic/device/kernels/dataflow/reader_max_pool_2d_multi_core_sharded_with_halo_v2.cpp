@@ -63,6 +63,8 @@ void kernel_main() {
 
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
 
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+
     constexpr uint32_t TILE_WIDTH = 32;
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CBIndex::c_1 : tt::CBIndex::c_0;
@@ -87,7 +89,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
 
-    uint32_t in_w_padded = in_w + 2 * pad_w;
+    uint32_t in_w_padded = in_w + 2 * pad_w + ceil_pad_w;
 
     if (reader_id == 0) {
         print_pages(in_l1_read_base_addr, 64, 25);

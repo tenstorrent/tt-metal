@@ -72,6 +72,9 @@ struct SlidingWindowConfig {
      */
     Shape get_output_shape() const;
 
+    uint32_t get_ceil_pad_h() const;
+    uint32_t get_ceil_pad_w() const;
+
     Shape get_transposed_full_input_shape() const;
 
     std::array<uint32_pair_t, 2> get_transposed_real_padding() const;

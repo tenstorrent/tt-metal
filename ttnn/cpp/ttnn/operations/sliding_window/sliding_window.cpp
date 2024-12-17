@@ -77,6 +77,29 @@ Shape SlidingWindowConfig::get_output_shape() const {
     return Shape({batch_size, output_h, output_w, 0});
 }
 
+uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
+    uint32_t ceil_padding_h = 0;
+    if (ceil_mode) {
+        Shape output_shape = get_output_shape();
+        // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
+        ceil_padding_h = stride_hw.first * (output_shape[1] - 1) + window_hw.first - input_hw.first - 2 * pad_hw.first;
+    }
+
+    return ceil_padding_h;
+}
+
+uint32_t SlidingWindowConfig::get_ceil_pad_w() const {
+    uint32_t ceil_padding_w = 0;
+    if (ceil_mode) {
+        Shape output_shape = get_output_shape();
+        // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
+        ceil_padding_w =
+            stride_hw.second * (output_shape[2] - 1) + window_hw.second - input_hw.second - 2 * pad_hw.second;
+    }
+
+    return ceil_padding_w;
+}
+
 Shape SlidingWindowConfig::get_transposed_full_input_shape() const {
     TT_FATAL(
         is_transpose == true,
@@ -158,16 +181,8 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
         return pad_metadata;
 
     } else {
-        uint32_t ceil_padding_h = 0;
-        uint32_t ceil_padding_w = 0;
-        if (config.ceil_mode) {
-            Shape output_shape = config.get_output_shape();
-            // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
-            ceil_padding_h = config.stride_hw.first * (output_shape[1] - 1) + config.window_hw.first -
-                             config.input_hw.first - 2 * config.pad_hw.first;
-            ceil_padding_w = config.stride_hw.second * (output_shape[2] - 1) + config.window_hw.second -
-                             config.input_hw.second - 2 * config.pad_hw.second;
-        }
+        uint32_t ceil_padding_h = config.get_ceil_pad_h();
+        uint32_t ceil_padding_w = config.get_ceil_pad_w();
         uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first + ceil_padding_h;
         uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
         std::vector<bool> pad_metadata(config.batch_size * padded_input_h * padded_input_w, false);
@@ -206,16 +221,8 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
             }
         }
     } else {
-        uint32_t ceil_padding_h = 0;
-        uint32_t ceil_padding_w = 0;
-        if (config.ceil_mode) {
-            Shape output_shape = config.get_output_shape();
-            // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
-            ceil_padding_h = config.stride_hw.first * (output_shape[1] - 1) + config.window_hw.first -
-                             config.input_hw.first - 2 * config.pad_hw.first;
-            ceil_padding_w = config.stride_hw.second * (output_shape[2] - 1) + config.window_hw.second -
-                             config.input_hw.second - 2 * config.pad_hw.second;
-        }
+        uint32_t ceil_padding_h = config.get_ceil_pad_h();
+        uint32_t ceil_padding_w = config.get_ceil_pad_w();
 
         uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first + ceil_padding_h;
         uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
@@ -239,13 +246,7 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
     uint32_t num_cores = config.num_cores_nhw;
     uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
 
-    uint32_t ceil_padding_w = 0;
-    if (config.ceil_mode) {
-        Shape output_shape = config.get_output_shape();
-        // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
-        ceil_padding_w = config.stride_hw.second * (output_shape[2] - 1) + config.window_hw.second -
-                         config.input_hw.second - 2 * config.pad_hw.second;
-    }
+    uint32_t ceil_padding_w = config.get_ceil_pad_w();
     uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
 
     uint32_t max_index = op_trace_metadata.size();
