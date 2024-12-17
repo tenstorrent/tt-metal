@@ -32,7 +32,7 @@ T get_median(std::vector<T>& vec) {
 template <typename T>
 void print_tensor_stats_(const tt::tt_metal::Tensor& tensor, const std::string& name) {
     auto tensor_shape = tensor.get_shape();
-    auto tensor_vec = ttml::core::to_vector<T>(tensor);
+    auto tensor_vec = tensor.to_vector<T>();
 
     auto median = get_median(tensor_vec);
     auto mean = std::accumulate(tensor_vec.begin(), tensor_vec.end(), 0.F) / static_cast<float>(tensor_vec.size());
@@ -88,50 +88,6 @@ tt::tt_metal::Tensor ttml_create_owned_tensor(
     auto buffer = tt::tt_metal::owned_buffer::create(std::move(data));
     auto storage = OwnedStorage{std::move(buffer)};
     return {std::move(storage), shape, data_type, layout};
-}
-
-// TODO: optimize precomputing multipliers
-template <class T = float, class InternalT = bfloat16>
-std::vector<T> untile_tensor_to_vec(const tt::tt_metal::Tensor& cpu_tensor) {
-    auto tiled_buffer = tt::tt_metal::host_buffer::get_as<InternalT>(cpu_tensor);
-    auto untiled_shape = cpu_tensor.get_logical_shape();
-    auto tiled_shape = cpu_tensor.get_padded_shape();
-
-    // Calculate total size of the untiled tensor
-    size_t total_size = untiled_shape.volume();
-
-    std::vector<T> untiled_data(total_size);
-
-    auto compute_flat_index = [](const std::vector<uint32_t>& indices, ttnn::SimpleShape& shape) -> uint32_t {
-        uint32_t flat_index = 0;
-        uint32_t multiplier = 1;
-        for (int i = (int)indices.size() - 1; i >= 0; --i) {
-            flat_index += indices[i] * multiplier;
-            multiplier *= shape[i];
-        }
-        return flat_index;
-    };
-
-    std::vector<uint32_t> indices(tiled_shape.rank(), 0);
-
-    for (size_t idx = 0; idx < total_size; ++idx) {
-        uint32_t untiled_index = compute_flat_index(indices, untiled_shape);
-        uint32_t tiled_index = compute_flat_index(indices, tiled_shape);
-        if constexpr (std::is_same_v<InternalT, bfloat16>) {
-            untiled_data[untiled_index] = tiled_buffer[tiled_index].to_float();
-        } else {
-            untiled_data[untiled_index] = tiled_buffer[tiled_index];
-        }
-
-        for (int dim = (int)tiled_shape.rank() - 1; dim >= 0; --dim) {
-            if (++indices[dim] < untiled_shape[dim]) {
-                break;
-            }
-            indices[dim] = 0;
-        }
-    }
-
-    return untiled_data;
 }
 
 }  // namespace
@@ -196,12 +152,12 @@ template <class T, DataType TensorType>
         if (buffers[i].shape() != first_shape) {
             throw std::runtime_error(fmt::format(
                 "Cannot create a host buffer from xtensors with different shapes: {} vs {}!",
-                get_shape_4d(buffers[0]),
-                get_shape_4d(buffers[i])));
+                ttnn::experimental::xtensor::get_shape_from_xarray(buffers[0]),
+                ttnn::experimental::xtensor::get_shape_from_xarray(buffers[i])));
         }
     }
     for (const auto& buffer : buffers) {
-        auto shape = create_shape(get_shape_4d(buffer));
+        auto shape = ttnn::experimental::xtensor::get_shape_from_xarray(buffer);
 
         if constexpr (std::is_same_v<T, float>) {
             auto owned_buffer =
@@ -271,17 +227,6 @@ tt::tt_metal::Tensor from_vector<float, DataType::FLOAT32>(
     return ttnn::typecast(tensor, DataType::FLOAT32);
 }
 
-template <>
-std::vector<float> to_vector<float>(const tt::tt_metal::Tensor& tensor) {
-    auto cpu_tensor = tensor.cpu();
-    cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
-    if (cpu_tensor.get_dtype() == DataType::BFLOAT16) {
-        return untile_tensor_to_vec<float, bfloat16>(cpu_tensor);
-    }
-    assert(cpu_tensor.get_dtype() == DataType::FLOAT32);
-    return untile_tensor_to_vec<float, float>(cpu_tensor);
-}
-
 /*
 From vector uint32 doesn't support tilize_with_zero_padding on device
 */
@@ -340,22 +285,6 @@ tt::tt_metal::Tensor from_vector<int32_t, DataType::INT32>(
     }
 
     return output;
-}
-
-template <>
-std::vector<uint32_t> to_vector<uint32_t>(const tt::tt_metal::Tensor& tensor) {
-    auto cpu_tensor = tensor.cpu();
-    cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
-
-    return untile_tensor_to_vec<uint32_t, uint32_t>(cpu_tensor);
-}
-
-template <>
-std::vector<int32_t> to_vector<int32_t>(const tt::tt_metal::Tensor& tensor) {
-    auto cpu_tensor = tensor.cpu();
-    cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
-
-    return untile_tensor_to_vec<int32_t, int32_t>(cpu_tensor);
 }
 
 bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {

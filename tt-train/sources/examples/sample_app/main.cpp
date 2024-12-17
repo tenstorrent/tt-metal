@@ -24,12 +24,14 @@ void print_tensor(const tt::tt_metal::Tensor& tensor) {
     tt::tt_metal::memcpy(device->command_queue(), data.data(), tensor);
 
     // print the data
-    for (size_t i = 0; i < shape[0]; i++) {
-        for (size_t j = 0; j < shape[1]; j++) {
-            for (size_t k = 0; k < shape[2]; k++) {
-                for (size_t l = 0; l < shape[3]; l++) {
-                    std::cout << data[i * shape[1] * shape[2] * shape[3] + j * shape[2] * shape[3] + k * shape[3] + l]
-                                     .to_float()
+    for (size_t dim0 = 0; dim0 < shape[0]; dim0++) {
+        for (size_t dim1 = 0; dim1 < shape[1]; dim1++) {
+            for (size_t dim2 = 0; dim2 < shape[2]; dim2++) {
+                for (size_t dim3 = 0; dim3 < shape[3]; dim3++) {
+                    std::cout << data
+                                     [dim0 * shape[1] * shape[2] * shape[3] + dim1 * shape[2] * shape[3] +
+                                      dim2 * shape[3] + dim3]
+                                         .to_float()
                               << " ";
                 }
                 std::cout << std::endl;
