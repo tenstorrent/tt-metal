@@ -50,7 +50,7 @@ std::vector<T> arange(int64_t start, int64_t end, int64_t step) {
 template <typename T>
 class VectorConversionTest : public ::testing::Test {};
 
-using TestTypes = ::testing::Types<float, bfloat16, uint32_t, int32_t>;
+using TestTypes = ::testing::Types<float, bfloat16, uint8_t, uint16_t, uint32_t, int32_t>;
 TYPED_TEST_SUITE(VectorConversionTest, TestTypes);
 
 TYPED_TEST(VectorConversionTest, Roundtrip) {
@@ -74,21 +74,17 @@ TYPED_TEST(VectorConversionTest, RoundtripTilezedLayout) {
     ttnn::SimpleShape shape{128, 128};
 
     auto input = arange<TypeParam>(0, shape.volume(), 1);
-    // TODO: Support this.
-    EXPECT_ANY_THROW(
-        Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE)));
 
-    auto output = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>()))
-                      .to(Layout::TILE)
+    auto output = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE))
                       .template to_vector<TypeParam>();
+
     EXPECT_THAT(output, Pointwise(Eq(), input));
 }
 
 TYPED_TEST(VectorConversionTest, InvalidDtype) {
     ttnn::SimpleShape shape{32, 32};
-    auto input = arange<TypeParam>(0, 42, 1);
+    auto input = arange<TypeParam>(0, shape.volume(), 1);
 
-    ASSERT_NE(input.size(), shape.volume());
     EXPECT_ANY_THROW(Tensor::from_vector(
         input,
         get_tensor_spec(
@@ -97,7 +93,7 @@ TYPED_TEST(VectorConversionTest, InvalidDtype) {
             (std::is_same_v<TypeParam, int32_t> ? DataType::FLOAT32 : DataType::INT32))));
 }
 
-TEST(FloatVectorConversionTest, RoundtripBfloat16Representation) {
+TEST(FloatVectorConversionTest, RoundtripBfloat16) {
     for (const auto& shape : get_shapes_for_test()) {
         auto input_bf16 = arange<bfloat16>(0, static_cast<int64_t>(shape.volume()), 1);
         std::vector<float> input_ft;
@@ -114,6 +110,27 @@ TEST(FloatVectorConversionTest, RoundtripBfloat16Representation) {
         EXPECT_THAT(output_ft, Pointwise(Eq(), input_ft)) << "for shape: " << shape;
     }
 }
+
+class BlockFloatTest : public ::testing::TestWithParam<DataType> {};
+
+TEST_P(BlockFloatTest, Roundtrip) {
+    ttnn::SimpleShape shape{128, 128};
+    std::vector<float> input;
+    input.reserve(shape.volume());
+    for (int i = 0; i < shape.volume(); ++i) {
+        input.push_back(i % 2 == 0 ? 0.0f : 1.0f);
+    }
+    auto output = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE)).to_vector<float>();
+    EXPECT_THAT(output, Pointwise(Eq(), input));
+}
+
+TEST_P(BlockFloatTest, InvalidLayout) {
+    ttnn::SimpleShape shape{128, 128};
+    EXPECT_ANY_THROW(
+        Tensor::from_vector(std::vector<float>(shape.volume()), get_tensor_spec(shape, GetParam(), Layout::ROW_MAJOR)));
+}
+
+INSTANTIATE_TEST_SUITE_P(BlockFloatTest, BlockFloatTest, ::testing::Values(DataType::BFLOAT4_B, DataType::BFLOAT8_B));
 
 }  // namespace
 }  // namespace ttnn
