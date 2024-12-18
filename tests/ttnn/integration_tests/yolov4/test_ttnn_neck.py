@@ -64,10 +64,6 @@ def test_neck(device, reset_seeds, model_location_generator):
     torch_model.eval()
 
     result_ttnn = ttnn_model(device, ttnn_input_tensor)
-    start_time = time.time()
-    for x in range(2):
-        result_ttnn = ttnn_model(device, ttnn_input_tensor)
-    logger.info(f"Time taken: {time.time() - start_time}")
 
     result_1 = ttnn.to_torch(result_ttnn[0])
     result_2 = ttnn.to_torch(result_ttnn[1])
