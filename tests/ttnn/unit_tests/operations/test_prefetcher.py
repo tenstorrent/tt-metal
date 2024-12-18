@@ -390,9 +390,17 @@ def test_run_prefetcher(
         if current_tile_size > max_tile_size:
             max_tile_size = current_tile_size
 
-    # FF1 is 368640 per receiver core = 360 tiles
-    # global_cb_size = 512 * 512 * 4
-    global_cb_size = 512 * max_tile_size
+    # Set global buffer size to buffer a whole layer at once
+    # receiver sizes in tiles
+    # FF1: 72 x 5 = 375
+    # FF3: 72 x 5 = 375
+    # FF2: 120 x 3 = 360
+    # QKV: 72 x 2 = 144
+    # DO: 72 x 3 = 216
+    # Total: 1470
+
+    # global_cb_size = 1000 * max_tile_size # works without profiler, fails with profiler, 900 doesn't provide tracy info
+    global_cb_size = 750 * max_tile_size
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
     print(f"global cb size {global_cb_size}")
 
