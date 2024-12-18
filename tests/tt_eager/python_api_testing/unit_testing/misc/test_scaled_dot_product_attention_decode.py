@@ -717,11 +717,8 @@ def run_test_sdpa_decode_paged_attention(
         # Test when page_table does not contain blocks for full sequence length
         k_chunk_size = get_chunk_size(max_start_idx + 1, s)
         padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size) if causal else s
-        if causal:
-            last_block = max(1, math.ceil(padded_layer_len / block_size))
-            tt_page_table = ttnn.Tensor(page_table[:, :last_block], ttnn.int32).to(device)
-        else:
-            tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+        tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
@@ -858,6 +855,7 @@ def run_test_sdpa_decode_paged_attention(
         # [4, 16, 4, 32768, 128, (8, 8), True],
         # [32, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
         [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
+        [1, 8, 1, 128 * 1024, 128, (8, 4), True],  # llama 3.1 8b N300
         # [1, 8, 1, 32768, 128, (8, 1), True],  # Llama2-70B
         # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
         # [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
@@ -869,6 +867,9 @@ def run_test_sdpa_decode_paged_attention(
 def test_sdpa_decode_paged_attention(
     device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, use_program_cache
 ):
+    if s == 128 * 1024 and block_size != 64:
+        # 128k sequence, block_size 64 tests the sizing of the page table CB
+        pytest.skip("Skipping test for seq_len=128k with block_size!=64")
     ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_paged_attention(
         device,
