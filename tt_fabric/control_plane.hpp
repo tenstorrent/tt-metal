@@ -28,6 +28,7 @@ class ControlPlane {
     void print_ethernet_channels() const;
 
     std::pair<mesh_id_t, chip_id_t> get_mesh_chip_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
+    chip_id_t get_physical_chip_id_from_mesh_chip_id(std::pair<mesh_id_t, chip_id_t> mesh_chip_id) const;
 
 private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;

@@ -512,6 +512,10 @@ std::pair<mesh_id_t, chip_id_t> ControlPlane::get_mesh_chip_id_from_physical_chi
     return {};
 }
 
+chip_id_t get_physical_chip_id_from_mesh_chip_id(std::pair<mesh_id_t, chip_id_t> mesh_chip_id) const {
+    return logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_chip_id.first][mesh_chip_id.second];
+}
+
 void ControlPlane::configure_routing_tables() const {
     // Configure the routing tables on the chips
     for (mesh_id_t mesh_id = 0; mesh_id < this->intra_mesh_routing_tables_.size(); mesh_id++) {
