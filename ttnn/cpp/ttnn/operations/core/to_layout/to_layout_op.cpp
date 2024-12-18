@@ -65,11 +65,14 @@ Tensor to_layout_impl_on_device(
     bool use_multicore_untilize = true;
     bool use_multicore_tilize = use_multicore_device_tilize(tensor_arg, dtype);
 
+    if (layout == ttnn::ROW_MAJOR_LAYOUT) {
+        TT_FATAL(
+            !dtype.has_value() || dtype.value() == tensor_arg.dtype(),
+            "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device!");
+    }
+
     if (!requires_padding_change(tensor_arg, layout)) {
         if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-            TT_FATAL(
-                !dtype.has_value() || dtype.value() == tensor_arg.dtype(),
-                "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
             return ttnn::untilize(tensor_arg, output_memory_config, use_multicore_untilize);
         }
         return ttnn::tilize(tensor_arg, output_memory_config, dtype, use_multicore_tilize);
@@ -78,10 +81,6 @@ Tensor to_layout_impl_on_device(
     auto tensor_shape = tensor_arg.get_logical_shape();
 
     if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-        TT_FATAL(
-            !dtype.has_value() || dtype.value() == tensor_arg.dtype(),
-            "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
-
         if (tensor_arg.is_sharded()) {
             const auto memory_config = tensor_arg.memory_config();
             output_memory_config = tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
