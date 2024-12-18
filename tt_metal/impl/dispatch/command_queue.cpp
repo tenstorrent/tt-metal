@@ -71,26 +71,24 @@ tt::stl::Span<const SubDeviceId> select_sub_device_ids(IDevice* device, tt::stl:
 }
 
 void ValidateBufferRegion(
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, const BufferRegion region) {
-    const auto [is_partial_region, is_valid_region, is_sharded_buffer] = std::visit(
-        [&](auto&& buf) -> std::tuple<bool, bool, bool> {
-            using T = std::decay_t<decltype(buf)>;
-            if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
-                return {
-                    buf.get().is_partial_region(region),
-                    buf.get().is_valid_region(region),
-                    is_sharded(buf.get().buffer_layout())};
-            } else if constexpr (std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                return {buf->is_partial_region(region), buf->is_valid_region(region), is_sharded(buf->buffer_layout())};
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, const BufferRegion& region) {
+    auto& b = std::visit(
+        [&](auto&& b) -> Buffer& {
+            using type_buf = std::decay_t<decltype(b)>;
+            if constexpr (std::is_same_v<type_buf, std::shared_ptr<Buffer>>) {
+                return *b;
+            } else {
+                return b.get();
             }
         },
         buffer);
 
-    TT_FATAL(is_valid_region, "Buffer region with offset {} and size {} is invalid.", region.offset, region.size);
+    TT_FATAL(
+        b.is_valid_region(region), "Buffer region with offset {} and size {} is invalid.", region.offset, region.size);
 
-    if (is_partial_region) {
+    if (b.is_partial_region(region)) {
         TT_FATAL(
-            !is_sharded_buffer,
+            !is_sharded(b.buffer_layout()),
             "Reading from and writing to partial buffer regions is only supported for non-sharded buffers.");
     }
 }
