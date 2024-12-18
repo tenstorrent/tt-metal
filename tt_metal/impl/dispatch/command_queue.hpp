@@ -72,7 +72,6 @@ class Command {
 class EnqueueReadBufferCommand : public Command {
 private:
     SystemMemoryManager& manager;
-    void* dst;
     CoreType dispatch_core_type;
 
     virtual void add_prefetch_relay(HugepageDeviceCommand& command) = 0;
@@ -94,7 +93,6 @@ public:
         IDevice* device,
         NOC noc_index,
         Buffer& buffer,
-        void* dst,
         SystemMemoryManager& manager,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         tt::stl::Span<const SubDeviceId> sub_device_ids,
@@ -119,7 +117,6 @@ public:
         IDevice* device,
         NOC noc_index,
         Buffer& buffer,
-        void* dst,
         SystemMemoryManager& manager,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         tt::stl::Span<const SubDeviceId> sub_device_ids,
@@ -131,7 +128,6 @@ public:
             device,
             noc_index,
             buffer,
-            dst,
             manager,
             expected_num_workers_completed,
             sub_device_ids,
@@ -152,7 +148,6 @@ public:
         IDevice* device,
         NOC noc_index,
         Buffer& buffer,
-        void* dst,
         SystemMemoryManager& manager,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         tt::stl::Span<const SubDeviceId> sub_device_ids,
@@ -165,7 +160,6 @@ public:
             device,
             noc_index,
             buffer,
-            dst,
             manager,
             expected_num_workers_completed,
             sub_device_ids,
