@@ -24,7 +24,7 @@ constexpr uint32_t PACKET_QUEUE_TEST_PASS = PACKET_QUEUE_STAUS_MASK | 0x1;
 constexpr uint32_t PACKET_QUEUE_TEST_TIMEOUT = PACKET_QUEUE_STAUS_MASK | 0x2;
 constexpr uint32_t PACKET_QUEUE_TEST_DATA_MISMATCH = PACKET_QUEUE_STAUS_MASK | 0x3;
 
-constexpr uint32_t PACKET_QUEUE_MAX_NUM_QUEUES_PER_CORE = 32;
+constexpr uint32_t MAX_PACKET_QUEUE_ID = 32; // Referenced by packet queue, dispatch_constants
 
 // indexes of return values in test results buffer
 constexpr uint32_t PQ_TEST_STATUS_INDEX = 0;
@@ -197,7 +197,7 @@ struct packet_queue_ptr_buffer_layout_t {
 constexpr uint32_t get_packet_queue_ptrs_addr(uint32_t ptr_start_addr, uint32_t queue_id) {
     uint32_t offset = ptr_start_addr + (queue_id * packet_queue_ptr_buffer_size);
 
-    if (offset > PACKET_QUEUE_MAX_NUM_QUEUES_PER_CORE * packet_queue_ptr_buffer_size) {
+    if (offset > MAX_PACKET_QUEUE_ID * packet_queue_ptr_buffer_size) {
         // invalid
         return 0;
     }

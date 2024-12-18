@@ -152,6 +152,19 @@ constexpr uint32_t mux_input_remote_ptr_buffers[MAX_SWITCH_FAN_IN] =
 constexpr uint32_t mux_output_ptr_buffer = get_compile_time_arg_val(33);
 constexpr uint32_t mux_output_remote_ptr_buffer = get_compile_time_arg_val(34);
 
+static_assert(mux_input_ptr_buffers[0] != 0, "local ptr buffers may not be at L1[0]");
+static_assert(mux_fan_in > 1 ? mux_input_ptr_buffers[1] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(mux_fan_in > 2 ? mux_input_ptr_buffers[2] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(mux_fan_in > 3 ? mux_input_ptr_buffers[3] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(mux_output_ptr_buffer != 0, "local ptr buffers may not be at L1[0]");
+// If not CB mode then the remote buffer cannot be at L1[0]
+// If CB mode then we use sem instead of remote L1
+static_assert(input_packetize[0] || mux_input_remote_ptr_buffers[0] != 0, "remote ptr buffers may not be at L1[0]");
+static_assert(mux_fan_in > 1 ? (input_packetize[1] || mux_input_remote_ptr_buffers[1] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(mux_fan_in > 2 ? (input_packetize[2] || mux_input_remote_ptr_buffers[2] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(mux_fan_in > 3 ? (input_packetize[3] || mux_input_remote_ptr_buffers[3] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(output_depacketize || mux_output_remote_ptr_buffer != 0, "remote ptr buffers may not be at L1[0]");
+
 packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
 using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
 using input_queue_cb_mode_sequence = CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;

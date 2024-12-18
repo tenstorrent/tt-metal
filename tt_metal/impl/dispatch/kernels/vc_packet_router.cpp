@@ -235,6 +235,26 @@ constexpr uint32_t vc_packet_router_output_remote_ptr_buffers[MAX_SWITCH_FAN_OUT
         get_compile_time_arg_val(51),
     };
 
+static_assert(vc_packet_router_input_ptr_buffers[0] != 0, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 1 ? vc_packet_router_input_ptr_buffers[1] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 2 ? vc_packet_router_input_ptr_buffers[2] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 3 ? vc_packet_router_input_ptr_buffers[3] != 0 : true, "local ptr buffers may not be at L1[0]");
+
+static_assert(vc_packet_router_output_ptr_buffers[0] != 0, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 1 ? vc_packet_router_output_ptr_buffers[1] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 2 ? vc_packet_router_output_ptr_buffers[2] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 3 ? vc_packet_router_output_ptr_buffers[3] != 0 : true, "local ptr buffers may not be at L1[0]");
+
+static_assert(input_packetize[0] || vc_packet_router_input_remote_ptr_buffers[0] != 0, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 1 ? (input_packetize[1] || vc_packet_router_input_remote_ptr_buffers[1] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 2 ? (input_packetize[2] || vc_packet_router_input_remote_ptr_buffers[2] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 3 ? (input_packetize[3] || vc_packet_router_input_remote_ptr_buffers[3] != 0) : true, "remote ptr buffers may not be at L1[0]");
+
+static_assert(output_depacketize[0] || vc_packet_router_output_remote_ptr_buffers[0] != 0, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 1 ? (output_depacketize[1] || vc_packet_router_output_remote_ptr_buffers[1] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 2 ? (output_depacketize[2] || vc_packet_router_output_remote_ptr_buffers[2] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 3 ? (output_depacketize[3] || vc_packet_router_output_remote_ptr_buffers[3] != 0) : true, "remote ptr buffers may not be at L1[0]");
+
 packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
 using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
 using input_queue_cb_mode_sequence = CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;
