@@ -212,6 +212,7 @@ void kernel_main() {
 
                     cb_pop_front(local_cb_id, max_block_num_tiles);
                 }
+            }
         }
     }
 }

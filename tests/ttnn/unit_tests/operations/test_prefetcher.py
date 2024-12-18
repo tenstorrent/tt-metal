@@ -378,9 +378,21 @@ def test_run_prefetcher(
 
     sender_receiver_mapping = list(zip(sender_cores, receiver_cores))
 
+    max_tile_size = 0
+    for dtype in dtypes:
+        if dtype == ttnn.bfloat4_b:
+            current_tile_size = 576
+        elif dtype == ttnn.bfloat8_b:
+            current_tile_size = 1088
+        elif dtype == ttnn.bfloat16:
+            current_tile_size = 2048
+
+        if current_tile_size > max_tile_size:
+            max_tile_size = current_tile_size
+
     # FF1 is 368640 per receiver core = 360 tiles
-    global_cb_size = 512 * 512 * 4
-    # global_cb_size = 360 * 576 * 4 # 4*FF1 in bfp4
+    # global_cb_size = 512 * 512 * 4
+    global_cb_size = 512 * max_tile_size
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
     print(f"global cb size {global_cb_size}")
 
