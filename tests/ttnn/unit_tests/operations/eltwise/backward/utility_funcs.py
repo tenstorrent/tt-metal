@@ -29,6 +29,19 @@ def data_gen_with_range(input_shapes, low, high, device, required_grad=False, is
     return pt_tensor, tt_tensor
 
 
+def data_gen_with_range_batch_norm(input_shapes, low, high, device, required_grad=False, is_row_major=False):
+    assert high > low, "Incorrect range provided"
+    torch.manual_seed(213919)
+    channels = input_shapes[1]
+    pt_tensor = torch.rand(channels, requires_grad=required_grad).bfloat16() * (high - low) + low
+    reshaped_tensor = pt_tensor.view(1, channels, 1, 1).expand(input_shapes)
+    if is_row_major:
+        tt_tensor = ttnn.Tensor(reshaped_tensor, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
+    else:
+        tt_tensor = ttnn.Tensor(reshaped_tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    return pt_tensor, tt_tensor
+
+
 def data_gen_with_range_dtype(
     input_shapes, low, high, device, required_grad=False, is_row_major=False, ttnn_dtype=ttnn.bfloat16
 ):
