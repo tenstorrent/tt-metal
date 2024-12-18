@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     auto reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram_v2.cpp",
+        "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram.cpp",
         reader_core_range,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
