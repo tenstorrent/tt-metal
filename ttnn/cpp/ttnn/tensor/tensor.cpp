@@ -150,7 +150,7 @@ Tensor::Tensor(
         tt::stl::overloaded{
             [](const DeviceStorage& s) { return s.memory_config(); },
             [](const MultiDeviceStorage& s) { return s.memory_config(); },
-            [](auto&&) { return MemoryConfig{}; }},
+            []<typename Other>(const Other&) { return MemoryConfig{}; }},
         storage);
 
     init(
