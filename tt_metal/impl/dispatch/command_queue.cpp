@@ -1029,6 +1029,12 @@ void EnqueueProgramCommand::assemble_device_commands(
                         read_length = max_paged_length_per_sub_cmd;
                         write_length = read_length;
                     }
+                    if (!kernel_bins_dispatch_subcmds.back().empty()) {
+                        auto& back = kernel_bins_dispatch_subcmds.back().back();
+                        if (back.noc_xy_addr != noc_encoding) {
+                            back.flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
+                        }
+                    }
                     kernel_bins_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                         .noc_xy_addr = noc_encoding,
                         .addr = kernel_config_buffer_offset,
@@ -1050,9 +1056,13 @@ void EnqueueProgramCommand::assemble_device_commands(
                 }
             }
         }
-        // Unlink the last subcmd of the current core range
-        if (!write_linear) {
-            kernel_bins_dispatch_subcmds.back().back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
+    }
+    // Unlink the last subcmd of every dispatch, to ensure we don't hold the
+    // path reservation for an incredible long time. This also prevents a hang
+    // if the next mcast is to a different destination.
+    for (auto& subcmd_list : kernel_bins_dispatch_subcmds) {
+        if (!subcmd_list.empty()) {
+            subcmd_list.back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
         }
     }
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
@@ -3046,8 +3056,7 @@ void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
         }
         // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
         // previous launch message.
-        // TODO(jbauman): Give correct number once async bug is fixed.
-        this->config_buffer_mgr[i].init_add_buffer(0, 1);
+        this->config_buffer_mgr[i].init_add_buffer(0, launch_msg_buffer_num_entries - 1);
     }
 }
 

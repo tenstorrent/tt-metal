@@ -16,7 +16,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import is_grayskull, skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
-    generation_funcs,
 )
 
 
@@ -1205,3 +1204,111 @@ def test_binary_prelu_1D_weight(input_shapes, weight, device):
     golden_tensor = golden_function(in_data1, weight)
 
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@skip_for_grayskull("Unsupported in Grayskull")
+def test_binary_left_shift(input_shapes, device):
+    torch.manual_seed(213919)
+    in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
+    in_data2 = torch.randint(-20, 50, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.bitwise_left_shift(input_tensor1, input_tensor2)
+    golden_function = ttnn.get_golden_function(ttnn.bitwise_left_shift)
+    golden_tensor = golden_function(in_data1, in_data2)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+    assert pcc >= 0.99
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@skip_for_grayskull("Unsupported in Grayskull")
+def test_binary_right_shift(input_shapes, device):
+    torch.manual_seed(213919)
+    in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
+    in_data2 = torch.randint(0, 31, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.bitwise_right_shift(input_tensor1, input_tensor2)
+    golden_function = ttnn.get_golden_function(ttnn.bitwise_right_shift)
+    golden_tensor = golden_function(in_data1, in_data2)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+    assert pcc >= 0.99
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "scalar",
+    {random.randint(0, 31)},
+)
+@skip_for_grayskull("Unsupported in Grayskull")
+def test_unary_left_shift(input_shapes, device, scalar):
+    torch.manual_seed(213919)
+    in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.bitwise_left_shift(input_tensor1, scalar)
+    golden_function = ttnn.get_golden_function(ttnn.bitwise_left_shift)
+    golden_tensor = golden_function(in_data1, scalar)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+    assert pcc >= 0.99
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "scalar",
+    {random.randint(0, 31)},
+)
+@skip_for_grayskull("Unsupported in Grayskull")
+def test_unary_right_shift(input_shapes, device, scalar):
+    torch.manual_seed(213919)
+    in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.bitwise_right_shift(input_tensor1, scalar)
+    golden_function = ttnn.get_golden_function(ttnn.bitwise_right_shift)
+    golden_tensor = golden_function(in_data1, scalar)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+    assert pcc >= 0.99
