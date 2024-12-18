@@ -1572,6 +1572,22 @@ void py_module(py::module& module) {
         ". ",
         R"doc(INT32)doc");
 
+    detail::bind_bitwise_binary_ops_operation(
+        module,
+        ttnn::bitwise_left_shift,
+        R"doc(Perform bitwise_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        ". ",
+        R"doc(INT32)doc");
+
+    detail::bind_bitwise_binary_ops_operation(
+        module,
+        ttnn::bitwise_right_shift,
+        R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        ". ",
+        R"doc(INT32)doc");
+
     auto prim_module = module.def_submodule("prim", "Primitive binary operations");
 
     detail::bind_primitive_binary_operation(

@@ -441,6 +441,62 @@ struct ExecuteBitwiseXor {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct ExecuteBitwiseLeftShift {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct ExecuteBitwiseRightShift {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace binary
 }  // namespace operations
 
@@ -499,6 +555,10 @@ constexpr auto rsub = ttnn::register_operation_with_auto_launch_op<"ttnn::rsub",
 constexpr auto bitwise_and = ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_and", operations::binary::ExecuteBitwiseAnd>();
 constexpr auto bitwise_or = ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_or", operations::binary::ExecuteBitwiseOr>();
 constexpr auto bitwise_xor = ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_xor", operations::binary::ExecuteBitwiseXor>();
+constexpr auto bitwise_left_shift = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::bitwise_left_shift", operations::binary::ExecuteBitwiseLeftShift>();
+constexpr auto bitwise_right_shift = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::bitwise_right_shift", operations::binary::ExecuteBitwiseRightShift>();
 constexpr auto pow = ttnn::register_operation_with_auto_launch_op<"ttnn::pow", operations::binary::ExecutePower>();
 
 }  // namespace ttnn

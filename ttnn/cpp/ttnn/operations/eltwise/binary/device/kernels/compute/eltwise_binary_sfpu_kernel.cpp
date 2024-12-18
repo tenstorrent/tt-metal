@@ -11,11 +11,12 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
+#include "compute_kernel_api/binary_shift.h"
 #include "compute_kernel_api/add_int32_sfpu.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
-#if defined(ADD_INT32_INIT) || defined(BITWISE_INIT)
+#if defined(ADD_INT32_INIT) || defined(BITWISE_INIT) || defined(SHIFT_INIT)
 #define INT32_INIT
 #endif
 
@@ -119,6 +120,9 @@ void MAIN {
 #endif
 #ifdef BITWISE_INIT
             BITWISE_INIT
+#endif
+#ifdef SHIFT_INIT
+            SHIFT_INIT
 #endif
 
 #ifdef BINARY_SFPU_OP
