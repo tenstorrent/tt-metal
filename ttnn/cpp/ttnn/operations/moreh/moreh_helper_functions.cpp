@@ -379,12 +379,21 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
                 output_rank);
         }
 
-        TT_FATAL(input_shape == output_shape, "Error {} {}", input_shape, output_shape);
-        TT_FATAL(
-            input_shape_wo_padding == output_shape_wo_padding,
-            "Error {} {}",
-            input_shape_wo_padding,
-            output_shape_wo_padding);
+        ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        expand_to_max_dim(input_dim, input_shape);
+        expand_to_max_dim(output_dim, output_shape);
+        expand_to_max_dim(input_dim_wo_padding, input_shape_wo_padding);
+        expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
+
+        for (int i = 0; i < input_shape.rank(); ++i) {
+            TT_FATAL(input_dim[i] == output_dim[i], "Error");
+        }
+        for (int i = 0; i < input_shape_wo_padding.rank(); ++i) {
+            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
+        }
     } else {
         ttnn::SmallVector<uint32_t> expected_output_shape;
         for (int i = 0; i < output_shape.rank(); ++i) {
@@ -406,7 +415,6 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
 
         for (int i = 0; i < input_shape.rank(); ++i) {
             TT_FATAL(i == padded_dim || input_shape[i] == expected_output_shape[i], "Error");
-            ;
         }
         for (int i = 0; i < input_shape_wo_padding.rank(); ++i) {
             TT_FATAL(i == dim || input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
