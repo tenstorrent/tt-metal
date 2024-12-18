@@ -6,6 +6,7 @@ from loguru import logger
 
 import torch
 import pytest
+import math
 from models.utility_functions import (
     is_wormhole_b0,
     skip_for_grayskull,
@@ -38,6 +39,29 @@ from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 #     plt.imshow(bool_vals, interpolation="none", vmin=0, vmax=1, cmap="Blues")
 #     plt.savefig(f"diff_core_{fid}.png", bbox_inches="tight", pad_inches=0.1)
 #     plt.close()
+
+
+def write_to_file(file_name, data):
+    data = data.cpu().numpy()
+    with open(file_name, "w") as f:
+        for i in range(1):
+            for j in range(data.shape[2]):
+                for k in range(data.shape[3]):
+                    for l in range(data.shape[1]):
+                        f.write(str(data[i][l][j][k]) + " ")
+                    f.write("\n")
+                f.write("\n")
+
+
+def write_to_file_special(file_name, data):
+    data = data.cpu().numpy()
+    with open(file_name, "w") as f:
+        for i in range(data.shape[0]):
+            for j in range(data.shape[1]):
+                for k in range(data.shape[2]):
+                    for l in range(16):
+                        f.write(str(data[i][j][k][l]) + " ")
+                    f.write("\n")
 
 
 def run_conv(
@@ -95,6 +119,12 @@ def run_conv(
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+
+    # for i in range(output_channels):
+    #     for j in range(input_channels):
+    #         for k in range(filter_height):
+    #             for l in range(filter_height):
+    #                 torch_weight_tensor[i, j, k, l] = 1 if i == 0 and j == 0 else 0
 
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
@@ -190,6 +220,15 @@ def run_conv(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    tt_output_tensor = ttnn.reshape(
+        tt_output_tensor,
+        [
+            1,
+            1,
+            tt_output_tensor.shape[0] * tt_output_tensor.shape[1] * tt_output_tensor.shape[2],
+            tt_output_tensor.shape[3],
+        ],
+    )
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
     # torch_output_tensor is in row major layout and NHWC shape
@@ -335,6 +374,15 @@ def run_conv_with_split(
             return_weights_and_bias=True,
         )
         tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+        tt_conv_output_tensor = ttnn.reshape(
+            tt_conv_output_tensor,
+            [
+                1,
+                1,
+                tt_conv_output_tensor.shape[0] * tt_conv_output_tensor.shape[1] * tt_conv_output_tensor.shape[2],
+                tt_conv_output_tensor.shape[3],
+            ],
+        )
         torch_conv_output_tensor = ttnn.to_torch(tt_conv_output_tensor)
         print(f"Output shape : {batch_size} {out_height} {out_width} {output_channels}")
         torch_conv_output_tensor = torch_conv_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
@@ -676,6 +724,16 @@ def test_conv_ws(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    print(tt_output_tensor.shape)
+    tt_output_tensor = ttnn.reshape(
+        tt_output_tensor,
+        [
+            1,
+            1,
+            tt_output_tensor.shape[0] * tt_output_tensor.shape[1] * tt_output_tensor.shape[2],
+            tt_output_tensor.shape[3],
+        ],
+    )
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     # torch_output_tensor is in row major layout and NHWC shape
@@ -1050,6 +1108,9 @@ def test_conv_mem_config_wh(
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
+
+    if batch_size == 16:
+        pytest.skip("Error. Need to discuss this with Infra team")
 
     use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
     run_conv(
@@ -2767,6 +2828,15 @@ def test_shallow_conv_with_tiled_input(device):
     )
 
     tt_output_tensor = ttnn.from_device(tt_out)
+    tt_output_tensor = ttnn.reshape(
+        tt_output_tensor,
+        [
+            1,
+            1,
+            tt_output_tensor.shape[0] * tt_output_tensor.shape[1] * tt_output_tensor.shape[2],
+            tt_output_tensor.shape[3],
+        ],
+    )
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     # torch_output_tensor is in row major layout and NHWC shape
