@@ -39,8 +39,8 @@ void kernel_main() {
     constexpr uint32_t shard_size_bytes = shard_size_in_tiles * in0_single_tile_size_bytes;
 
     // Push the local shard
-    cb_reserve_back(cb_id_in0, batch * shard_size_in_tiles);
-    cb_push_back(cb_id_in0, batch * shard_size_in_tiles);
+    // cb_reserve_back(cb_id_in0, batch * shard_size_in_tiles);
+    // cb_push_back(cb_id_in0, batch * shard_size_in_tiles);
 
     cb_reserve_back(cb_id_in2, batch * (ring_size - 1) * shard_size_in_tiles);
 

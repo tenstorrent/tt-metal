@@ -76,7 +76,6 @@ void kernel_main() {
 #ifdef ENABLE_GLOBAL_CB
         experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
 #endif
-        LocalCBInterface& local_cb = get_local_cb_interface(cb_id_in1);
 
         cb_push_back(sync_cb2, 1);
 

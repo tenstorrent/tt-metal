@@ -1953,8 +1953,8 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .set_tile_dims(src2_cb_index, in0_tile);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, ring_cores, src2_cb_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16
-    uint32_t interm0_cb_index = tt::CBIndex::c_24;
+    uint32_t output_cb_index = tt::CBIndex::c_7;  // output operands start at index 16
+    uint32_t interm0_cb_index = tt::CBIndex::c_8;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config =

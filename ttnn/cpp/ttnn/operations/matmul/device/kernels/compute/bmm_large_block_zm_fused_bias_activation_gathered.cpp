@@ -160,8 +160,8 @@ void MAIN {
     constexpr uint32_t in0_cb_id = tt::CB::c_in0;
     constexpr uint32_t in1_cb_id = tt::CB::c_in1;
     constexpr uint32_t in2_cb_id = tt::CB::c_in2;
-    constexpr uint32_t out_cb_id = tt::CB::c_out0;
-    constexpr uint32_t mm_partials_cb_id = tt::CB::c_intermed0;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_7;
+    constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_8;
 
     constexpr uint32_t mm_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
@@ -227,6 +227,11 @@ void MAIN {
                 PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
             }
 #endif
+
+            if (block == 0) {
+                cb_reserve_back(input0_cb_id, in0_block_num_tiles);
+                cb_push_back(input0_cb_id, in0_block_num_tiles);
+            }
 
             cb_wait_front(input0_cb_id, in0_block_num_tiles);
 
@@ -298,6 +303,11 @@ void MAIN {
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
 
+                        // Release in1
+                        cb_reserve_back(sync_cb, 1);
+                        cb_push_back(sync_cb, 1);
+                        cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
+
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                         PACK((pack_reconfig_data_format(mm_out_cb_id)));
 #endif
@@ -364,9 +374,6 @@ void MAIN {
             curr_in1_block_index = next_in1_block_index;
             UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
         }
-        cb_reserve_back(sync_cb, 1);
-        cb_push_back(sync_cb, 1);
-        cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
 
         if constexpr (batch > 1) {
             // reconfigure init for matmul
