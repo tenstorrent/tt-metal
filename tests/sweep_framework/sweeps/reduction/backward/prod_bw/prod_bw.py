@@ -39,7 +39,25 @@ parameters = {
         + gen_shapes([1], [4], [1], 2)
         + gen_shapes([1], [14], [11], 12)
         + gen_shapes([1], [24], [21], 22),
-        "dim": [0, 1, 2, 3, None],
+        "dim": [
+            0,
+            1,
+            2,
+            3,
+            None,
+            [0, 1],
+            [0, 2],
+            [0, 3],
+            [1, 2],
+            [1, 3],
+            [2, 3],
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+            [0, 1, 2, 3],
+        ],
         "keepdim": [True, False],
         "grad_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -66,6 +84,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             return True, "Row major is only supported for fp32 & fp16"
     if not test_vector["keepdim"]:
         return True, "keepdim = false is not supported"
+    if not isinstance(test_vector["dim"], int):
+        return True, "dim can only be integer value"
 
     device = ttnn.open_device(device_id=0)
     if (
@@ -103,9 +123,6 @@ def run(
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
     torch_input_tensor_a.retain_grad()
-
-    max_dim = len(input_shape) - 1
-    dim = random.randint(-max_dim - 1, max_dim)
 
     intermediate_result = torch.prod(torch_input_tensor_a, dim=dim, keepdim=keepdim)
     torch_grad_tensor = gen_func_with_cast_tt(

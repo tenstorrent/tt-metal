@@ -39,7 +39,25 @@ parameters = {
         + gen_shapes([1], [8], [1], 2)
         + gen_shapes([1], [18], [1], 2)
         + gen_shapes([1], [28], [1], 2),
-        "dim": [0, 1, 2, 3, None],
+        "dim": [
+            0,
+            1,
+            2,
+            3,
+            None,
+            [0, 1],
+            [0, 2],
+            [0, 3],
+            [1, 2],
+            [1, 3],
+            [2, 3],
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+            [0, 1, 2, 3],
+        ],
         "keepdim": [True, False],
         "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
@@ -57,8 +75,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
     ):
         return True, "Row major is only supported for fp32 & fp16"
-    if not isinstance(test_vector["dim"], int):
-        return True, "Only accepts integers as dim values"
     if not test_vector["keepdim"]:
         return True, "keepdim = false is not supported"
 
@@ -108,7 +124,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.var(input_tensor_a, dim=-1, memory_config=output_memory_config)
+    output_tensor = ttnn.var(input_tensor_a, dim=dim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     e2e_perf = stop_measuring_time(start_time)
