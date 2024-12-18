@@ -72,9 +72,6 @@ void kernel_main() {
     constexpr uint32_t addrs_cb_id = 1;  // Tensor specs
     constexpr uint32_t sync_cb = 2;
 
-    uint32_t fifo_start_address = get_fifo_start_address(cb_id);
-    uint32_t fifo_start_size = get_fifo_start_size(cb_id);
-
     // TODO: Take noc as input?
     uint32_t rt_args_idx = 0;
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -90,6 +87,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* tensor_addrs_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(addrs_cb_id));
 
+    DeviceZoneScopedN("reader");
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         DeviceZoneScopedN("layers");
         for (uint32_t t = 0; t < num_tensors; t++) {
@@ -108,7 +106,9 @@ void kernel_main() {
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
             // Reserve two blocks of spcae to issue multiple block reads in parallel
-            cb_reserve_back(cb_id, max_block_num_tiles * 2);
+            // {DeviceZoneScopedN("rb");
+            cb_reserve_back(cb_id, max_block_num_tiles);
+            // }
 
             uint32_t l1_write_addr_offset = 0;
             uint32_t l1_write_addr_start = get_write_ptr(cb_id);
@@ -134,23 +134,34 @@ void kernel_main() {
                 if (num_free_blocks_in_buffer == 3) {  // After first block we don't block but continue issuing reads
                     num_free_blocks_in_buffer -= 1;
                 } else {
+                    // {DeviceZoneScopedN("noc barrier");
                     noc_async_read_barrier_with_trid(block_trid_to_wait);
+                    // }
+                    // {DeviceZoneScopedN("push back");
                     cb_push_back(cb_id, max_block_num_tiles);
+                    // }
                     block_trid_to_wait =
                         block_trid_to_wait == total_num_blocks_in_buffer ? 1 : (block_trid_to_wait + 1);
+                }
+
+                // We still have blocks to read
+                if (block != num_blocks - 1) {
+                    // Increment block_trid, wrap around to 1 if it reaches total_num_blocks_in_buffer
+                    curr_block_trid = curr_block_trid == total_num_blocks_in_buffer ? 1 : (curr_block_trid + 1);
+
+                    // Wrap around l1_write_addr if it reaches l1_buffer_end_addr
+                    l1_write_addr += max_block_size;
+                    if (l1_write_addr >= l1_buffer_end_addr) {
+                        l1_write_addr = l1_buffer_start_addr;
+                    }
+
+                    // {
+                    // DeviceZoneScopedN("rb");
                     cb_reserve_back(
                         cb_id,
                         max_block_num_tiles *
                             2);  // Reserve two blocks of spcae to issue multiple block reads in parallel
-                }
-
-                // Increment block_trid, wrap around to 1 if it reaches total_num_blocks_in_buffer
-                curr_block_trid = curr_block_trid == total_num_blocks_in_buffer ? 1 : (curr_block_trid + 1);
-
-                // Wrap around l1_write_addr if it reaches l1_buffer_end_addr
-                l1_write_addr += max_block_size;
-                if (l1_write_addr >= l1_buffer_end_addr) {
-                    l1_write_addr = l1_buffer_start_addr;
+                    // }
                 }
             }
 

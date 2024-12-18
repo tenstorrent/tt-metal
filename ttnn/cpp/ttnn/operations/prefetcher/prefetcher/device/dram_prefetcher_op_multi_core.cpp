@@ -92,16 +92,15 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t max_tile_size = *std::max_element(tensor_tile_sizes.begin(), tensor_tile_sizes.end());
     std::cout << "max_tile_size " << max_tile_size << std::endl;
 
-    uint32_t max_block_size = max_tile_size * max_block_tiles;
-
     std::vector<uint32_t> block_sizes;
     for (uint32_t i = 0; i < num_tensors; i++) {
         block_sizes.push_back(tensor_block_num_tiles[i] * tensor_tile_sizes[i]);
     }
-    uint32_t max_tensor_size = *std::max_element(block_sizes.begin(), block_sizes.end()) * num_blocks;
+    uint32_t max_block_size_per_reader_core = *std::max_element(block_sizes.begin(), block_sizes.end());
+    uint32_t max_tensor_size = max_block_size_per_reader_core / num_receivers_per_reader * num_blocks;
     TT_FATAL(
         max_tensor_size <= global_cb->size(),
-        "largest tensor must fit in global cb {} {}",
+        "largest tensor {} must fit in global cb {}",
         max_tensor_size,
         global_cb->size());
 
@@ -112,7 +111,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;  // bfloat16 tile size
     const uint32_t total_num_blocks_in_buffer = 3;        // reader cb is triple buffered
-    uint32_t reader_cb_size = max_block_size * total_num_blocks_in_buffer;
+    uint32_t reader_cb_size = max_block_size_per_reader_core * total_num_blocks_in_buffer;
     std::cout << "reader_cb_size " << reader_cb_size << std::endl;
 
     TT_FATAL(reader_cb_size <= global_cb->size(), "reader_cb_size must not be larger than global cb");
@@ -156,7 +155,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* remote cb setup */
     uint32_t remote_cb_size = global_cb->size();
-    uint32_t remote_cb_single_tile_size = 2048;  // 16B aligned
+    uint32_t remote_cb_single_tile_size = max_tile_size;
 
     uint32_t remote_cb_index = tt::CBIndex::c_31;
     CircularBufferConfig remote_cb_config = CircularBufferConfig(remote_cb_size);
@@ -170,7 +169,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     // Reader kernel
     std::vector<uint32_t> reader_ct_args = {
-        num_layers, num_tensors, num_blocks, reader_cb_size, max_block_tiles, max_block_size};
+        num_layers, num_tensors, num_blocks, reader_cb_size, max_block_tiles, max_block_size_per_reader_core};
 
     auto reader_kernel_id = CreateKernel(
         program,
