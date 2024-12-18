@@ -47,6 +47,13 @@ private:
     // Device events
     std::set<tracy::TTDeviceEvent> device_events;
 
+    // Device aggregates
+    std::map<uint32_t, std::map<uint32_t, std::set<tracy::TTDeviceEvent>>> device_aggregates;
+
+    std::map<uint32_t, std::map<uint32_t, uint32_t>> device_aggregates_zone_counter;
+
+    std::map<uint32_t, std::map<uint32_t, uint32_t>> device_aggregates_trace_counter;
+
     // Hash to zone source locations
     std::unordered_map<uint16_t, std::string> hash_to_zone_src_locations;
 
@@ -83,6 +90,9 @@ private:
 
     // Track the smallest timestamp dumped to file
     void firstTimestamp(uint64_t timestamp);
+
+    // Append the new event to device aggregates
+    void aggregate(tracy::TTDeviceEvent event);
 
 public:
     DeviceProfiler(const bool new_logs);
