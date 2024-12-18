@@ -369,7 +369,18 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     }
     if (shape.logical_shape().volume() != tensor.get_logical_volume()) {
         // This is completely incorrect but it is due to issue 15137 or issue 15558
-        return tensor.reshape(shape);
+        bool tile_tensor_view_reshape_possible =
+            (layout == ttnn::Layout::TILE and shape.with_tile_padding().rank() >= 2 and
+             shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0 and
+             shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0 and
+             tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]);
+
+        if (tile_tensor_view_reshape_possible) {
+            // This case has been allowed in the past though it means introducing padding values to the data
+            return tensor.reshape(shape);
+        }
+        // This is a completely incorrect test but it is due to issue 15558
+        TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
     }
     // Catch-all
     // Do the reshape in row-major

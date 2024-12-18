@@ -124,7 +124,7 @@ Tensor to_layout_impl_on_device(
 
     auto tensor = ttnn::tilize_with_val_padding(
         tensor_arg, result_spec.padded_shape(), pad_value_variant, output_memory_config, dtype, use_multicore_tilize);
-    return ttnn::reshape(tensor, tensor_arg.logical_shape());
+    return tensor.reshape(tensor_arg.logical_shape());
 }
 
 template <typename T>
@@ -171,7 +171,7 @@ Tensor to_layout_impl(
     if (layout == ttnn::ROW_MAJOR_LAYOUT) {
         auto tensor = device ? tensor_arg.to(layout, device) : tensor_arg.to(layout);
         tensor = tensor.unpad_from_tile(tensor.get_logical_shape());
-        return ttnn::reshape(tensor, tensor_arg.logical_shape());
+        return tensor.reshape(tensor_arg.logical_shape());
     }
 
     SmallVector<uint32_t> padded_input_start;
@@ -189,7 +189,7 @@ Tensor to_layout_impl(
 
     auto tensor = tensor_arg.pad(result_spec.padded_shape(), ttnn::SimpleShape(std::move(padded_input_start)), 0);
     tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-    return ttnn::reshape(tensor, result_spec.logical_shape());
+    return tensor.reshape(result_spec.logical_shape());
 }
 }  // namespace detail
 
