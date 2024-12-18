@@ -1003,7 +1003,10 @@ namespace operations {
 namespace matmul {
 
 Matmul create_matmul_struct(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const struct Matmul& parameters) {
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const struct Matmul& parameters,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
     auto arch = input_tensor_a.device()->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
@@ -1022,16 +1025,44 @@ Matmul create_matmul_struct(
     bool broadcast_batch =
         parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
     TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
+
+    const bool is_optional_output_tensor =
+        !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
+    auto output_dtype = parameters.output_dtype;
+    auto output_mem_config = parameters.output_mem_config;
+
+    if (is_optional_output_tensor) {
+        const auto& optional_output_tensor_c = optional_output_tensors.at(0);
+        if (output_mem_config == operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+            output_mem_config = optional_output_tensor_c->memory_config();
+        } else {
+            TT_FATAL(
+                optional_output_tensor_c->memory_config() == output_mem_config,
+                "Memory config mismatch between optional output tensor & output tensor");
+        }
+
+        if (output_dtype.has_value()) {
+            TT_FATAL(
+                optional_output_tensor_c->get_dtype() == output_dtype.value(),
+                "Type mismatch between optional output tensor & output tensor");
+        } else {
+            output_dtype = optional_output_tensor_c->get_dtype();
+        }
+    } else {
+        if (!output_dtype.has_value()) {
+            output_dtype = input_tensor_a.get_dtype();
+        }
+    }
+
     auto in0_tile = input_tensor_a.get_tensor_spec().tile();
     auto in1_tile = input_tensor_b.get_tensor_spec().tile();
-    tt::tt_metal::Tile output_tile =
-        get_output_tile(parameters.output_mem_config, in0_tile, in1_tile, parameters.output_tile);
+    tt::tt_metal::Tile output_tile = get_output_tile(output_mem_config, in0_tile, in1_tile, parameters.output_tile);
 
     return Matmul{
         parameters.program_config,
         broadcast_batch,
-        parameters.output_mem_config,
-        parameters.output_dtype.value_or(input_tensor_a.get_dtype()),
+        output_mem_config,
+        output_dtype,
         kernel_config_val,
         parameters.untilize_out,
         parameters.user_core_coord,
@@ -1070,7 +1101,7 @@ Tensor matmul(
             const auto& input_tensor_b = input_tensors.at(1);
 
             return operation::run(
-                create_matmul_struct(input_tensor_a, input_tensor_b, parameters),
+                create_matmul_struct(input_tensor_a, input_tensor_b, parameters, optional_output_tensors),
                 {input_tensor_a, input_tensor_b},
                 optional_input_tensors,
                 optional_output_tensors,

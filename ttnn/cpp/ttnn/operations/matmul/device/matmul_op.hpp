@@ -196,7 +196,10 @@ struct Matmul {
 };
 
 Matmul create_matmul_struct(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const struct Matmul& parameters);
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const struct Matmul& parameters,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,

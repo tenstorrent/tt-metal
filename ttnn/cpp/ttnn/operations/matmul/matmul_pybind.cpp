@@ -277,6 +277,10 @@ void py_module(py::module& module) {
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor) : User provided on-device output tensor where the result of matmul is to be written.
+                                                   If optional output tensor is specified, then dtype and memory config need to be checked as follows:
+                                                        if they are default then they should be set based on optional output tensor
+                                                        if the are not default then they should be compared and if there is a difference an error is reported (via fatal or throw)
+
 
         Returns:
             ttnn.Tensor: the output tensor.
