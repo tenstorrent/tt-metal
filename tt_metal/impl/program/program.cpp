@@ -1059,17 +1059,14 @@ void detail::Program_::populate_dispatch_data(Device *device) {
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
                 const ll_api::memory& kernel_bin = *binaries[sub_kernel_index];
 
-                // Spans are now packed into one
-                // TODO: code below can be simplified w/ a single span
+                // TODO: Pack erisc spans too, and then everthing is
+                // one span
                 uint32_t num_spans = kernel_bin.num_spans();
                 dst_base_addrs.resize(dst_base_addrs.size() + num_spans);
                 page_offsets.resize(page_offsets.size() + num_spans);
                 lengths.resize(lengths.size() + num_spans);
                 riscvs.resize(riscvs.size() + num_spans);
 
-                TT_ASSERT(kernel_bin.num_spans() == 1);
-
-                // TODO: spans are packed into 1 now, just grab it and go
                 kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
 
                     // Set dst for eth kernels until they move to ring buffer
