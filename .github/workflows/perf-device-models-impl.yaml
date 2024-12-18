@@ -42,9 +42,21 @@ jobs:
           is_profiler: 'true'
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-info.timeout }}
-        run: |
-          source python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.test-info.machine-type }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
+            -v /mnt/MLPerf:/mnt/MLPerf
+          run_args: |
+            rm -rf $PYTHON_ENV_DIR
+            ./create_venv.sh
+            source $PYTHON_ENV_DIR/bin/activate
+            ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.test-info.machine-type }}
       - name: Check device perf report exists
         id: check-device-perf-report
         if: ${{ !cancelled() }}
