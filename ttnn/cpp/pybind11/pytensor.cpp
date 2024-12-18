@@ -9,7 +9,7 @@
 #include <chrono>
 #include <memory>
 
-#include "tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tt_stl/overloaded.hpp"
@@ -150,15 +150,12 @@ Tensor create_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
     const TensorSpec& tensor_spec,
     Device* device,
-    bool override_enable_borrow,
+    bool force_disable_borrow,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback) {
     auto layout = tensor_spec.layout();
 
-    bool enable_borrow = true;
-    if (layout != Layout::ROW_MAJOR or override_enable_borrow) {
-        enable_borrow = false;
-    }
+    const bool enable_borrow = layout == Layout::ROW_MAJOR and not force_disable_borrow;
 
     auto data_type = tensor_spec.data_type();
     std::size_t num_elements = tensor_spec.logical_shape().volume();
@@ -256,7 +253,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
     Device* device,
-    bool override_enable_borrow = false) {
+    bool force_disable_borrow = false) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
         py_tensor,
@@ -265,7 +262,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         optional_tile,
         memory_config,
         device,
-        override_enable_borrow);
+        force_disable_borrow);
     py::object torch = py::module_::import("torch");
     py::object np = py::module_::import("numpy");
 
@@ -342,7 +339,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")());
         py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")());
     } else if (py::isinstance(py_tensor, np.attr("ndarray"))) {
-        TT_FATAL(!override_enable_borrow, "Disabling borrowed buffers for numpy tensors is untested!");
+        TT_FATAL(!force_disable_borrow, "Disabling borrowed buffers for numpy tensors is untested!");
 
         contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
 
@@ -429,7 +426,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     auto on_creation_callback = [tensor = contiguous_py_tensor] { tensor.inc_ref(); };
     auto on_destruction_callback = [tensor = contiguous_py_tensor] { tensor.dec_ref(); };
     auto output = create_tt_tensor_from_py_data(
-        py_data_ptr, tensor_spec, device, override_enable_borrow, on_creation_callback, on_destruction_callback);
+        py_data_ptr, tensor_spec, device, force_disable_borrow, on_creation_callback, on_destruction_callback);
 
     if (device) {
         output = output.to(device, memory_config);
