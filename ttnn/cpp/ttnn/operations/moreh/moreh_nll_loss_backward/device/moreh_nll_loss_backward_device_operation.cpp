@@ -90,6 +90,10 @@ MorehNllLossBackwardDeviceOperation::spec_return_value_t MorehNllLossBackwardDev
     if (tensor_args.input_grad_tensor.has_value()) {
         return {tensor_args.input_grad_tensor->get_tensor_spec()};
     }
+    return TensorSpec(
+        tensor_args.target_tensor.get_logical_shape(),
+        TensorLayout(
+            tensor_args.target_tensor.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
 
 MorehNllLossBackwardDeviceOperation::tensor_return_value_t MorehNllLossBackwardDeviceOperation::create_output_tensors(
@@ -98,11 +102,8 @@ MorehNllLossBackwardDeviceOperation::tensor_return_value_t MorehNllLossBackwardD
         return {tensor_args.input_grad_tensor.value()};
     }
 
-    auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
-    auto dtype = tensor_args.target_tensor.get_dtype();
-    Layout layout{Layout::TILE};
-    auto device = tensor_args.target_tensor.device();
-    return create_device_tensor(output_shapes, dtype, layout, device, operation_attributes.memory_config);
+    return create_device_tensor(
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.target_tensor.device());
 }
 
 std::tuple<
