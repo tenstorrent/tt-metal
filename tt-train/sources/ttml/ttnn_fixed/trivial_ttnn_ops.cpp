@@ -14,13 +14,7 @@
 namespace ttml::ttnn_fixed {
 
 tt::tt_metal::Tensor sum_over_dim(const tt::tt_metal::Tensor& t, uint32_t dim) {
-    return ttnn::moreh_sum(
-        t,
-        /* dim */ dim,
-        /* keep_dim */ true,
-        /* output */ std::nullopt,
-        /* output_mem_config */ std::nullopt,
-        /*compute_kernel_config */ core::ComputeKernelConfig::precise());
+    return sum_ttnn(t, dim, true);
 }
 
 tt::tt_metal::Tensor sum_over_batch(const tt::tt_metal::Tensor& t) {
@@ -56,10 +50,6 @@ tt::tt_metal::Tensor divide(const tt::tt_metal::Tensor& a, const tt::tt_metal::T
 }
 
 tt::tt_metal ::Tensor mean_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
-    // auto tensor_shape = t.get_shape();
-    // auto shape = core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
-    // auto* device = &autograd::ctx().get_device();
-    // auto mean = core::empty(shape, device, t.memory_config());
     auto res = ttnn::moreh_mean(
         t,
         dim,
@@ -75,10 +65,6 @@ tt::tt_metal ::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool kee
 }
 
 tt::tt_metal ::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
-    // auto tensor_shape = t.get_shape();
-    // auto shape = core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
-    // auto* device = &autograd::ctx().get_device();
-    // auto mean = core::empty(shape, device, t.memory_config());
     auto res = ttnn::moreh_sum(
         t,
         dim,
