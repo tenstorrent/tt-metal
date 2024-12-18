@@ -5,7 +5,10 @@
 #include <cstdint>
 #include <memory>
 
+#include "buffers/buffer.hpp"
+#include "buffers/buffer_constants.hpp"
 #include "command_queue_fixture.hpp"
+#include "common/core_coord.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
@@ -685,6 +688,25 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestWriteSubBufferInvalidRegion) {
         auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
         auto src = local_test_functions::generate_arange_vector(buffer_region_size);
         EXPECT_ANY_THROW(EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, true));
+    }
+}
+
+TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBuffer) {
+    const uint32_t page_size = 256;
+    const uint32_t buffer_size = 64 * page_size;
+    const BufferRegion region(256, 512);
+    for (Device* device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        ShardSpecBuffer shard_spec_buffer(
+            CoreRangeSet(CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1})), );
+        auto buffer = Buffer::create(
+            device, buffer_size, page_size, BufferType::DRAM, TensorMemoryLayout::BLOCK_SHARDED, shard_spec_buffer);
+        auto src = local_test_functions::generate_arange_vector(region.size);
+        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
+        vector<uint32_t> result;
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
+        EXPECT_EQ(src, result);
     }
 }
 
