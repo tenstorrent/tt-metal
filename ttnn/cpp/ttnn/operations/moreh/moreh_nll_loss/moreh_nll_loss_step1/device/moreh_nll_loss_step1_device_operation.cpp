@@ -40,7 +40,7 @@ void MorehNllLossStep1DeviceOperation::validate_on_program_cache_hit(
     validate_inputs(attributes, tensor_args);
 }
 
-MorehNllLossStep1DeviceOperation::shape_return_value_t MorehNllLossStep1DeviceOperation::compute_output_shapes(
+MorehNllLossStep1DeviceOperation::spec_return_value_t MorehNllLossStep1DeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& target_tensor = tensor_args.target_tensor;
     auto target_shape = target_tensor.get_shape();

@@ -69,16 +69,15 @@ void MorehDotBackwardOperation::validate_on_program_cache_hit(
     validate_tensors(operation_attributes, tensor_args);
 }
 
-MorehDotBackwardOperation::shape_return_value_t MorehDotBackwardOperation::compute_output_shapes(
+MorehDotBackwardOperation::spec_return_value_t MorehDotBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    TT_FATAL(false, "This operation is in place, and as such, should not be computing output shapes.");
     return {};
 }
 
 MorehDotBackwardOperation::tensor_return_value_t MorehDotBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(tensor_args.output_tensors.size() > 0, "Invalid number of output tensors.");
-    return tensor_args.output_tensors;
+    return {};
 }
 
 std::tuple<MorehDotBackwardOperation::operation_attributes_t, MorehDotBackwardOperation::tensor_args_t>
