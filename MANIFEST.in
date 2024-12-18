@@ -52,3 +52,6 @@ exclude .pre-commit-config.yaml
 prune ttnn/ttnn/examples/bert/
 
 recursive-include runtime *
+
+# TEST removing a duplicate folder in SFPI
+prune runtime/sfpi/compiler/riscv32-unknown-elf/bin/
