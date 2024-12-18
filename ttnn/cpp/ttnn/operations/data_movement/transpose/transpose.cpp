@@ -58,9 +58,7 @@ inline Tensor transpose_(
             if (a.device()->arch() == tt::ARCH::GRAYSKULL) {
                 tiled_only = a.shape()[-2] > 256;  // hangs right now past this dimension, #13660 will turn it from a
                                                    // hang into a PCC issue for GS and improve perf for WH
-            } else if (!a.is_sharded() && a.layout() == Layout::ROW_MAJOR) {  // rm is L1 intensive, if it overflows we
-                                                                              // can do tiled which allocates much
-                                                                              // smaller CBs
+            } else if (!a.is_sharded() && a.layout() == Layout::ROW_MAJOR) {
                 return ttnn::prim::permute(
                     a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}), output_mem_config, std::nullopt);
             }
@@ -91,7 +89,7 @@ ttnn::Tensor transpose_nd(
     const uint32_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
-    std::vector<int64_t> permutation;
+    ttnn::SmallVector<int64_t> permutation;
     permutation.reserve(input_tensor.get_shape().rank());
     for (uint32_t i = 0; i < input_tensor.get_shape().rank(); ++i) {
         permutation.push_back(i);
