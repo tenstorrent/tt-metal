@@ -7,6 +7,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <ttnn/operations/moreh/moreh_sum/moreh_sum.hpp>
 
+#include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 
@@ -52,6 +53,43 @@ tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim) {
 tt::tt_metal::Tensor divide(const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b) {
     auto inv_b = ttnn::reciprocal(/* queue_id */ 0, b);
     return ttnn::multiply(a, inv_b);
+}
+
+tt::tt_metal ::Tensor mean_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+    // auto tensor_shape = t.get_shape();
+    // auto shape = core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
+    // auto* device = &autograd::ctx().get_device();
+    // auto mean = core::empty(shape, device, t.memory_config());
+    auto res = ttnn::moreh_mean(
+        t,
+        dim,
+        keep_dim,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+    return res;
+}
+tt::tt_metal ::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+    return ttnn::mean(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
+}
+
+tt::tt_metal ::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+    // auto tensor_shape = t.get_shape();
+    // auto shape = core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
+    // auto* device = &autograd::ctx().get_device();
+    // auto mean = core::empty(shape, device, t.memory_config());
+    auto res = ttnn::moreh_sum(
+        t,
+        dim,
+        keep_dim,
+        std::nullopt,
+        std::nullopt,
+        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+    return res;
+}
+tt::tt_metal ::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+    return ttnn::sum(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
 
 }  // namespace ttml::ttnn_fixed
