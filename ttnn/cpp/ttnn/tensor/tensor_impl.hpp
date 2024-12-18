@@ -180,7 +180,7 @@ inline void read_data_from_device_buffer(
 
 template <typename T>
 inline void read_data_from_device_buffer(DeviceBuffer device_buffer, std::vector<T>& host_buffer) {
-    ::detail::ReadFromBuffer(device_buffer, host_buffer);
+    ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
 }
 
 // ======================================================================================
