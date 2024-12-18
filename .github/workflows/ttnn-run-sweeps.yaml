@@ -29,10 +29,13 @@ on:
           - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu_pytorch2
           - eltwise.unary.abs.abs
+          - eltwise.unary.abs.abs_forge
           - eltwise.unary.cos.cos
           - eltwise.unary.cos.cos_pytorch2
+          - eltwise.unary.cos.cos_forge
           - eltwise.unary.sin.sin
           - eltwise.unary.sin.sin_pytorch2
+          - eltwise.unary.sin.sin_forge
           - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
           - eltwise.unary.clamp.clamp_pytorch2
@@ -56,11 +59,13 @@ on:
           - eltwise.unary.elu.elu_pytorch2
           - eltwise.unary.erfc.erfc
           - eltwise.unary.exp.exp
+          - eltwise.unary.exp.exp_forge
           - eltwise.unary.exp.exp_pytorch2
           - eltwise.unary.exp2.exp2
           - eltwise.unary.expm1.expm1
           - eltwise.unary.tanh.tanh
           - eltwise.unary.tanh.tanh_pytorch2
+          - eltwise.unary.tanh.tanh_forge
           - eltwise.unary.atanh.atanh
           - eltwise.unary.atan.atan
           - eltwise.unary.sign.sign
@@ -181,6 +186,7 @@ on:
           - eltwise.unary.lgamma.lgamma
           - eltwise.unary.lgamma.lgamma_sharded
           - eltwise.unary.logit.logit
+          - eltwise.unary.logit.logit_forge
           - eltwise.unary.logit.logit_sharded
           - eltwise.unary.mish.mish
           - eltwise.unary.mish.mish_sharded
