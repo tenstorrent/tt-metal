@@ -714,27 +714,14 @@ endfunction()
 set(PRECOMPILED_HEADER_TARGET "")
 
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        add_library(${SUBLIBRARY_NAME} SHARED ${ARGN})
-        install(
-            TARGETS
-                ${SUBLIBRARY_NAME}
-            LIBRARY
-                DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            ARCHIVE
-                DESTINATION ${CMAKE_INSTALL_LIBDIR}
-                COMPONENT tt_build_artifacts
-        )
-    else()
-        add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
-    endif()
+    add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
     if(WITH_PYTHON_BINDINGS)
         target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
     else()
         target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=0)
     endif()
-    target_include_directories(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_INCLUDE_DIRS})
-    target_link_libraries(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_LINK_LIBRARIES})
+    target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
+    target_link_libraries(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
     use_precompiled_header(${SUBLIBRARY_NAME})
     set(PRECOMPILED_HEADER_TARGET "${PRECOMPILED_HEADER_TARGET}" PARENT_SCOPE)
@@ -778,7 +765,6 @@ endforeach(
 )
 
 add_ttnn_sublibrary(ttnn_tensor ${TENSOR_SRCS})
-# add_ttnn_sublibrary(tt_dnn ${TT_DNN_SRCS})
 add_ttnn_sublibrary(ttnn_ccl ${CCL_TTNN_SRCS})
 add_ttnn_sublibrary(ttnn_ccl_exp ${CCL_EXPERIMENTAL_TTNN_SRCS})
 
