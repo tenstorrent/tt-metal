@@ -351,17 +351,67 @@ void validate_input_with_dim(const Tensor& input, const int64_t& dim) {
 void validate_output_with_keepdim(const Tensor& input, const Tensor& output, const int64_t& dim, const bool& keepdim) {
     auto input_shape = input.get_padded_shape();
     auto input_shape_wo_padding = input.get_logical_shape();
-    const auto input_rank = input_shape.rank();
+    const auto input_rank = input_shape_wo_padding.rank();
+    auto padded_dim = dim + input_shape.rank() - input_shape_wo_padding.rank();
 
     const auto output_shape = output.get_padded_shape();
     const auto output_shape_wo_padding = output.get_logical_shape();
-    const auto output_rank = output_shape.rank();
+    const auto output_rank = output_shape_wo_padding.rank();
 
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
 
     log_debug(LogOp, "{}:{} keepdim {} dim {}", __func__, __LINE__, keepdim, dim);
     log_debug(LogOp, "{}:{} input_shape {} wo_padding {}", __func__, __LINE__, input_shape, input_shape_wo_padding);
     log_debug(LogOp, "{}:{} output_shape {} wo_paddoutg {}", __func__, __LINE__, output_shape, output_shape_wo_padding);
+
+    if (keepdim) {
+        bool ranks_are_equal = (input_rank == output_rank);
+        input_shape[padded_dim] = (is_tile_dim) ? (TILE_HEIGHT) : (1);
+        input_shape_wo_padding[dim] = 1;
+
+        if (!ranks_are_equal) {
+            log_warning(
+                LogOp,
+                "{}:{} input_rank {} and output_rank {} are not the same in keepdim mode",
+                __func__,
+                __LINE__,
+                input_rank,
+                output_rank);
+        }
+
+        TT_FATAL(input_shape == output_shape, "Error {} {}", input_shape, output_shape);
+        TT_FATAL(
+            input_shape_wo_padding == output_shape_wo_padding,
+            "Error {} {}",
+            input_shape_wo_padding,
+            output_shape_wo_padding);
+    } else {
+        ttnn::SmallVector<uint32_t> expected_output_shape;
+        for (int i = 0; i < output_shape.rank(); ++i) {
+            if (i == padded_dim && !is_tile_dim) {
+                expected_output_shape.push_back(1);
+            }
+            expected_output_shape.push_back(output_shape[i]);
+        }
+        ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
+        for (int i = 0; i < output_shape_wo_padding.rank(); ++i) {
+            if (i == dim && !is_tile_dim) {
+                expected_output_shape_wo_padding.push_back(1);
+            }
+            expected_output_shape_wo_padding.push_back(output_shape_wo_padding[i]);
+        }
+        log_debug(LogOp, "{}:{} expected_output_shape {}", __func__, __LINE__, expected_output_shape);
+        log_debug(
+            LogOp, "{}:{} expected_output_shape_wo_padding {}", __func__, __LINE__, expected_output_shape_wo_padding);
+
+        for (int i = 0; i < input_shape.rank(); ++i) {
+            TT_FATAL(i == padded_dim || input_shape[i] == expected_output_shape[i], "Error");
+            ;
+        }
+        for (int i = 0; i < input_shape_wo_padding.rank(); ++i) {
+            TT_FATAL(i == dim || input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
+        }
+    }
 }
 
 void initialize_dims_with_range(ttnn::SmallVector<int64_t>& dims, uint32_t input_rank) {
