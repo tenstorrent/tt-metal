@@ -1930,6 +1930,14 @@ void configure_for_single_chip(
             // Packetized path buffer, can be at any available address.
             uint32_t prefetch_relay_demux_queue_start_addr = l1_unreserved_base;
             constexpr uint32_t prefetch_relay_demux_queue_size_bytes = 0x10000;
+            log_info(
+                LogTest,
+                "prefetch mux remote prefetcher buffer size = {:#x}",
+                (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE));
+            log_info(LogTest, "prefetch_relay_mux_queue_start_addr = {:#x}", prefetch_relay_mux_queue_start_addr);
+            log_info(LogTest, "prefetch_relay_mux_queue_size_bytes = {:#x}", prefetch_relay_mux_queue_size_bytes);
+            log_info(LogTest, "prefetch_relay_demux_queue_start_addr = {:#x}", prefetch_relay_demux_queue_start_addr);
+            log_info(LogTest, "prefetch_relay_demux_queue_size_bytes = {:#x}", prefetch_relay_demux_queue_size_bytes);
 
             // mux / demux pointers
             const auto prefetch_relax_mux_queue0_ptrs =
@@ -2252,6 +2260,11 @@ void configure_for_single_chip(
             // Packetized path buffer, can be at any available address.
             uint32_t dispatch_relay_demux_queue_start_addr = l1_unreserved_base;
             constexpr uint32_t dispatch_relay_demux_queue_size_bytes = 0x10000;
+
+            log_info(LogTest, "dispatch_relay_mux_queue_start_addr = {:#x}", dispatch_relay_mux_queue_start_addr);
+            log_info(LogTest, "dispatch_relay_mux_queue_size_bytes = {:#x}", dispatch_relay_mux_queue_size_bytes);
+            log_info(LogTest, "dispatch_relay_demux_queue_start_addr = {:#x}", dispatch_relay_demux_queue_start_addr);
+            log_info(LogTest, "dispatch_relay_demux_queue_size_bytes = {:#x}", dispatch_relay_demux_queue_size_bytes);
 
             // mux / demux pointers
             const auto dispatch_relax_mux_queue0_ptrs =
@@ -3608,6 +3621,10 @@ int main(int argc, char** argv) {
                 LogTest,
                 "prefetch relay mux status = {}",
                 packet_queue_test_status_to_string(prefetch_relay_mux_results[PQ_TEST_STATUS_INDEX]));
+            log_info(
+                LogTest,
+                "prefetch relay mux words sent = {}",
+                get_64b_result(prefetch_relay_mux_results, PQ_TEST_WORD_CNT_INDEX));
             pass &= (prefetch_relay_mux_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
 
             vector<uint32_t> prefetch_relay_demux_results = tt::llrt::read_hex_vec_from_core(
@@ -3619,6 +3636,10 @@ int main(int argc, char** argv) {
                 LogTest,
                 "prefetch relay demux status = {}",
                 packet_queue_test_status_to_string(prefetch_relay_demux_results[PQ_TEST_STATUS_INDEX]));
+            log_info(
+                LogTest,
+                "prefetch relay demux words sent = {}",
+                get_64b_result(prefetch_relay_demux_results, PQ_TEST_WORD_CNT_INDEX));
             pass &= (prefetch_relay_demux_results[0] == PACKET_QUEUE_TEST_PASS);
 
             vector<uint32_t> dispatch_relay_mux_results = tt::llrt::read_hex_vec_from_core(
@@ -3630,6 +3651,7 @@ int main(int argc, char** argv) {
                 LogTest,
                 "dispatch relay mux status = {}",
                 packet_queue_test_status_to_string(dispatch_relay_mux_results[PQ_TEST_STATUS_INDEX]));
+            log_info(LogTest, "dispatch relay mux words sent = {}", dispatch_relay_mux_results[PQ_TEST_WORD_CNT_INDEX]);
             pass &= (dispatch_relay_mux_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
 
             vector<uint32_t> dispatch_relay_demux_results = tt::llrt::read_hex_vec_from_core(
@@ -3641,6 +3663,10 @@ int main(int argc, char** argv) {
                 LogTest,
                 "dispatch relay demux status = {}",
                 packet_queue_test_status_to_string(dispatch_relay_demux_results[PQ_TEST_STATUS_INDEX]));
+            log_info(
+                LogTest,
+                "dispatch relay demux words sent = {}",
+                get_64b_result(dispatch_relay_demux_results, PQ_TEST_WORD_CNT_INDEX));
             pass &= (dispatch_relay_demux_results[0] == PACKET_QUEUE_TEST_PASS);
         }
 

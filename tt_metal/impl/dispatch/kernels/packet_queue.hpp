@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <utility>
 #include <array>
 
@@ -120,33 +121,37 @@ class packet_input_queue_state_t;
 class packet_output_queue_state_t;
 
 class packet_queue_state_t {
-    volatile uint32_t* local_wptr_val;
-    volatile uint32_t* local_rptr_sent_val;
-    volatile uint32_t* local_rptr_cleared_val;
-    volatile uint32_t* remote_wptr_val;
-    volatile uint32_t* remote_rptr_sent_val;
-    volatile uint32_t* remote_rptr_cleared_val;
+    volatile tt_l1_ptr uint32_t* local_wptr_val;
+    volatile tt_l1_ptr uint32_t* local_rptr_sent_val;
+    volatile tt_l1_ptr uint32_t* local_rptr_cleared_val;
+    volatile tt_l1_ptr uint32_t* remote_wptr_val;
+    volatile tt_l1_ptr uint32_t* remote_rptr_sent_val;
+    volatile tt_l1_ptr uint32_t* remote_rptr_cleared_val;
     // Input queue: will only update remote rptr sent and cleared
     // Output queue: will only update remote wptr
     uint32_t remote_wptr_addr;
     uint32_t remote_rptr_sent_addr;
     uint32_t remote_rptr_cleared_addr;
 
-    volatile uint32_t* sent;
-    volatile uint32_t* recv;
+    volatile tt_l1_ptr uint32_t* sent;
+    volatile tt_l1_ptr uint32_t* recv;
     uint32_t remote_sent_addr;
     uint32_t remote_recv_addr;
 
     uint32_t remote_ready_status_addr;
     volatile uint32_t* local_ready_status_ptr;
+
 protected:
-    volatile uint32_t* local_rptr_sent_reset;
-    volatile uint32_t* local_rptr_cleared_reset;
+    volatile tt_l1_ptr uint32_t* local_rptr_sent_reset;
+    volatile tt_l1_ptr uint32_t* local_rptr_cleared_reset;
 
     bool cb_mode; // used in advance_next_packet
     uint32_t cb_mode_page_size_words;
     uint8_t cb_mode_local_sem_id;
     uint8_t cb_mode_remote_sem_id;
+
+    uint32_t queue_size_mask;
+    uint32_t ptr_offset_mask;
 
 public:
     uint8_t queue_id;
@@ -180,6 +185,9 @@ public:
         this->remote_y = remote_y;
         this->remote_queue_id = remote_queue_id;
         this->remote_update_network_type = remote_update_network_type;
+
+        this->queue_size_mask = (this->queue_size_words << 1) - 1;
+        this->ptr_offset_mask = this->queue_size_words - 1;
 
         this->cb_mode = cb_mode;
         this->cb_mode_local_sem_id = cb_mode_local_sem_id;
@@ -221,24 +229,6 @@ public:
         this->local_ready_status_ptr = reinterpret_cast<volatile uint32_t*>(STREAM_REG_ADDR(queue_id, STREAM_REMOTE_SRC_REG_INDEX));
     }
 
-    inline uint32_t wrap_ptr(uint32_t value) const {
-        // Increments that wrap over the queue are not supported
-        // to support them we need to add a case for if value >= 2*queue_size_words then
-        // use the modulus operator
-        if (value >= this->queue_size_words) {
-            value -= this->queue_size_words;
-        }
-        return value;
-    }
-
-    inline uint32_t distance(uint32_t end, uint32_t start) const {
-        if (end >= start) {
-            return end - start;
-        } else {
-            return this->queue_size_words - start + end;
-        }
-    }
-
     inline uint8_t get_queue_id() const {
         return this->queue_id;
     }
@@ -256,42 +246,42 @@ public:
     }
 
     inline uint32_t get_queue_wptr_offset_words() const {
-        return this->get_queue_local_wptr();
+        return this->get_queue_local_wptr() & this->ptr_offset_mask;
     }
 
     inline uint32_t get_queue_rptr_sent_offset_words() const {
-        return this->get_queue_local_rptr_sent();
+        return this->get_queue_local_rptr_sent() & this->ptr_offset_mask;
     }
 
     inline uint32_t get_queue_rptr_cleared_offset_words() const {
-        return this->get_queue_local_rptr_cleared();
+        return this->get_queue_local_rptr_cleared() & this->ptr_offset_mask;
     }
 
     template<bool is_input>
     inline void advance_queue_local_wptr(uint32_t num_words) {
-        *this->local_wptr_val = wrap_ptr(*this->local_wptr_val + num_words);
+        *this->local_wptr_val = *this->local_wptr_val + num_words;
     }
 
     template<bool is_input>
     inline void advance_queue_local_rptr_sent(uint32_t num_words)  {
-        *this->local_rptr_sent_val = wrap_ptr(*this->local_rptr_sent_val + num_words);
+        *this->local_rptr_sent_val = *this->local_rptr_sent_val + num_words;
     }
 
     template<bool is_input>
     inline void advance_queue_local_rptr_cleared(uint32_t num_words)  {
-        *this->local_rptr_cleared_val = wrap_ptr(*this->local_rptr_cleared_val + num_words);
+        *this->local_rptr_cleared_val = *this->local_rptr_cleared_val + num_words;
     }
 
     inline uint32_t get_queue_data_num_words_occupied() const {
-        return distance(this->get_queue_wptr_offset_words(), this->get_queue_rptr_cleared_offset_words());
+        return (this->get_queue_local_wptr() - this->get_queue_local_rptr_cleared()) & this->queue_size_mask;
     }
 
     inline uint32_t get_queue_data_num_words_free() const {
-        return this->queue_size_words - this->get_queue_data_num_words_occupied() - 1;
+        return this->queue_size_words - this->get_queue_data_num_words_occupied();
     }
 
     inline uint32_t get_num_words_written_not_sent() const {
-        return distance(this->get_queue_wptr_offset_words(), this->get_queue_rptr_sent_offset_words());
+        return (this->get_queue_local_wptr() - this->get_queue_local_rptr_sent()) & this->queue_size_mask;
     }
 
     inline uint32_t get_queue_rptr_sent_addr_bytes() const {
@@ -361,19 +351,19 @@ public:
 
     template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline void advance_queue_remote_wptr(uint32_t num_words) {
-        *this->remote_wptr_val = wrap_ptr(*this->remote_wptr_val + num_words);
+        *this->remote_wptr_val = *this->remote_wptr_val + num_words;
         this->remote_ptr_update<network_type, cb_mode>((uint32_t)this->remote_wptr_val, this->remote_wptr_addr);
     }
 
     template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline void advance_queue_remote_rptr_sent(uint32_t num_words) {
-        *this->remote_rptr_sent_val = wrap_ptr(*this->remote_rptr_sent_val + num_words);
+        *this->remote_rptr_sent_val = *this->remote_rptr_sent_val + num_words;
         this->remote_ptr_update<network_type, cb_mode>((uint32_t)this->remote_rptr_sent_val, this->remote_rptr_sent_addr);
     }
 
     template<DispatchRemoteNetworkType network_type, bool cb_mode>
     inline void advance_queue_remote_rptr_cleared(uint32_t num_words) {
-        *this->remote_rptr_cleared_val = wrap_ptr(*this->remote_rptr_cleared_val + num_words);
+        *this->remote_rptr_cleared_val = *this->remote_rptr_cleared_val + num_words;
         this->remote_ptr_update<network_type, cb_mode>((uint32_t)this->remote_rptr_cleared_val, this->remote_rptr_cleared_addr);
     }
 
@@ -457,14 +447,12 @@ public:
     inline void cb_mode_inc_remote_sem_val(uint32_t val) {
         uint32_t sem_l1_addr = get_semaphore<fd_core_type>(this->cb_mode_remote_sem_id);
         uint64_t sem_noc_addr = get_noc_addr(remote_x, remote_y, sem_l1_addr);
-        if (val) {
-            noc_semaphore_inc(sem_noc_addr, val);
-        }
+        noc_semaphore_inc(sem_noc_addr, val);
     }
 
     template<bool is_input>
     inline uint32_t cb_mode_rptr_sent_advance_page_align() {
-        uint32_t rptr_val = this->get_queue_local_rptr_sent();
+        uint32_t rptr_val = this->get_queue_rptr_sent_offset_words();
         uint32_t page_size_words_mask = this->cb_mode_page_size_words - 1;
         uint32_t num_words_past_page_boundary = rptr_val & page_size_words_mask;
         uint32_t input_pad_words_skipped = 0;
@@ -581,10 +569,6 @@ public:
                                    packetizer_input, packetizer_input_sem_id,
                                    packetizer_input_remote_sem_id,
                                    packetizer_input_log_page_size);
-
-        tt_l1_ptr uint32_t* queue_ptr =
-            reinterpret_cast<tt_l1_ptr uint32_t*>(queue_start_addr_words*PACKET_WORD_SIZE_BYTES);
-
         this->packetizer_page_words_cleared = 0;
 
         if (packetizer_input) {
@@ -750,7 +734,6 @@ public:
 class packet_output_queue_state_t : public packet_queue_state_t {
 
 protected:
-
     uint32_t output_max_send_words;
 
     uint32_t unpacketizer_page_words_sent;
