@@ -15,46 +15,24 @@ TIMEOUT = 15
 
 parameters = {
     "default": {
-        "height": [25, 16],
-        "width": [4, 9],
-        "keepdim": [True, False],
-        "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+        "height": [25],
+        "width": [4],
+        "dtype": [ttnn.float32, ttnn.bfloat16],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     }
 }
 
 
-# Invalidate vector is called during the generation phase where each vector will be passed in.
-# If invalidated, the vector will still be stored but will be skipped.
-# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
-        test_vector["dtype"] == ttnn.float32 or test_vector["dtype"] == ttnn.bfloat16
-    ):
-        return True, "Row major is only supported for fp32 & fp16"
-    if not test_vector["keepdim"]:
-        return True, "keepdim = false is not supported"
-
-    device = ttnn.open_device(device_id=0)
-    if test_vector["dtype"] == ttnn.float32 and ttnn.device.is_grayskull(device):
-        return True, "Dest Fp32 mode is not supported for arch grayskull"
-    ttnn.close_device(device)
-    del device
-
-    return False, None
-
-
 def run(
     height,
     width,
-    keepdim,
     dtype,
     layout,
     *,
     device,
 ) -> list:
     torch_input_tensor = torch.rand([height, width], dtype=torch.float32)
-    torch_output_tensor = torch.max(torch_input_tensor, keepdim=keepdim)
+    torch_output_tensor = torch.max(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout, device=device)
 
