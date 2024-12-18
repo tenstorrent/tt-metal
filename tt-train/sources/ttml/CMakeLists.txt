@@ -49,7 +49,12 @@ if(NOT TARGET Metalium::Metal)
                 INTERFACE_INCLUDE_DIRECTORIES
                     "${METALIUM_INCLUDE_DIRS}"
         )
-        target_link_libraries(Metalium::Metal INTERFACE ${DEVICE_LIBRARY})
+        target_link_libraries(
+            Metalium::Metal
+            INTERFACE
+                ${DEVICE_LIBRARY}
+                nlohmann_json::nlohmann_json
+        )
         message(STATUS "Successfully found libtt_metal.so at ${TT_METAL_LIBRARY}")
     else()
         message(FATAL_ERROR "libtt_metal.so not found in ${METALIUM_LIB_PATH}")

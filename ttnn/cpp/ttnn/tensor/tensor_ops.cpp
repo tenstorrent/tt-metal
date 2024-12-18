@@ -160,15 +160,6 @@ Tensor tensor_cpu(
     return host_tensor;
 }
 
-Tensor tensor_cpu_sharded(const Tensor& input_tensor) {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::cpu_sharded", input_tensor);
-    auto output = tensor_impl::to_host_sharded_wrapper(input_tensor);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
-}
-
 Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, Device* worker) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_layout, worker);
@@ -215,6 +206,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
             host_storage != nullptr) {
             distributed_config = host_storage->strategy;
         }
+
         Tensor tensor_modified_layout = Tensor(workers.size(), distributed_config);
         for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
             auto& worker = workers[worker_index];
@@ -415,7 +407,9 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
                     if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
                         DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         DeviceBuffer device_buffer = device_storage.get_buffer();
-                        device_buffer->set_page_size(new_shape[-1] * tensor.element_size());
+                        const auto& tensor_spec = tensor.tensor_spec();
+                        auto page_size_bytes = tensor_spec.compute_page_size_bytes();
+                        device_buffer->set_page_size(page_size_bytes);
                         device_storage.insert_buffer(device_buffer);
                         return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout(), tile);
                     } else {
@@ -426,10 +420,16 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
                         auto shard_spec = shard_spec_buffer.tensor_shard_spec;
                         auto shard_shape = shard_spec.shape;
 
-                        uint32_t mul_div = new_shape[-1] > shard_shape[1] ? (new_shape[-1] / shard_shape[1])
-                                                                          : (shard_shape[1] / new_shape[-1]);
-                        shard_spec.shape[0] =
-                            new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
+                        uint32_t mul_div;
+                        if (new_shape[-1] == 0 || shard_shape[1] == 0) {
+                            mul_div = 0;
+                        } else {
+                            mul_div = new_shape[-1] > shard_shape[1] ?
+                                        (new_shape[-1] / shard_shape[1]) :
+                                        (shard_shape[1] / new_shape[-1]);
+                        }
+
+                        shard_spec.shape[0] = new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
                         shard_spec.shape[1] = new_shape[-1];
 
                         shard_spec_buffer.page_shape = {1, new_shape[-1]};

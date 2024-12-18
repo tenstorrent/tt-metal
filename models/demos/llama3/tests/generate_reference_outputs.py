@@ -11,38 +11,43 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Trans
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from loguru import logger
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
-def generate_reference_outputs(total_length, output_file):
-    # Load the model arguments
-    model_args = TtModelArgs(mesh_device=None)
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+def generate_reference_outputs(total_length, output_file, hf_model_name=None):
+    if hf_model_name:
+        # HuggingFace path
+        tokenizer = AutoTokenizer.from_pretrained(hf_model_name)
+        model = AutoModelForCausalLM.from_pretrained(hf_model_name, torch_dtype=torch.float32)
+        model.eval()
+    else:
+        # Original path - load reference model
+        model_args = TtModelArgs(mesh_device=None)
+        model_args.max_seq_len = total_length
+        tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    # Load the model state dict
-    state_dict = model_args.load_state_dict()
-
-    # Initialize the reference model
-    state_dict_prefix = model_args.get_state_dict_prefix("", None)
-    reference_state_dict = {
-        k[len(state_dict_prefix) :]: v
-        for k, v in state_dict.items()
-        if (
-            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-            or any(
-                [
-                    f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-                ]
+        state_dict = model_args.load_state_dict()
+        state_dict_prefix = model_args.get_state_dict_prefix("", None)
+        reference_state_dict = {
+            k[len(state_dict_prefix) :]: v
+            for k, v in state_dict.items()
+            if (
+                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
+                or any(
+                    [
+                        f"{state_dict_prefix}{name}" in k
+                        for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                    ]
+                )
             )
-        )
-    }
-    reference_model = Transformer(model_args)
-    reference_model.load_state_dict(reference_state_dict)
-    reference_model.eval()  # Set to evaluation mode
+        }
+        model = Transformer(model_args)
+        model.load_state_dict(reference_state_dict)
+        model.eval()
 
-    # Initialize HostEmbedding
-    embd = HostEmbedding(model_args)
-    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
+        # Initialize HostEmbedding
+        embd = HostEmbedding(model_args)
+        embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     # Load the book text and encode tokens
     current_file_path = os.path.abspath(__file__)
@@ -52,8 +57,12 @@ def generate_reference_outputs(total_length, output_file):
     with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
         text = f.read()
 
-    # Encode text to tokens
-    encoded_tokens = tokenizer.encode(text, bos=True, eos=False)[:total_length]
+    # Modify token encoding based on model type
+    if hf_model_name:
+        encoded_tokens = tokenizer.encode(text, add_special_tokens=True)[:total_length]
+    else:
+        encoded_tokens = tokenizer.encode(text, bos=True, eos=False)[:total_length]
+
     encoded_tokens_tensor = torch.tensor(encoded_tokens).unsqueeze(0)  # Shape [1, seq_len]
 
     print(f"{'Progress':<15}{'Correct':<8}{'Actual':<15}{'Top 5 Predictions':<75}")
@@ -77,9 +86,13 @@ def generate_reference_outputs(total_length, output_file):
             # Trim input chunk if needed
             chunk_tokens = chunk_tokens[:, :actual_chunk_size]
 
-            # Process chunk
-            pt_decode_input = embd(chunk_tokens).view(1, actual_chunk_size, -1)
-            ref_output = reference_model(pt_decode_input, start_pos=chunk_start)
+            # Process chunk based on model type
+            if hf_model_name:
+                outputs = model(chunk_tokens)
+                ref_output = outputs.logits
+            else:
+                pt_decode_input = embd(chunk_tokens).view(1, actual_chunk_size, -1)
+                ref_output = model(pt_decode_input, start_pos=chunk_start)
 
             # Compute top-5 predictions
             probs = torch.softmax(ref_output, dim=-1)
@@ -121,6 +134,9 @@ def generate_reference_outputs(total_length, output_file):
                     if len(segment_accuracies) <= global_pos // 100:
                         segment_accuracies.append((segment_top1_acc, segment_top5_acc))
 
+        # Concatenate all top5 tokens into a single tensor
+        all_top5_tokens = torch.cat(all_top5_tokens, dim=0)  # Shape: [total_tokens, 5]
+
     # Save the data
     data = {
         "top5_tokens": all_top5_tokens,
@@ -153,9 +169,10 @@ def main():
     parser.add_argument(
         "--output_file", type=str, default="reference_outputs.pt", help="Output file path for reference data"
     )
+    parser.add_argument("--model", type=str, help="Optional: HuggingFace model name (e.g., 'meta-llama/Llama-2-7b-hf')")
     args = parser.parse_args()
 
-    generate_reference_outputs(total_length=args.total_length, output_file=args.output_file)
+    generate_reference_outputs(total_length=args.total_length, output_file=args.output_file, hf_model_name=args.model)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,18 @@
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 
-TEST(TensorUtilsTest, TestFloatToFromTensorEven) {
+class TensorUtilsTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(TensorUtilsTest, TestFloatToFromTensorEven) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data = {1.F, 5.F, 10.F, 15.F};
 
@@ -27,7 +38,7 @@ TEST(TensorUtilsTest, TestFloatToFromTensorEven) {
     }
 }
 
-TEST(TensorUtilsTest, TestFloatToFromTensorGPT2Tokenizer) {
+TEST_F(TensorUtilsTest, TestFloatToFromTensorGPT2Tokenizer) {
     auto* device = &ttml::autograd::ctx().get_device();
     const size_t N = 50304;
     std::vector<float> test_data(N, 0.F);
@@ -43,7 +54,7 @@ TEST(TensorUtilsTest, TestFloatToFromTensorGPT2Tokenizer) {
     }
 }
 
-TEST(TensorUtilsTest, TestFloatToFromTensorOdd) {
+TEST_F(TensorUtilsTest, TestFloatToFromTensorOdd) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data = {30.F, 20.F, 2.F};
 
@@ -58,7 +69,7 @@ TEST(TensorUtilsTest, TestFloatToFromTensorOdd) {
     }
 }
 
-TEST(TensorUtilsTest, TestUint32ToFromTensorEven) {
+TEST_F(TensorUtilsTest, TestUint32ToFromTensorEven) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<uint32_t> test_data = {1, 5, 10, 15};
 
@@ -73,7 +84,7 @@ TEST(TensorUtilsTest, TestUint32ToFromTensorEven) {
     }
 }
 
-TEST(TensorUtilsTest, TestUint32ToFromTensorOdd) {
+TEST_F(TensorUtilsTest, TestUint32ToFromTensorOdd) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<uint32_t> test_data = {30, 20, 2};
 
@@ -88,7 +99,7 @@ TEST(TensorUtilsTest, TestUint32ToFromTensorOdd) {
     }
 }
 
-TEST(TensorUtilsTest, TestUint32ToFromTensorLargeWithBatch) {
+TEST_F(TensorUtilsTest, TestUint32ToFromTensorLargeWithBatch) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<uint32_t> test_data;
     uint32_t batch_size = 16;
@@ -106,7 +117,7 @@ TEST(TensorUtilsTest, TestUint32ToFromTensorLargeWithBatch) {
     }
 }
 
-TEST(TensorUtilsTest, TestFloatToFromTensorLargeWithBatch) {
+TEST_F(TensorUtilsTest, TestFloatToFromTensorLargeWithBatch) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data;
     uint32_t batch_size = 16;
@@ -124,7 +135,7 @@ TEST(TensorUtilsTest, TestFloatToFromTensorLargeWithBatch) {
     }
 }
 
-TEST(TensorUtilsTest, TestToFromTensorLarge) {
+TEST_F(TensorUtilsTest, TestToFromTensorLarge) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data;
     uint32_t vec_size = 1337;
@@ -141,7 +152,7 @@ TEST(TensorUtilsTest, TestToFromTensorLarge) {
     }
 }
 
-TEST(TensorUtilsTest, TestToFromTensorBatch) {
+TEST_F(TensorUtilsTest, TestToFromTensorBatch) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data = {1.F, 5.F, 10.F, 15.F};
 
@@ -156,7 +167,7 @@ TEST(TensorUtilsTest, TestToFromTensorBatch) {
     }
 }
 
-TEST(TensorUtilsTest, TestOnes_0) {
+TEST_F(TensorUtilsTest, TestOnes_0) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto shape = ttml::core::create_shape({1, 2, 3, 4});
     auto tensor = ttml::core::ones(shape, device);
@@ -172,7 +183,7 @@ TEST(TensorUtilsTest, TestOnes_0) {
     }
 }
 
-TEST(TensorUtilsTest, TestOnes_1) {
+TEST_F(TensorUtilsTest, TestOnes_1) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto shape = ttml::core::create_shape({1, 2, 3, 4});
     auto tensor_zeros = ttml::core::zeros(shape, device);
@@ -183,7 +194,7 @@ TEST(TensorUtilsTest, TestOnes_1) {
     }
 }
 
-TEST(TensorUtilsTest, TestZeros) {
+TEST_F(TensorUtilsTest, TestZeros) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto shape = ttml::core::create_shape({1, 2, 3, 4});
     auto tensor = ttml::core::ones(shape, device);
@@ -195,7 +206,7 @@ TEST(TensorUtilsTest, TestZeros) {
     }
 }
 
-TEST(TensorUtilsTest, TestIsInitialized) {
+TEST_F(TensorUtilsTest, TestIsInitialized) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     tt::tt_metal::Tensor tensor;
@@ -206,7 +217,7 @@ TEST(TensorUtilsTest, TestIsInitialized) {
     EXPECT_TRUE(ttml::core::is_tensor_initialized(tensor));
 }
 
-TEST(TensorUtilsTest, TestOnesLike) {
+TEST_F(TensorUtilsTest, TestOnesLike) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto shape = ttml::core::create_shape({1, 2, 32, 321});
     auto tensor_zeros = ttml::core::zeros(shape, device);
@@ -217,7 +228,7 @@ TEST(TensorUtilsTest, TestOnesLike) {
     }
 }
 
-TEST(TensorUtilsTest, TestZerosLike) {
+TEST_F(TensorUtilsTest, TestZerosLike) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto shape = ttml::core::create_shape({1, 2, 31, 322});
     auto tensor_ones = ttml::core::ones(shape, device);
@@ -228,14 +239,14 @@ TEST(TensorUtilsTest, TestZerosLike) {
     }
 }
 
-TEST(TensorUtilsTest, TestFloatXtensor) {
+TEST_F(TensorUtilsTest, TestFloatXtensor) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data = {30.F, 20.F, 2.F};
 
     auto shape = ttml::core::create_shape({1, 1, 1, 3});
 
     xt::xarray<float> xtensor =
-        ttml::core::span_to_xtensor(std::span<float>{test_data.data(), test_data.size()}, shape.logical_shape());
+        ttml::core::span_to_xtensor_view(std::span<float>{test_data.data(), test_data.size()}, shape.logical_shape());
     auto tensor = ttml::core::from_xtensor(xtensor, device);
 
     auto xtensor_back = ttml::core::to_xtensor(tensor);
@@ -243,13 +254,13 @@ TEST(TensorUtilsTest, TestFloatXtensor) {
     EXPECT_TRUE(xt::allclose(xtensor, xtensor_back));
 }
 
-TEST(TensorUtilsTest, TestUint32XTensor) {
+TEST_F(TensorUtilsTest, TestUint32XTensor) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<uint32_t> test_data = {30, 20, 2};
 
     auto shape = ttml::core::create_shape({1, 1, 1, 3});
-    xt::xarray<uint32_t> xtensor =
-        ttml::core::span_to_xtensor(std::span<uint32_t>{test_data.data(), test_data.size()}, shape.logical_shape());
+    xt::xarray<uint32_t> xtensor = ttml::core::span_to_xtensor_view(
+        std::span<uint32_t>{test_data.data(), test_data.size()}, shape.logical_shape());
     auto tensor = ttml::core::from_xtensor<uint32_t, DataType::UINT32>(xtensor, device);
 
     auto xtensor_back = ttml::core::to_xtensor<uint32_t>(tensor);

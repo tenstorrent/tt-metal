@@ -1430,7 +1430,7 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
                 uint32_t num_intersections = 0;
                 uint32_t num_cores = 0;
                 for (const auto& kg : program_kgs) {
-                    for (uint8_t i = 0; i < device->num_sub_devices(); ++i) {
+                    for (size_t i = 0; i < device->num_sub_devices(); ++i) {
                         const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
                         auto intersection = sub_device_cores.intersection(kg.core_ranges);
                         if (intersection.size() > 0) {
