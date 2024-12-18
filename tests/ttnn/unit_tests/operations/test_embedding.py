@@ -203,11 +203,11 @@ def reverse_embedding_output(output_tensor, weights_tensor):
     return reversed_indices
 
 
-@pytest.mark.parametrize("batch_size", [4])
-@pytest.mark.parametrize("sentence_size", [64])
-@pytest.mark.parametrize("hidden_embedding_dim", [4])  # Bert_Num_Cols_768, Llama_Num_Cols
+@pytest.mark.parametrize("batch_size", [1, 8, 9])
+@pytest.mark.parametrize("sentence_size", [32, 256, 512])
+@pytest.mark.parametrize("hidden_embedding_dim", [768, 4096])  # Bert_Num_Cols_768, Llama_Num_Cols
 @pytest.mark.parametrize(
-    "vocabulary_size", [10]
+    "vocabulary_size", [512, 30522, 2048]
 )  # Bert_Position_Embeddings_512, Bert_Word_Embeddings_30528, Llama_Position_Embeddings,
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
@@ -225,10 +225,10 @@ def test_tiled(
     torch.manual_seed(1234)
 
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
-    # torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
-    row_indices = torch.arange(0, vocabulary_size, dtype=torch.float32)
-    torch_weights = row_indices.unsqueeze(1).expand(-1, hidden_embedding_dim)
-    print(torch_weights)
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    # row_indices = torch.arange(0, vocabulary_size, dtype=torch.float32)
+    # torch_weights = row_indices.unsqueeze(1).expand(-1, hidden_embedding_dim)
+    # print(torch_weights)
     # torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
     torch_embedding = torch.nn.Embedding.from_pretrained(torch_weights)
     torch_output_tensor = torch_embedding(torch_input_tensor)
@@ -256,10 +256,10 @@ def test_tiled(
     )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    print("Reversed ttnn Tensor:")
-    print(reverse_embedding_output(output_tensor, torch_weights))
-    print("Reversed torch Tensor:")
-    print(reverse_embedding_output(torch_output_tensor, torch_weights))
+    # print("Reversed ttnn Tensor:")
+    # print(reverse_embedding_output(output_tensor, torch_weights))
+    # print("Reversed torch Tensor:")
+    # print(reverse_embedding_output(torch_output_tensor, torch_weights))
 
     assert_with_pcc(torch_output_tensor, output_tensor)
 
