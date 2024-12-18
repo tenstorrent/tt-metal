@@ -165,7 +165,6 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
         ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
         shard_strategy,
         shard_orientation,
-        halo=False,
         use_height_and_width_as_shard_shape=True,
     ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
 

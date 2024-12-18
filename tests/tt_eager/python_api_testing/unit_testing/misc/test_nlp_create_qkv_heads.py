@@ -331,7 +331,6 @@ def run_sharded_nlp_create_qkv_heads_test(
                 A_interleaved.shape[-1] // num_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         in1_shard_spec = ttnn.ShardSpec(
             shard_grid,
@@ -340,7 +339,6 @@ def run_sharded_nlp_create_qkv_heads_test(
                 B_interleaved.shape[-1] // num_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
         in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in1_shard_spec)
@@ -356,7 +354,6 @@ def run_sharded_nlp_create_qkv_heads_test(
                 A_interleaved.shape[-1] // num_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
         in0_t = ttnn.Tensor(A_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)

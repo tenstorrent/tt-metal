@@ -196,7 +196,7 @@ def test_performance_vit_e2e(
         }
     )
     n_cores = 8
-    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
     # tracyProfiler = tracy.Profiler()
     # tracyProfiler.enable()
