@@ -229,6 +229,11 @@ on:
           - eltwise.unary.hardtanh.hardtanh_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu
           - eltwise.unary.reglu.reglu
+          - eltwise.unary.swish.swish_sharded
+          - eltwise.unary.softsign.softsign_sharded
+          - eltwise.unary.signbit.signbit_sharded
+          - eltwise.unary.polygamma.polygamma_sharded
+          - eltwise.unary.tan.tan_sharded
           - eltwise.unary_complex.polar.polar
           - eltwise.unary_complex.angle.angle
           - eltwise.unary_complex.polar_bw.polar_bw
