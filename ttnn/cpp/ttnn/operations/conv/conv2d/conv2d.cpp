@@ -83,12 +83,7 @@ Result conv2d(
 
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-    auto num_cores_c = shard_orientation == ShardOrientation::COL_MAJOR ? device->compute_with_storage_grid_size().y : device->compute_with_storage_grid_size().x;
-    auto elem_size = conv_config.weights_dtype == DataType::BFLOAT8_B ? 1 : 2;
-    bool is_non_tile_mul_width =
-        (conv_config.shard_layout == TensorMemoryLayout::BLOCK_SHARDED) && conv_config.act_block_h_override == 0 &&
-        (conv_config.weights_dtype == DataType::BFLOAT8_B || conv_config.weights_dtype == DataType::BFLOAT16) &&
-        conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size * in_channels) % (16 * num_cores_c)) == 0;
+    bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(
         init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false));
