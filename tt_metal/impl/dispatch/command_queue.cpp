@@ -96,7 +96,6 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     Device* device,
     NOC noc_index,
     Buffer& buffer,
-    void* dst,
     SystemMemoryManager& manager,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
@@ -105,7 +104,6 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     std::optional<uint32_t> pages_to_read) :
     command_queue_id(command_queue_id),
     noc_index(noc_index),
-    dst(dst),
     manager(manager),
     buffer(buffer),
     expected_num_workers_completed(expected_num_workers_completed),
@@ -2241,7 +2239,6 @@ void HWCommandQueue::enqueue_read_buffer(
                     this->device,
                     this->noc_index,
                     buffer,
-                    dst,
                     this->manager,
                     this->expected_num_workers_completed,
                     sub_device_ids,
@@ -2305,7 +2302,6 @@ void HWCommandQueue::enqueue_read_buffer(
             this->device,
             this->noc_index,
             buffer,
-            dst,
             this->manager,
             this->expected_num_workers_completed,
             sub_device_ids,
@@ -2520,7 +2516,7 @@ void HWCommandQueue::enqueue_write_buffer(
             uint32_t data_offsetB = CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
                                                                     // + CQ_DISPATCH_CMD_WRITE_PAGED
             bool issue_wait =
-                (dst_page_index == orig_dst_page_index and // should this change?
+                (dst_page_index == orig_dst_page_index and
                  bank_base_address == buffer.address());  // only stall for the first write of the buffer
             if (issue_wait) {
                 data_offsetB *= 2;  // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
