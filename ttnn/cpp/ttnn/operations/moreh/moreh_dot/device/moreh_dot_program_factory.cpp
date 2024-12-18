@@ -5,7 +5,6 @@
 #include "moreh_dot_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_metal/tt_metal.cpp"
 
 namespace ttnn::operations::moreh::moreh_dot {
 MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::create(
