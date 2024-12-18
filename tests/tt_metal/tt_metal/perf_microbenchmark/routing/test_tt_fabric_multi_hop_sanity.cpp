@@ -238,11 +238,14 @@ int main(int argc, char** argv) {
         }
 
         std::map<chip_id_t, tt_metal::Device*> device_map;
-        for (uint32_t i = 4; i < 36; i++) {
-            device_map[i] = tt_metal::CreateDevice(i);
-        }
 
-        log_info(LogTest, "Created Devices ...");
+        std::vector<chip_id_t> chip_ids;
+        for (unsigned int id = 4; id < 36; id++) {
+            chip_ids.push_back(id);
+        }
+        device_map = tt::tt_metal::detail::CreateDevices(chip_ids);
+
+        log_info(LogTest, "Created {} Devices ...", device_map.size());
 
         std::map<chip_id_t, tt_metal::Program> program_map;
 

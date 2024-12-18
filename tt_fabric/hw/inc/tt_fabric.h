@@ -842,9 +842,6 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
 
     uint32_t scratch_addr = ((uint32_t)&router_state->scratch) / PACKET_WORD_SIZE_BYTES;
     router_state->scratch[0] = 0xAA;
-    // send_buf[1] = 0x0;
-    // send_buf[2] = 0x0;
-    // send_buf[3] = 0x0;
 
     while (!src_ready or !dest_ready) {
         if (router_state->sync_out != 0xAA) {
