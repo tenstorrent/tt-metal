@@ -11,11 +11,7 @@
 
 TEST_F(DeviceSingleCardBufferFixture, InvalidBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
-        .device = this->device_,
-        .size = 2048,
-        .page_size = 32,
-        .buffer_type = BufferType::DRAM
-    };
+        .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> buffer = CreateBuffer(buffer_config);
 
     const BufferRegion buffer_region1(512, 4096);
@@ -30,11 +26,7 @@ TEST_F(DeviceSingleCardBufferFixture, InvalidBufferRegion) {
 
 TEST_F(DeviceSingleCardBufferFixture, ValidBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
-        .device = this->device_,
-        .size = 2048,
-        .page_size = 32,
-        .buffer_type = BufferType::DRAM
-    };
+        .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> buffer = CreateBuffer(buffer_config);
 
     const BufferRegion buffer_region1(1024, 1024);
@@ -52,11 +44,7 @@ TEST_F(DeviceSingleCardBufferFixture, ValidBufferRegion) {
 
 TEST_F(DeviceSingleCardBufferFixture, PartialBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
-        .device = this->device_,
-        .size = 2048,
-        .page_size = 32,
-        .buffer_type = BufferType::DRAM
-    };
+        .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> buffer = CreateBuffer(buffer_config);
 
     const BufferRegion buffer_region1(512, 2048);
@@ -71,11 +59,7 @@ TEST_F(DeviceSingleCardBufferFixture, PartialBufferRegion) {
 
 TEST_F(DeviceSingleCardBufferFixture, FullBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
-        .device = this->device_,
-        .size = 2048,
-        .page_size = 32,
-        .buffer_type = BufferType::DRAM
-    };
+        .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> buffer = CreateBuffer(buffer_config);
 
     const BufferRegion buffer_region(0, 2048);
