@@ -413,10 +413,10 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
         log_debug(
             LogOp, "{}:{} expected_output_shape_wo_padding {}", __func__, __LINE__, expected_output_shape_wo_padding);
 
-        for (int i = 0; i < input_shape.rank(); ++i) {
+        for (int i = 0; i < expected_output_shape.size(); ++i) {
             TT_FATAL(i == padded_dim || input_shape[i] == expected_output_shape[i], "Error");
         }
-        for (int i = 0; i < input_shape_wo_padding.rank(); ++i) {
+        for (int i = 0; i < expected_output_shape_wo_padding.size(); ++i) {
             TT_FATAL(i == dim || input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
         }
     }
