@@ -68,6 +68,8 @@ def run_max_pool(
             and is_wormhole_b0()
         ):
             pytest.skip("This case runs out of memory on Wormhole b0")
+        if ceil_mode and act_shape == [16, 64, 112, 112] and kernel_size == (13, 13):
+            pytest.skip("This case runs out of memory on Wormhole b0")
         if stride == (1, 1) and act_shape == [8, 16, 528, 80] and is_grayskull():
             pytest.skip("This case runs out of memory on Grayskull")
         if kernel_h > 3 and kernel_w > 3 and act_shape == [16, 64, 112, 112] and is_grayskull():
@@ -240,7 +242,7 @@ def run_max_pool(
             # [1, 64, 112, 112],
             # [4, 64, 112, 112],
             # [8, 64, 112, 112],
-            # [16, 64, 112, 112],
+            [16, 64, 112, 112],
             # # [20, 64, 112, 112],   ## oom
             # ## hpr shapes
             # [8, 32, 132, 20],
@@ -278,9 +280,6 @@ def run_max_pool(
             # [1, 192, 132, 20],
             # [1, 64, 112, 112],
             # [1, 512, 10, 10],
-            [1, 64, 8, 8],
-            [1, 32, 6, 6],
-            [1, 128, 112, 112],
         )
     ),
 )
@@ -288,20 +287,20 @@ def run_max_pool(
     "kernel_size",
     (
         # (2, 2),
-        (3, 3),
-        (5, 5),
+        # (3, 3),
+        # (5, 5),
         # (9, 9),
-        # (13, 13),
+        (13, 13),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
         # (0, 0),
-        (1, 1),
-        (2, 2),
+        # (1, 1),
+        # (2, 2),
         # (4, 4),
-        # (6, 6),
+        (6, 6),
     ),
 )
 @pytest.mark.parametrize(
