@@ -240,7 +240,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
     Buffer* config_buffer = config_tensor_device.buffer();
     auto config_buffer_page_size = config_buffer->page_size();
-    uint32_t config_cb_id = tt::CB::c_in2;
+    uint32_t config_cb_id = CBIndex::c_6;
     auto config_cb_config = CircularBufferConfig(config_buffer_page_size, {{config_cb_id, config_df}})
                                 .set_page_size(config_cb_id, config_buffer->page_size())
                                 .set_globally_allocated_address(*config_buffer);
@@ -307,7 +307,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
         TT_THROW("Unsupported memory layout");
     }
 
-    auto override_runtime_args_callback = [writer_kernel, cb_src0, config_cb, out_cb](
+    auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb, config_cb](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,

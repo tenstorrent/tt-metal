@@ -66,7 +66,6 @@ void kernel_main() {
         }
     }
 
-    cb_push_back(out_cb_id, out_w);
-
     noc_async_read_barrier();
+    cb_push_back(out_cb_id, out_w);
 }
