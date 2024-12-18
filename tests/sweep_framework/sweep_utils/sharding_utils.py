@@ -88,15 +88,8 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                     input_shape[-2] //= 2
 
             elif sharding_strategy == "BLOCK":
-                if shard_height_mul_of_32:
-                    min_shard_size_y = 1
-                    if shard_orientation == "ROW_MAJOR":
-                        min_shard_size_x = 32 * x
-                    else:
-                        min_shard_size_x = 32 * y
-                else:
-                    min_shard_size_y = 32 * y
-                    min_shard_size_x = 32 * x
+                min_shard_size_y = 32 * y
+                min_shard_size_x = 32 * x
 
                 rest_volume = random.randint(1, max_tensor_size // (min_shard_size_x * min_shard_size_y))
                 physical_shape = random.choice(_gen_reshape_args_from_volume(rest_volume, step=1, out_dims=2))
@@ -120,10 +113,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                 if layout == "TILE_LAYOUT":
                     # In shard mode ShardMode::PHYSICAL, physical shard shape {12, 13312} is not compatible with alignment Alignment([32, 32])!
                     min_shard_size_x = 32
-                    if shard_height_mul_of_32 and sharding_strategy == "HEIGHT":
-                        min_shard_size_y = 32
-                    else:
-                        min_shard_size_y = 32 * x * y
+                    min_shard_size_y = 32 * x * y
                 else:  # if layout == "ROW_MAJOR_LAYOUT":
                     # Shard Size must be multiple of input_tile_size
                     # Shard width should be multiple of 16 to satisfy L1 alignment
@@ -137,12 +127,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                             mul_32_y //= 2
 
                     min_shard_size_x = mul_32_x
-                    if shard_height_mul_of_32 and sharding_strategy == "HEIGHT":
-                        while round_up(mul_32_y, x * y) // 16 < 1 or round_up(mul_32_y, x * y) % 16 != 0:
-                            mul_32_y = random.randint(1, roundown(max_tensor_size // min_shard_size_x, x * y))
-                        min_shard_size_y = mul_32_y
-                    else:
-                        min_shard_size_y = mul_32_y * x * y
+                    min_shard_size_y = mul_32_y * x * y
 
                 rest_volume = random.randint(1, max_tensor_size // (min_shard_size_x * min_shard_size_y))
                 input_shape = random.choice(_gen_reshape_args_from_volume(rest_volume, step=1, out_dims=rank))
