@@ -29,12 +29,16 @@ on:
           - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu_pytorch2
           - eltwise.unary.abs.abs
+          - eltwise.unary.abs.abs_forge
           - eltwise.unary.cos.cos
           - eltwise.unary.cos.cos_pytorch2
+          - eltwise.unary.cos.cos_forge
           - eltwise.unary.sin.sin
           - eltwise.unary.sin.sin_pytorch2
+          - eltwise.unary.sin.sin_forge
           - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
+          - eltwise.unary.clamp.clamp_forge
           - eltwise.unary.clamp.clamp_pytorch2
           - eltwise.unary.clamp.clamp_min_pytorch2
           - eltwise.unary.clip.clip
@@ -42,6 +46,7 @@ on:
           - eltwise.unary.rsub.rsub
           - eltwise.unary.rsub.rsub_pytorch2
           - eltwise.unary.rsqrt.rsqrt_pytorch2
+          - eltwise.unary.rsqrt.rsqrt_forge
           - eltwise.unary.rdiv.rdiv
           - eltwise.unary.frac.frac
           - eltwise.unary.frac.frac_sharded
@@ -50,17 +55,20 @@ on:
           - eltwise.unary.trunc.trunc
           - eltwise.unary.trunc.trunc_sharded
           - eltwise.unary.floor.floor
+          - eltwise.unary.floor.floor_forge
           - eltwise.unary.floor.floor_pytorch2
           - eltwise.unary.clone.clone
           - eltwise.unary.elu.elu
           - eltwise.unary.elu.elu_pytorch2
           - eltwise.unary.erfc.erfc
           - eltwise.unary.exp.exp
+          - eltwise.unary.exp.exp_forge
           - eltwise.unary.exp.exp_pytorch2
           - eltwise.unary.exp2.exp2
           - eltwise.unary.expm1.expm1
           - eltwise.unary.tanh.tanh
           - eltwise.unary.tanh.tanh_pytorch2
+          - eltwise.unary.tanh.tanh_forge
           - eltwise.unary.atanh.atanh
           - eltwise.unary.atan.atan
           - eltwise.unary.sign.sign
@@ -69,9 +77,11 @@ on:
           - eltwise.unary.relu6.relu6
           - eltwise.unary.log.log
           - eltwise.unary.log.log_pytorch2
+          - eltwise.unary.log.log_forge
           - eltwise.unary.log1p.log1p
           - eltwise.unary.log2.log2
           - eltwise.unary.log10.log10
+          - eltwise.unary.sqrt.sqrt_forge
           - eltwise.unary.bitwise.bitwise_and
           - eltwise.unary.bitwise.bitwise_left_shift
           - eltwise.unary.bitwise.bitwise_not
@@ -82,9 +92,11 @@ on:
           - eltwise.unary.log_sigmoid.log_sigmoid
           - eltwise.unary.logical_not.logical_not_
           - eltwise.unary.logical_not.logical_not
+          - eltwise.unary.logical_not.logical_not_forge
           - eltwise.unary.logical_not.logical_not_output
           - eltwise.unary.logical_not.logical_not_pytorch2
           - eltwise.unary.neg.neg_pytorch2
+          - eltwise.unary.neg.neg_forge
           - eltwise.unary.erf.erf
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.i0.i0
@@ -181,6 +193,7 @@ on:
           - eltwise.unary.lgamma.lgamma
           - eltwise.unary.lgamma.lgamma_sharded
           - eltwise.unary.logit.logit
+          - eltwise.unary.logit.logit_forge
           - eltwise.unary.logit.logit_sharded
           - eltwise.unary.mish.mish
           - eltwise.unary.mish.mish_sharded
