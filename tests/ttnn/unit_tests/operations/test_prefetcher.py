@@ -343,6 +343,7 @@ def test_run_prefetcher(
 ):
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shapes[0]}")
     assert len(input_shapes) == len(dtypes)
+    assert num_tensors == len(input_shapes)
 
     num_global_cb_receivers = 2
 
@@ -377,7 +378,9 @@ def test_run_prefetcher(
 
     sender_receiver_mapping = list(zip(sender_cores, receiver_cores))
 
+    # FF1 is 368640 per receiver core = 360 tiles
     global_cb_size = 512 * 512 * 4
+    # global_cb_size = 360 * 576 * 4 # 4*FF1 in bfp4
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
     print(f"global cb size {global_cb_size}")
 

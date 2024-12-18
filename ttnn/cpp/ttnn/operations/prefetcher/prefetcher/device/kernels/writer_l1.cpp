@@ -164,7 +164,7 @@ void kernel_main() {
         (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));  // Kt / num_blocks = in_block_h;
     // const uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t noc = noc_index;
-
+    // DeviceZoneScopedN("writer");
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         DeviceZoneScopedN("layers");
         for (uint32_t t = 0; t < num_tensors; t++) {
@@ -192,20 +192,26 @@ void kernel_main() {
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 // DeviceZoneScopedN("writer_block");
-                cb_wait_front(local_cb_id, max_block_num_tiles);
+                {
+                    // DeviceZoneScopedN("wait local cb");
+                    cb_wait_front(local_cb_id, max_block_num_tiles);
+                    // }
 
-                uint32_t local_cb_addr = get_read_ptr(local_cb_id);
-                experimental::remote_cb_push_back_and_write_pages(
-                    remote_cb_id,
-                    local_cb_addr,
-                    1,  // wrt to the size of the packet (curr_block_size)
-                    curr_block_height_in_tiles,
-                    curr_coalesced_num_pages,
-                    curr_coalesced_page_size,
-                    noc);
+                    uint32_t local_cb_addr = get_read_ptr(local_cb_id);
+                    // {
+                    // DeviceZoneScopedN("remote write");
+                    experimental::remote_cb_push_back_and_write_pages(
+                        remote_cb_id,
+                        local_cb_addr,
+                        1,  // wrt to the size of the packet (curr_block_size)
+                        curr_block_height_in_tiles,
+                        curr_coalesced_num_pages,
+                        curr_coalesced_page_size,
+                        noc);
+                    // }
 
-                cb_pop_front(local_cb_id, max_block_num_tiles);
-            }
+                    cb_pop_front(local_cb_id, max_block_num_tiles);
+                }
         }
     }
 }
