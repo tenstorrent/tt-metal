@@ -184,6 +184,12 @@ void kernel_main() {
                 experimental::remote_cb_reserve_back(remote_cb_id, num_blocks);
             }
 
+            // // To simulate interference
+            // if (layer == 1 && t == 1) {
+            //     DeviceZoneScopedN("space");
+            //     for (volatile int i=0 ; i<16500; ++i);
+            // }
+
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 // DeviceZoneScopedN("writer_block");
                 cb_wait_front(local_cb_id, max_block_num_tiles);
