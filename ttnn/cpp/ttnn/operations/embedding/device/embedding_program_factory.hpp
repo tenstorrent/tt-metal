@@ -722,10 +722,10 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         uint32_t r_f_offset = ((row % tile_size) / face_size) * 2 * face_size * face_size + row * face_size;
         uint32_t c_f_offset = ((col_offset % tile_size) / face_size) * face_size * face_size;
         uint32_t face_offset = r_f_offset + c_f_offset;
-        std::cout << "Core " << core.x << " " << core.y << std::endl;
-        std::cout << "Tile " << (row / tile_size) * tiles_per_row + (col_offset / tile_size) << ", face_offset "
-                  << face_offset << std::endl;
-        std::cout << "Row " << row << ", Col " << col_offset << std::endl << std::endl;
+        // std::cout << "Core " << core.x << " " << core.y << std::endl;
+        // std::cout << "Tile " << (row / tile_size) * tiles_per_row + (col_offset / tile_size) << ", face_offset "
+        //   << face_offset << std::endl;
+        // std::cout << "Row " << row << ", Col " << col_offset << std::endl << std::endl;
 
         // Reader
         {
@@ -741,11 +741,12 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         // Writer
         {
             writer_runtime_args[2] = local_num_blocks;
-            writer_runtime_args[3] = col_offset;
+            writer_runtime_args[3] = weight_offset;
             tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 
         col_offset += local_num_blocks;
+        weight_offset += local_num_blocks;
         if (col_offset >= num_cols) {
             col_offset -= num_cols;
             row++;
