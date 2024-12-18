@@ -33,9 +33,9 @@ struct PermuteDeviceOperation {
     struct MultiCoreRowInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
-            CoreRangeSet core_range;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::CoreRangeSet core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

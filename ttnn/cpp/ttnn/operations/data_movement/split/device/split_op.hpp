@@ -12,7 +12,7 @@ namespace ttnn::operations::data_movement {
 struct SplitDeviceOperation {
     const int num_splits;
     const int dim;
-    const MemoryConfig output_mem_config;
+    const tt::tt_metal::MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;

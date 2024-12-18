@@ -25,7 +25,9 @@ public:
         return tensors;
     }
 
-    DistributedTensorConfig config() const override { return DistributedTensorConfig{ReplicateTensor{num_devices_}}; }
+    tt::tt_metal::DistributedTensorConfig config() const override {
+        return tt::tt_metal::DistributedTensorConfig{ReplicateTensor{num_devices_}};
+    }
 
 private:
     size_t num_devices_ = 0;
@@ -39,7 +41,9 @@ public:
         return experimental::xtensor::chunk(tensor, num_devices_, shard_dim_);
     }
 
-    DistributedTensorConfig config() const override { return DistributedTensorConfig{ShardTensor{shard_dim_}}; }
+    tt::tt_metal::DistributedTensorConfig config() const override {
+        return tt::tt_metal::DistributedTensorConfig{ShardTensor{shard_dim_}};
+    }
 
 private:
     size_t num_devices_ = 0;
@@ -94,7 +98,7 @@ public:
         return tensor_shards;
     }
 
-    DistributedTensorConfig config() const override {
+    tt::tt_metal::DistributedTensorConfig config() const override {
         return DistributedTensorConfig{ShardTensor2D{ShardMesh{mesh_shape_.num_rows, mesh_shape_.num_cols}}};
     }
 
@@ -178,7 +182,8 @@ std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh
 
 Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, TensorToMesh& mapper) {
     TT_FATAL(
-        tensor.storage_type() != StorageType::MULTI_DEVICE && tensor.storage_type() != StorageType::MULTI_DEVICE_HOST,
+        tensor.storage_type() != tt::tt_metal::StorageType::MULTI_DEVICE &&
+            tensor.storage_type() != tt::tt_metal::StorageType::MULTI_DEVICE_HOST,
         "TensorToMesh does not support multi-device or multi-device host tensors; got storage type: {}",
         tensor.storage_type());
     std::vector<Tensor> tensors = mapper.map(tensor);

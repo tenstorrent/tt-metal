@@ -33,9 +33,9 @@ std::shared_ptr<GlobalSemaphore> create_global_semaphore(
     return global_semaphore;
 }
 
-DeviceAddr get_global_semaphore_address(const std::shared_ptr<GlobalSemaphore>& global_semaphore) {
+tt::tt_metal::DeviceAddr get_global_semaphore_address(const std::shared_ptr<GlobalSemaphore>& global_semaphore) {
     auto* device = global_semaphore->device();
-    DeviceAddr address = 0;
+    tt::tt_metal::DeviceAddr address = 0;
     device->push_work([&global_semaphore, &address] { address = global_semaphore->address(); }, /*blocking=*/true);
     return address;
 }
@@ -70,8 +70,8 @@ MultiDeviceGlobalSemaphore create_global_semaphore(
     }
     return multi_device_global_semaphore;
 }
-std::vector<DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSemaphore& global_semaphore) {
-    std::vector<DeviceAddr> addresses(global_semaphore.global_semaphores.size());
+std::vector<tt::tt_metal::DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSemaphore& global_semaphore) {
+    std::vector<tt::tt_metal::DeviceAddr> addresses(global_semaphore.global_semaphores.size());
     const auto& global_semaphores = global_semaphore.global_semaphores;
     for (uint32_t i = 0; i < global_semaphores.size(); ++i) {
         const auto& global_semaphore = global_semaphores[i];

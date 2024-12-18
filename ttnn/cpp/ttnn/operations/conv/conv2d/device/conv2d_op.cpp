@@ -72,7 +72,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool enable_subblock_padding,
     bool use_non_tile_height
 ) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
         [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {

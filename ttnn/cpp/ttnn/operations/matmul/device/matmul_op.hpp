@@ -25,14 +25,14 @@ using ttnn::operations::unary::UnaryWithParam;
 /*
  * GENERAL MATMUL AND BMM
  */
-operation::ProgramWithCallbacks matmul_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor, bool bcast_batch);
-operation::ProgramWithCallbacks matmul_multi_core_reuse(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor, bool bcast_batch);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor, bool bcast_batch);
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     bool mcast_in0,
     bool gather_in0,
     bool untilize_out);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     bool skip_compute,
     bool skip_in0_mcast,
     bool skip_write_back);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
@@ -85,7 +85,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out);
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
+tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     Tensor& output_tensor,
@@ -180,11 +180,11 @@ struct Matmul {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
-    operation::OpPerformanceModel create_op_performance_model(
+    tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;

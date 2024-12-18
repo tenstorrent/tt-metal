@@ -14,7 +14,7 @@ class TensorToMesh {
 public:
     virtual ~TensorToMesh() = default;
     virtual std::vector<Tensor> map(const Tensor& tensor) = 0;
-    virtual DistributedTensorConfig config() const = 0;
+    virtual tt::tt_metal::DistributedTensorConfig config() const = 0;
 };
 
 // Composer interface that aggregates a multi-device tensor into a host tensor.

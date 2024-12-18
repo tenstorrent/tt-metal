@@ -405,7 +405,7 @@ CoreType Buffer::core_type() const {
 }
 
 bool Buffer::is_l1() const {
-    return ::is_l1(buffer_type());
+    return tt::tt_metal::is_l1(buffer_type());
 }
 bool Buffer::is_dram() const {
     return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE;
@@ -544,7 +544,7 @@ tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann:
     const auto& shard_mode = from_json<tt_metal::ShardMode>(json_object.at("mode"));
     const auto& physical_shard_shape = from_json<std::optional<std::array<uint32_t, 2>>>(json_object.at("physical_shard_shape"));
     if (physical_shard_shape.has_value()) {
-        TT_FATAL(shard_mode == ShardMode::LOGICAL, "Physical shard shape can only be provided in logical sharding mode!");
+        TT_FATAL(shard_mode == tt::tt_metal::ShardMode::LOGICAL, "Physical shard shape can only be provided in logical sharding mode!");
         return tt_metal::ShardSpec{
             from_json<CoreRangeSet>(json_object.at("grid")),
             from_json<std::array<uint32_t, 2>>(json_object.at("shape")),

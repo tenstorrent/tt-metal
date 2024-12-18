@@ -16,9 +16,12 @@ void Pad::validate_with_output_tensors(
     auto padded_rank = input_tensor.padded_shape().rank();
     TT_FATAL(logical_rank == padded_rank, "ttnn.pad: logical and padded shapes must have the same rank");
     TT_FATAL(input_tensor.logical_shape().rank() <= 4, "ttnn.pad: input tensor rank currently must be 4 or less");
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
+    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE || input_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
+    TT_FATAL(
+        input_tensor.get_layout() == tt::tt_metal::Layout::TILE ||
+            input_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "Error");
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_FATAL(
             (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 &&

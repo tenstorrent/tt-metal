@@ -37,7 +37,7 @@ const uint32_t untilized_padded_out_cb = CBIndex::c_28;
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
