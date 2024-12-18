@@ -143,12 +143,10 @@ Tensor::Tensor(
     Layout layout,
     const std::optional<Tile>& tile) {
     using namespace tt::constants;
-    if (tile.has_value()) {
-        if (tile->get_tile_shape()[0] != TILE_WIDTH or tile->get_tile_shape()[1] != TILE_HEIGHT) {
-            tt::log_warning(
-                "only matmul op and ccl all-gather currently supports the customized tile shape: {}",
-                tile->get_tile_shape());
-        }
+    if (tile.has_value() && (tile->get_tile_shape()[0] != TILE_WIDTH || tile->get_tile_shape()[1] != TILE_HEIGHT)) {
+        tt::log_warning(
+            "only matmul op and ccl all-gather currently supports the customized tile shape: {}",
+            tile->get_tile_shape());
     }
 
     const auto memory_config = std::visit(
