@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "common/logger.hpp"
+#include "conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/work_split.hpp"
@@ -684,8 +685,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     // Local L1 to store temp vars
     //Used for act_mcast_sender_semaphore_valid_addr_ptr
     CircularBufferConfig cb_for_l1_array_config =
-        CircularBufferConfig(32 * 2, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
-            .set_page_size(cb_for_l1_array, 32 * 2);
+        CircularBufferConfig(l1_scratchpad_CB_size, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
+            .set_page_size(cb_for_l1_array, l1_scratchpad_CB_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
     log_debug(LogOp, "CB for L1 Array CB: {}, npages: {}, pagesize: {}", cb_for_l1_array, 1, 32 * 2);
 

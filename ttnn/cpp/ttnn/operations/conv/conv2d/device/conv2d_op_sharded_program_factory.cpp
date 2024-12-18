@@ -5,6 +5,7 @@
 #include "common/assert.hpp"
 #include "common/logger.hpp"
 #include "common/math.hpp"
+#include "conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/work_split.hpp"
@@ -1257,8 +1258,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
         // Local L1 to store temp vars
         CircularBufferConfig cb_for_l1_array_config =
-            CircularBufferConfig(32 * 2, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
-                .set_page_size(cb_for_l1_array, 32 * 2);
+            CircularBufferConfig(l1_scratchpad_CB_size, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
+                .set_page_size(cb_for_l1_array, l1_scratchpad_CB_size);
         auto cb_for_l1_array_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
     } else {
         TT_THROW("Sharded input not supported for this conv yet!");

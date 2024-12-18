@@ -10,6 +10,7 @@
 #include "conv2d_utils.hpp"
 #include "common/constants.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "device/conv2d_op.hpp"
 #include "impl/buffers/buffer_constants.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -1115,7 +1116,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         uint32_t cb2_size = bias_block_num_bytes; tt::log_debug(tt::LogOp, "CB2 Size: {}", cb2_size);
 
         //CB 5
-        uint32_t cb5_size = 64; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
+        uint32_t cb5_size = conv2d::l1_scratchpad_CB_size; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
 
         //CB 6
         uint32_t cb6_size = act_block_num_bytes; tt::log_debug(tt::LogOp, "CB6 Size: {}", cb6_size);
@@ -1150,7 +1151,6 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
 
         uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
 
-        TT_FATAL(conv_act_c_blocks == 1, "Error: conv_act_c_blocks should be 1 for height sharding");
         uint32_t weight_block_w_ntiles = per_core_out_matrix_width_ntiles;
         uint32_t weight_block_h_ntiles = is_depthwise_conv ? act_block_h_ntiles : act_block_w_ntiles;
 
@@ -1203,7 +1203,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         //CB 2
         uint32_t cb2_size = bias_block_num_bytes; tt::log_debug(tt::LogOp, "CB2 Size: {}", cb2_size);
 
-        uint32_t cb5_size = 64; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
+        uint32_t cb5_size = conv2d::l1_scratchpad_CB_size; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
 
         uint32_t cb7_size = 0;
 
@@ -1285,7 +1285,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         uint32_t cb2_size = bias_block_num_bytes; tt::log_debug(tt::LogOp, "CB2 Size: {}", cb2_size);
 
         //CB 5
-        uint32_t cb5_size = 64; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
+        uint32_t cb5_size = conv2d::l1_scratchpad_CB_size; tt::log_debug(tt::LogOp, "CB5 Size: {}", cb5_size);
 
         //CB 6
         uint32_t cb6_size = row_major_act_cb_size; tt::log_debug(tt::LogOp, "CB6 Size: {}", cb6_size);
