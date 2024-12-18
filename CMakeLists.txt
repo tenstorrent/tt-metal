@@ -253,18 +253,11 @@ add_link_options(
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
-if(ENABLE_TRACY)
-    add_compile_definitions(TRACY_ENABLE)
-    add_compile_options(-fno-omit-frame-pointer)
-    add_link_options(-rdynamic)
-endif()
+include(tracy)
 
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
-if(ENABLE_TRACY)
-    include(tracy)
-endif()
 
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
