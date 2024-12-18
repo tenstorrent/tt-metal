@@ -113,6 +113,12 @@ struct WorkerToFabricEdmSender {
     /*
      * No CB
      */
+    FORCE_INLINE void send_packet_header_and_notify_fabric_flush_blocking(uint32_t source_address) {
+        send_packet_header_and_notify_fabric<ttnn::ccl::EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address);
+    }
+    FORCE_INLINE void send_payload_without_header_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
+        send_payload_without_header_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
+    }
     FORCE_INLINE void send_payload_flush_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address, size_bytes);
     }
@@ -181,6 +187,28 @@ struct WorkerToFabricEdmSender {
     uint8_t edm_noc_y;
 
 private:
+
+    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
+        this->clear_flow_control_semaphore();
+        uint64_t buffer_address = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr) +
+                                  (*this->buffer_index_ptr * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+
+        send_chunk_from_address<blocking_mode>(source_address, 1, sizeof(tt::fabric::PacketHeader), buffer_address);
+        auto const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_semaphore_addr);
+        noc_semaphore_inc(noc_sem_addr, 1);
+        *this->buffer_index_ptr =
+            (*this->buffer_index_ptr == this->last_buffer_index) ? 0 : *this->buffer_index_ptr + 1;
+    }
+    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    FORCE_INLINE void send_payload_without_header_from_address_impl(uint32_t source_address, size_t size_bytes) {
+        uint64_t buffer_address = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr) +
+                                  (*this->buffer_index_ptr * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+
+        // DPRINT << "SND PKT TO @ " << (uint64_t)buffer_address << "\n";
+        send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address + sizeof(tt::fabric::PacketHeader));
+    }
+
     template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
         this->clear_flow_control_semaphore();
