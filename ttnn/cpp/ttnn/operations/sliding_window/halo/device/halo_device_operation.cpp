@@ -167,9 +167,7 @@ Tensor halo_op(
         auto device = input_tensor.device();
 
         auto sliding_window_hash = config.get_hash();
-        printf("HASH: %lu\n", sliding_window_hash);
         if (!HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
-            printf("HIT\n");
             auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
             auto shard_boundaries = sliding_window::generate_shard_boundaries(config, op_trace_metadata);
             HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.emplace(

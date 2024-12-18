@@ -115,8 +115,6 @@ Tensor Pool2DOp<pool_type>::invoke(
     log_debug(tt::LogOp, "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}", output_nhw, output_nhw_padded, output_shard_height_padded, output_shard_width_padded);
     out_memory_config.shard_spec = ShardSpec{shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR, false};
 
-    printf("updating SWC\n");
-
     sliding_window_config = sliding_window::SlidingWindowConfig{
             .batch_size = batch_size,
             .input_hw = {input_h, input_w},
@@ -131,8 +129,6 @@ Tensor Pool2DOp<pool_type>::invoke(
             .ceil_mode = ceil_mode,
     };
 
-    printf("starting HALO\n");
-
     // Call the halo uop
     auto haloed_tensor = ttnn::halo(
         queue_id,
@@ -145,8 +141,6 @@ Tensor Pool2DOp<pool_type>::invoke(
         input_tensor_sharded.memory_config(),
         is_out_tiled);
 
-    printf("starting POOL\n");
-
     auto output_tensor = ttnn::prim::pool2d(
         queue_id,
         haloed_tensor,
@@ -154,8 +148,6 @@ Tensor Pool2DOp<pool_type>::invoke(
         pool_type,
         DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
         out_memory_config);
-
-    printf("finished POOL\n");
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
         output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);

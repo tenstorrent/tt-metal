@@ -149,9 +149,6 @@ ParallelConfig determine_parallel_config(
     CoreRangeSet grid;
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding(out_nhw_ntiles, max_num_cores);
-        printf("out_nhw_ntiles: %d\n", out_nhw_ntiles);
-        printf("max_num_cores: %d\n", max_num_cores);
-        printf("num_cores_nhw: %d\n", num_cores_nhw);
         grid = num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t start_divisor =

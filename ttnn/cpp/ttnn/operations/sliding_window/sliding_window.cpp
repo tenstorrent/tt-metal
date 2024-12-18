@@ -57,14 +57,6 @@ Shape SlidingWindowConfig::get_output_shape() const {
         output_w = std::floor(eff_size_w / stride_hw.second) + 1;
     }
 
-    printf(
-        "Ceil mode: %d, eff_size_h: %f, eff_size_w: %f, output_h: %d, output_w: %d\n",
-        ceil_mode,
-        eff_size_h,
-        eff_size_w,
-        output_h,
-        output_w);
-
     if (is_bilinear) {
         TT_FATAL(!ceil_mode, "ceil_mode is not supported for bilinear operation");
 
@@ -380,18 +372,8 @@ generate_halo_kernel_config_tensors(
             uint32_t dst_core_id = core_id;
             uint32_t local_idx = global_idx - input_start;
             auto [is_pad_stick, src_idx] = tensor_metadata[global_idx];
-            if (global_idx >= tensor_metadata.size()) {
-                // printf("core_id: %d, shard_boundaries size: %ld\n", core_id, shard_boundaries.size());
-                // printf("input_start: %d, input_end: %d, global_idx: %d\n", input_start, input_end, global_idx);
-            }
             auto [src_core_id, src_local_idx] = src_idx;
-            bool check = local_idx < pad_local && src_local_idx < pad_local;
-            if (!check) {
-                // printf("tensor_metadata size: %ld, global_idx: %d\n", tensor_metadata.size(), global_idx);
-                // printf("local_idx: %d, pad_local: %d, src_local_idx: %d, pad_local: %d\n", local_idx, pad_local,
-                // src_local_idx, pad_local);
-            }
-            TT_ASSERT(check, "Index overflow");
+            TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
             if (is_pad_stick) {
                 TT_ASSERT(src_local_idx == 0);
                 src_core_id = pad_local;
@@ -437,43 +419,18 @@ generate_halo_kernel_config_tensors(
         if (is_pad) {
             for (auto [src_start, dst_start, length] : data) {
                 pad_config[dst_core_id].push_back({dst_start, length});
-                // printf("pad_config[%d]: %d %d\n", dst_core_id, dst_start, length);
             }
         } else if (is_local) {
             CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
             local_config[src_core_id].first = {noc_xy.x, noc_xy.y, 3 * data.size()};
             local_config[src_core_id].second = data;
-            printf(
-                "local_config[%d]: %ld %ld -> (%d, %d, %d)\n",
-                src_core_id,
-                noc_xy.x,
-                noc_xy.y,
-                std::get<0>(data[0]),
-                std::get<1>(data[0]),
-                std::get<2>(data[0]));
         } else if (is_remote) {
             if (remote_read) {
                 CoreCoord noc_xy = core_id_to_noc_coords(src_core_id);
                 remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
-                // printf(
-                //     "remote_config[%d]: %ld %ld -> (%d, %d, %d)\n",
-                //     dst_core_id,
-                //     noc_xy.x,
-                //     noc_xy.y,
-                //     std::get<0>(data[0]),
-                //     std::get<1>(data[0]),
-                //     std::get<2>(data[0]));
             } else {
                 CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
                 remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
-                // printf(
-                //     "remote_config[%d]: %ld %ld -> (%d, %d, %d)\n",
-                //     src_core_id,
-                //     noc_xy.x,
-                //     noc_xy.y,
-                //     std::get<0>(data[0]),
-                //     std::get<1>(data[0]),
-                //     std::get<2>(data[0]));
             }
         }
     }
