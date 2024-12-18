@@ -103,22 +103,24 @@ void kernel_main() {
             uint32_t src_base_addr =
                 noc_async_read_tile_dram_sharded_set_state<true>(tensor_base_address, curr_page_size, bank_id, vc);
             uint32_t src_read_addr = 0;
+            {
+                // DeviceZoneScopedN("tensor_read");
+                for (uint32_t block = 0; block < num_blocks; ++block) {
+                    cb_reserve_back(cb_id, max_block_num_tiles);
+                    auto l1_write_addr = get_write_ptr(cb_id);
 
-            for (uint32_t block = 0; block < num_blocks; ++block) {
-                cb_reserve_back(cb_id, max_block_num_tiles);
-                auto l1_write_addr = get_write_ptr(cb_id);
+                    DPRINT << "reader max_block_num_tiles " << max_block_num_tiles << ENDL();
 
-                DPRINT << "reader max_block_num_tiles " << max_block_num_tiles << ENDL();
+                    for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
+                        noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
+                        src_read_addr += curr_page_size;
+                        l1_write_addr += curr_page_size;
+                    }
 
-                for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
-                    noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
-                    src_read_addr += curr_page_size;
-                    l1_write_addr += curr_page_size;
+                    noc_async_read_barrier();
+
+                    cb_push_back(cb_id, max_block_num_tiles);
                 }
-
-                noc_async_read_barrier();
-
-                cb_push_back(cb_id, max_block_num_tiles);
             }
         }
     }

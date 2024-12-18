@@ -506,10 +506,10 @@ int main() {
             }
 
 #if defined(PROFILE_KERNEL)
-            if (noc_mode == DM_DYNAMIC_NOC) {
-                // re-init for profiler to able to run barrier in dedicated noc mode
-                noc_local_state_init(noc_index);
-            }
+            // if (noc_mode == DM_DYNAMIC_NOC) {
+            // re-init for profiler to able to run barrier in dedicated noc mode
+            noc_local_state_init(noc_index);
+            // }
 #endif
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
