@@ -56,7 +56,7 @@ struct TrainingConfig {
 void train_test(bool use_moreh_adamw = false) {
     auto config = TrainingConfig();
     config.transformer_config.dropout_prob = 0.0F;
-    config.data_path = std::string(TEST_DATA_DIR) + "/shakespeare.txt";
+    config.data_path = "/shakespeare.txt";
 
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
