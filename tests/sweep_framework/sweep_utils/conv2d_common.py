@@ -214,10 +214,10 @@ def run_conv2d_short_sweep(
             has_bias,
             dilation,
         ] = input_specs
-        datatype = "bfloat16"
+        datatype = int(ttnn.bfloat16)
     print(input_specs)
 
-    if datatype == "float32":
+    if datatype == int(ttnn.float32):
         ttnn_datatype = ttnn.float32
         torch_datatype = torch.float32
     else:
