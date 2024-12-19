@@ -145,7 +145,7 @@ struct Tensor {
     // The data in the buffer is copied into a tensor with an owned storage.
     //
     // TODO: add support for returning a tensor with borrowed storage based off the buffer.
-    // TODO: plumb a device, and perform tilization on device, whenever possible.
+    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     static Tensor from_span(
         tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
@@ -162,6 +162,8 @@ struct Tensor {
     // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // If the tensor resides on a device, it will be brough back to host.
+    //
+    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     std::vector<T> to_vector() const;
 
