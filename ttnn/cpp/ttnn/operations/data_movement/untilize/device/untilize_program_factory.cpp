@@ -231,11 +231,6 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     uint32_t ncores_y = grid_size.y;
     // uint32_t ncores_x = 2;
 
-    // if (core_range.value()){
-    //     grid_size = core_range.at(1) - core_range.at(0);
-    //     ncores_x = core_range.at(1).x - core_range.at(0).x;
-    //     ncores_y = core_range.at(1).y - core_range.at(0).y;
-    // }
     ncores_x = get_largest_divisor(ntiles, ncores_x);
     // uint32_t ncores_y = 1;
     ncores_y = get_largest_divisor(ntiles, ncores_y, ncores_x);

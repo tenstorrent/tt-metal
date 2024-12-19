@@ -30,6 +30,7 @@ void bind_untilize(py::module& module) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
                 queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
