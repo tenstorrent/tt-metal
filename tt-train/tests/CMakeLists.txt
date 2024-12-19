@@ -43,7 +43,7 @@ add_definitions(-DENABLE_CI_ONLY_TT_TRAIN_TESTS=0)
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")
-set(SHAKESPEARE_FILE "${CMAKE_SOURCE_DIR}/data/shakespeare.txt")
+set(SHAKESPEARE_FILE "${CMAKE_CURRENT_BINARY_DIR}/shakespeare.txt")
 
 # Check if the file already exists before downloading
 if(NOT EXISTS "${SHAKESPEARE_FILE}")
