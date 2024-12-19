@@ -277,20 +277,24 @@ def run_max_pool(
             # [1, 96, 112, 112],
             # [1, 192, 132, 20],
             # wide non-8 multiple tests
-            # [1, 384, 8, 8],  # passes
-            # [1, 384, 16, 8],  # fails
-            # [1, 128, 2, 2],  # passes
-            [1, 384, 2, 2],  # fails
-            # [1, 512, 2, 2],  # passes
+            [1, 384, 8, 8],
+            [1, 384, 16, 8],
+            [1, 384, 16, 16],
+            [1, 448, 8, 8],
+            [1, 448, 16, 8],
+            [1, 448, 16, 16],
+            [1, 544, 8, 8],
+            [1, 544, 16, 8],
+            [1, 544, 16, 16],
         )
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        # (2, 2),
+        (2, 2),
         (3, 3),
-        # (5, 5),
+        (5, 5),
         # (9, 9),
         # (13, 13),
     ),
@@ -298,9 +302,9 @@ def run_max_pool(
 @pytest.mark.parametrize(
     "padding",
     (
-        # (0, 0),
+        (0, 0),
         (1, 1),
-        # (2, 2),
+        (2, 2),
         # (4, 4),
         # (6, 6),
     ),
@@ -309,7 +313,7 @@ def run_max_pool(
     "stride",
     (
         (1, 1),
-        # (2, 2),
+        (2, 2),
     ),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
@@ -317,7 +321,7 @@ def run_max_pool(
     "dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
     ],
 )
 def test_run_max_pool(

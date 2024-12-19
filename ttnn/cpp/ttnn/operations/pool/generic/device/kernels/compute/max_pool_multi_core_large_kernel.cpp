@@ -101,8 +101,6 @@ void MAIN {
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
 
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
     constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
