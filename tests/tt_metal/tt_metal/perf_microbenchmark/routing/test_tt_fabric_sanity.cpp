@@ -662,6 +662,8 @@ int main(int argc, char **argv) {
 
     constexpr const char* default_board_type = "glx32";
 
+    constexpr uint32_t default_num_traffic_devices = -1;
+
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
@@ -753,7 +755,11 @@ int main(int argc, char **argv) {
 
     std::string board_type = test_args::get_command_option(input_args, "--board_type", std::string(default_board_type));
 
+    uint32_t num_traffic_devices =
+        test_args::get_command_option_uint32(input_args, "--num_devices", default_num_traffic_devices);
+
     bool pass = true;
+    uint32_t num_available_devices, num_allocated_devices = 0;
 
     std::map<string, string> defines = {
         {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
@@ -761,6 +767,14 @@ int main(int argc, char **argv) {
 
     try {
         test_board_t test_board(board_type);
+
+        num_available_devices = test_board.get_num_available_devices();
+
+        if (num_traffic_devices > num_available_devices) {
+            throw std::runtime_error("Insufficient number of devices available");
+        } else if (default_num_traffic_devices == num_traffic_devices) {
+            num_traffic_devices = num_available_devices;
+        }
 
         std::map<chip_id_t, std::shared_ptr<test_device_t>> test_devices;
         std::vector<test_traffic_t> fabric_traffic;
@@ -770,22 +784,26 @@ int main(int argc, char **argv) {
             test_devices[tx_chip_id] = std::make_shared<test_device_t>(tx_chip_id, &test_board);
             test_devices[rx_chip_id] = std::make_shared<test_device_t>(rx_chip_id, &test_board);
 
-            test_traffic_t traffic(
-                test_devices[tx_chip_id],
-                test_devices[rx_chip_id],
-                num_src_endpoints,
-                num_dest_endpoints,
-                target_address);
-            fabric_traffic.push_back(traffic);
+            if (num_allocated_devices < num_traffic_devices) {
+                test_traffic_t traffic(
+                    test_devices[tx_chip_id],
+                    test_devices[rx_chip_id],
+                    num_src_endpoints,
+                    num_dest_endpoints,
+                    target_address);
+                fabric_traffic.push_back(traffic);
 
-            // TODO: should this be optional?
-            test_traffic_t traffic_r(
-                test_devices[rx_chip_id],
-                test_devices[tx_chip_id],
-                num_src_endpoints,
-                num_dest_endpoints,
-                target_address);
-            fabric_traffic.push_back(traffic_r);
+                // TODO: should this be optional?
+                test_traffic_t traffic_r(
+                    test_devices[rx_chip_id],
+                    test_devices[tx_chip_id],
+                    num_src_endpoints,
+                    num_dest_endpoints,
+                    target_address);
+                fabric_traffic.push_back(traffic_r);
+
+                num_allocated_devices += 2;
+            }
         }
 
         // TODO: check this in a loop for all the devices involved in the traffic
