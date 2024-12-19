@@ -5,7 +5,6 @@
 #pragma once
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <cstdint>
 
 namespace ttnn::operations::uniform {
 struct Uniform {
