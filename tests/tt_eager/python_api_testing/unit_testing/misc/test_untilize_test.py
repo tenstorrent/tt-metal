@@ -21,30 +21,87 @@ from models.utility_functions import is_grayskull, skip_for_blackhole
 @pytest.mark.parametrize(
     "nb, nc, nh, nw",
     (
-        # (1, 1, 1, 2),
-        # (5, 2, 4, 8),
-        # (5, 2, 4, 7),
-        # ## resnet shapes
-        # (1, 1, 1, 1),
-        # (1, 1, 7, 8),
-        # (1, 1, 49, 1),
-        # (1, 1, 49, 16),
-        # (1, 1, 49, 32),
-        # (1, 1, 196, 4),
-        # (1, 1, 196, 8),
-        # (1, 1, 196, 16),
-        # (1, 1, 784, 2),
-        # (1, 1, 784, 4),
-        # (1, 1, 784, 8),
-        # (1, 1, 3136, 2),
-        (1, 1, 32, 16 * 1024),
+        # llama shapes
+        (1, 1, 32, 128 * 1024),
+    ),
+)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+    device.enable_async(True)
+    shape = [nb, nc, nh, nw]
+
+    torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
+
+    torch.manual_seed(10)
+
+    inp = torch.rand(*shape).bfloat16()
+
+    a = ttnn.Tensor(
+        inp.flatten().tolist(),
+        shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+        device,
+    )
+
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    b1 = ttnn.untilize(
+        a,
+        memory_config=out_mem_config,
+        use_multicore=True,
+        sub_core_grids=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            }
+        ),
+    )
+    c1 = b1.cpu().to_torch()
+
+    untilized_inp = untilize(inp)
+
+    if dtype == ttnn.float32:
+        passing1, output = comp_pcc(untilized_inp, c1, 0.999999)
+        logger.info(output)
+    else:
+        passing1 = torch.equal(untilized_inp, c1)
+    assert passing1
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float32"],
+)
+@pytest.mark.parametrize(
+    "nb, nc, nh, nw",
+    (
+        (1, 1, 1, 2),
+        (5, 2, 4, 8),
+        (5, 2, 4, 7),
+        ## resnet shapes
+        (1, 1, 1, 1),
+        (1, 1, 7, 8),
+        (1, 1, 49, 1),
+        (1, 1, 49, 16),
+        (1, 1, 49, 32),
+        (1, 1, 196, 4),
+        (1, 1, 196, 8),
+        (1, 1, 196, 16),
+        (1, 1, 784, 2),
+        (1, 1, 784, 4),
+        (1, 1, 784, 8),
+        (1, 1, 3136, 2),
     ),
 )
 def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
     device.enable_async(True)
-    shape = [nb, nc, nh, nw]
+    shape = [nb, nc, 32 * nh, 32 * nw]
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
 
@@ -65,7 +122,11 @@ def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
 
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
-    b1 = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True)
+    b1 = ttnn.untilize(
+        a,
+        memory_config=out_mem_config,
+        use_multicore=True,
+    )
     c1 = b1.cpu().to_torch()
 
     untilized_inp = untilize(inp)
@@ -75,7 +136,6 @@ def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
         logger.info(output)
     else:
         passing1 = torch.equal(untilized_inp, c1)
-
     assert passing1
 
 

@@ -35,7 +35,6 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
     const CoreRangeSet& sub_core_grids) {
-    tt::log_info("untilize_multi_core_parallelize_column_subgrid");
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -76,11 +75,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
     uint32_t block_size_nbytes = input_single_tile_size;
 
     auto cores = corerange_to_cores(sub_core_grids, ncores, true);
-    auto all_cores = num_cores_to_corerangeset_in_subcoregrids(
-        cores[0],
-        ncores,
-        sub_core_grids,
-        true);  //(sub_core_grids; //CoreRangeSet(corerange_to_cores(sub_core_grids, ncores, true));
+    auto all_cores = num_cores_to_corerangeset_in_subcoregrids(cores[0], ncores, sub_core_grids, true);
     uint32_t nblocks_per_core = nblocks / ncores;
 
     bool row_major = true;
@@ -220,7 +215,6 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
 
 operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
-    tt::log_info("untilize_multi_core_parallelize_column");
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -274,16 +268,6 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(CoreCoord(ncores_x, ncores_y), nblocks);
 
-    tt::log_info(
-        "ncores: {}, nblocks: {}, nblocks_per_core: {}, nblocks_per_core_cliff: {}, all_cores: {}, core_range: {}, "
-        "core_range_cliff: {} ",
-        ncores,
-        nblocks,
-        nblocks_per_core,
-        nblocks_per_core_cliff,
-        all_cores,
-        core_range,
-        core_range_cliff);
     bool row_major = true;
     bool src_block_sharded = false;
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
@@ -471,7 +455,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids) {
-    tt::log_info("untilize_multi_core");
     tt::tt_metal::Program program{};
 
     bool src_sharded = a.memory_config().is_sharded();
@@ -898,7 +881,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
 operation::ProgramWithCallbacks untilize_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
-    tt::log_info("untilize_single_core");
     tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
