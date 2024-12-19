@@ -160,7 +160,7 @@ typedef struct fvc_consumer_state {
         packet_words_remaining -= num_words_to_pull;
         // also check for complete packet pulled.
         if ((packet_words_remaining == 0) or (words_since_last_sync >= FVC_SYNC_THRESHOLD)) {
-            sync_buf[sync_buf_wrptr] = fvc_pull_wrptr;
+            sync_buf[sync_buf_wrptr & SYNC_BUF_SIZE_MASK] = fvc_pull_wrptr;
             if (get_num_words_free()) {
                 advance_pull_wrptr(1);
                 sync_buf_advance_wrptr();
@@ -186,7 +186,7 @@ typedef struct fvc_consumer_state {
     template <bool live = true>
     inline uint32_t forward_data_from_fvc_buffer() {
         uint32_t total_words_to_forward = 0;
-        uint32_t wrptr = sync_buf[sync_buf_rdptr];
+        uint32_t wrptr = sync_buf[sync_buf_rdptr & SYNC_BUF_SIZE_MASK];
 
         total_words_to_forward =
             wrptr > fvc_out_rdptr ? wrptr - fvc_out_rdptr : buffer_size * 2 + wrptr - fvc_out_rdptr;
