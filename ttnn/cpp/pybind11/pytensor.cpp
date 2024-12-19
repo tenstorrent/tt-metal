@@ -107,14 +107,10 @@ Tensor convert_float_vector_to_tt_tensor(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tile>& tile) {
     if (data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B) {
-        if (layout != Layout::TILE) {
-            log_warning(
-                tt::LogAlways,
-                "Tensor layout must be Layout::TILE for bfloat8_b or bfloat4_b! Tensor layout will be {} instead of "
-                "the requested {}!",
-                Layout::TILE,
-                layout);
-        }
+        TT_FATAL(layout == Layout::TILE, "Tile layout is required for BFLOAT8_B and BFLOAT4_B; got {}", layout);
+
+        auto result_cpu_spec = TensorSpec(
+            ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(Layout::TILE, tile), MemoryConfig{}));
         auto owned_buffer = create_owned_buffer_from_vector_of_floats(std::move(data), DataType::FLOAT32);
         auto float_tensor = Tensor(OwnedStorage{owned_buffer}, shape, DataType::FLOAT32, Layout::ROW_MAJOR, tile);
         auto tile_val = tile.value_or(Tile());
@@ -409,18 +405,18 @@ Tensor convert_python_tensor_to_tt_tensor(
         num_elements,
         shape.volume());
 
-    Layout layout = optional_layout.value_or(Layout::ROW_MAJOR);
-    if (data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
-        if (optional_layout.has_value() and optional_layout.value() != Layout::TILE) {
-            log_warning(
-                tt::LogAlways,
-                "Tensor layout must be Layout::TILE for bfloat8_b or bfloat4_b! Tensor layout will be {} instead of "
-                "the requested {}!",
-                Layout::TILE,
-                optional_layout.value());
+    const Layout layout = [&]() {
+        // Block float types require tile layout.
+        // Choose tile by default and disallow overriding to anything else.
+        if (data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
+            TT_FATAL(
+                !optional_layout.has_value() or *optional_layout == Layout::TILE,
+                "Tile layout is required for cannot be specified for tensor of type bfloat8_b or bfloat4_b.");
+            return Layout::TILE;
+        } else {
+            return optional_layout.value_or(Layout::ROW_MAJOR);
         }
-        layout = Layout::TILE;
-    }
+    }();
 
     auto tensor_spec = TensorSpec(shape, TensorLayout(data_type, PageConfig(layout, optional_tile), memory_config));
     auto on_creation_callback = [tensor = contiguous_py_tensor] { tensor.inc_ref(); };
