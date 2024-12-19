@@ -154,11 +154,9 @@ struct WorkerToFabricEdmSender {
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
         noc_async_read_barrier();
         ASSERT(*this->buffer_index_ptr < 20);
-        DPRINT << "Connecting to EDM fabric @ " << (uint64_t)edm_connection_handshake_noc_addr << "\n";
     }
 
     FORCE_INLINE void close() {
-        DPRINT << "edm_connection_handshake_l1_addr: " << (uint32_t)edm_connection_handshake_l1_addr << "\n";
         const auto dest_noc_addr_coord_only =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_semaphore_addr) & ~(uint64_t)NOC_COORDINATE_MASK;
 
