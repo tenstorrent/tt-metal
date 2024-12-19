@@ -10,7 +10,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"

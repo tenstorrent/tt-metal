@@ -37,6 +37,7 @@ target_link_libraries(
     PUBLIC
         common
         Metalium::Metal::LLRT
+        Tracy::TracyClient
     PRIVATE
         Boost::smart_ptr
         range-v3::range-v3

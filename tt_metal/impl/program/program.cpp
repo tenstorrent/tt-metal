@@ -27,7 +27,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/program.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 
 namespace tt::tt_metal {
 

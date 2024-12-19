@@ -11,7 +11,7 @@
 
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "blockfloat_common.hpp"
 
 // TODO: empty struct to facilitate Tensor template logic. Reconsider how/why templating is supported in Tensor
