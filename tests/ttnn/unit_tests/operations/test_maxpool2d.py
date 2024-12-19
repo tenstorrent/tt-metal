@@ -275,8 +275,6 @@ def run_max_pool(
             [1, 512, 10, 10],
             [1, 96, 112, 112],
             [1, 192, 132, 20],
-            [1, 64, 112, 112],
-            [1, 512, 10, 10],
         )
     ),
 )
@@ -840,8 +838,8 @@ def test_pool_core_nondivis(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "act_shape",  ## NCHW
-    (([1, 256, 54, 54],)),  # SHAPE MISMATCH
+    "act_shape",
+    (([1, 256, 54, 54],)),
 )
 @pytest.mark.parametrize(
     "kernel_size",
@@ -852,7 +850,7 @@ def test_pool_core_nondivis(
     ((0, 0),),
 )
 @pytest.mark.parametrize("stride", ((2, 2),))
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize("dilation", ((1, 1),))
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("ceil_mode", [True])
 def test_run_max_pool_squeeze_net_model(
