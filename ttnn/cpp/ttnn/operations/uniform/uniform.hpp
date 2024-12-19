@@ -12,6 +12,7 @@ struct Uniform {
         const Tensor& input,
         const float from,
         const float to,
+        const uint32_t seed,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
