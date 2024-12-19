@@ -14,7 +14,7 @@
 namespace ttml::ttnn_fixed {
 
 tt::tt_metal::Tensor sum_over_dim(const tt::tt_metal::Tensor& t, uint32_t dim) {
-    return sum_ttnn(t, dim, true);
+    return sum_ttnn(t, dim, /* keepdim */ true);
 }
 
 tt::tt_metal::Tensor sum_over_batch(const tt::tt_metal::Tensor& t) {
