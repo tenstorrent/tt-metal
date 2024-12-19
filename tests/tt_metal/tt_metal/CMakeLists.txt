@@ -45,9 +45,7 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
     target_include_directories(
         ${TEST}
         PRIVATE
-            ${PROJECT_SOURCE_DIR}
-            ${PROJECT_SOURCE_DIR}/tt_metal
-            ${PROJECT_SOURCE_DIR}/tt_metal/common
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
