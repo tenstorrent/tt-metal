@@ -26,7 +26,7 @@ from models.utility_functions import (
 
 
 def get_expected_compile_time_sec():
-    return 60
+    return 100
 
 
 def get_expected_inference_time_sec():
