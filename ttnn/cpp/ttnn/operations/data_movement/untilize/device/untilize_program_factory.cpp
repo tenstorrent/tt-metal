@@ -30,7 +30,11 @@ uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint3
 }
 
 operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en, const CoreRangeSet& core_range) {
+    const Tensor& a,
+    Tensor& output,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    const CoreRangeSet& sub_core_grids) {
     tt::log_info("untilize_multi_core_parallelize_column_subgrid");
     tt::tt_metal::Program program{};
 
@@ -42,9 +46,8 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
     Device* device = a.device();
 
     uint32_t ntiles = a.volume() / TILE_HW;
-    uint32_t ncores = core_range.value().num_cores();
-
-    for (uint32_t core_id = ncores; core_id <= 1; core_id--) {
+    uint32_t ncores = sub_core_grids.num_cores();
+    for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (ntiles % ncores == 0) {
             break;
         } else {
@@ -72,7 +75,12 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
     uint32_t nblocks = (ntiles / ntiles_per_block);
     uint32_t block_size_nbytes = input_single_tile_size;
 
-    auto all_cores = CoreRangeSet(corerange_to_cores(core_range.value(), ncores, true));
+    auto cores = corerange_to_cores(sub_core_grids, ncores, true);
+    auto all_cores = num_cores_to_corerangeset_in_subcoregrids(
+        cores[0],
+        ncores,
+        sub_core_grids,
+        true);  //(sub_core_grids; //CoreRangeSet(corerange_to_cores(sub_core_grids, ncores, true));
     uint32_t nblocks_per_core = nblocks / ncores;
 
     bool row_major = true;
@@ -148,7 +156,6 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
 
     uint32_t tile_start_id = 0;
     uint32_t offset_within_stick = 0;
-    auto cores = corerange_to_cores(all_cores, ncores, row_major);
 
     auto nsticks_per_core = ntiles_per_column * TILE_HEIGHT;
 
@@ -459,7 +466,11 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 }
 
 operation::ProgramWithCallbacks untilize_multi_core(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
+    const Tensor& a,
+    Tensor& output,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    std::optional<CoreRangeSet> sub_core_grids) {
     tt::log_info("untilize_multi_core");
     tt::tt_metal::Program program{};
 
@@ -489,7 +500,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
         if (!src_sharded and !out_sharded) {
             uint32_t ntiles_height = ntiles / ntiles_per_block;
             if (ntiles_height == 1) {
-                return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
+                if (sub_core_grids.has_value()) {
+                    return untilize_multi_core_parallelize_column_subgrid(
+                        a, output, use_pack_untilize, fp32_dest_acc_en, sub_core_grids.value());
+                } else {
+                    return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
+                }
             } else {
                 return untilize_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
             }
