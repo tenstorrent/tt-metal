@@ -12,6 +12,7 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/transpose/device/transpose_op.hpp"
 
 #include "fold.hpp"
 
@@ -62,7 +63,8 @@ std::vector<Tensor> fold_with_transpose_(
     tt::log_debug("pad_output: {}", pad_output.shape());
 
     // transpose
-    auto transpose_hw_output = ttnn::transpose(pad_output, 2, 3, L1_mem_config);
+    auto transpose_hw_output = operation::run(Transpose{TransposeOpDim::WH, L1_mem_config, 0.0f}, {pad_output})
+                                   .at(0);  // ttnn::transpose(pad_output, 2, 3, L1_mem_config);
 
     tt::log_debug("transpose_hw_output: {}", transpose_hw_output.shape());
 
@@ -80,7 +82,8 @@ std::vector<Tensor> fold_with_transpose_(
     tt::log_debug("reshape_hc_output: {}", reshape_hc_output.shape());
 
     // transpose
-    auto transpose_hw_output2 = ttnn::transpose(reshape_hc_output, 2, 3, L1_mem_config);
+    auto transpose_hw_output2 =
+        operation::run(Transpose{TransposeOpDim::WH, L1_mem_config, 0.0f}, {reshape_hc_output}).at(0);
 
     tt::log_debug("transpose_hw_output2: {}", transpose_hw_output2.shape());
 
