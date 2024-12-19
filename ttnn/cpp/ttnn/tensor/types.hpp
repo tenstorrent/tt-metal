@@ -209,10 +209,10 @@ class LegacyShape {
         rank_(shape_with_tile_padding.size()), dimensions_{}, padding_{shape_with_tile_padding.size()} {
         for (int index = 0; index < shape_with_tile_padding.size(); index++) {
             int shape_index = index + static_cast<int>(shape.size()) - static_cast<int>(shape_with_tile_padding.size());
-            int dimenstion = shape_index >= 0 ? shape[shape_index] : 1;
+            int dimension = shape_index >= 0 ? shape[shape_index] : 1;
             int padded_dimension = shape_with_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
-            this->padding_[index] = {.front = 0, .back = static_cast<size_t>(padded_dimension - dimenstion)};
+            this->padding_[index] = {.front = 0, .back = static_cast<size_t>(padded_dimension - dimension)};
         }
     }
     explicit LegacyShape(const ttnn::SmallVector<uint32_t>& shape, const ttnn::SmallVector<uint32_t>& shape_with_tile_padding)
