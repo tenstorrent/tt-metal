@@ -166,24 +166,22 @@ inline void riscv_wait(uint32_t cycles) {
 }
 
 // Invalidates Blackhole's entire L1 cache
-// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). If cache is enabled, the entire L1 is cached (no
-// MMU).
-//  Writing an address on one core and reading it from another core only requires the reader to invalidate.
-//  Need to invalidate any address written by noc that may have been previously read
+// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). The cache covers all of L1 (no
+// MMU or range registers).
+//  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
+//  Need to invalidate any address written by noc that may have been previously read by riscv
 inline __attribute__((always_inline)) void invalidate_l1_cache() {
 #if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
     asm("fence");
 #endif
 }
 
-// Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
-// L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
-// export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
-inline __attribute__((always_inline)) void conditionally_disable_l1_cache() {
-#if defined(ARCH_BLACKHOLE) && defined(DISABLE_L1_DATA_CACHE)
-    // asm(R"ASM(
-    //         csrrsi zero, 0x7c0, 0x8
-    //       )ASM");
+inline __attribute__((always_inline)) void configure_l1_data_cache() {
+#if defined(ARCH_BLACKHOLE)
+#if defined(DISABLE_L1_DATA_CACHE)
+    // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
+    // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
+    // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
     asm(R"ASM(
         .option push
         li   t1, 0x1
@@ -192,6 +190,18 @@ inline __attribute__((always_inline)) void conditionally_disable_l1_cache() {
         .option pop
          )ASM" ::
             : "t1");
+#elif !defined(ENABLE_HW_CACHE_INVALIDATION)
+    // Disable gathering to stop HW from invalidating the data cache after 128 transactions
+    // This is default enabled
+    asm(R"ASM(
+        .option push
+        li   t1, 0x1
+        slli t1, t1, 18
+        csrrs zero, 0x7c0, t1
+        .option pop
+         )ASM" ::
+            : "t1");
+#endif
 #endif
 }
 
