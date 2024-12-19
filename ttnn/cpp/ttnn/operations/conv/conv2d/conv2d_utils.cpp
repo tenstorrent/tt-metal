@@ -1042,7 +1042,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
 
     uint32_t input_channels = input_shape[3];
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
-
+    bool is_conv1d = kernel_size[1] == 1 && conv_output_w == 1;
     uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_dtype));
     uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(weights_dtype));
     uint32_t bias_tile_size = 0;
@@ -1139,6 +1139,9 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         if(use_non_tile_height){
             uint32_t total_height = conv_output_h * conv_output_w * batch_size;
             output_size = total_height / pconfig.num_cores_nhw * output_channels;
+            if(output_dtype == DataType::BFLOAT16) {
+                output_size *= 2;
+            }
         } else {
             output_size = per_core_out_matrix_height_ntiles *
                           per_core_out_matrix_width_ntiles *
@@ -1150,7 +1153,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
 
         uint32_t weight_block_w_ntiles = per_core_out_matrix_width_ntiles;
-        uint32_t weight_block_h_ntiles = is_depthwise_conv ? act_block_h_ntiles : act_block_w_ntiles;
+        uint32_t weight_block_h_ntiles = (is_conv1d and is_depthwise_conv ) ? act_block_h_ntiles : act_block_w_ntiles;
 
 
         uint32_t act_block_cb_ntiles =  act_block_h_ntiles * act_block_w_ntiles;
@@ -1212,7 +1215,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         if(untilize_out==false && interm_dtype == output_dtype) {
             cb24_size = 0;
         }
-        if(is_depthwise_conv) {
+        if(is_conv1d and is_depthwise_conv) {
             cb24_size = output_tile_size;
         }
         if(cb24_size != 0) {
@@ -1222,8 +1225,9 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         uint32_t cb25_size = tilzed_act_cb_size; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
 
         uint32_t cb27_size = 0;
-        if(is_depthwise_conv) {
+        if(is_conv1d and is_depthwise_conv) {
             cb27_size = output_tile_size;
+            tt::log_debug(tt::LogOp, "CB27 Size: {}", cb27_size);
         }
 
         return {output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb7_size + cb24_size + cb25_size + cb27_size};
