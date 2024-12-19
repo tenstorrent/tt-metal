@@ -39,6 +39,7 @@ void RunCustomCycle(tt_metal::Device* device, int fastDispatch) {
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args});
 
     for (int i = 0; i < fastDispatch; i++) {
+        program.set_runtime_id(i + 1);
         EnqueueProgram(device->command_queue(), program, false);
     }
 }
