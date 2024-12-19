@@ -66,6 +66,16 @@ test_sweep_args = [
         7,
     ),
     ((416, 32), ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.COL_MAJOR, True, 3, 3),
+    (
+        (4, 48, 1024),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.ShardStrategy.BLOCK,
+        ttnn.ShardOrientation.COL_MAJOR,
+        False,
+        6,
+        2,
+    ),
 ]
 
 
