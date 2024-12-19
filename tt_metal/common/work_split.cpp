@@ -13,7 +13,7 @@
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/math.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 
 namespace tt {
 namespace tt_metal {

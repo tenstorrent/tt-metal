@@ -22,6 +22,8 @@ target_link_libraries(
         Metalium::Metal::STL
         Metalium::Metal::LLRT
         umd::Firmware
+    PRIVATE
+        Tracy::TracyClient
 )
 
 target_include_directories(

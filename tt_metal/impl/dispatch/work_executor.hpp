@@ -15,8 +15,7 @@
 
 #include "common/env_lib.hpp"
 #include "lock_free_queue.hpp"
-#include "tt_metal/third_party/tracy/public/common/TracySystem.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 
 #if defined(TRACY_ENABLE)
 #define TracyTTThreadName(name, id)                     \

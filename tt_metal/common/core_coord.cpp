@@ -15,7 +15,7 @@
 
 #include "umd/device/tt_xy_pair.h"
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
