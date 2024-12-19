@@ -72,7 +72,6 @@ def unsqueeze_all_params_to_4d(params):
         (2, 4, 64, 64),
     ],
 )
-@pytest.mark.skip(reason="#15931: Failing, skip for now")
 def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
     device.enable_program_cache()
 
@@ -179,33 +178,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     print(f"Second iteration took {second_iter} seconds")
     ttnn_output = ttnn_to_torch(ttnn_output)
 
-    # times = []
-    # for i in range(50):
-    #     start = time.time()
-    #     ttnn_output = model(
-    #         input,
-    #         timestep=ttnn_timestep,
-    #         encoder_hidden_states=encoder_hidden_states,
-    #         class_labels=class_labels,
-    #         attention_mask=attention_mask,
-    #         cross_attention_kwargs=cross_attention_kwargs,
-    #         return_dict=return_dict,
-    #         config=config,
-    #     )
-    #     ttnn_output = ttnn_to_torch(ttnn_output)
-    #     passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
-    #     print(output)
-    #     end = time.time()
-    #     times.append(end - start)
-    #     print(f"Current iteration took {end - start} seconds")
-    # total_time = 0
-    # for iter in times:
-    #     total_time += iter
-    #     print(iter)
-    # print(f"Time taken for 50 iterations: {total_time}")
-    # print(f"Samples per second: {50 / total_time}")
-    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.981)
+    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.996)
     print(output)
     assert passing
-
-    print("EXIT UNET-2D TEST")
