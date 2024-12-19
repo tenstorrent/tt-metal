@@ -54,11 +54,8 @@ inline Tensor transpose_(
         case TransposeOpDim::CN:
             tiled_only = true;  // CN only has a tiled implementation at the moment
             break;
-        case TransposeOpDim::WH:  // THIS NEEDS TO BE FIXED
-            if (a.device()->arch() == tt::ARCH::GRAYSKULL) {
-                tiled_only = a.shape()[-2] > 256;  // hangs right now past this dimension, #13660 will turn it from a
-                                                   // hang into a PCC issue for GS and improve perf for WH
-            } else if (!a.is_sharded() && a.layout() == Layout::ROW_MAJOR) {
+        case TransposeOpDim::WH:
+            if (!a.is_sharded() && a.layout() == Layout::ROW_MAJOR) {
                 return ttnn::prim::permute(
                     a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}), output_mem_config, std::nullopt);
             }

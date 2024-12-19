@@ -334,9 +334,9 @@ def test_tranpose_hw_rm_with_padding(device, n, c, h, w):
 
 @skip_for_grayskull("Grayskull has pcc issue when transpose used untilize")
 @pytest.mark.parametrize("n", [16])
-@pytest.mark.parametrize("c", [128])
-@pytest.mark.parametrize("h", [8])
-@pytest.mark.parametrize("w", [256])
+@pytest.mark.parametrize("c", [128, 4])
+@pytest.mark.parametrize("h", [8, 256])
+@pytest.mark.parametrize("w", [256, 256])
 def test_tranpose_hw_rm_no_padding(device, n, c, h, w):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
@@ -1048,7 +1048,7 @@ def test_tranpose_hw_sharded_tiled_8_cores(device, n, c, h, w):
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("h", [224])
 @pytest.mark.parametrize("w", [32])
-def test_tranpose_hw_sharded_tiled_n_cores(device, n, c, h, w):
+def test_transpose_hw_sharded_tiled_n_cores(device, n, c, h, w):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
@@ -1079,3 +1079,13 @@ def test_tranpose_hw_sharded_tiled_n_cores(device, n, c, h, w):
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("shape", [[16, 4, 256, 256], [16, 128, 8, 256]])
+def test_transpose_hw_rm(shape, device):
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(2, 3)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.transpose(tt_input, 2, 3)
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
