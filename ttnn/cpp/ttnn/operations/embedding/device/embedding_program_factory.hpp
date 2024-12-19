@@ -617,8 +617,8 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t src1_cb_index = 1;
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
     tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(tile_size * index_page_size, {{src1_cb_index, input_cb_data_format}})
-            .set_page_size(src1_cb_index, tile_size * index_page_size);
+        tt_metal::CircularBufferConfig(face_size * index_page_size, {{src1_cb_index, input_cb_data_format}})
+            .set_page_size(src1_cb_index, face_size * index_page_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     if (embeddings_type == EmbeddingsType::PADDED) {
@@ -657,7 +657,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)weight_page_size,
         (std::uint32_t)weight_log2_stick_size,
         (std::uint32_t)face_size,
-        (std::uint32_t)face_size * input_element_size_bytes};
+        (std::uint32_t)face_size};
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.get_dtype() == DataType::BFLOAT16) {
@@ -722,10 +722,11 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         uint32_t r_f_offset = ((row % tile_size) / face_size) * 2 * face_size * face_size + row * face_size;
         uint32_t c_f_offset = ((col_offset % tile_size) / face_size) * face_size * face_size;
         uint32_t face_offset = r_f_offset + c_f_offset;
-        // std::cout << "Core " << core.x << " " << core.y << std::endl;
-        // std::cout << "Tile " << (row / tile_size) * tiles_per_row + (col_offset / tile_size) << ", face_offset "
-        //   << face_offset << std::endl;
-        // std::cout << "Row " << row << ", Col " << col_offset << std::endl << std::endl;
+        std::cout << "Core " << core.x << " " << core.y << std::endl;
+        std::cout << "Units: " << local_num_blocks << std::endl;
+        std::cout << "Tile " << (row / tile_size) * tiles_per_row + (col_offset / tile_size) << ", face_offset "
+                  << face_offset << std::endl;
+        std::cout << "Row " << row << ", Col " << col_offset << std::endl << std::endl;
 
         // Reader
         {
