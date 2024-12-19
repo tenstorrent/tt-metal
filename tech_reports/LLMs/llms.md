@@ -1,11 +1,7 @@
 # LLMs in TT-NN
-<<<<<<< HEAD
 
-Authors: Mark O'Connor, Djordje Ivanovic, Jack (Xun) Cai, Kartik Paigwar, Johanna Rock, Stuti Raizada
+Authors: Mark O'Connor, Djordje Ivanovic, Jack (Xun) Cai, Kartik Paigwar, Johanna Rock, Stuti Raizada, Ammar Vora
 
-=======
-Authors:
->>>>>>> Added RoPE and MLP sections. MLP is WIP.
 ## Contents
 - [LLMs in TT-NN](#llms-in-tt-nn)
   - [Contents](#contents)
@@ -549,7 +545,7 @@ where FF1, FF2, and FF3 are linear transformations (matmuls) with weights `w1`, 
 Let's dive into our implementation of MLP, and discuss what makes it performant across different WH systems.
 
 #### 0. Setup
-When used in the model by the `TtLlamaDecoder` module class, the MLP class is initialzed at the start, where the weights for `w1`, `w2`, and `w3` are loaded and fractured across devices in specific schemes, as outlined in section 3.3 Multi-Device. Specifically, in n300 and T3000 systems the weights are 1D column fractured, and in TG systems the weights are 2D fractured.
+When used in the model by the `TtLlamaDecoder` module class, the MLP class is initialized at the start, where the weights for `w1`, `w2`, and `w3` are loaded and fractured across devices in specific schemes, as outlined in the [Multi-Device](#33-multi-device) section. Specifically, in n300 and T3000 systems the weights are 1D column fractured, and in TG systems the weights are 2D fractured.
 
 ```py
 self.feed_forward = TtLlamaMLP(
@@ -685,7 +681,7 @@ The first set of operations in the MLP are:
 w1_out = FF1(x)
 w3_out = FF3(x)
 ```
-Based on the program configs we computed beforehand, we perform the FF1/FF3 matmuls, making sure that the ouputs are L1 sharded in in decode mode, and interleaved in DRAM if in prefill mode. For the `compute_kernel_config`, we use `ttnn.MathFidelity.HiFi2` to retain accuracy while still being performance. Using `ttnn.MathFidelity.HiFi4` instead, would mean that this matmul would become compute bound.
+Based on the program configs we computed beforehand, we perform the FF1/FF3 matmuls, making sure that the ouputs are L1 sharded in in decode mode, and interleaved in DRAM if in prefill mode. For the `compute_kernel_config`, we use `ttnn.MathFidelity.HiFi2` to retain accuracy while still being performant. Using `ttnn.MathFidelity.HiFi4` instead, would mean that this matmul would become compute bound.
 
 ```py
 compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
@@ -718,7 +714,7 @@ w3_out = ttnn.linear(
 
 #### 3.1 FF1/FF3 Matmul with 2D Weight Fracturing
 
-In the case of TG systems, where have have access to a 2D device mesh, we can leverage 2D weight fracturing. For a weight tensor with shape `[1, 1, K, N]`, using 2D weight fracturing on a `(8, 4)` device mesh, the resulting shape on each device would be: `[1, 1, K / 4, N / 8]`. In other words, the inner dimension (K) of the matmul is spread out across 4 devices, and to complete the entire matmul operation, a reduction step across the partials is necessary. We do this using an all-reduce operation along the 4 devices in `cluster_axis=1` of the device mesh.
+In the case of TG systems, where we have access to a 2D device mesh, we can leverage 2D weight fracturing. For a weight tensor with shape `[1, 1, K, N]`, using 2D weight fracturing on a `(8, 4)` device mesh, the resulting shape on each device would be: `[1, 1, K / 4, N / 8]`. In other words, the inner dimension (K) of the matmul is spread out across 4 devices, and to complete the entire matmul operation, a reduction step across the partials is necessary. We do this using an all-reduce operation along the 4 devices in `cluster_axis=1` of the device mesh.
 ```py
   w1_out = tt_all_reduce(
       w1_out,
