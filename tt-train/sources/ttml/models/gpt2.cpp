@@ -4,11 +4,42 @@
 
 #include "gpt2.hpp"
 
+#include "autograd/graph_utils.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::models::gpt2 {
+
+namespace {
+
+autograd::TensorPtr memory_efficient_runner(
+    auto&& forward_impl, const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
+    if (autograd::ctx().get_gradient_mode() == autograd::GradMode::DISABLED) {
+        return forward_impl(input, mask);
+    }
+
+    autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED);
+    auto out = forward_impl(input, mask);
+    autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED);
+    autograd::GradFunction grad = [input, mask, out, &forward_impl]() {
+        // detach input from existing graph
+        auto input_detached = autograd::create_tensor(input->get_value());
+        // run forward pass again
+        auto output = forward_impl(input_detached, mask);
+        // use gradients from new output
+        output->set_grad(out->get_grad());
+        output->backward();
+        // reuse gradients from detached input
+        input->add_grad(input_detached->get_grad());
+    };
+
+    auto links = autograd::get_links(input);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
+
+}  // namespace
 
 Transformer::Transformer(const TransformerConfig& config) {
     uint32_t vocab_size = config.vocab_size;
@@ -19,6 +50,7 @@ Transformer::Transformer(const TransformerConfig& config) {
     uint32_t num_blocks = config.num_blocks;
     auto position_embedding_type = config.positional_embedding_type;
     auto use_composite_layernorm = config.experimental.use_composite_layernorm;
+    runner_type = config.runner_type;
 
     fmt::print("Transformer configuration:\n");
     fmt::print("    Vocab size: {}\n", vocab_size);
@@ -30,6 +62,7 @@ Transformer::Transformer(const TransformerConfig& config) {
     fmt::print(
         "    Positional embedding type: {}\n",
         position_embedding_type == PositionalEmbeddingType::Trainable ? "Trainable" : "Fixed");
+    fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
     fmt::print("    Composite layernorm: {}\n", use_composite_layernorm);
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
@@ -83,12 +116,30 @@ ttml::autograd::TensorPtr Transformer::operator()(
     auto tok_emb_out = (*tok_emb)(x);
     auto out = (*pos_emb)(tok_emb_out);
     for (auto& block : blocks) {
-        out = (*block)(out, mask);
+        if (runner_type == RunnerType::MemoryEfficient) {
+            out = memory_efficient_runner(*block, out, mask);
+        } else if (runner_type == RunnerType::Default) {
+            out = (*block)(out, mask);
+        } else {
+            throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
+        }
     }
     out = (*ln_fc)(out);
     auto logits = (*fc)(out);
     auto log_softmax = ttml::ops::log_softmax(logits, 3);
     return log_softmax;
+}
+
+RunnerType read_runner_type(const YAML::Node& config) {
+    auto runner_type_str = config["runner_type"].as<std::string>("default");
+    if (runner_type_str == "default") {
+        return RunnerType::Default;
+    } else if (runner_type_str == "memory_efficient") {
+        return RunnerType::MemoryEfficient;
+    } else {
+        throw std::runtime_error(fmt::format(
+            "Unknown runner type: {}. Supported runner types [default, memory_efficient]", runner_type_str));
+    }
 }
 
 PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config) {
@@ -113,6 +164,14 @@ TransformerConfig read_config(const YAML::Node& config) {
     transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
     transformer_config.positional_embedding_type = read_positional_embedding_type(config);
+    transformer_config.runner_type = read_runner_type(config);
+
+    if (transformer_config.runner_type == RunnerType::MemoryEfficient && transformer_config.dropout_prob > 0.F) {
+        throw std::runtime_error(fmt::format(
+            "Memory efficient runner does not support dropout. Please set dropout_prob to 0.0. Dropout probability = "
+            "{}",
+            transformer_config.dropout_prob));
+    }
 
     if (auto experimental_config = config["experimental"]) {
         transformer_config.experimental.use_composite_layernorm =
