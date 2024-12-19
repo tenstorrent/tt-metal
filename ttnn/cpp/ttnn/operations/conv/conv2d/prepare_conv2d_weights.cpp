@@ -129,29 +129,26 @@ static OptimizedConvBlockConfig get_opt_block_config(
                                conv_config.output_layout == Layout::ROW_MAJOR;
     use_non_tile_height = use_non_tile_height && conv_config.input_channels_alignment != 16;
 
-    ParallelConfig parallel_config = determine_parallel_config(
-        conv_config.shard_layout.value(),
-        batch_size,
-        in_channels,
-        output_height,
-        output_width,
-        out_channels,
-        device->compute_with_storage_grid_size(),
-        shard_orientation,
-        !use_non_tile_height);
-
-    auto output_parallel_config = parallel_config;
-    if (conv_config.shard_layout.value() == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !mm_conv) {
-        uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
-        output_parallel_config = {
-            .grid = num_cores_to_corerangeset(
-                find_closest_largest_divisor(tt::div_up(out_channels, tt::constants::TILE_WIDTH), max_num_cores),
-                compute_grid_size,
-                true),
-            .shard_scheme = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
-            .shard_orientation = parallel_config.shard_orientation};
-        log_debug(tt::LogOp, "Changing width sharded output grid to  {}", output_parallel_config.grid);
+    ParallelConfig parallel_config;
+    if (input_memory_config.is_sharded()) {
+        parallel_config = {
+            .grid = input_memory_config.shard_spec.value().grid,
+            .shard_scheme = input_memory_config.memory_layout,
+            .shard_orientation = input_memory_config.shard_spec.value().orientation};
+    } else {
+        parallel_config = determine_parallel_config(
+            conv_config.shard_layout.value(),
+            batch_size,
+            in_channels,
+            output_height,
+            output_width,
+            out_channels,
+            device->compute_with_storage_grid_size(),
+            shard_orientation,
+            !use_non_tile_height);
     }
+    ParallelConfig output_parallel_config =
+        determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, mm_conv);
 
     uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
@@ -369,16 +366,24 @@ ttnn::Tensor prepare_conv_weights(
                                conv_config.output_layout == Layout::ROW_MAJOR;
     use_non_tile_height = use_non_tile_height && conv_config.input_channels_alignment != 16;
 
-    ParallelConfig parallel_config = determine_parallel_config(
-        conv_config.shard_layout.value(),
-        batch_size,
-        in_channels,
-        output_height,
-        output_width,
-        out_channels,
-        device->compute_with_storage_grid_size(),
-        shard_orientation,
-        !use_non_tile_height);
+    ParallelConfig parallel_config;
+    if (input_memory_config.is_sharded()) {
+        parallel_config = {
+            .grid = input_memory_config.shard_spec.value().grid,
+            .shard_scheme = input_memory_config.memory_layout,
+            .shard_orientation = input_memory_config.shard_spec.value().orientation};
+    } else {
+        parallel_config = determine_parallel_config(
+            conv_config.shard_layout.value(),
+            batch_size,
+            in_channels,
+            output_height,
+            output_width,
+            out_channels,
+            device->compute_with_storage_grid_size(),
+            shard_orientation,
+            !use_non_tile_height);
+    }
 
     bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt;
@@ -420,9 +425,8 @@ ttnn::Tensor prepare_conv_bias(
     T* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
-    TT_FATAL(
-        !ttnn::is_tensor_on_device_or_multidevice(bias_tensor), "Error: bias tensor must be on host for preparation.");
 
+    TT_FATAL(!ttnn::is_tensor_on_device_or_multidevice(bias_tensor), "Error: bias tensor must be on host for preparation.");
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
     const uint32_t output_height =
         ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
@@ -458,16 +462,24 @@ ttnn::Tensor prepare_conv_bias(
                                conv_config.output_layout == Layout::ROW_MAJOR;
     use_non_tile_height = use_non_tile_height && conv_config.input_channels_alignment != 16;
 
-    ParallelConfig parallel_config = determine_parallel_config(
-        conv_config.shard_layout.value(),
-        batch_size,
-        in_channels,
-        output_height,
-        output_width,
-        out_channels,
-        device->compute_with_storage_grid_size(),
-        shard_orientation,
-        !use_non_tile_height);
+    ParallelConfig parallel_config;
+    if (input_memory_config.is_sharded()) {
+        parallel_config = {
+            .grid = input_memory_config.shard_spec.value().grid,
+            .shard_scheme = input_memory_config.memory_layout,
+            .shard_orientation = input_memory_config.shard_spec.value().orientation};
+    } else {
+        parallel_config = determine_parallel_config(
+            conv_config.shard_layout.value(),
+            batch_size,
+            in_channels,
+            output_height,
+            output_width,
+            out_channels,
+            device->compute_with_storage_grid_size(),
+            shard_orientation,
+            !use_non_tile_height);
+    }
 
     bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
     ttnn::Tensor bias_tensor_ = bias_tensor;
