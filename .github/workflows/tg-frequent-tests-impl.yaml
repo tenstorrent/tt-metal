@@ -22,7 +22,7 @@ jobs:
     runs-on:
       - arch-wormhole_b0
       - config-tg
-      - in-service
+      - issue-15821
       - bare-metal
       - pipeline-functional
     steps:
