@@ -40,6 +40,8 @@ add_executable(unit_tests_ttnn_tensor ${TTNN_TENSOR_UNIT_TESTS_SRC})
 add_executable(test_multi_device ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_device.cpp)
 add_executable(galaxy_unit_tests_ttnn ${CMAKE_CURRENT_SOURCE_DIR}/test_ccl_on_galaxy.cpp)
 
+target_compile_definitions(unit_tests_ttnn_ccl PRIVATE KERNEL_COMPILE_TIME_ARGS="2,7,23,33,12,76")
+
 # Set up properties for all targets
 setup_ttnn_test_target(unit_tests_ttnn)
 setup_ttnn_test_target(unit_tests_ttnn_ccl)
