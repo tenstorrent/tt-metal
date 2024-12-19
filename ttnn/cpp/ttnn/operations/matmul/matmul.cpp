@@ -43,7 +43,8 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t& queue_id) {
+    const uint8_t& queue_id,
+    std::optional<ttnn::Tensor>& optional_output_tensor) {
     const auto& input_tensor_a_adjusted = parameters.transpose_a
                                               ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
                                               : input_tensor_a;
@@ -76,8 +77,13 @@ ttnn::Tensor bound_matmul(
         }
     }
 
-    auto output_tensor =
-        matmul(input_tensor_a_adjusted, input_tensor_b_adjusted, post_process_bias ? std::nullopt : bias, parameters);
+    auto output_tensor = matmul(
+        input_tensor_a_adjusted,
+        input_tensor_b_adjusted,
+        post_process_bias ? std::nullopt : bias,
+        parameters,
+        0,
+        optional_output_tensor = optional_output_tensor);
 
     if (post_process_bias) {
         output_tensor = ttnn::add(output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
@@ -110,7 +116,8 @@ Tensor MatmulOperation::invoke(
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
-    const std::optional<const tt::tt_metal::Tile>& output_tile) {
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    std::optional<Tensor> optional_output_tensor) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -133,7 +140,8 @@ Tensor MatmulOperation::invoke(
             transpose_a,
             transpose_b,
             output_tile},
-        /*queue_id=*/0);
+        /*queue_id=*/0,
+        optional_output_tensor);
 }
 
 Tensor LinearOperation::invoke(
@@ -148,7 +156,8 @@ Tensor LinearOperation::invoke(
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
-    const std::optional<const tt::tt_metal::Tile>& output_tile) {
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    std::optional<ttnn::Tensor> optional_output_tensor) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -173,7 +182,8 @@ Tensor LinearOperation::invoke(
             transpose_a,
             transpose_b,
             output_tile},
-        /*queue_id=*/0);
+        /*queue_id=*/0,
+        optional_output_tensor);
 }
 
 }  // namespace matmul
