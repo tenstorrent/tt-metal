@@ -89,10 +89,9 @@ MorehNllLossUnreducedBackwardDeviceOperation::compute_output_specs(
     if (tensor_args.input_grad_tensor.has_value()) {
         return {tensor_args.input_grad_tensor->get_tensor_spec()};
     }
-    return TensorSpec(
-        tensor_args.target_tensor.get_logical_shape(),
-        TensorLayout(
-            tensor_args.target_tensor.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+    // To calculate the output shape, we need the channel_size. However, the required tensors, target and output_grad,
+    // do not contain the channel_size information.
+    TT_FATAL(false, "moreh_nll_loss_unreduced_backward not support creating output tensors.");
 }
 
 MorehNllLossUnreducedBackwardDeviceOperation::tensor_return_value_t

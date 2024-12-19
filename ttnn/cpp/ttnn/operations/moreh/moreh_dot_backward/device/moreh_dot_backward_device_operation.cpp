@@ -71,13 +71,22 @@ void MorehDotBackwardOperation::validate_on_program_cache_hit(
 
 MorehDotBackwardOperation::spec_return_value_t MorehDotBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return {};
+    std::vector<std::optional<TensorSpec>> output_specs;
+    output_specs.reserve(tensor_args.output_tensors.size());
+    for (const auto& output_tensor : tensor_args.output_tensors) {
+        if (output_tensor.has_value()) {
+            output_specs.push_back(output_tensor->get_tensor_spec());
+        } else {
+            output_specs.push_back(std::nullopt);
+        }
+    }
+    return output_specs;
 }
 
 MorehDotBackwardOperation::tensor_return_value_t MorehDotBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(tensor_args.output_tensors.size() > 0, "Invalid number of output tensors.");
-    return {};
+    return tensor_args.output_tensors;
 }
 
 std::tuple<MorehDotBackwardOperation::operation_attributes_t, MorehDotBackwardOperation::tensor_args_t>
