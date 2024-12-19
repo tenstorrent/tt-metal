@@ -797,7 +797,7 @@ Below is a summary and example code of the most important concepts for mapping a
 
 *Figure: Example usage of mesh_device, ShardTensorToMesh and ReplicateTensorToMesh*
 
-```py
+```python
 import ttnn
 
 # 2x4 mesh_device, Topology Ring: devices are connected in a ring
@@ -834,6 +834,7 @@ See the [CCL Developer Guide](../EthernetMultichip/CclDeveloperGuide.md) for mor
 
 #### AllGather
 The AllGather operation collects data from all devices, concatenating each chunk along a specified dimension. The result is stored on each device (replication).
+
 - Supported Topologies: Ring, Linear
 - Supported number of links
   - N300, T3000: 1
@@ -863,6 +864,7 @@ output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=2, cluster
 
 #### ReduceScatter
 The ReduceScatter operation reduces the data across all devices and shards the result of the reduction over a specified dimension across all devices.
+
 - Supported Topologies: Ring, Linear
 - Supported number of links: 1
 - Arguments
