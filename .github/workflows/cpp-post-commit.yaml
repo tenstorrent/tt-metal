@@ -68,6 +68,7 @@ jobs:
 
           {name: ttnn cpp tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
           {name: ttnn ccl cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl},
+          {name: ttnn ccl cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_tensor},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
