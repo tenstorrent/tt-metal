@@ -873,7 +873,7 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
         # Calcuate execution time in micro seconds(us)
         time_us = cycle / dev_freq_mhz
         # Calculate throughput in GB/s
-        throughput_gbs = input_size / time_us / 1000
+        throughput_gbs = (input_size / 1024 / 1024 / 1024) / (time_us / 1000 / 1000)
         logger.info("DRAM read cycle: " + str(cycle))
         logger.info("DRAM read time[us]: " + str(time_us))
         logger.info("DRAM read throughput[GB/s]: " + str(throughput_gbs))
@@ -944,7 +944,7 @@ def test_dram_read_l1_write_core(
         # Calcuate execution time in micro seconds(us)
         time_us = cycle / dev_freq_mhz
         # Calculate throughput in GB/s
-        throughput_gbs = input_size / time_us / 1000
+        throughput_gbs = (input_size / 1024 / 1024 / 1024) / (time_us / 1000 / 1000)
         cycle_list.append(cycle)
         time_list.append(time_us)
         throughput_list.append(throughput_gbs)
@@ -1081,7 +1081,7 @@ def test_dram_read_remote_cb_sync(
         # Calcuate execution time in micro seconds(us)
         time_us = cycle / get_device_freq()
         # Calculate throughput in GB/s
-        throughput_gbs = input_size / time_us / 1000
+        throughput_gbs = (input_size / 1024 / 1024 / 1024) / (time_us / 1000 / 1000)
         cycle_list.append(cycle)
         time_list.append(time_us)
         throughput_list.append(throughput_gbs)
