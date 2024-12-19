@@ -64,7 +64,7 @@ tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep
     return ttnn::mean(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
 
-tt::tt_metal ::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
     auto res = ttnn::moreh_sum(
         t,
         dim,
