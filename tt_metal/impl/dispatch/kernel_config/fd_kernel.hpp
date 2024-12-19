@@ -7,9 +7,9 @@
 #include "impl/program/program.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
-#define UNUSED_LOGICAL_CORE tt_cxy_pair(this->device->id(), 0, 0)
+#define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
 // TODO: Just to make match with previous implementation, remove later
-#define UNUSED_LOGICAL_CORE_ADJUSTED tt_cxy_pair(servicing_device_id, 0, 0)
+#define UNUSED_LOGICAL_CORE_ADJUSTED tt_cxy_pair(servicing_device_id_, 0, 0)
 #define UNUSED_SEM_ID 0
 
 typedef struct {
@@ -45,11 +45,11 @@ class FDKernel {
 public:
     FDKernel(
         int node_id, chip_id_t device_id, chip_id_t servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
-        node_id(node_id),
-        device_id(device_id),
-        servicing_device_id(servicing_device_id),
-        cq_id(cq_id),
-        noc_selection(noc_selection) {};
+        node_id_(node_id),
+        device_id_(device_id),
+        servicing_device_id_(servicing_device_id),
+        cq_id_(cq_id),
+        noc_selection_(noc_selection) {};
     virtual ~FDKernel() = default;
 
     // Populate the static configs for this kernel (ones that do not depend on configs from other kernels), including
@@ -77,22 +77,22 @@ public:
         DispatchWorkerType type);
 
     // Register another kernel as upstream/downstream of this one
-    void AddUpstreamKernel(FDKernel* upstream) { this->upstream_kernels.push_back(upstream); }
-    void AddDownstreamKernel(FDKernel* downstream) { this->downstream_kernels.push_back(downstream); }
+    void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
+    void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
 
-    virtual CoreType GetCoreType() { return dispatch_core_manager::instance().get_dispatch_core_type(device->id()); }
-    tt_cxy_pair GetLogicalCore() { return logical_core; }
+    virtual CoreType GetCoreType() { return dispatch_core_manager::instance().get_dispatch_core_type(device_->id()); }
+    tt_cxy_pair GetLogicalCore() { return logical_core_; }
     tt_cxy_pair GetVirtualCore() {
-        return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core, GetCoreType());
+        return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());
     }
-    chip_id_t GetDeviceId() { return this->device_id; }  // Since this->device may not exist yet
+    chip_id_t GetDeviceId() { return device_id_; }  // Since this->device may not exist yet
 
     // Get the port index for which a given kernel is upstream/downstream of this one
-    int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels); }
-    int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels); }
+    int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
+    int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels_); }
     void AddDeviceAndProgram(Device* device, Program* program) {
-        this->device = device;
-        this->program = program;
+        device_ = device;
+        program_ = program;
     };
 
 protected:
@@ -118,15 +118,15 @@ protected:
     static chip_id_t GetDownstreamDeviceId(chip_id_t device_id);
     static uint32_t GetTunnelStop(chip_id_t device_id);
 
-    Device* device = nullptr;  // Set at configuration time by AddDeviceAndProgram()
-    Program* program = nullptr;
-    tt_cxy_pair logical_core;
-    chip_id_t device_id;
-    chip_id_t servicing_device_id;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
-    int node_id;
-    uint8_t cq_id;
-    noc_selection_t noc_selection;
+    Device* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
+    Program* program_ = nullptr;
+    tt_cxy_pair logical_core_;
+    chip_id_t device_id_;
+    chip_id_t servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
+    int node_id_;
+    uint8_t cq_id_;
+    noc_selection_t noc_selection_;
 
-    std::vector<FDKernel*> upstream_kernels;
-    std::vector<FDKernel*> downstream_kernels;
+    std::vector<FDKernel*> upstream_kernels_;
+    std::vector<FDKernel*> downstream_kernels_;
 };

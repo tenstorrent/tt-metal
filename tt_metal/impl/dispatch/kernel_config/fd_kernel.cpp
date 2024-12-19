@@ -117,30 +117,30 @@ void FDKernel::configure_kernel_variant(
     if (tt::llrt::RunTimeOptions::get_instance().watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (!tt::DPrintServerReadsDispatchCores(this->device)) {
+    if (!tt::DPrintServerReadsDispatchCores(device_)) {
         defines["FORCE_DPRINT_OFF"] = "1";
     }
     defines.insert(defines_in.begin(), defines_in.end());
 
     if (GetCoreType() == CoreType::WORKER) {
         tt::tt_metal::CreateKernel(
-            *program,
+            *program_,
             path,
-            this->logical_core,
+            logical_core_,
             tt::tt_metal::DataMovementConfig{
                 .processor = send_to_brisc ? tt::tt_metal::DataMovementProcessor::RISCV_0
                                            : tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = this->noc_selection.non_dispatch_noc,
+                .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
                 .defines = defines});
     } else {
         tt::tt_metal::CreateKernel(
-            *program,
+            *program_,
             path,
-            this->logical_core,
+            logical_core_,
             tt::tt_metal::EthernetConfig{
                 .eth_mode = is_active_eth_core ? Eth::SENDER : Eth::IDLE,
-                .noc = this->noc_selection.non_dispatch_noc,
+                .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
                 .defines = defines});
     }

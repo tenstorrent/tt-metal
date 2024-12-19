@@ -420,9 +420,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
         if (num_hw_cqs == 1) {
             return single_chip_arch_1cq;
         } else {
-            // Special case here, single-device can either have dispatch_s or no dispatch_s, depending on the dispatch
-            // core type. This is only an issue for single-chip, since multi-chip always has ethernet dispatch (and
-            // therefore no dispatch_s). TODO: determine whether dispatch_s is inserted at this level, instead of inside
+            // TODO: determine whether dispatch_s is inserted at this level, instead of inside
             // Device::dispatch_s_enabled().
             if (dispatch_core_manager::instance().get_dispatch_core_type(0) == CoreType::WORKER) {
                 return single_chip_arch_2cq_dispatch_s;
