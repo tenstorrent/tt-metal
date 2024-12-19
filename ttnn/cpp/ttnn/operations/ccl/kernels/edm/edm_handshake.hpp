@@ -65,9 +65,10 @@ FORCE_INLINE void initialize_edm_common_datastructures(std::uint32_t handshake_r
  * As the designated master EDM core, initiate a handshake by sending a packet to reserved
  * memory region.
  */
-FORCE_INLINE void sender_side_start(std::uint32_t handshake_register_address) {
+FORCE_INLINE void sender_side_start(
+    std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     initialize_edm_common_datastructures(handshake_register_address);
-    eth_wait_receiver_done(A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
+    eth_wait_receiver_done(HS_CONTEXT_SWITCH_TIMEOUT);
     while (eth_txq_reg_read(0, ETH_TXQ_CMD) != 0) {
         asm volatile("nop");
     }
@@ -77,8 +78,9 @@ FORCE_INLINE void sender_side_start(std::uint32_t handshake_register_address) {
 /*
  * As the designated master EDM core, wait for the acknowledgement from the slave EDM core
  */
-FORCE_INLINE void sender_side_finish(std::uint32_t handshake_register_address) {
-    eth_wait_for_receiver_done(A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
+FORCE_INLINE void sender_side_finish(
+    std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    eth_wait_for_receiver_done(HS_CONTEXT_SWITCH_TIMEOUT);
 }
 
 FORCE_INLINE void receiver_side_start(std::uint32_t handshake_register_address) {
@@ -96,8 +98,9 @@ FORCE_INLINE bool receiver_side_can_finish() { return eth_bytes_are_available_on
  * The slave EDM core shall only acknowledge after receiving the initial handshake packet
  * from the master EDM core.
  */
-FORCE_INLINE void receiver_side_finish(std::uint32_t handshake_register_address) {
-    eth_wait_for_bytes(16, A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
+FORCE_INLINE void receiver_side_finish(
+    std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    eth_wait_for_bytes(16, HS_CONTEXT_SWITCH_TIMEOUT);
     while (eth_txq_reg_read(0, ETH_TXQ_CMD) != 0) {
         asm volatile("nop");
     }
