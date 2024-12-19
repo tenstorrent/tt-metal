@@ -11,6 +11,7 @@ namespace ttnn::operations::bernoulli {
 
 struct BernoulliDeviceOperation {
     struct operation_attributes_t {
+        uint32_t seed;
         const DataType dtype;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
@@ -57,10 +58,13 @@ struct BernoulliDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
+        const uint32_t seed,
         const std::optional<Tensor>& output,
         const std::optional<DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+
+        static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::bernoulli
