@@ -1,5 +1,5 @@
 # TT-METAL UBUNTU 22.04 AMD64 DOCKERFILE
-FROM ubuntu:22.04
+FROM public.ecr.aws/ubuntu/ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG UBUNTU_VERSION=22.04
