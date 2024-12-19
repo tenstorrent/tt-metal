@@ -7,9 +7,11 @@
 #include "debug/dprint.h"
 #include "tt_fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "tt_fabric/hw/inc/tt_fabric_interface.h"
 // clang-format on
 
-constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
+uint32_t src_endpoint_id;
+// constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
 static_assert(is_power_of_2(num_dest_endpoints), "num_dest_endpoints must be a power of 2");
 constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(2);
@@ -18,8 +20,8 @@ constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(3);
 constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(4);
 
 constexpr uint32_t routing_table_start_addr = get_compile_time_arg_val(5);
-constexpr uint32_t router_x = get_compile_time_arg_val(6);
-constexpr uint32_t router_y = get_compile_time_arg_val(7);
+// constexpr uint32_t router_x = get_compile_time_arg_val(6);
+// constexpr uint32_t router_y = get_compile_time_arg_val(7);
 
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(8);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(9);
@@ -50,13 +52,10 @@ uint32_t target_address = base_target_address;
 
 // atomic increment for the ATOMIC_INC command
 constexpr uint32_t atomic_increment = get_compile_time_arg_val(20);
-constexpr uint32_t dest_device = get_compile_time_arg_val(21);
+// constexpr uint32_t dest_device = get_compile_time_arg_val(21);
+uint32_t dest_device;
 
-constexpr uint32_t base_target_address = get_compile_time_arg_val(19);
-uint32_t target_address = base_target_address;
-
-// atomic increment for the ATOMIC_INC command
-constexpr uint32_t atomic_increment = get_compile_time_arg_val(20);
+constexpr uint32_t signal_address = get_compile_time_arg_val(21);
 
 uint32_t max_packet_size_mask;
 
@@ -70,6 +69,8 @@ fvc_producer_state_t test_producer __attribute__((aligned(16)));
 uint64_t xy_local_addr;
 
 packet_header_t packet_header __attribute__((aligned(16)));
+
+uint32_t noc_offset;
 
 // generates packets with random size and payload on the input side
 inline bool test_buffer_handler_async_wr() {
@@ -106,7 +107,7 @@ inline bool test_buffer_handler_async_wr() {
             packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
             packet_header.session.command = ASYNC_WR;
             packet_header.session.target_offset_l = target_address;
-            packet_header.session.target_offset_h = 0x410;
+            packet_header.session.target_offset_h = noc_offset;
             target_address += packet_header.routing.packet_size_bytes - PACKET_HEADER_SIZE_BYTES;
             packet_header.packet_parameters.misc_parameters.words[1] = input_queue_state.packet_rnd_seed;
             tt_fabric_add_header_checksum(&packet_header);
@@ -192,7 +193,7 @@ inline bool test_buffer_handler_atomic_inc() {
             packet_header.routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
             packet_header.session.command = ATOMIC_INC;
             packet_header.session.target_offset_l = target_address;
-            packet_header.session.target_offset_h = 0x410;
+            packet_header.session.target_offset_h = noc_offset;
             packet_header.packet_parameters.atomic_parameters.wrap_boundary = 31;
             packet_header.packet_parameters.atomic_parameters.increment = atomic_increment;
             tt_fabric_add_header_checksum(&packet_header);
@@ -241,6 +242,17 @@ bool test_buffer_handler() {
 void kernel_main() {
     tt_fabric_init();
 
+    // TODO: refactor
+    src_endpoint_id = get_arg_val<uint32_t>(0);
+    noc_offset = get_arg_val<uint32_t>(1);
+    uint32_t router_x = get_arg_val<uint32_t>(2);
+    uint32_t router_y = get_arg_val<uint32_t>(3);
+    dest_device = get_arg_val<uint32_t>(4);
+
+    if (ASYNC_WR == test_command) {
+        target_address = get_arg_val<uint32_t>(5);
+    }
+
     uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
     noc_async_read_one_packet(
         router_config_addr, routing_table_start_addr, sizeof(tt::tt_fabric::fabric_router_l1_config_t));
@@ -282,7 +294,7 @@ void kernel_main() {
 
     // wait till test sends start signal. This is set by test
     // once tt_fabric kernels have been launched on all the test devices.
-    while (*(volatile uint32_t*)data_buffer_start_addr == 0);
+    while (*(tt_l1_ptr volatile uint32_t*)signal_address == 0);
 
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
 
@@ -311,10 +323,12 @@ void kernel_main() {
             }
         }
 #endif
+
         bool all_packets_initialized = test_buffer_handler();
 
         if (test_producer.get_curr_packet_valid()) {
-            curr_packet_size = (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+            curr_packet_size =
+                (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();
             curr_packet_words_sent += curr_data_words_sent;
             data_words_sent += curr_data_words_sent;
