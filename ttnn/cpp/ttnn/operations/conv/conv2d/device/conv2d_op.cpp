@@ -75,10 +75,10 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool use_non_tile_height
 ) {
     tt::tt_metal::Device* device = a.device();
-    auto stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1);
+    auto pre_op_total_allocated_bytes = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
-        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height, stats]
+        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height, pre_op_total_allocated_bytes]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 using ttnn::operations::experimental::auto_format::FormatParams;
                 auto& a = input_tensors.at(0);
@@ -114,7 +114,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                                   enable_split_reader,
                                   enable_subblock_padding,
                                   use_non_tile_height);
-                optimized_conv_op.pre_op_l1_allocation_size_bytes = stats.total_allocated_bytes;
+                optimized_conv_op.pre_op_l1_allocation_size_bytes = pre_op_total_allocated_bytes;
                 return operation::run_without_autoformat(
                     optimized_conv_op,
                     input_tensors,
@@ -260,21 +260,21 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
                 input_tensor_shape, weights_shape, sliding_window_config.get_output_shape(),
                 output_channels, groups, std::array<uint32_t,2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
                 Conv2dConfig{
-                    .enable_act_double_buffer=enable_act_double_buffer,
-                    .enable_weights_double_buffer=enable_weights_double_buffer,
-                    .enable_split_reader=enable_split_reader,
-                    .enable_subblock_padding=enable_subblock_padding
+                    .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
+                    .enable_act_double_buffer = enable_act_double_buffer,
+                    .enable_weights_double_buffer = enable_weights_double_buffer,
+                    .enable_split_reader = enable_split_reader,
+                    .enable_subblock_padding = enable_subblock_padding
                 },
                 has_bias, use_non_tile_height);
     if(calc_CB_size > 0) {
         if(calc_CB_size != actual_cb_size) {
-            tt::log_error("Calculated CB size {} does not match with the actual CB size {}",calc_CB_size,actual_cb_size);
-            TT_ASSERT(actual_cb_size==calc_CB_size);
+            TT_FATAL(actual_cb_size==calc_CB_size,"Calculated CB size {} does not match with the actual CB size {}",calc_CB_size,actual_cb_size);
         }
     }
     if(calc_output_size > 0) {
         if(post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
-            tt::log_error(tt::LogOp, "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}", this->pre_op_l1_allocation_size_bytes, post_op_l1_stats,calc_output_size);
+            TT_FATAL(post_op_l1_stats == (this->pre_op_l1_allocation_size_bytes + calc_output_size),  "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}", this->pre_op_l1_allocation_size_bytes, post_op_l1_stats,calc_output_size);
         }
     }
     return program_with_cbs;

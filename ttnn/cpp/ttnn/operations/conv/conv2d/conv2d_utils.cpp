@@ -1123,7 +1123,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
 
         //CB 24
         uint32_t cb24_size = partials_block_num_bytes;
-        if(interm_dtype == output_dtype) {
+        if(untilize_out==false && interm_dtype == output_dtype ) {
             cb24_size = 0;
         } else {
             tt::log_debug(tt::LogOp, "CB24 Size: {}", cb24_size);
@@ -1217,25 +1217,18 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         if(is_depthwise_conv) {
             cb24_size = output_tile_size;
         }
-        if(cb24_size == 0) {
+        if(cb24_size != 0) {
             tt::log_debug(tt::LogOp, "CB24 Size: {}", cb24_size);
         }
         //CB 25
         uint32_t cb25_size = tilzed_act_cb_size; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
-
-
-        uint32_t cb26_size = 0;
-        //CB26
-        if(untilize_out) {
-            cb26_size = weight_block_w_ntiles * output_tile_size; tt::log_debug(tt::LogOp, "CB26 Size: {}", cb26_size);
-        }
 
         uint32_t cb27_size = 0;
         if(is_depthwise_conv) {
             cb27_size = output_tile_size;
         }
 
-        return {output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb7_size + cb24_size + cb25_size + cb26_size + cb27_size};
+        return {output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb7_size + cb24_size + cb25_size + cb27_size};
     } else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
 
@@ -1301,14 +1294,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         //CB 25
         uint32_t cb25_size = tilized_act_block_cb_size; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
 
-
-        uint32_t cb26_size = 0;
-        //CB26
-        if(untilize_out) {
-            cb26_size = weight_block_w_ntiles * output_tile_size; tt::log_debug(tt::LogOp, "CB26 Size: {}", cb26_size);
-        }
-
-        return{ output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb6_size + cb24_size + cb25_size + cb26_size};
+        return{ output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb6_size + cb24_size + cb25_size};
     }
     return {0, 0};
 
