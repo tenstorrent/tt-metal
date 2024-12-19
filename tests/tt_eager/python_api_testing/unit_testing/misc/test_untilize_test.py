@@ -74,7 +74,7 @@ def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
-    ids=["bfloat16", "float32"],
+    ids=["bfloat16", "float"],
 )
 @pytest.mark.parametrize(
     "nb, nc, nh, nw",
@@ -100,7 +100,6 @@ def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
 def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-    device.enable_async(True)
     shape = [nb, nc, 32 * nh, 32 * nw]
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
@@ -122,11 +121,7 @@ def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
 
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
-    b1 = ttnn.untilize(
-        a,
-        memory_config=out_mem_config,
-        use_multicore=True,
-    )
+    b1 = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True)
     c1 = b1.cpu().to_torch()
 
     untilized_inp = untilize(inp)
