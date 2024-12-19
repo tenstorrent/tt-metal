@@ -472,7 +472,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t subblock_wt,
     uint32_t block_ht,
     uint32_t block_wt,
-    std::optional<CoreCoord> grid_offset,
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
@@ -557,6 +556,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = shard_spec.grid.bounding_box();
     CoreCoord grid_size = {bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1};
+    std::optional<CoreCoord> grid_offset = std::nullopt;
+    if (bbox.start_coord.x != 0 || bbox.start_coord.y != 0) {
+        grid_offset = bbox.start_coord;
+    }
     if (mcast_1d) {
         num_blocks = shard_spec.num_cores();
     } else if (row_wise) {

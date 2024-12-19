@@ -39,7 +39,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t subblock_wt,
     uint32_t block_ht,
     uint32_t block_wt,
-    std::optional<CoreCoord> grid_offset,
     DeviceComputeKernelConfig compute_kernel_config);
 
 struct LayerNorm {
