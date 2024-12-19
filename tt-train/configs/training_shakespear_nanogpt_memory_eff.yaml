@@ -11,11 +11,11 @@ training_config:
   transformer_config:
     num_heads: 6
     embedding_dim: 384
-    dropout_prob: 0.2
+    dropout_prob: 0.0
     num_blocks: 6
     vocab_size: 96
     max_sequence_length: 256
+    runner_type: memory_efficient
     positional_embedding_type: trainable
-    runner_type: default
     experimental:
       use_composite_layernorm: false
