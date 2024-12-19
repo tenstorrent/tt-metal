@@ -60,7 +60,7 @@ tt::tt_metal::Tensor mean_moreh(const tt::tt_metal::Tensor& t, int dim, bool kee
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
     return res;
 }
-tt::tt_metal ::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
     return ttnn::mean(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
 
