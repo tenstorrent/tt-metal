@@ -71,8 +71,10 @@ protected:
     }
 
     void TearDown() override {
-        mesh_device_->close_devices();
-        mesh_device_.reset();
+        if (!::testing::Test::IsSkipped()) {
+            mesh_device_->close_devices();
+            mesh_device_.reset();
+        }
     }
     std::shared_ptr<MeshDevice> mesh_device_;
 };
