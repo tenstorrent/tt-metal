@@ -109,14 +109,21 @@ on:
           - eltwise.unary.sigmoid.sigmoid_pytorch2
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
           - eltwise.unary.tril.tril
+          - eltwise.unary.tril.tril_sharded
           - eltwise.unary.triu.triu
+          - eltwise.unary.triu.triu_sharded
           - eltwise.unary.normalize_hw.normalize_hw
           - eltwise.unary.normalize_global.normalize_global
           - eltwise.unary.heaviside.heaviside
+          - eltwise.unary.heaviside.heaviside_sharded
           - eltwise.unary.hardtanh.hardtanh
+          - eltwise.unary.hardtanh.hardtanh_sharded
           - eltwise.unary.hardswish.hardswish
+          - eltwise.unary.hardswish.hardswish_sharded
           - eltwise.unary.hardsigmoid.hardsigmoid
+          - eltwise.unary.hardsigmoid.hardsigmoid_sharded
           - eltwise.unary.hardshrink.hardshrink
+          - eltwise.unary.hardshrink.hardshrink_sharded
           - eltwise.unary.softmax.softmax
           - eltwise.unary.identity.identity
           - eltwise.unary.neg.neg
