@@ -100,7 +100,12 @@ void py_module(py::module& module) {
             "get_device",
             py::overload_cast<size_t, size_t>(&MeshDevice::get_device, py::const_),
             py::return_value_policy::reference)
-        .def("get_devices", &MeshDevice::get_devices, py::return_value_policy::reference, R"doc(
+        .def(
+            "get_devices",
+            &MeshDevice::get_devices,
+            py::return_value_policy::reference,
+            py::arg("type") = py::none(),
+            R"doc(
             Get the devices in the device mesh.
 
             Returns:
@@ -197,23 +202,24 @@ void py_module(py::module& module) {
                     MeshSubDeviceManagerId: The ID of the created sub-device manager.
             )doc")
         .def(
-            "create_sub_device_manager",
-            [](MeshDevice& self,
-               const std::vector<std::vector<SubDevice>>& mesh_sub_devices,
-               DeviceAddr local_l1_size) { return self.create_sub_device_manager(mesh_sub_devices, local_l1_size); },
+            "create_sub_device_manager_with_fabric",
+            [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
+                return self.create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
+            },
             py::arg("sub_devices"),
             py::arg("local_l1_size"),
             R"doc(
-                Creates a sub-device manager for the given mesh device.
+                Creates a sub-device manager for the given mesh device. This will automatically create a sub-device of ethernet cores for use with fabric.
+                Note that this is a temporary API until migration to actual fabric is complete.
 
                 Args:
-                    mesh_sub_devices (List[List[ttnn.SubDevice]]): The sub-devices to include in the sub-device manager.
-                    Each element of the outer list will be used to configure the corresponding device in the MeshDevice.
-                    This means that the individual devices in the MeshDevice may have different configurations.
+                    sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager. No ethernet cores should be included in this list.
+                    This configuration will be used for each device in the MeshDevice.
                     local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
 
                 Returns:
                     MeshSubDeviceManagerId: The ID of the created sub-device manager.
+                    SubDeviceId: The ID of the sub-device that will be used for fabric.
             )doc")
         .def(
             "load_sub_device_manager",

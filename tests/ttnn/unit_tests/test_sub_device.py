@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 
-def run_sub_devices(device, replicate_sub_devices=False):
+def run_sub_devices(device, create_fabric_sub_device=False):
     tensix_cores0 = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
@@ -28,12 +28,14 @@ def run_sub_devices(device, replicate_sub_devices=False):
     sub_device_2 = ttnn.SubDevice([tensix_cores1])
     sub_devices_1 = [sub_device_1, sub_device_2]
     sub_devices_2 = [sub_device_2]
-    if replicate_sub_devices:
-        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
-        sub_devices_1 = [sub_devices_1] * num_devices
-        sub_devices_2 = [sub_devices_2] * num_devices
-    sub_device_manager1 = device.create_sub_device_manager(sub_devices_1, 3200)
-    sub_device_manager2 = device.create_sub_device_manager(sub_devices_2, 3200)
+    if create_fabric_sub_device:
+        sub_device_manager1, fabric_sub_device_id1 = device.create_sub_device_manager_with_fabric(sub_devices_1, 3200)
+        sub_device_manager2, fabric_sub_device_id2 = device.create_sub_device_manager_with_fabric(sub_devices_2, 3200)
+        assert fabric_sub_device_id1 == ttnn.SubDeviceId(len(sub_devices_1))
+        assert fabric_sub_device_id2 == ttnn.SubDeviceId(len(sub_devices_2))
+    else:
+        sub_device_manager1 = device.create_sub_device_manager(sub_devices_1, 3200)
+        sub_device_manager2 = device.create_sub_device_manager(sub_devices_2, 3200)
     device.load_sub_device_manager(sub_device_manager1)
     ttnn.synchronize_devices(device, sub_device_ids=[ttnn.SubDeviceId(1)])
     ttnn.synchronize_devices(device, sub_device_ids=[ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
@@ -45,7 +47,7 @@ def run_sub_devices(device, replicate_sub_devices=False):
     device.remove_sub_device_manager(sub_device_manager2)
 
 
-def run_sub_devices_program(device, replicate_sub_devices=False):
+def run_sub_devices_program(device, create_fabric_sub_device=False):
     is_mesh_device = isinstance(device, ttnn.MeshDevice)
     if is_mesh_device:
         inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
@@ -74,10 +76,11 @@ def run_sub_devices_program(device, replicate_sub_devices=False):
     sub_device_1 = ttnn.SubDevice([tensix_cores0])
     sub_device_2 = ttnn.SubDevice([tensix_cores1])
     sub_devices = [sub_device_1, sub_device_2]
-    if replicate_sub_devices:
-        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
-        sub_devices = [sub_devices] * num_devices
-    sub_device_manager = device.create_sub_device_manager(sub_devices, 3200)
+    if create_fabric_sub_device:
+        sub_device_manager, fabric_sub_device_id = device.create_sub_device_manager_with_fabric(sub_devices, 3200)
+        assert fabric_sub_device_id == ttnn.SubDeviceId(len(sub_devices))
+    else:
+        sub_device_manager = device.create_sub_device_manager(sub_devices, 3200)
     device.load_sub_device_manager(sub_device_manager)
 
     x = torch.randn(num_devices, 1, 64, 64, dtype=torch.bfloat16)
@@ -135,22 +138,24 @@ def run_sub_devices_program(device, replicate_sub_devices=False):
 
 
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
-def test_sub_devices(device, enable_async_mode):
-    run_sub_devices(device)
+@pytest.mark.parametrize("create_fabric_sub_device", (False, True))
+def test_sub_devices(device, create_fabric_sub_device, enable_async_mode):
+    run_sub_devices(device, create_fabric_sub_device)
 
 
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
-@pytest.mark.parametrize("replicate_sub_devices", (False, True))
-def test_sub_devices_mesh(mesh_device, replicate_sub_devices, enable_async_mode):
-    run_sub_devices(mesh_device, replicate_sub_devices)
+@pytest.mark.parametrize("create_fabric_sub_device", (False, True))
+def test_sub_devices_mesh(mesh_device, create_fabric_sub_device, enable_async_mode):
+    run_sub_devices(mesh_device, create_fabric_sub_device)
 
 
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
-def test_sub_device_program(device, enable_async_mode):
-    run_sub_devices_program(device)
+@pytest.mark.parametrize("create_fabric_sub_device", (False, True))
+def test_sub_device_program(device, create_fabric_sub_device, enable_async_mode):
+    run_sub_devices_program(device, create_fabric_sub_device)
 
 
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
-@pytest.mark.parametrize("replicate_sub_devices", (False, True))
-def test_sub_device_program_mesh(mesh_device, replicate_sub_devices, enable_async_mode):
-    run_sub_devices_program(mesh_device, replicate_sub_devices)
+@pytest.mark.parametrize("create_fabric_sub_device", (False, True))
+def test_sub_device_program_mesh(mesh_device, create_fabric_sub_device, enable_async_mode):
+    run_sub_devices_program(mesh_device, create_fabric_sub_device)

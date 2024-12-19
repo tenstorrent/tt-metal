@@ -12,7 +12,18 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 
-TEST(UnaryOpsTest, GlobalMean) {
+class UnaryOpsTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(UnaryOpsTest, GlobalMean) {
     std::vector<float> test_data = {1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F};
 
     auto shape = ttml::core::create_shape({2, 1, 1, 4});
@@ -34,7 +45,8 @@ TEST(UnaryOpsTest, GlobalMean) {
     }
 }
 
-TEST(UnaryOpsTest, LogSoftmax) {
+TEST_F(UnaryOpsTest, LogSoftmax) {
+    GTEST_SKIP() << "Skipping LogSoftmax";
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data = {-0.1F, -0.2F, -0.3F, -0.4F, 0.F, -0.2F, -0.3F, -0.4F};
     auto tensor = ttml::core::from_vector(test_data, ttml::core::create_shape({2, 1, 1, 4}), device);

@@ -206,14 +206,13 @@ class LegacyShape {
         }
     }
     explicit LegacyShape(tt::stl::Span<const uint32_t> shape, tt::stl::Span<const uint32_t> shape_with_tile_padding) :
-        rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
-        TT_ASSERT(
-            shape.size() == shape_with_tile_padding.size(),
-            "Shape and shape_with_tile_padding must have the same size");
-        for (auto index = 0; index < shape.size(); index++) {
-            auto padded_dimension = shape_with_tile_padding[index];
+        rank_(shape_with_tile_padding.size()), dimensions_{}, padding_{shape_with_tile_padding.size()} {
+        for (int index = 0; index < shape_with_tile_padding.size(); index++) {
+            int shape_index = index + static_cast<int>(shape.size()) - static_cast<int>(shape_with_tile_padding.size());
+            int dimension = shape_index >= 0 ? shape[shape_index] : 1;
+            int padded_dimension = shape_with_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
-            this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
+            this->padding_[index] = {.front = 0, .back = static_cast<size_t>(padded_dimension - dimension)};
         }
     }
     explicit LegacyShape(const ttnn::SmallVector<uint32_t>& shape, const ttnn::SmallVector<uint32_t>& shape_with_tile_padding)
@@ -279,12 +278,6 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
 bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
 bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
-
-void dump_memory_config(std::ostream &output_stream, const MemoryConfig &memory_config);
-void dump_memory_config(const std::string &file_name, const MemoryConfig &memory_config);
-
-MemoryConfig load_memory_config(std::ifstream &input_stream);
-MemoryConfig load_memory_config(const std::string &file_name);
 
 using OwnedBuffer = std::variant<
     owned_buffer::Buffer<uint8_t>,

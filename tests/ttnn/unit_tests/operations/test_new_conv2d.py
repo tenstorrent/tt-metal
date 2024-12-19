@@ -2738,17 +2738,15 @@ def test_shallow_conv_with_tiled_input(device):
     pad = (1, 1)
 
     torch_kernel = torch.randn(kernel_shape, dtype=torch.bfloat16)
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-
     tt_kernel = ttnn.from_torch(torch_kernel)
-    tt_input = ttnn.to_device(ttnn.from_torch(torch_input), device)
 
-    tt_input = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, device=device)
     tt_input = ttnn.permute(tt_input, (0, 2, 3, 1))
-
     tt_input = ttnn.reshape(tt_input, (1, 1, batch_size * img_h * img_w, in_channels))
+    tt_input = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
 
-    [tt_out, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
+    [tt_out, [out_height, out_width], [_, _]] = ttnn.conv2d(
         input_tensor=tt_input,
         weight_tensor=tt_kernel,
         in_channels=in_channels,
@@ -2763,9 +2761,6 @@ def test_shallow_conv_with_tiled_input(device):
         input_height=img_h,
         input_width=img_w,
         groups=1,
-        compute_config=ttnn.init_device_compute_kernel_config(
-            device.arch(),
-        ),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         return_output_dim=True,
         return_weights_and_bias=True,
@@ -2777,6 +2772,75 @@ def test_shallow_conv_with_tiled_input(device):
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
+    torch_output_tensor = torch_output_tensor[:, :, :, :out_channels]
+
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_input, torch_kernel, bias=None, stride=stride, padding=pad, dilation=dilation, groups=1
+    )
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.99)
+    logger.info(f"PCC = {pcc_msg}. Threshold = 0.99")
+    assert passing
+
+
+# Tests running conv2d which maps to matmul w/o sharding the input tensor.
+# Output tensor is in DRAM.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("tiled_input", [True, False])
+@pytest.mark.parametrize("input_on_device", [True, False])
+def test_dram_input_mm_conv(device, tiled_input, input_on_device):
+    batch_size = 1
+    out_channels, in_channels = 256, 1024
+    img_h, img_w = 128, 128
+    input_shape = (batch_size, in_channels, img_h, img_w)
+
+    # Params which map conv2d to matmul op.
+    kernel_h, kernel_w = 1, 1
+    stride = (1, 1)
+    dilation = (1, 1)
+    pad = (0, 0)
+
+    kernel_shape = (out_channels, in_channels, kernel_h, kernel_w)
+    torch_kernel = torch.randn(kernel_shape, dtype=torch.bfloat16)
+    tt_kernel = ttnn.from_torch(torch_kernel)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    if input_on_device:
+        tt_input = ttnn.from_torch(torch_input, device=device)
+        tt_input = ttnn.permute(tt_input, (0, 2, 3, 1))
+        tt_input = ttnn.reshape(tt_input, (1, 1, batch_size * img_h * img_w, in_channels))
+    else:
+        torch_input_nhwc = torch.permute(torch_input, (0, 2, 3, 1))
+        tt_input = ttnn.from_torch(torch_input_nhwc)
+
+    if tiled_input:
+        tt_input = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
+
+    tt_out = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_kernel,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        device=device,
+        kernel_size=(kernel_h, kernel_w),
+        stride=stride,
+        padding=pad,
+        dilation=dilation,
+        batch_size=batch_size,
+        input_height=img_h,
+        input_width=img_w,
+    )
+
+    assert tt_out.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+
+    tt_output_tensor = ttnn.from_device(tt_out)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    # torch_output_tensor is in row major layout and NHWC shape
+    # NHWC to NCHW
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, img_h, img_w, torch_output_tensor.shape[-1])
     torch_output_tensor = torch_output_tensor[:, :, :, :out_channels]
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))

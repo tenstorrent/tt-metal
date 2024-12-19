@@ -15,12 +15,15 @@ target_link_libraries(common PRIVATE yaml-cpp::yaml-cpp)
 target_link_libraries(
     common
     PUBLIC
+        nlohmann_json::nlohmann_json
         magic_enum
         fmt::fmt-header-only
         span
         Metalium::Metal::STL
         Metalium::Metal::LLRT
         umd::Firmware
+    PRIVATE
+        Tracy::TracyClient
 )
 
 target_include_directories(

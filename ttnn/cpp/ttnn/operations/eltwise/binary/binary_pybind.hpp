@@ -1265,6 +1265,124 @@ void bind_binary_inplace_operation(
             py::arg("activations") = std::nullopt,
             py::arg("input_tensor_a_activation") = std::nullopt});
 }
+
+template <typename binary_operation_t>
+void bind_power(py::module& module, const binary_operation_t& operation, const std::string& note = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Perform element-wise {0} operation on :attr:`input_tensor` with :attr:`exponent`.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor}}_i ** \mathrm{{exponent}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor, float): the input tensor.
+            exponent (float, int, ttnn.Tensor): the exponent value.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
+            {2}
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> exponent = 2
+            >>> output = {1}(tensor, exponent)
+        )doc",
+        ttnn::pow.base_name(),
+        ttnn::pow.python_fully_qualified_name(),
+        note);
+
+    bind_registered_operation(
+        module,
+        ttnn::pow,
+        doc,
+        // integer exponent
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const Tensor& input_tensor,
+               uint32_t exponent,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor,
+               const uint8_t queue_id) -> ttnn::Tensor {
+                return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("exponent"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0},
+
+        // float exponent
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const Tensor& input_tensor,
+               float exponent,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor,
+               const uint8_t queue_id) -> ttnn::Tensor {
+                return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("exponent"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId},
+
+        // tensor exponent
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const Tensor& input_tensor,
+               const Tensor& exponent,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor,
+               const uint8_t queue_id) -> ttnn::Tensor {
+                return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("exponent"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId},
+
+        // scalar input - tensor exponent
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               float input,
+               const Tensor& exponent,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor,
+               const uint8_t queue_id) -> ttnn::Tensor {
+                return self(queue_id, input, exponent, memory_config, output_tensor);
+            },
+            py::arg("input"),
+            py::arg("exponent"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId});
+}
 }  // namespace detail
 
 void py_module(py::module& module) {
@@ -1276,7 +1394,7 @@ void py_module(py::module& module) {
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -1434,7 +1552,7 @@ void py_module(py::module& module) {
         module,
         ttnn::bitwise_and,
         R"doc(Perform bitwise_and operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_b}}_i \verb|bitwise_and| \mathrm{{input\_tensor\_a}}_i)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
         R"doc(INT32)doc");
 
@@ -1442,7 +1560,7 @@ void py_module(py::module& module) {
         module,
         ttnn::bitwise_or,
         R"doc(Perform bitwise_or operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_b}}_i \verb|bitwise_or| \mathrm{{input\_tensor\_a}}_i)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_or|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
         R"doc(INT32)doc");
 
@@ -1450,7 +1568,23 @@ void py_module(py::module& module) {
         module,
         ttnn::bitwise_xor,
         R"doc(Perform bitwise_xor operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_b}}_i \verb|bitwise_xor| \mathrm{{input\_tensor\_a}}_i)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_xor|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        ". ",
+        R"doc(INT32)doc");
+
+    detail::bind_bitwise_binary_ops_operation(
+        module,
+        ttnn::bitwise_left_shift,
+        R"doc(Perform bitwise_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        ". ",
+        R"doc(INT32)doc");
+
+    detail::bind_bitwise_binary_ops_operation(
+        module,
+        ttnn::bitwise_right_shift,
+        R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
         R"doc(INT32)doc");
 
@@ -1537,8 +1671,8 @@ void py_module(py::module& module) {
         )doc",
         R"doc(INT32)doc",
         R"doc(2, 3, 4)doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device))doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device))doc");
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc",
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc");
 
     detail::bind_binary_composite(
         module,
@@ -1549,8 +1683,8 @@ void py_module(py::module& module) {
         )doc",
         R"doc(INT32)doc",
         R"doc(2, 3, 4)doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device))doc",
-        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device))doc");
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc",
+        R"doc(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))doc");
 
     detail::bind_binary_composite_with_alpha(
         module,
@@ -1689,6 +1823,9 @@ void py_module(py::module& module) {
         R"doc(Performs Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}\: != \mathrm{{input\_tensor\_b}})doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
+
+    detail::bind_power(
+        module, ttnn::pow, R"doc(When :attr:`exponent` is a Tensor, supported dtypes are: BFLOAT16, FLOAT32)doc");
 }
 
 }  // namespace binary

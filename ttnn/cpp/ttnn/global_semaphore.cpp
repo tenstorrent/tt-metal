@@ -33,17 +33,21 @@ std::shared_ptr<GlobalSemaphore> create_global_semaphore(
     return global_semaphore;
 }
 
-DeviceAddr get_global_semaphore_address(const std::shared_ptr<GlobalSemaphore>& global_semaphore) {
+tt::tt_metal::DeviceAddr get_global_semaphore_address(const std::shared_ptr<GlobalSemaphore>& global_semaphore) {
     auto* device = global_semaphore->device();
-    DeviceAddr address = 0;
+    tt::tt_metal::DeviceAddr address = 0;
     device->push_work([&global_semaphore, &address] { address = global_semaphore->address(); }, /*blocking=*/true);
     return address;
 }
 
 void reset_global_semaphore_value(
-    const std::shared_ptr<GlobalSemaphore>& global_semaphore, const std::vector<SubDeviceId>& sub_device_ids) {
+    const std::shared_ptr<GlobalSemaphore>& global_semaphore,
+    uint32_t reset_value,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto* device = global_semaphore->device();
-    device->push_work([global_semaphore, sub_device_ids] { global_semaphore->reset_semaphore_value(sub_device_ids); });
+    device->push_work([global_semaphore, reset_value, sub_device_ids] {
+        global_semaphore->reset_semaphore_value(reset_value, sub_device_ids);
+    });
 }
 
 MultiDeviceGlobalSemaphore create_global_semaphore(
@@ -66,8 +70,8 @@ MultiDeviceGlobalSemaphore create_global_semaphore(
     }
     return multi_device_global_semaphore;
 }
-std::vector<DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSemaphore& global_semaphore) {
-    std::vector<DeviceAddr> addresses(global_semaphore.global_semaphores.size());
+std::vector<tt::tt_metal::DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSemaphore& global_semaphore) {
+    std::vector<tt::tt_metal::DeviceAddr> addresses(global_semaphore.global_semaphores.size());
     const auto& global_semaphores = global_semaphore.global_semaphores;
     for (uint32_t i = 0; i < global_semaphores.size(); ++i) {
         const auto& global_semaphore = global_semaphores[i];
@@ -82,9 +86,11 @@ std::vector<DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSema
 }
 
 void reset_global_semaphore_value(
-    const MultiDeviceGlobalSemaphore& global_semaphore, const std::vector<SubDeviceId>& sub_device_ids) {
+    const MultiDeviceGlobalSemaphore& global_semaphore,
+    uint32_t reset_value,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     for (const auto& global_semaphore : global_semaphore.global_semaphores) {
-        reset_global_semaphore_value(global_semaphore, sub_device_ids);
+        reset_global_semaphore_value(global_semaphore, reset_value, sub_device_ids);
     }
 }
 

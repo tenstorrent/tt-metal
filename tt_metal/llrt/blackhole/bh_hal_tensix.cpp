@@ -70,7 +70,7 @@ HalCoreInfoType create_tensix_mem_map() {
     for (uint8_t processor_class_idx = 0; processor_class_idx < NumTensixDispatchClasses; processor_class_idx++) {
         uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
         processor_types.resize(num_processors);
-        for (uint8_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
+        for (size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
             DeviceAddr fw_base, local_init;
             switch (processor_class_idx) {
                 case 0: {

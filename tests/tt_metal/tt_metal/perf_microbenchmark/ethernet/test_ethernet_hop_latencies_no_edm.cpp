@@ -449,48 +449,48 @@ int main(int argc, char** argv) {
     T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    auto get_device_list = [](const std::shared_ptr<MeshDeviceView>& view, std::size_t n_hops) {
+    auto get_device_list = [](const MeshDeviceView& view, std::size_t n_hops) {
         switch (n_hops) {
             case 2:
                 return std::vector<Device*>{
-                    view->get_device(0, 0),
-                    view->get_device(0, 1),
+                    view.get_device(0, 0),
+                    view.get_device(0, 1),
                 };
 
             case 4:
                 return std::vector<Device*>{
-                    view->get_device(1, 1),
-                    view->get_device(0, 1),
-                    view->get_device(0, 2),
-                    view->get_device(1, 2),
+                    view.get_device(1, 1),
+                    view.get_device(0, 1),
+                    view.get_device(0, 2),
+                    view.get_device(1, 2),
                 };
 
             case 8:
                 return std::vector<Device*>{
-                    view->get_device(1, 1),
-                    view->get_device(1, 0),
-                    view->get_device(0, 0),
-                    view->get_device(0, 1),
-                    view->get_device(0, 2),
-                    view->get_device(0, 3),
-                    view->get_device(1, 3),
-                    view->get_device(1, 2),
+                    view.get_device(1, 1),
+                    view.get_device(1, 0),
+                    view.get_device(0, 0),
+                    view.get_device(0, 1),
+                    view.get_device(0, 2),
+                    view.get_device(0, 3),
+                    view.get_device(1, 3),
+                    view.get_device(1, 2),
                 };
 
             case 12:  // Does an extra loop through the inner ring
                 return std::vector<Device*>{
-                    view->get_device(1, 1),
-                    view->get_device(1, 0),
-                    view->get_device(0, 0),
-                    view->get_device(0, 1),
-                    view->get_device(0, 2),
-                    view->get_device(1, 2),
-                    view->get_device(1, 1),
-                    view->get_device(0, 1),
-                    view->get_device(0, 2),
-                    view->get_device(0, 3),
-                    view->get_device(1, 3),
-                    view->get_device(1, 2),
+                    view.get_device(1, 1),
+                    view.get_device(1, 0),
+                    view.get_device(0, 0),
+                    view.get_device(0, 1),
+                    view.get_device(0, 2),
+                    view.get_device(1, 2),
+                    view.get_device(1, 1),
+                    view.get_device(0, 1),
+                    view.get_device(0, 2),
+                    view.get_device(0, 3),
+                    view.get_device(1, 3),
+                    view.get_device(1, 2),
                 };
 
             default: TT_THROW("Unsupported hop_count"); return std::vector<Device*>{};
@@ -533,7 +533,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-    } catch (std::exception e) {
+    } catch (std::exception& e) {
         test_fixture.TearDown();
         return -1;
     }

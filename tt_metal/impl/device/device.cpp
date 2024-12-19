@@ -10,7 +10,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
@@ -438,10 +438,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                 auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                 for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
                     ll_api::memory const& binary_mem = llrt::get_risc_binary(
-                        firmware_build_states_[riscv_id]->get_target_out_path(""),
-                        core_type_idx,
-                        processor_class,
-                        (riscv_id - build_idx));
+                        firmware_build_states_[riscv_id]->get_target_out_path(""));
                     uint32_t fw_size = binary_mem.get_text_size();
                     if (riscv_id == 1) { // TODO: clean up how brisc/ncrisc are handled
                         // In this context, ncrisc_kernel_size16 is the size of the fw
@@ -485,10 +482,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = build_idx; eriscv_id < (build_idx + num_build_states); eriscv_id++) {
                         ll_api::memory const& binary_mem = llrt::get_risc_binary(
-                            firmware_build_states_[eriscv_id]->get_target_out_path(""),
-                            core_type_idx,
-                            processor_class,
-                            (eriscv_id - build_idx));
+                            firmware_build_states_[eriscv_id]->get_target_out_path(""));
                         uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                         llrt::test_load_write_read_risc_binary(binary_mem, this->id(), virtual_core, core_type_idx, processor_class, (eriscv_id - build_idx));
@@ -2989,7 +2983,27 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     this->using_fast_dispatch = false;
     this->num_hw_cqs_ = num_hw_cqs;
     constexpr uint32_t harvesting_map_bits = 12;
-    this->build_key_ = ((uint32_t)this->num_hw_cqs_ << harvesting_map_bits) | tt::Cluster::instance().get_harvesting_mask(this->id());
+    constexpr uint32_t num_hw_cq_bits = 8;
+    constexpr uint32_t dispatch_core_axis_bits = 1;
+    constexpr uint32_t dispatch_core_type_bits = 1;
+    static_assert(dispatch_core_manager::MAX_NUM_HW_CQS <= (1 << num_hw_cq_bits));
+    static_assert(static_cast<uint32_t>(DispatchCoreAxis::COUNT) <= (1 << dispatch_core_axis_bits));
+    static_assert(static_cast<uint32_t>(DispatchCoreType::COUNT) <= (1 << dispatch_core_type_bits));
+    static_assert(harvesting_map_bits + num_hw_cq_bits + dispatch_core_axis_bits + dispatch_core_type_bits <= sizeof(this->build_key_) * CHAR_BIT);
+
+    // num_hw_cqs, dispatch_core_axis, dispatch_core_type all change the number of banks, so need to be part of the
+    // build key since we have defines based on number of banks.
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(this->id_);
+    this->build_key_ = (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type()) << (harvesting_map_bits + num_hw_cq_bits + dispatch_core_axis_bits)) |
+                       (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis()) << (harvesting_map_bits + num_hw_cq_bits)) |
+                       (static_cast<uint32_t>(num_hw_cqs_) << harvesting_map_bits);
+    if (not hal.is_coordinate_virtualization_enabled()) {
+        // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across devices with different cores harvested.
+        this->build_key_ = (this->build_key_) | tt::Cluster::instance().get_harvesting_mask(this->id());
+    } else {
+        // Coordinate Virtualization is enabled. Track only the number of harvested cores, instead of the exact harvesting configuration (this is not needed).
+        this->build_key_ = (this->build_key_) | (std::bitset<harvesting_map_bits>(tt::Cluster::instance().get_harvesting_mask(this->id())).count());
+    }
     this->initialize_cluster();
     this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
@@ -3722,6 +3736,20 @@ SubDeviceManagerId Device::get_default_sub_device_manager_id() const {
 SubDeviceManagerId Device::create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto [sub_device_manager, _] = this->sub_device_managers_.insert_or_assign(this->get_next_sub_device_manager_id(), std::make_unique<detail::SubDeviceManager>(sub_devices, local_l1_size, this));
     return sub_device_manager->first;
+}
+
+std::tuple<SubDeviceManagerId, SubDeviceId> Device::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    auto fabric_sub_device = SubDevice(std::array{CoreRangeSet(), this->default_sub_device_manager_->sub_device(SubDeviceId{0}).cores(HalProgrammableCoreType::ACTIVE_ETH)});
+    auto new_sub_devices = std::vector<SubDevice>(sub_devices.begin(), sub_devices.end());
+    new_sub_devices.push_back(fabric_sub_device);
+    auto fabric_sub_device_id = SubDeviceId{static_cast<uint32_t>(new_sub_devices.size() - 1)};
+    auto sub_device_manager_id = this->create_sub_device_manager(new_sub_devices, local_l1_size);
+    this->sub_device_managers_[sub_device_manager_id]->set_fabric_sub_device_id(fabric_sub_device_id);
+    return {sub_device_manager_id, fabric_sub_device_id};
+}
+
+std::optional<SubDeviceId> Device::get_fabric_sub_device_id() const {
+    return this->active_sub_device_manager_->fabric_sub_device_id();
 }
 
 void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {

@@ -42,7 +42,7 @@
 
 #include "llrt/hal.hpp"
 
-#include "third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "umd/device/tt_simulation_device.h"
 
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"
@@ -252,15 +252,15 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt_SimulationDevice>(sdesc_path);
     }
-    std::uint32_t dram_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
-    device_driver->set_device_dram_address_params(tt_device_dram_address_params{dram_barrier_base});
 
-    l1_address_params.tensix_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
+    barrier_address_params barrier_params;
+    barrier_params.tensix_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
+    barrier_params.dram_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
+
     if (tt_metal::hal.get_arch() != tt::ARCH::GRAYSKULL) {
-        l1_address_params.eth_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
-        l1_address_params.fw_version_addr = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FW_VERSION_ADDR);
+        barrier_params.eth_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
     }
-    device_driver->set_device_l1_address_params(l1_address_params);
+    device_driver->set_barrier_address_params(barrier_params);
 
     this->get_metal_desc_from_tt_desc(
         device_driver->get_virtual_soc_descriptors(), device_driver->get_harvesting_masks_for_soc_descriptors());

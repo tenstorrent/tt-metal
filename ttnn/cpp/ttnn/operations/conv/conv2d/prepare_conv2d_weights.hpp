@@ -6,26 +6,30 @@
 #pragma once
 #include <optional>
 
-#include "conv2d_utils.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/common/math.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+
+namespace ttnn::operations::sliding_window {
+    struct ParallelConfig;
+}
 
 namespace ttnn {
 
 namespace operations::conv {
 namespace conv2d {
+
+template <typename T>
+ttnn::Tensor conv_bias_layout_convert(
+    const ttnn::Tensor& bias_tensor,
+    DataType bias_dtype,
+    uint32_t weight_block_h_ntiles,
+    uint32_t weight_block_w_ntiles,
+    const sliding_window::ParallelConfig& parallel_config,
+    T * device,
+    uint32_t out_channels,
+    bool is_non_tile_mul_width);
+
 template <typename T>
 ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
@@ -80,6 +84,12 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t input_width,
     const bool parameters_on_device=true,
     bool is_non_tile_mul_width=false);
+
+template <typename T>
+bool check_non_tile_mul_width(
+    T* device,
+    const Conv2dConfig& conv_config,
+    const uint32_t in_channels);
 
 } // namespace conv2d
 } // namespace operations::conv

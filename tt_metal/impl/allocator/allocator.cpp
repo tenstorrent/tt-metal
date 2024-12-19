@@ -4,10 +4,10 @@
 
 #include "tt_metal/impl/allocator/allocator.hpp"
 
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "tt_metal/impl/allocator/algorithms/free_list.hpp"
+#include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
 namespace tt {
@@ -27,8 +27,8 @@ static char const* get_memory_pool_name(BufferType buffer_type) {
 #endif
 
 void BankManager::init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset) {
-    this->allocator_ =
-        std::make_unique<FreeList>(size_bytes, offset, alignment_bytes, alignment_bytes, FreeList::SearchPolicy::FIRST);
+    this->allocator_ = std::make_unique<FreeListOpt>(
+        size_bytes, offset, alignment_bytes, alignment_bytes, FreeListOpt::SearchPolicy::FIRST);
 }
 
 void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool disable_interleaved) {
@@ -37,7 +37,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool 
     // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved
     // address gen For non pow2 num banks, special cases need to be added to avoid falling back to generic
     // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321
-    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {12, 56, 70, 80, 94, 124, 130, 140};
+    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {12, 56, 63, 70, 80, 94, 124, 130, 140};
     bool custom_mod_bank_id_calculation_exists = acceptable_num_non_pow2_mem_banks.count(num_banks) > 0;
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
     if (not valid_num_banks) {
@@ -169,7 +169,7 @@ BankManager::~BankManager() {
     this->allocator_.reset(nullptr);
 }
 
-BankManager&& BankManager::operator=(BankManager&& that) {
+BankManager&& BankManager::operator=(BankManager&& that) noexcept {
     buffer_type_ = that.buffer_type_;
     allocated_buffers_ = that.allocated_buffers_;
     bank_id_to_bank_offset_ = that.bank_id_to_bank_offset_;

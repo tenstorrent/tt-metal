@@ -30,7 +30,7 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
 #include "tt_metal/include/tt_metal/program.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 
 #include "tt_metal/graph/graph_tracking.hpp"
 
@@ -162,13 +162,13 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range) {
+std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange& core_range, CoreType core_type) {
     std::optional<uint32_t> semaphore_id = std::nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             CoreCoord logical_core(x, y);
-            auto semaphores = program.semaphores_on_core(logical_core);
+            auto semaphores = program.semaphores_on_core(logical_core, core_type);
             if (semaphores.size() == NUM_SEMAPHORES) {
                 TT_THROW(
                     "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
@@ -1158,7 +1158,7 @@ uint32_t CreateSemaphore(
             for (const auto& core_range : crs.ranges()) {
                 CoreCoord start_core = core_range.start_coord;
                 CoreCoord end_core = core_range.end_coord;
-                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range);
+                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
                 if (!semaphore_id.has_value()) {
                     semaphore_id = semaphore_id_candidate;
                 } else {

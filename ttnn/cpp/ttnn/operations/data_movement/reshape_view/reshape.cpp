@@ -310,10 +310,9 @@ ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& input_shape,
-    const std::optional<MemoryConfig> &memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     const uint8_t queue_id,
-    const std::optional<PadValue> &pad_value
-     ) {
+    const std::optional<PadValue>& pad_value) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.get_layout();
     auto tensor_shape = tensor.get_shape();
@@ -337,11 +336,24 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     //The following case should only be called for the device storage case, the rest is a bandaid
     //for issue 15317
 
-
+    const uint32_t shape_last_dim = shape.rank() >= 1 ? shape[-1] : 1;
+    const uint32_t tensor_last_dim = tensor_shape.rank() >= 1 ? tensor_shape[-1] : 1;
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2]:1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2]:1;
+
+    // Just edit shape if shape has a 0 dimension
+    if (tensor.get_logical_volume() == 0) {
+        TT_FATAL(shape.logical_shape().volume() == 0, "Tensor volume is 0, but shape's volume is not");
+        TT_FATAL(
+            (tensor.storage_type() != StorageType::MULTI_DEVICE &&
+             tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
+            "Reshaping a multi-device tensor with 0 volume is not supported");
+        return tensor.reshape(shape);
+    }
+    TT_FATAL(shape.logical_shape().volume() != 0, "Tensor volume is not 0, but shape volume is 0");
+
     bool this_is_view =
-        (tensor_shape[-1] == shape[-1]) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
+        (tensor_last_dim == shape_last_dim) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
         ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) ||          // Its row major
          (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
@@ -355,20 +367,19 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     if (this_is_view) {
         return PerformView(tensor,shape, tile_first_dim, tile_second_dim);
     }
-    if(shape.logical_shape().volume() != tensor.get_logical_volume())
-    {
-        //This is completely incorrect but it is due to issue 15137 or issue 15558
+    if (shape.logical_shape().volume() != tensor.get_logical_volume()) {
+        // This is completely incorrect but it is due to issue 15137 or issue 15558
         bool tile_tensor_view_reshape_possible =
             (layout == ttnn::Layout::TILE and shape.with_tile_padding().rank() >= 2 and
-            shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0 and
-            shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0 and
-            tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]);
+             shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0 and
+             shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0 and
+             tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]);
 
         if (tile_tensor_view_reshape_possible) {
             // This case has been allowed in the past though it means introducing padding values to the data
             return tensor.reshape(shape);
         }
-        //This is a completely incorrect test but it is due to issue 15558
+        // This is a completely incorrect test but it is due to issue 15558
         TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
     }
     // Catch-all
@@ -391,21 +402,20 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         return invoke(tensor, shape,std::nullopt,0,std::nullopt);
      }
 
-ttnn::Tensor ReshapeViewOperation::invoke(
-    const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& shape,
-    const std::optional<MemoryConfig> &memory_config,
-    const uint8_t queue_id,
-    const std::optional<PadValue> &pad_value
-    ) {
-    return invoke(tensor, ttnn::Shape(shape.view()),memory_config,queue_id,pad_value);
-}
+     ttnn::Tensor ReshapeViewOperation::invoke(
+         const ttnn::Tensor& tensor,
+         const ttnn::SimpleShape& shape,
+         const std::optional<MemoryConfig>& memory_config,
+         const uint8_t queue_id,
+         const std::optional<PadValue>& pad_value) {
+         return invoke(tensor, ttnn::Shape(shape.view()), memory_config, queue_id, pad_value);
+     }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     const ttnn::SimpleShape& shape
     ) {
-    return invoke(tensor, ttnn::Shape(shape.view()),std::nullopt,0,std::nullopt);
+    return invoke(tensor, ttnn::Shape(shape.view()), std::nullopt, 0, std::nullopt);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
