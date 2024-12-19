@@ -38,12 +38,6 @@ uint32_t find_closest_largest_divisor(uint32_t num1, uint32_t num2, uint32_t sta
     return divisor;
 }
 
-uint32_t find_closest_common_largest_divisor(uint32_t num1, uint32_t num2, uint32_t start_divisor) {
-    uint32_t divisor = start_divisor;
-    while (num1 % divisor != 0 or num2 % divisor != 0) divisor = divisor - 1;
-    return divisor;
-}
-
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
     uint32_t padded_num = round_up(num, divisor);
@@ -89,41 +83,6 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
 // Converts convolution weights to grouped layout with padded zeros
 Tensor convert_conv_weight_tensor_to_grouped_layout(const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype){
        return tt::tt_metal::convert_conv_weight_tensor_to_grouped_layout(std::move(conv_weight_tensor), num_groups, output_dtype);
-}
-
-ParallelConfig determine_parallel_config_non_tile_mul_width(
-    const TensorMemoryLayout shard_layout,
-    uint32_t batch_size,
-    uint32_t input_channels,
-    uint32_t output_height,
-    uint32_t output_width,
-    uint32_t output_channels,
-    const CoreCoord& compute_grid_size,
-    ShardOrientation block_shard_orientation) {
-
-    uint32_t effective_tile_height = 1;
-    uint32_t effective_tile_width = 1;
-    CoreRangeSet grid;
-    uint32_t out_nhw_ntiles = tt::round_up(batch_size * output_height * output_width, tt::constants::TILE_HEIGHT);
-    uint32_t start_divisor =
-        block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
-    uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding(out_nhw_ntiles, start_divisor);
-
-    uint32_t start_divisor_c =
-        block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
-    uint32_t num_cores_c = find_closest_common_largest_divisor(output_channels, input_channels, start_divisor_c);
-    uint32_t cores_x = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
-    uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
-    CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
-    grid = CoreRangeSet({core_range});
-    auto shard_orientation = shard_layout == TensorMemoryLayout::BLOCK_SHARDED ? block_shard_orientation : ShardOrientation::ROW_MAJOR;
-    ParallelConfig pconfig = {
-        .grid = grid,
-        .shard_scheme = shard_layout,
-        .shard_orientation = block_shard_orientation};
-
-    return pconfig;
-
 }
 
 ParallelConfig determine_parallel_config(
@@ -551,7 +510,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
             conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
         ParallelConfig optimal_parallel_config;
         if (is_non_tile_mul_width) {
-            optimal_parallel_config = determine_parallel_config_non_tile_mul_width(
+            optimal_parallel_config = determine_parallel_config(
                 shard_layout,
                 batch_size,
                 in_channels,
@@ -559,7 +518,9 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
                 width,
                 out_channels,
                 device->compute_with_storage_grid_size(),
-                block_shard_orientation);
+                block_shard_orientation,
+                false,
+                false);
         } else {
             optimal_parallel_config = determine_parallel_config(
                 shard_layout,
