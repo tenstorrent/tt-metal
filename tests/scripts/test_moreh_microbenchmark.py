@@ -701,7 +701,7 @@ def test_noc(arch, r, c, nt, test_vector):
 )
 def test_matmul_dram(arch, freq, r, c, test_vector):
     file_name = PROFILER_LOGS_DIR / "moreh_old_Matmul_DRAM.csv"
-    header = ["M", "N", "K", "Cycles", "Time (ms)", "TFLOPS"]
+    header = ["M", "N", "K", "Cycles", "Time (us)", "TFLOPs"]
     data = []
     for vec in test_vector:
         mt = int(vec[0] / 32)
@@ -711,10 +711,13 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
         per_core_nt = int((nt - 1) / c) + 1
         test_matmul_global(r, c, mt, nt, kt, per_core_mt, per_core_nt, 0, 0, 0, 2)
         cycle = profile_results()
+        # Get device frequency in MHz
+        dev_freq_mhz = get_device_freq()
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / freq / 1000.0
-        throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
-        data.append([vec[0], vec[1], vec[2], cycle, time, throughput])
+        time_us = cycle / dev_freq_mhz
+        # Calcualte throughput in TFLOPs
+        throughput = num_op / time_us / 1000.0 / 1000.0
+        data.append([vec[0], vec[1], vec[2], cycle, time_us, throughput])
     generate_csv(file_name, header, data)
     return
 
@@ -759,8 +762,23 @@ def test_matmul_single_core_sharded(
     baseline,
 ):
     file_name = PROFILER_LOGS_DIR / "moreh_single_core_Matmul_Sharded.csv"
-    header = ["Kernel Duration (Cycles)"]
-    kernel_durations_cycle = []
+    header = [
+        "m",
+        "n",
+        "k",
+        "dtype",
+        "fidel",
+        "matmul_block",
+        "num_blocks",
+        "packer_l1_acc",
+        "fp32_dest_acc",
+        "interm_cb_dtype",
+        "subblock_index",
+        "Cycles",
+        "Time (us)",
+        "TFLOPs",
+    ]
+    data = []
     for vec in test_vector:
         m = int(vec[0])
         n = int(vec[1])
@@ -779,27 +797,47 @@ def test_matmul_single_core_sharded(
             subblock_index,
         )
         cycle = profile_results_kernel_duration()
-        dev_freq = get_device_freq()
+        # Get device frequency in MHz
+        dev_freq_mhz = get_device_freq()
         logger.info("cycle: " + str(cycle))
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / dev_freq / 1000.0
-        throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
-        kernel_durations_cycle.append([cycle])
+        # Calculate execution time in us
+        time_us = cycle / dev_freq_mhz
+        # Calcualte throughput in TFLOPs
+        throughput = num_op / time_us / 1000.0 / 1000.0
+        data.append(
+            [
+                m,
+                n,
+                k,
+                dtype,
+                fidel,
+                matmul_block,
+                num_blocks,
+                packer_l1_acc,
+                fp32_dest_acc,
+                interm_cb_dtype,
+                subblock_index,
+                cycle,
+                time_us,
+                throughput,
+            ]
+        )
 
     max_diff = 0.01
 
-    percentage_diff = np.abs(kernel_durations_cycle[0][0] - baseline) / baseline
+    percentage_diff = np.abs(data[0][-3] - baseline) / baseline
     is_within_range = percentage_diff < max_diff
     if is_within_range == False:
         logger.info(
             "Diff is too large! kernel duration: {}, baseline: {}, diff: {}",
-            kernel_durations_cycle[0][0],
+            data[0][-3],
             baseline,
             percentage_diff,
         )
 
     write_header = not os.path.exists(file_name)
-    append_to_csv(file_name, header, kernel_durations_cycle, write_header)
+    append_to_csv(file_name, header, data, write_header)
     # assert is_within_range
 
 
@@ -816,7 +854,7 @@ def test_matmul_single_core_sharded(
 )
 def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
     file_name = PROFILER_LOGS_DIR / "moreh_dram_read_all_core.csv"
-    header = ["Read cycles", "Read time", "Read throughput"]
+    header = ["k", "n", "nblock", "data_format", "num_banks", "Read cycles", "Read time[us]", "Read throughput[GB/s]"]
     data = []
     cycle_list = []
     time_list = []
@@ -830,26 +868,33 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
             input_size = k * n * 2048 // 1024
         run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
         cycle = profile_results_kernel_duration()
-        time = cycle / freq / 1000.0 / 1000.0
-        throughput = input_size / cycle
+        # Get device frequency in MHz
+        dev_freq_mhz = get_device_freq()
+        # Calcuate execution time in micro seconds(us)
+        time_us = cycle / dev_freq_mhz
+        # Calculate throughput in GB/s
+        throughput_gbs = input_size / time_us / 1000
         logger.info("DRAM read cycle: " + str(cycle))
-        logger.info("DRAM read time: " + str(time))
-        logger.info("DRAM read throughput: " + str(throughput))
+        logger.info("DRAM read time[us]: " + str(time_us))
+        logger.info("DRAM read throughput[GB/s]: " + str(throughput_gbs))
         cycle_list.append(cycle)
-        time_list.append(time)
-        throughput_list.append(throughput)
-        data.append([cycle, time, throughput])
+        time_list.append(time_us)
+        throughput_list.append(throughput_gbs)
+        data.append([k, n, nblock, data_format, num_banks, cycle, time_us, throughput_gbs])
     cycle = sum(cycle_list) / len(cycle_list)
     time = sum(time_list) / len(time_list)
     throughput = sum(throughput_list) / len(throughput_list)
     logger.info("DRAM read cycle: " + str(cycle))
-    logger.info("DRAM read time: " + str(time))
-    logger.info("DRAM read throughput: " + str(throughput))
-    generate_csv(file_name, header, data)
+    logger.info("DRAM read time[us]: " + str(time))
+    logger.info("DRAM read throughput[GB/s]: " + str(throughput))
+
+    # Append data to csv file
+    write_header = not os.path.exists(file_name)
+    append_to_csv(file_name, header, data, write_header)
+
     # check within range
-    dev_freq = get_device_freq()
     # Disable bw bound assertion to run all tests - TODO check bandwidth numbers for BH
-    # bw_lower_bound = 260.0 * dev_freq / 1000.0
+    # bw_lower_bound = 260.0 * dev_freq_mhz / 1000.0
     # bw_upper_bound = bw_lower_bound + 10.0
     # assert bw_lower_bound <= throughput
     # assert throughput <= bw_upper_bound
@@ -862,96 +907,24 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
         ("wormhole_b0", np.array([32768 * 2, 12 * 128]), 1, 64, 2, 12, 0, None),
         ("blackhole", np.array([32768 * 8, 8 * 128]), 1, 256, 2, 8, 0, None),
         # FF1/FF3 shapes for TG llama 70b
-        (
-            "wormhole_b0",
-            np.array([2048, 3840]),
-            1,
-            16,
-            0,
-            12,
-            0,
-            240,
-        ),  # 244 GB/s
-        (
-            "blackhole",
-            np.array([2048, 3840]),
-            1,
-            16,
-            0,
-            8,
-            0,
-            240,
-        ),  # 244 GB/s
+        ("wormhole_b0", np.array([2048, 3840]), 1, 16, 0, 12, 0, 240),  # 244 GB/s
+        ("blackhole", np.array([2048, 3840]), 1, 16, 0, 8, 0, 240),  # 244 GB/s
         # FF2 shapes for TG llama 70b
-        (
-            "wormhole_b0",
-            np.array([3584, 2304]),
-            1,
-            28,
-            1,
-            12,
-            0,
-            250,
-        ),  # 255 GB/s
-        (
-            "blackhole",
-            np.array([3584, 2304]),
-            1,
-            28,
-            1,
-            8,
-            0,
-            250,
-        ),  # 255 GB/s
+        ("wormhole_b0", np.array([3584, 2304]), 1, 28, 1, 12, 0, 250),  # 255 GB/s
+        ("blackhole", np.array([3584, 2304]), 1, 28, 1, 8, 0, 250),  # 255 GB/s
         # Dense Out shapes for TG llama 70b
-        (
-            "wormhole_b0",
-            np.array([1024, 2304]),
-            1,
-            8,
-            1,
-            12,
-            0,
-            220,
-        ),  # 226 GB/s
-        (
-            "blackhole",
-            np.array([1024, 2304]),
-            1,
-            8,
-            1,
-            8,
-            0,
-            220,
-        ),  # 226 GB/s
+        ("wormhole_b0", np.array([1024, 2304]), 1, 8, 1, 12, 0, 220),  # 226 GB/s
+        ("blackhole", np.array([1024, 2304]), 1, 8, 1, 8, 0, 220),  # 226 GB/s
         # QKV shapes for TG llama 70b
-        (
-            "wormhole_b0",
-            np.array([2048, 1536]),
-            1,
-            16,
-            1,
-            12,
-            0,
-            225,
-        ),  # 232 GB/s
-        (
-            "blackhole",
-            np.array([2048, 1536]),
-            1,
-            16,
-            1,
-            8,
-            0,
-            225,
-        ),  # 232 GB/ss
+        ("wormhole_b0", np.array([2048, 1536]), 1, 16, 1, 12, 0, 225),  # 232 GB/s
+        ("blackhole", np.array([2048, 1536]), 1, 16, 1, 8, 0, 225),  # 232 GB/ss
     ],
 )
 def test_dram_read_l1_write_core(
     arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, bw_target
 ):
     file_name = PROFILER_LOGS_DIR / "moreh_dram_read_l1_write_core.csv"
-    header = ["Read cycles", "Read time", "Read throughput"]
+    header = ["k", "n", "nblock", "data_format", "num_banks", "Read cycles", "Read time[us]", "Read throughput[GB/s]"]
     data = []
     cycle_list = []
     time_list = []
@@ -967,20 +940,26 @@ def test_dram_read_l1_write_core(
             input_size = k * n * 2048 // 1024
         run_dram_read_l1_write_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
         cycle = profile_results_kernel_duration()
-        dev_freq = get_device_freq()
-        time = cycle / dev_freq / 1000.0 / 1000.0
-        throughput = input_size / cycle * dev_freq / 1000.0
+        dev_freq_mhz = get_device_freq()
+        # Calcuate execution time in micro seconds(us)
+        time_us = cycle / dev_freq_mhz
+        # Calculate throughput in GB/s
+        throughput_gbs = input_size / time_us / 1000
         cycle_list.append(cycle)
-        time_list.append(time)
-        throughput_list.append(throughput)
-        data.append([cycle, time, throughput])
+        time_list.append(time_us)
+        throughput_list.append(throughput_gbs)
+        data.append([k, n, nblock, data_format, num_banks, cycle, time_us, throughput_gbs])
     cycle = sum(cycle_list) / len(cycle_list)
     time = sum(time_list) / len(time_list)
     throughput = sum(throughput_list) / len(throughput_list)
     logger.info("DRAM read cycle: " + str(cycle))
-    logger.info("DRAM read time: " + str(time))
-    logger.info("DRAM read throughput: " + str(throughput))
-    generate_csv(file_name, header, data)
+    logger.info("DRAM read time[us]: " + str(time))
+    logger.info("DRAM read throughput[GB/s]: " + str(throughput))
+
+    # Append data to csv file
+    write_header = not os.path.exists(file_name)
+    append_to_csv(file_name, header, data, write_header)
+
     # Disable bw bound assertion to run all tests - TODO check bandwidth numbers for BH
     # check within range
     # if arch == "grayskull":
@@ -992,7 +971,7 @@ def test_dram_read_l1_write_core(
     # if bw_target is not None:
     #     bw_lower_bound = bw_target
     # bw_lower_bound = (
-    #     bw_lower_bound * dev_freq / 1000.0
+    #     bw_lower_bound * dev_freq_mhz / 1000.0
     # )  # Adjust for device frequency; target is based on max device frequency
     # assert bw_lower_bound <= throughput
     # bw_upper_bound = bw_lower_bound + 10.0
@@ -1050,13 +1029,29 @@ def test_dram_read_remote_cb_sync(
     use_sub_devices,
 ):
     file_name = PROFILER_LOGS_DIR / "moreh_dram_read_remote_cb_sync.csv"
-    header = ["Read cycles", "Read time", "Read throughput"]
+    header = [
+        "test",
+        "m",
+        "n",
+        "k",
+        "nblock",
+        "cb_nblock",
+        "cb_padding",
+        "data_format",
+        "num_receivers",
+        "num_mixed_df_layers",
+        "use_sub_devices",
+        "Read cycles",
+        "Read time[us]",
+        "Read throughput[GB/s]",
+    ]
     data = []
     cycle_list = []
     time_list = []
     throughput_list = []
     for _ in range(num_tests):
         if test == None:
+            m = 0
             k = int(test_vector[0])
             n = int(test_vector[1])
         elif test == "Matmul":
@@ -1083,19 +1078,42 @@ def test_dram_read_remote_cb_sync(
                 m, k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers, use_sub_devices
             )
         cycle = profile_results_kernel_duration()
-        time = cycle / get_device_freq() / 1000.0 / 1000.0
-        throughput = input_size / cycle * get_device_freq() / 1000.0
+        # Calcuate execution time in micro seconds(us)
+        time_us = cycle / get_device_freq()
+        # Calculate throughput in GB/s
+        throughput_gbs = input_size / time_us / 1000
         cycle_list.append(cycle)
-        time_list.append(time)
-        throughput_list.append(throughput)
-        data.append([cycle, time, throughput])
+        time_list.append(time_us)
+        throughput_list.append(throughput_gbs)
+        data.append(
+            [
+                test,
+                m,
+                n,
+                k,
+                nblock,
+                cb_nblock,
+                cb_padding,
+                data_format,
+                num_receivers,
+                num_mixed_df_layers,
+                use_sub_devices,
+                cycle,
+                time_us,
+                throughput_gbs,
+            ]
+        )
     cycle = sum(cycle_list) / len(cycle_list)
     time = sum(time_list) / len(time_list)
     throughput = sum(throughput_list) / len(throughput_list)
     logger.info("DRAM read cycle: " + str(cycle))
-    logger.info("DRAM read time: " + str(time))
-    logger.info("DRAM read throughput: " + str(throughput))
-    generate_csv(file_name, header, data)
+    logger.info("DRAM read time[us]: " + str(time))
+    logger.info("DRAM read throughput[GB/s]: " + str(throughput))
+
+    # Append data to csv file
+    write_header = not os.path.exists(file_name)
+    append_to_csv(file_name, header, data, write_header)
+
     # Disable bw bound assertion to run all tests - TODO check bandwidth numbers for BH
     # # check within range
     # bw_lower_bound = 0.0
@@ -1122,7 +1140,7 @@ def test_dram_read_remote_cb_sync(
 )
 def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
     file_name = PROFILER_LOGS_DIR / "moreh_old_Matmul_SRAM.csv"
-    header = ["M", "N", "K", "Cycles", "Time (ms)", "TFLOPS"]
+    header = ["M", "N", "K", "Cycles", "Time (us)", "TFLOPs"]
     data = []
     for vec in test_vector_global:
         mt = int(vec[0] / 32)
@@ -1132,20 +1150,26 @@ def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
         per_core_nt = int((nt - 1) / c) + 1
         test_matmul_global(r, c, mt, nt, kt, per_core_mt, per_core_nt, 1, 1, 1, 4)
         cycle = profile_results()
+        # Get device frequency in MHz
+        dev_freq_mhz = get_device_freq()
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / freq / 1000.0
-        throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
-        data.append([vec[0], vec[1], vec[2], cycle, time, throughput])
+        time_us = cycle / dev_freq_mhz
+        # Calcualte throughput in TFLOPs
+        throughput = num_op / time_us / 1000.0 / 1000.0
+        data.append([vec[0], vec[1], vec[2], cycle, time_us, throughput])
     for vec in test_vector_local:
         mt = int(vec[0] / 32)
         nt = int(vec[1] / 32)
         kt = int(vec[2] / 32)
         test_matmul_local(r, c, mt, nt, kt)
         cycle = profile_results()
+        # Get device frequency in MHz
+        dev_freq_mhz = get_device_freq()
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / freq / 1000.0
-        throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
-        data.append([vec[0], vec[1], vec[2], cycle, time, throughput])
+        time_us = cycle / dev_freq_mhz
+        # Calcualte throughput in TFLOPs
+        throughput = num_op / time_us / 1000.0 / 1000.0
+        data.append([vec[0], vec[1], vec[2], cycle, time_us, throughput])
     generate_csv(file_name, header, data)
     return
 
