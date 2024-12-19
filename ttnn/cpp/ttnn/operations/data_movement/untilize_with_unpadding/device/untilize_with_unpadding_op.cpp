@@ -24,7 +24,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
             TT_FATAL(
                 input_tensor_a.volume() /
-                        (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) ==
+                        (input_tensor_a.get_padded_shape()[-2] * input_tensor_a.get_padded_shape()[-1]) ==
                     1,
                 "Can only write unbatched output interleaved");
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -33,15 +33,15 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             }
             // What else?
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-            auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+            auto output_shape = this->compute_output_specs(input_tensors).at(0).padded_shape();
             for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
-                TT_FATAL(input_tensor_a.get_legacy_shape()[i] == output_shape[i], "Error");
+                TT_FATAL(input_tensor_a.get_padded_shape()[i] == output_shape[i], "Error");
             }
             if (output_mem_config.is_sharded()) {
                 TT_FATAL(
                     this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout, "Error");
                 TT_FATAL(
-                    input_tensor_a.get_legacy_shape()[-1] == output_shape[-1] ||
+                    input_tensor_a.get_padded_shape()[-1] == output_shape[-1] ||
                         (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
                          input_tensor_a.shard_spec().value().grid.num_cores()),
                     "Error");
@@ -49,11 +49,11 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                 TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
                 TT_FATAL(
                     input_tensor_a.volume() /
-                            (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) ==
+                            (input_tensor_a.get_padded_shape()[-2] * input_tensor_a.get_padded_shape()[-1]) ==
                         1,
                     "Can only write unbatched output interleaved");
                 TT_FATAL(
-                    input_tensor_a.get_legacy_shape()[-1] - output_shape[-1] <
+                    input_tensor_a.get_padded_shape()[-1] - output_shape[-1] <
                         input_tensor_a.shard_spec().value().shape[1],
                     "Error");
             }
@@ -66,26 +66,21 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> UntilizeWithUnpadding::compute_output_shapes(
+std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    auto rank = input_tensor_a.get_logical_shape().rank();
     SmallVector<uint32_t> out_shape;
-    auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->output_tensor_end[i] + 1);
     }
-    tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
-    return {output_tensor_shape};
-}
+    ttnn::SimpleShape output_shape(out_shape);
 
-std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
     DataType output_dtype =
         input_tensor_a.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.get_dtype();
     if (input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded()) {
-        auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-        uint32_t fused_height = tt::tt_metal::compute_volume(output_shape) / output_shape[-1];
+        uint32_t fused_height = output_shape.volume() / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
         std::array<uint32_t, 2> shard_shape;
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
@@ -97,16 +92,11 @@ std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(
         shard_spec.shape = shard_shape;
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            output_dtype,
-            Layout::ROW_MAJOR,
-            input_tensor_a.device(),
-            mem_config)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, output_dtype, Layout::ROW_MAJOR, this->output_mem_config);
+        return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config))};
     }
+
+    return {
+        TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), this->output_mem_config))};
 }
 
 operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(

@@ -90,8 +90,8 @@ Tensor to_layout_impl_on_device(
             output_tensor_end.push_back(tensor_shape[index] - 1);
         }
 
-        auto tensor =
-            ttnn::untilize_with_unpadding(tensor_arg, output_tensor_end, output_memory_config, use_multicore_untilize);
+        auto tensor = ttnn::untilize_with_unpadding(
+            tensor_arg, ttnn::SimpleShape(output_tensor_end), output_memory_config, use_multicore_untilize);
         return ttnn::reshape(tensor, tensor_shape);
     }
 
