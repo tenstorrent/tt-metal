@@ -8,7 +8,6 @@
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
