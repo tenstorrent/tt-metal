@@ -44,7 +44,7 @@ tt_l1_ptr volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 uint64_t xy_local_addr;
 
-#define SWITCH_THRESHOLD 1000
+#define SWITCH_THRESHOLD 0x3FF
 
 inline void notify_all_routers() {
     uint32_t channel = 0;
@@ -115,7 +115,6 @@ void kernel_main() {
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
     uint32_t loop_count = 0;
-    uint32_t switch_counter = 0;
     uint32_t total_words_procesed = 0;
 
     while (1) {
@@ -151,7 +150,7 @@ void kernel_main() {
             // current invocatoin may still result in sync pending,
             // while previous sync pending has been serviced and pushed to sync buf
             while (!fvc_consumer_state.sync_buf_empty()) {
-                if (fvc_consumer_state.forward_data_from_fvc_buffer() == 0) {
+                if (fvc_consumer_state.forward_data_from_fvc_buffer<true>() == 0) {
                     // not able to forward any data over ethernet.
                     // should break and retry.
                     break;
@@ -171,7 +170,7 @@ void kernel_main() {
         if (fvc_req_buf_is_empty(fvc_consumer_req_buf)) {
             noc_async_read_barrier();
             while (!fvc_consumer_state.sync_buf_empty()) {
-                if (fvc_consumer_state.forward_data_from_fvc_buffer() == 0) {
+                if (fvc_consumer_state.forward_data_from_fvc_buffer<true>() == 0) {
                     // not able to forward any data over ethernet.
                     // should break and retry.
                     break;
@@ -192,19 +191,17 @@ void kernel_main() {
         }
 
         loop_count++;
-        volatile uint32_t* temp = (volatile uint32_t*)0x9010;
-        temp[0] = loop_count;
-        if (loop_count >= 0x200000) {
-            break;
-        }
 
         // need to optimize this.
         // context switch to base fw is very costly.
-        switch_counter++;
-        if (switch_counter >= SWITCH_THRESHOLD) {
-            switch_counter = 0;
+        if ((loop_count & SWITCH_THRESHOLD) == SWITCH_THRESHOLD) {
             internal_::risc_context_switch();
-            switch_counter = SWITCH_THRESHOLD;
+        }
+        if (*(volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM == 0) {
+            // terminate signal from host sw.
+            if (loop_count >= 0x1000) {
+                break;
+            }
         }
     }
     uint64_t cycles_elapsed = fvc_producer_state.packet_timestamp - start_timestamp;
