@@ -11,6 +11,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
+      os: "ubuntu-20.04-amd64"
     secrets: inherit
   device-perf:
     needs: build-artifact-profiler
