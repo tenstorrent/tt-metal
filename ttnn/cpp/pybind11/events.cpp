@@ -6,6 +6,7 @@
 
 #include "tt_metal/impl/event/event.hpp"
 #include "pybind11/pybind11.h"
+#include <pybind11/stl.h>
 
 using namespace tt::tt_metal;
 
