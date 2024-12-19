@@ -223,7 +223,6 @@ class Program_ {
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<KernelGroup>> kernel_groups_;
     std::vector<std::vector<uint8_t>> core_to_kernel_group_index_table_;
-    uint32_t tensix_go_signal_count_;
 
     std::vector<std::shared_ptr<Buffer>> config_buffers_;
 
@@ -1159,31 +1158,19 @@ void detail::Program_::populate_dispatch_data(Device *device) {
     return;
 }
 
-uint32_t detail::Program_::finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset) {
-
-    // Iterate over kernels in the program and "level" the number of RTAs based on the max
-    // Unique RTAs are packed across dispatch classes
-    // Common RTAs come after unique RTAs
+uint32_t configure_rta_offsets_for_kernel_groups(uint32_t programmable_core_type_index, std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels, std::vector<KernelGroup>& kernel_groups, uint32_t base_offset) {
     uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
-
     std::vector<uint32_t> max_rtas(processor_classes);
-    std::vector<uint32_t> max_crtas(processor_classes);
     uint32_t max_unique_rta_size = 0;
-    uint32_t total_crta_size = 0;
-
-    CoreType core_type = hal.get_core_type(programmable_core_type_index);
-    HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
-
-    this->get_program_config(programmable_core_type_index).rta_offset = base_offset;
-
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
-        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
+
+    for (auto& kg : kernel_groups) {
+        for (std::size_t dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             max_rtas[dispatch_class] = 0;
             auto& optional_id = kg.kernel_ids[dispatch_class];
             if (optional_id) {
-                auto kernel = get_kernel(optional_id.value());
-                for (const CoreRange &core_range : kg.core_ranges.ranges()) {
+                auto kernel = kernels.at(optional_id.value());
+                for (const CoreRange& core_range : kg.core_ranges.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                             CoreCoord core_coord(x, y);
@@ -1194,13 +1181,12 @@ uint32_t detail::Program_::finalize_rt_args(uint32_t programmable_core_type_inde
                 }
             }
         }
-
         uint32_t offset = 0;
-        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
+        for (std::size_t dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             auto& optional_id = kg.kernel_ids[dispatch_class];
             kg.rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
             if (optional_id) {
-                auto kernel = get_kernel(optional_id.value());
+                auto kernel = kernels.at(optional_id.value());
                 kernel->set_runtime_args_count(kg.core_ranges, max_rtas[dispatch_class]);
                 kg.launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
                 offset += max_rtas[dispatch_class] * sizeof(uint32_t);
@@ -1208,60 +1194,75 @@ uint32_t detail::Program_::finalize_rt_args(uint32_t programmable_core_type_inde
                 kg.launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = 0;
             }
         }
-
         kg.total_rta_size = offset;
         offset = align(offset, l1_alignment);
         max_unique_rta_size = std::max(offset, max_unique_rta_size);
     }
+    return max_unique_rta_size;
+}
+
+uint32_t configure_crta_offsets_for_kernel_groups(uint32_t programmable_core_type_index, std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels, std::vector<KernelGroup>& kernel_groups, uint32_t crta_base_offset, std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets, std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
+    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
+    std::vector<uint32_t> max_crtas(processor_classes);
 
     for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
         max_crtas[dispatch_class] = 0;
     }
     // Find the max # common RTAs across all kernels for each dispatch class
-    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-        auto kernel = get_kernel(kernel_id);
-        // TODO: kernels should be stored by programmable core type
-        if (core_type == kernel->get_kernel_core_type() &&
-            (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) == kernel->is_idle_eth()) {
-            uint32_t dispatch_class = kernel->dispatch_class();
-            max_crtas[dispatch_class] =
-                std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
-        }
+    for (auto& kernel_info : kernels) {
+        auto kernel = kernel_info.second;
+        uint32_t dispatch_class = kernel->dispatch_class();
+        max_crtas[dispatch_class] =
+            std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
     }
 
-    // Calculate the address offset and size for common RTAs for each dispatch class
+    // Derive crta offsets and sizes per dispatch class
     uint32_t offset = 0;
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
         uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
-        this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class] = base_offset + max_unique_rta_size + offset;
-        this->get_program_config(programmable_core_type_index).crta_sizes[dispatch_class] = size;
+        crta_offsets[dispatch_class] = crta_base_offset + offset;
+        crta_sizes[dispatch_class] = size;
         offset += size;
         offset = align(offset, l1_alignment);
     }
-    total_crta_size = offset;
+    uint32_t total_crta_size = offset;
 
     // Set the runtime_args_data sizing info based on the shared max
-    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-        auto kernel = get_kernel(kernel_id);
-        // TODO: as above, fix when kernels are stored by programmable core type
-        if (core_type == kernel->get_kernel_core_type() &&
-            (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) == kernel->is_idle_eth()) {
-            uint32_t dispatch_class = kernel->dispatch_class();
-            kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
-        }
+    for (auto& kernel_info : kernels) {
+        auto kernel = kernel_info.second;
+        uint32_t dispatch_class = kernel->dispatch_class();
+        kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
     }
-
     // Set the kernel group common runtime arg offsets use in the launch message
-    for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
+    for (auto& kg : kernel_groups) {
         for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            kg.launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset = this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class];
+            kg.launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset = crta_offsets[dispatch_class];
         }
     }
+    return total_crta_size;
+}
+
+uint32_t detail::Program_::finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset) {
+
+    // Iterate over kernels in the program and "level" the number of RTAs based on the max
+    // Unique RTAs are packed across dispatch classes
+    // Common RTAs come after unique RTAs
+    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
+
+    CoreType core_type = hal.get_core_type(programmable_core_type_index);
+    HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
+
+    uint32_t max_unique_rta_size = configure_rta_offsets_for_kernel_groups(programmable_core_type_index, this->kernels_[programmable_core_type_index], this->get_kernel_groups(programmable_core_type_index), base_offset);
+    this->get_program_config(programmable_core_type_index).rta_offset = base_offset;
+    uint32_t crta_base_offset = base_offset + max_unique_rta_size;
+    uint32_t total_crta_size = configure_crta_offsets_for_kernel_groups(programmable_core_type_index, this->kernels_[programmable_core_type_index], this->get_kernel_groups(programmable_core_type_index), crta_base_offset, this->get_program_config(programmable_core_type_index).crta_offsets, this->get_program_config(programmable_core_type_index).crta_sizes);
+
 
     // TODO: this is asserted here as the leveling above can break the limits enforced by the API
     // Once we use a ring buffer, memory space will be dynamic and this assert won't matter
-    std::uint32_t l1_kernel_config_size = tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
-    TT_FATAL(offset <= l1_kernel_config_size, "offset {} cannot exceed config size {}", offset, l1_kernel_config_size);
+    // std::uint32_t l1_kernel_config_size = tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+    // TT_FATAL(offset <= l1_kernel_config_size, "offset {} cannot exceed config size {}", offset, l1_kernel_config_size);
 
     return max_unique_rta_size + total_crta_size;
 }
@@ -1470,15 +1471,6 @@ void detail::Program_::finalize(Device *device) {
     // Store the number of tensix "go signals" for use by CQ
     // CQ iterates over these to update runtime addresses, needs to know when eth begins (after tensix)
     // TODO: should store all the counts
-    this->tensix_go_signal_count_ = 0;
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        CoreType core_type = hal.get_core_type(index);
-        if (core_type == CoreType::WORKER) {
-            for (auto& kg : this->get_kernel_groups(index)) {
-                this->tensix_go_signal_count_ += kg.core_ranges.size();
-            }
-        }
-    }
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = static_cast<HalProgrammableCoreType>(index);
