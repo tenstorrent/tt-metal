@@ -439,6 +439,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
         for (auto id : mmio_devices) {
             for (auto node : nodes_for_one_mmio) {
                 node.device_id = id;
+                node.servicing_device_id = id;
                 increment_node_ids(node, index_offset);
                 nodes.push_back(node);
             }
@@ -467,6 +468,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
                 // Pull nodes from the template, updating their index and device id
                 for (dispatch_kernel_node_t node : *nodes_for_one_mmio) {
                     node.device_id = template_id_to_device_id[node.device_id];
+                    node.servicing_device_id = template_id_to_device_id[node.servicing_device_id];
                     increment_node_ids(node, index_offset);
                     nodes.push_back(node);
                 }
@@ -498,6 +500,11 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
                     TT_ASSERT(node.device_id == 0 || node.device_id == 1);
                     if (node.device_id == 0) {
                         node.device_id = mmio_device_id;
+                        if (node.servicing_device_id == 0) {
+                            node.servicing_device_id = mmio_device_id;
+                        } else if (node.servicing_device_id == 1) {
+                            node.servicing_device_id = remote_device_id;
+                        }
                     } else {
                         node.device_id = remote_device_id;
                     }
