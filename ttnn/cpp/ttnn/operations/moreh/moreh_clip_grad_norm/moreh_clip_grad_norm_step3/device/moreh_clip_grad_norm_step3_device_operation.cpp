@@ -37,9 +37,14 @@ void MorehClipGradNormStep3Operation::validate_on_program_cache_hit(
 };
 
 // No output
-MorehClipGradNormStep3Operation::shape_return_value_t MorehClipGradNormStep3Operation::compute_output_shapes(
+MorehClipGradNormStep3Operation::spec_return_value_t MorehClipGradNormStep3Operation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return {};
+    std::vector<TensorSpec> output_specs;
+    output_specs.reserve(tensor_args.inputs.size());
+    for (const auto& input : tensor_args.inputs) {
+        output_specs.push_back(input.get_tensor_spec());
+    }
+    return output_specs;
 };
 
 // No output

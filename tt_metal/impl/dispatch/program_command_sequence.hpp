@@ -20,9 +20,12 @@ class CircularBuffer;
 
 }  // namespace v0
 
+constexpr uint32_t UncachedStallSequenceIdx = 0;
+constexpr uint32_t CachedStallSequenceIdx = 1;
 struct ProgramCommandSequence {
     HostMemDeviceCommand preamble_command_sequence;
-    HostMemDeviceCommand stall_command_sequence;
+    uint32_t current_stall_seq_idx = 0;
+    HostMemDeviceCommand stall_command_sequences[2];
     std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
     uint32_t runtime_args_fetch_size_bytes;
     HostMemDeviceCommand device_command_sequence;
