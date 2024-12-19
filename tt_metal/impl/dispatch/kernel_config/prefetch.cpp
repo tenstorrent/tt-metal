@@ -23,8 +23,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
-        logical_core_ = dispatch_core_manager::instance().prefetcher_core(device_->id(), channel, cq_id_);
-
         dependent_config_.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.downstream_cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.downstream_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
@@ -83,8 +81,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
-        logical_core_ = dispatch_core_manager::instance().prefetcher_core(servicing_device_id_, channel, cq_id_);
-
         static_config_.downstream_cb_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         if (tt::Cluster::instance().is_galaxy_cluster()) {  // TODO: whys is this hard-coded for galaxy?
             static_config_.downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(1);
@@ -123,8 +119,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_s_buffer_size = 0;
         static_config_.dispatch_s_cb_log_page_size = 0;
     } else if (static_config_.is_d_variant.value()) {
-        logical_core_ = dispatch_core_manager::instance().prefetcher_d_core(device_->id(), channel, cq_id_);
-
         dependent_config_.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.downstream_cb_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.downstream_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
