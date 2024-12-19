@@ -137,10 +137,6 @@ typedef struct test_board {
         for (auto i = start_row_idx; i < (start_row_idx + num_rows); i++) {
             for (auto j = i; j < 32; j += 8) {
                 physical_chip_id = control_plane->get_physical_chip_id_from_mesh_chip_id({mesh_id, j});
-<<<<<<< HEAD
-=======
-                std::cout << "logical :" << j << ", physical: " << physical_chip_id << std::endl;
->>>>>>> e64cf17557459b6c01d438abba3b5baeae935686
                 physical_chip_ids.push_back(physical_chip_id);
             }
         }
@@ -237,6 +233,13 @@ typedef struct test_device {
         }
     }
 
+    void terminate_router_kernels() {
+        std::vector<uint32_t> zero_buf(1, 0);
+        for (auto& core : router_physical_cores) {
+            tt::llrt::write_hex_vec_to_core(device_handle->id(), core, zero_buf, FABRIC_ROUTER_SYNC_SEM);
+        }
+    }
+
     std::vector<CoreCoord> select_random_worker_cores(uint32_t count) {
         std::vector<CoreCoord> result;
         std::random_device rd;
@@ -286,6 +289,7 @@ typedef struct test_traffic {
     std::vector<std::vector<uint32_t>> rx_to_tx_address_map;
     std::vector<std::vector<uint32_t>> tx_results;
     std::vector<std::vector<uint32_t>> rx_results;
+    uint32_t test_results_address;
 
     test_traffic(
         std::shared_ptr<test_device_t>& tx_device_,
@@ -329,11 +333,15 @@ typedef struct test_traffic {
         std::vector<uint32_t>& rx_compile_args,
         std::map<string, string>& defines,
         uint32_t fabric_command,
-        uint32_t tx_signal_address) {
+        uint32_t tx_signal_address,
+        uint32_t test_results_address_) {
         CoreCoord core, dest_core;
         std::vector<uint32_t> zero_buf(2, 0);
         CoreCoord router_phys_core = tx_device->get_router_core();
         uint32_t mesh_chip_id = rx_device->mesh_chip_id;
+
+        // update the test results address, which will be used later for polling, collecting results
+        test_results_address = test_results_address_;
 
         // launch tx kernels
         for (auto i = 0; i < num_tx_workers; i++) {
@@ -391,10 +399,13 @@ typedef struct test_traffic {
                     runtime_args.push_back(address);
                 }
             } else if (ATOMIC_INC == fabric_command) {
-                std::vector<uint32_t> zero_buf(2, 0);
                 tt::llrt::write_hex_vec_to_core(
                     rx_device->device_handle->id(), rx_physical_cores[i], zero_buf, target_address);
             }
+
+            // zero out the test results address, which will be used for polling
+            tt::llrt::write_hex_vec_to_core(
+                rx_device->device_handle->id(), rx_physical_cores[i], zero_buf, test_results_address);
 
             log_info(LogTest, "run traffic_gen_rx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
@@ -415,6 +426,18 @@ typedef struct test_traffic {
         std::vector<uint32_t> start_signal(1, 1);
         for (auto core : tx_physical_cores) {
             tt::llrt::write_hex_vec_to_core(tx_device->device_handle->id(), core, start_signal, address);
+        }
+    }
+
+    void wait_for_rx_workers_to_finish() {
+        for (auto& rx_core : rx_physical_cores) {
+            while (true) {
+                auto tx_status =
+                    tt::llrt::read_hex_vec_from_core(rx_device->device_handle->id(), rx_core, test_results_address, 4);
+                if ((tx_status[0] & 0xFFFF) != 0) {
+                    break;
+                }
+            }
         }
     }
 
@@ -729,10 +752,6 @@ int main(int argc, char **argv) {
     uint32_t tx_signal_address = default_tx_signal_address;
 
     std::string board_type = test_args::get_command_option(input_args, "--board_type", std::string(default_board_type));
-<<<<<<< HEAD
-=======
-    ;
->>>>>>> e64cf17557459b6c01d438abba3b5baeae935686
 
     bool pass = true;
 
@@ -747,10 +766,6 @@ int main(int argc, char **argv) {
         std::vector<test_traffic_t> fabric_traffic;
 
         // init test devices
-<<<<<<< HEAD
-=======
-        // TODO: remove hard-coding
->>>>>>> e64cf17557459b6c01d438abba3b5baeae935686
         for (auto& [tx_chip_id, rx_chip_id] : test_board.unicast_map) {
             test_devices[tx_chip_id] = std::make_shared<test_device_t>(tx_chip_id, &test_board);
             test_devices[rx_chip_id] = std::make_shared<test_device_t>(rx_chip_id, &test_board);
@@ -841,7 +856,8 @@ int main(int argc, char **argv) {
 
         // TODO: launch traffic kernels
         for (auto& traffic : fabric_traffic) {
-            traffic.launch_kernels(tx_compile_args, rx_compile_args, defines, fabric_command, tx_signal_address);
+            traffic.launch_kernels(
+                tx_compile_args, rx_compile_args, defines, fabric_command, tx_signal_address, test_results_addr);
         }
 
         if (check_txrx_timeout) {
@@ -856,8 +872,18 @@ int main(int argc, char **argv) {
         }
 
         // notify tx kernels to start transmitting
-        for (auto traffic : fabric_traffic) {
+        for (auto& traffic : fabric_traffic) {
             traffic.notify_tx_workers(tx_signal_address);
+        }
+
+        // wait for rx kernels to finish
+        for (auto& traffic : fabric_traffic) {
+            traffic.wait_for_rx_workers_to_finish();
+        }
+
+        // terminate fabric routers
+        for (auto& [chip_id, test_device] : test_devices) {
+            test_device->terminate_router_kernels();
         }
 
         // wait for programs to exit
@@ -870,7 +896,7 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
-        // TODO: collect traffic results
+        // collect traffic results
         for (auto& traffic : fabric_traffic) {
             pass &= traffic.collect_results(test_results_addr);
         }
@@ -891,17 +917,18 @@ int main(int argc, char **argv) {
            packet_queue_test_status_to_string(r_router_results[PQ_TEST_STATUS_INDEX])); pass &=
            (r_router_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
         */
+
         // close devices
         for (auto& [chip_id, test_device] : test_devices) {
             tt_metal::CloseDevice(test_device->device_handle);
         }
 
-        // TODO: tally-up the packets and words from tx/rx kernels
+        // tally-up the packets and words from tx/rx kernels
         for (auto& traffic : fabric_traffic) {
             pass &= traffic.validate_results();
         }
 
-        // TODO: print results
+        // print results
         if (pass) {
             for (auto& traffic : fabric_traffic) {
                 traffic.print_result_summary();

@@ -54,7 +54,6 @@ void kernel_main() {
     if constexpr (ASYNC_WR == test_command) {
         uint32_t packet_rnd_seed = 0;
         uint64_t curr_packet_words = 0, curr_payload_words = 0, processed_packet_words_src = 0;
-        uint32_t src_endpoint_id = 1028;  // TODO: remove hardcoding, instead read as compile time args
         uint32_t max_packet_size_mask, temp;
         uint32_t mismatch_addr, mismatch_val, expected_val;
         tt_l1_ptr uint32_t* read_addr;
@@ -133,12 +132,6 @@ void kernel_main() {
 
         processed_packet_words = num_packets * PACKET_HEADER_SIZE_WORDS;
     }
-
-    // DPRINT << "rx kernel: test_command: " << test_command << ENDL();
-    // DPRINT << "rx kernel: num_producers: " << num_producers << ENDL();
-    // DPRINT << "rx kernel: total_data_words: " << total_data_words << ENDL();
-    // DPRINT << "rx kernel: data_words_processed: " << processed_packet_words << ENDL();
-    // DPRINT << "rx kernel: packets_processed: " << num_packets << ENDL();
 
     // write out results
     set_64b_result(test_results, processed_packet_words, PQ_TEST_WORD_CNT_INDEX);

@@ -249,10 +249,9 @@ void kernel_main() {
     uint32_t router_y = get_arg_val<uint32_t>(3);
     dest_device = get_arg_val<uint32_t>(4);
 
-    if (1 == test_command) {
+    if (ASYNC_WR == test_command) {
         target_address = get_arg_val<uint32_t>(5);
     }
-    DPRINT << "tx kernel: id: " << src_endpoint_id << ", target_address: " << target_address << ENDL();
 
     uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
     noc_async_read_one_packet(
@@ -368,10 +367,6 @@ void kernel_main() {
     set_64b_result(test_results, few_data_sent_iter, TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
     set_64b_result(test_results, many_data_sent_iter, TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
 
-    // DPRINT << "tx kernel: id: " << my_ep_id << ", test_command: " << test_command << ENDL();
-    DPRINT << "tx kernel: id: " << src_endpoint_id << ", data_words_sent: " << data_words_sent << ENDL();
-    DPRINT << "tx kernel: id: " << src_endpoint_id << ", packets_sent: " << num_packets << ENDL();
-
     if (test_producer.packet_corrupted) {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_BAD_HEADER;
         test_results[PQ_TEST_MISC_INDEX] = packet_count;
@@ -382,6 +377,4 @@ void kernel_main() {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
         set_64b_result(test_results, words_flushed, TX_TEST_IDX_WORDS_FLUSHED);
     }
-
-    DPRINT << "tx kernel: id: " << src_endpoint_id << ", exiting" << ENDL();
 }
