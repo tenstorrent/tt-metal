@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <bitset>
 #include <memory>
 #include <optional>
 
@@ -31,6 +30,18 @@ class CircularBufferConfig;
 
 }  // namespace v0
 
+namespace v1 {
+namespace experimental {
+class GlobalCircularBuffer;
+CBHandle CreateCircularBuffer(
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const CircularBufferConfig& config,
+    const GlobalCircularBuffer& global_circular_buffer);
+
+}  // namespace experimental
+}  // namespace v1
+
 class EnqueueProgramCommand;
 class HWCommandQueue;
 class JitBuildOptions;
@@ -54,19 +65,20 @@ struct KernelGroup {
     kernel_id_array_t kernel_ids;
     uint32_t rta_sizes[DISPATCH_CLASS_MAX];
     uint32_t total_rta_size;
-    uint32_t kernel_text_offsets[MaxProcessorsPerCoreType];
-    uint32_t kernel_bin_sizes[MaxProcessorsPerCoreType];
+    uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE];
     launch_msg_t launch_msg;
     go_msg_t go_msg;
 
     KernelGroup();
     KernelGroup(
-        const detail::Program_ &program,
+        const detail::Program_& program,
         uint32_t programmable_core_type_index,
         kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
-        int last_cb_index,
-        const CoreRangeSet &new_ranges);
+        uint32_t max_local_cb_end_index,
+        uint32_t min_remote_cb_start_index,
+        const CoreRangeSet& new_ranges);
 
     uint32_t get_programmable_core_type_index() const;
 
@@ -82,11 +94,18 @@ struct ProgramConfig {
     uint32_t sem_size;
     uint32_t cb_offset;
     uint32_t cb_size;
+    uint32_t local_cb_size;
     uint32_t kernel_text_offset; // offset of first kernel bin
     uint32_t kernel_text_size;   // max size of all kernel bins across all kernel groups
 };
 
 inline namespace v0 {
+// Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
+enum class ProgramBinaryStatus : uint8_t {
+    NotSent = 0, // Binaries have not been written
+    InFlight = 1, // Fast Dispatch Commands to write the binaries to DRAM has been issued
+    Committed = 2, // Binaries have been commited to DRAM
+};
 
 class Program {
    public:
@@ -122,9 +141,9 @@ class Program {
 
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
 
-    std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core) const;
+    std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core, CoreType core_type) const;
 
-    size_t num_semaphores ( const CoreCoord & core ) const;
+    size_t num_semaphores ( const CoreCoord & core, CoreType core_type ) const;
     size_t num_semaphores () const;
     void init_semaphores ( const Device & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
@@ -138,7 +157,10 @@ class Program {
 
     bool is_finalized() const;
     bool is_cached() const;
+    ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
     void set_cached();
+    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
+    void allocate_kernel_bin_buf_on_device(Device* device);
     void finalize(Device *device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
@@ -157,6 +179,11 @@ class Program {
     std::unique_ptr<detail::Program_> pimpl_;
 
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
+    friend CBHandle v1::experimental::CreateCircularBuffer(
+        Program& program,
+        const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+        const CircularBufferConfig& config,
+        const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
@@ -166,6 +193,10 @@ class Program {
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
+    CBHandle add_circular_buffer(
+        const CoreRangeSet& core_range_set,
+        const CircularBufferConfig& config,
+        const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
@@ -180,7 +211,7 @@ class Program {
     friend detail::Internal_;
 
     const ProgramTransferInfo &get_program_transfer_info() const noexcept;
-    const std::shared_ptr<Buffer> &get_kernels_buffer() const noexcept;
+    std::shared_ptr<Buffer> get_kernels_buffer(Device* device) const noexcept;
     const std::vector<uint32_t> &get_program_config_sizes() const noexcept;
     std::unordered_map<uint64_t, ProgramCommandSequence> &get_cached_program_command_sequences() noexcept;
 };

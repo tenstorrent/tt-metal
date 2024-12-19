@@ -297,36 +297,46 @@ uint32_t CreateSemaphore(
  * Initializes a global semaphore on all cores within the specified CoreRangeSet.
  * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
  *
- * Return value: std::unique_ptr<GlobalSemaphore>.
+ * Return value: std::shared_ptr<GlobalSemaphore>
  *
- * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
- * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | device        | The device to create the semaphore on                | Device *                                                  |              | Yes      |
- * | cores         | Range of the Tensix co-ordinates using the semaphore | const CoreRangeSet &                                      |              | Yes      |
- * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
- * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
+ * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
+ * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
+ * | device         | The device to create the semaphore on                  | Device *                                                  |              | Yes      |
+ * | cores          | Range of the Tensix co-ordinates using the semaphore   | const CoreRangeSet &                                      |              | Yes      |
+ * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
+ * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
+ * | sub_device_ids | Sub-device ids to wait on before writing the semaphore | tt::stl::Span<const SubDeviceId>                          |              | No       |
  */
 // clang-format on
-std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+    Device* device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type = BufferType::L1,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 // clang-format off
 /**
  * Initializes a global semaphore on all cores within the specified CoreRangeSet.
  * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
  *
- * Return value: std::unique_ptr<GlobalSemaphore>.
+ * Return value: std::shared_ptr<GlobalSemaphore>
  *
- * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
- * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | device        | The device to create the semaphore on                | Device *                                                  |              | Yes      |
- * | cores         | Range of the Tensix co-ordinates using the semaphore | CoreRangeSet &&                                           |              | Yes      |
- * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
- * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
+ * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
+ * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
+ * | device         | The device to create the semaphore on                  | Device *                                                  |              | Yes      |
+ * | cores          | Range of the Tensix co-ordinates using the semaphore   | CoreRangeSet &&                                           |              | Yes      |
+ * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
+ * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
+ * | sub_device_ids | Sub-device ids to wait on before writing the semaphore | tt::stl::Span<const SubDeviceId>                          |              | No       |
  */
 // clang-format on
-std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
-    Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+std::shared_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+    Device* device,
+    CoreRangeSet&& cores,
+    uint32_t initial_value,
+    BufferType buffer_type = BufferType::L1,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 // clang-format off
 /**

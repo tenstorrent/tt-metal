@@ -11,7 +11,7 @@
 #include <tuple>
 
 #include "gtest/gtest.h"
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "impl/device/device.hpp"
@@ -244,23 +244,23 @@ void build_and_run_autonomous_stream_test(
     log_trace(
         tt::LogTest,
         "sender_core: x={}, y={}",
-        device->physical_core_from_logical_core(sender_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(sender_core, CoreType::WORKER).y);
+        device->virtual_core_from_logical_core(sender_core, CoreType::WORKER).x,
+        device->virtual_core_from_logical_core(sender_core, CoreType::WORKER).y);
     log_trace(
         tt::LogTest,
         "first_relay_core: x={}, y={}",
-        device->physical_core_from_logical_core(first_relay_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(first_relay_core, CoreType::WORKER).y);
+        device->virtual_core_from_logical_core(first_relay_core, CoreType::WORKER).x,
+        device->virtual_core_from_logical_core(first_relay_core, CoreType::WORKER).y);
     log_trace(
         tt::LogTest,
         "second_relay_core: x={}, y={}",
-        device->physical_core_from_logical_core(second_relay_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(second_relay_core, CoreType::WORKER).y);
+        device->virtual_core_from_logical_core(second_relay_core, CoreType::WORKER).x,
+        device->virtual_core_from_logical_core(second_relay_core, CoreType::WORKER).y);
     log_trace(
         tt::LogTest,
         "receiver_core: x={}, y={}",
-        device->physical_core_from_logical_core(receiver_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(receiver_core, CoreType::WORKER).y);
+        device->virtual_core_from_logical_core(receiver_core, CoreType::WORKER).x,
+        device->virtual_core_from_logical_core(receiver_core, CoreType::WORKER).y);
 
     // Input DRAM buffer creation
     uint32_t buffer_size_bytes = num_messages * page_size;

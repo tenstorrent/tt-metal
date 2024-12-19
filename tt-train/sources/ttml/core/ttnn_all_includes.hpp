@@ -9,7 +9,8 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-volatile"
 #pragma GCC diagnostic ignored "-Wdeprecated-this-capture"
 
-#include <common/bfloat16.hpp>                                                                     // NOLINT
+#include <common/bfloat16.hpp>  // NOLINT
+#include <distributed/mesh_device_view.hpp>
 #include <tests/tt_metal/test_utils/env_vars.hpp>                                                  // NOLINT
 #include <tt_metal/common/base_types.hpp>                                                          // NOLINT
 #include <tt_metal/common/math.hpp>                                                                // NOLINT
@@ -54,8 +55,13 @@
 #include <ttnn/operations/moreh/moreh_sum/moreh_sum.hpp>                                           // NOLINT
 #include <ttnn/operations/normalization/softmax/softmax.hpp>                                       // NOLINT
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>                                // NOLINT
+#include <ttnn/tensor/enum_types.hpp>                                                              // NOLINT
 #include <ttnn/tensor/host_buffer/functions.hpp>                                                   // NOLINT
 #include <ttnn/tensor/tensor.hpp>                                                                  // NOLINT
 #include <ttnn/tensor/types.hpp>                                                                   // NOLINT
+#include <ttnn/tensor/xtensor/conversion_utils.hpp>                                                // NOLINT
+#include <ttnn/tensor/xtensor/partition.hpp>                                                       // NOLINT
+#include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>                                            // NOLINT
 #include <ttnn/types.hpp>                                                                          // NOLINT
+
 #pragma GCC diagnostic pop

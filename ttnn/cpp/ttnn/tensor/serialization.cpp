@@ -15,13 +15,11 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 using MeshDevice = distributed::MeshDevice;
 
-namespace detail {
+namespace {
 
 static constexpr std::size_t SENTINEL_VALUE = std::numeric_limits<std::size_t>::max();
 
@@ -191,7 +189,7 @@ Storage load_storage(std::ifstream& input_stream, DataType data_type, StorageTyp
     }
 }
 
-}  // namespace detail
+}  // namespace
 
 void dump_tensor(
     const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
@@ -205,7 +203,7 @@ void dump_tensor(
     auto layout = tensor.get_layout();
     auto storage_type = tensor.storage_type();
 
-    output_stream.write(reinterpret_cast<const char*>(&detail::SENTINEL_VALUE), sizeof(std::size_t));
+    output_stream.write(reinterpret_cast<const char*>(&SENTINEL_VALUE), sizeof(std::size_t));
     output_stream.write(reinterpret_cast<const char*>(&VERSION_ID), sizeof(std::uint8_t));
     output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(ttnn::Shape));
     output_stream.write(reinterpret_cast<const char*>(&data_type), sizeof(DataType));
@@ -230,16 +228,16 @@ void dump_tensor(
         [&output_stream, &strategy](const auto& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                detail::dump_owned_storage(output_stream, storage);
+                dump_owned_storage(output_stream, storage);
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                detail::dump_borrowed_storage(output_stream, storage);
+                dump_borrowed_storage(output_stream, storage);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 auto distribute_config = get_distributed_tensor_config(strategy);
-                detail::dump_multi_device_host_storage(output_stream, storage, distribute_config);
+                dump_multi_device_host_storage(output_stream, storage, distribute_config);
             } else {
                 raise_unsupported_storage<StorageType>();
             }
@@ -256,7 +254,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
 
     std::size_t read_sentinel;
     input_stream.read(reinterpret_cast<char*>(&read_sentinel), sizeof(read_sentinel));
-    if (read_sentinel == detail::SENTINEL_VALUE) {
+    if (read_sentinel == SENTINEL_VALUE) {
         std::uint8_t version_id;
         input_stream.read(reinterpret_cast<char*>(&version_id), sizeof(version_id));
 
@@ -285,7 +283,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
             }
         }
 
-        auto storage = detail::load_storage(input_stream, data_type, storage_type, device);
+        auto storage = load_storage(input_stream, data_type, storage_type, device);
 
         auto tensor = Tensor(std::move(storage), shape, data_type, layout);
         if (device != nullptr) {
@@ -305,7 +303,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
         input_stream.read(reinterpret_cast<char*>(&data_type), sizeof(DataType));
         input_stream.read(reinterpret_cast<char*>(&layout), sizeof(Layout));
 
-        auto storage = detail::load_owned_storage(input_stream, data_type);
+        auto storage = load_owned_storage(input_stream, data_type);
         auto tensor = Tensor(std::move(storage), shape, data_type, layout);
         if (device != nullptr) {
             tensor = tensor.to(device);
@@ -322,6 +320,76 @@ Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     return load_tensor_helper<MeshDevice*>(file_name, device);
 }
 
-}  // namespace tt_metal
+void dump_memory_config(std::ostream& output_stream, const MemoryConfig& memory_config) {
+    output_stream.write(reinterpret_cast<const char*>(&VERSION_ID), sizeof(std::uint8_t));
+    output_stream.write(reinterpret_cast<const char*>(&memory_config.memory_layout), sizeof(TensorMemoryLayout));
+    output_stream.write(reinterpret_cast<const char*>(&memory_config.buffer_type), sizeof(BufferType));
 
-}  // namespace tt
+    bool has_shard_spec = memory_config.shard_spec.has_value();
+    output_stream.write(reinterpret_cast<const char*>(&has_shard_spec), sizeof(bool));
+    if (has_shard_spec) {
+        const auto& shard_spec = memory_config.shard_spec.value();
+        const auto& core_ranges = shard_spec.grid.ranges();
+        std::size_t num_core_ranges = core_ranges.size();
+        output_stream.write(reinterpret_cast<const char*>(&num_core_ranges), sizeof(std::size_t));
+        for (const auto& core_range : core_ranges) {
+            output_stream.write(reinterpret_cast<const char*>(&core_range), sizeof(CoreRange));
+        }
+        output_stream.write(reinterpret_cast<const char*>(&shard_spec.shape), sizeof(std::array<uint32_t, 2>));
+        output_stream.write(reinterpret_cast<const char*>(&shard_spec.orientation), sizeof(ShardOrientation));
+        output_stream.write(reinterpret_cast<const char*>(&shard_spec.halo), sizeof(bool));
+    }
+}
+
+void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config) {
+    std::ofstream output_stream(file_name, std::ios::out | std::ios::binary);
+    if (not output_stream) {
+        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+    }
+    dump_memory_config(output_stream, memory_config);
+}
+
+MemoryConfig load_memory_config(std::ifstream& input_stream) {
+    std::uint8_t version_id;
+    TensorMemoryLayout memory_layout;
+    BufferType buffer_type;
+    bool has_shard_spec;
+    input_stream.read(reinterpret_cast<char*>(&version_id), sizeof(std::uint8_t));
+    if (version_id != VERSION_ID) {
+        throw std::runtime_error(fmt::format("Unsupported version_id: {}", version_id));
+    }
+    input_stream.read(reinterpret_cast<char*>(&memory_layout), sizeof(TensorMemoryLayout));
+    input_stream.read(reinterpret_cast<char*>(&buffer_type), sizeof(BufferType));
+    input_stream.read(reinterpret_cast<char*>(&has_shard_spec), sizeof(bool));
+
+    std::optional<ShardSpec> shard_spec = std::nullopt;
+    if (has_shard_spec) {
+        std::size_t num_core_ranges;
+        std::set<CoreRange> core_ranges;
+        std::array<uint32_t, 2> shape;
+        ShardOrientation orientation;
+        bool halo;
+
+        input_stream.read(reinterpret_cast<char*>(&num_core_ranges), sizeof(std::size_t));
+        for (auto index = 0; index < num_core_ranges; index++) {
+            CoreRange core_range{{}, {}};
+            input_stream.read(reinterpret_cast<char*>(&core_range), sizeof(CoreRange));
+            core_ranges.insert(core_range);
+        }
+        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(std::array<uint32_t, 2>));
+        input_stream.read(reinterpret_cast<char*>(&orientation), sizeof(ShardOrientation));
+        input_stream.read(reinterpret_cast<char*>(&halo), sizeof(bool));
+        shard_spec = {CoreRangeSet{core_ranges}, shape, orientation, halo};
+    }
+    return MemoryConfig{memory_layout, buffer_type, shard_spec};
+}
+
+MemoryConfig load_memory_config(const std::string& file_name) {
+    std::ifstream input_stream(file_name, std::ios::in | std::ios::binary);
+    if (not input_stream) {
+        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+    }
+    return load_memory_config(input_stream);
+}
+
+}  // namespace tt::tt_metal

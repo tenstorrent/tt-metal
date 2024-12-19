@@ -9,7 +9,7 @@
 #include <random>
 #include <tuple>
 
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "impl/device/device.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "tt_backend_api_types.hpp"
@@ -25,6 +25,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
+
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -267,7 +270,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-    } catch (std::exception e) {
+    } catch (std::exception& e) {
         test_fixture.TearDown();
         return -1;
     }

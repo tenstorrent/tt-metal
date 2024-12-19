@@ -8,7 +8,8 @@
 
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/common/assert.hpp"
-#include "umd/device/cluster.h"
+#include "umd/device/pci_device.hpp"
+#include "umd/device/tt_soc_descriptor.h"
 
 namespace tt::tt_metal {
 
@@ -42,13 +43,12 @@ namespace tt::tt_metal {
  * if (arch == tt::ARCH::Invalid) {
  *     std::cerr << "Failed to detect architecture!" << std::endl;
  * } else {
- *     std::cout << "Detected architecture: " << tt::get_arch_str(arch) << std::endl;
+ *     std::cout << "Detected architecture: " << tt::arch_to_str(arch) << std::endl;
  * }
  * @endcode
  *
  * @see tt::get_arch_from_string
- * @see tt::umd::Cluster::detect_available_device_ids
- * @see detect_arch
+ * @see PCIDevice::enumerate_devices_info
  */
 inline tt::ARCH get_platform_architecture() {
     auto arch = tt::ARCH::Invalid;
@@ -57,18 +57,20 @@ inline tt::ARCH get_platform_architecture() {
         TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
         arch = tt::get_arch_from_string(arch_env);
     } else {
-        std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
-        if (!physical_mmio_device_ids.empty()) {
-            arch = detect_arch(physical_mmio_device_ids.at(0));
-            for (int i = 1; i < physical_mmio_device_ids.size(); ++i) {
-                chip_id_t device_id = physical_mmio_device_ids.at(i);
-                tt::ARCH detected_arch = detect_arch(device_id);
+
+        // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
+        // This map holds PCI info for each mmio chip.
+        auto devices_info = PCIDevice::enumerate_devices_info();
+        if (devices_info.size() > 0) {
+            arch = devices_info.begin()->second.get_arch();
+            for (auto &[device_id, device_info] : devices_info) {
+                tt::ARCH detected_arch = device_info.get_arch();
                 TT_FATAL(
                     arch == detected_arch,
                     "Expected all devices to be {} but device {} is {}",
-                    get_arch_str(arch),
+                    tt::arch_to_str(arch),
                     device_id,
-                    get_arch_str(detected_arch));
+                    tt::arch_to_str(detected_arch));
             }
         }
     }

@@ -176,9 +176,9 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     const Tensor& input_tensor_b_arg,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     return invoke(
         DefaultQueueId,
         input_tensor_a_arg,
@@ -196,10 +196,10 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     const ttnn::Tensor& input_tensor_a,
     float scalar,
     const std::optional<const DataType>& output_dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     return ttnn::prim::binary(
         queue_id,
         input_tensor_a,
@@ -219,10 +219,10 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     const ttnn::Tensor& input_tensor_a,
     float scalar,
     const std::optional<const DataType>& output_dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     return BinaryOperation::invoke(
         DefaultQueueId,
         input_tensor_a,
@@ -241,7 +241,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     const Tensor& input_tensor_b_arg,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor,
+    const std::optional<Tensor>& optional_output_tensor,
     const std::optional<unary::FusedActivations>& activations,
     const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
@@ -265,7 +265,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
         input_tensor_b,
         binary_op_type,
         dtype,
-        output_memory_config,
+        memory_config,
         optional_output_tensor,
         activations,
         input_tensor_a_activation);
@@ -277,9 +277,9 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     const Tensor& input_tensor_b_arg,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation)  {
     return invoke(
         DefaultQueueId,
         input_tensor_a_arg,
@@ -366,8 +366,8 @@ template <BinaryOpType binary_op_type>
 Tensor InplaceBinaryOperation<binary_op_type>::invoke(
     const Tensor& input_tensor_a_arg,
     const Tensor& input_tensor_b_arg,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     return BinaryOperation<binary_op_type>::invoke(
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -382,10 +382,61 @@ template <BinaryOpType binary_op_type>
 Tensor InplaceBinaryOperation<binary_op_type>::invoke(
     const ttnn::Tensor& input_tensor_a,
     const float scalar,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     return BinaryOperation<binary_op_type>::invoke(
         input_tensor_a, scalar, std::nullopt, std::nullopt, input_tensor_a, activations, input_tensor_a_activation);
+}
+
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationSfpu<binary_op_type>::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
+    auto [input_tensor_a, input_tensor_b] =
+        detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg);
+
+    auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
+    DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
+    if (optional_output_tensor.has_value()) {
+        dtype = optional_output_tensor.value().get_dtype();
+    }
+
+    return ttnn::prim::binary(
+        queue_id,
+        input_tensor_a,
+        input_tensor_b,
+        binary_op_type,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        activations,
+        input_tensor_a_activation);
+}
+
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationSfpu<binary_op_type>::invoke(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<unary::FusedActivations>& activations,
+    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
+    return invoke(
+        DefaultQueueId,
+        input_tensor_a_arg,
+        input_tensor_b_arg,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        activations,
+        input_tensor_a_activation);
 }
 
 template struct BinaryOperation<BinaryOpType::ADD>;
@@ -403,6 +454,7 @@ template struct BinaryOperation<BinaryOpType::LOGADDEXP2>;
 template struct BinaryOperation<BinaryOpType::SQUARED_DIFFERENCE>;
 template struct BinaryOperation<BinaryOpType::DIV_FAST>;
 template struct BinaryOperation<BinaryOpType::BIAS_GELU>;
+template struct BinaryOperation<BinaryOpType::RSUB>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;
 template struct RelationalBinary<BinaryOpType::NE>;
@@ -421,5 +473,12 @@ template struct InplaceRelationalBinary<BinaryOpType::NE>;
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_AND>;
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_OR>;
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_XOR>;
+
+template struct BinaryOperationSfpu<BinaryOpType::POWER>;
+template struct BinaryOperationSfpu<BinaryOpType::BITWISE_AND>;
+template struct BinaryOperationSfpu<BinaryOpType::BITWISE_XOR>;
+template struct BinaryOperationSfpu<BinaryOpType::BITWISE_OR>;
+template struct BinaryOperationSfpu<BinaryOpType::LEFT_SHIFT>;
+template struct BinaryOperationSfpu<BinaryOpType::RIGHT_SHIFT>;
 
 }  // namespace ttnn::operations::binary

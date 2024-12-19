@@ -186,27 +186,24 @@ void AllGather::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<ttnn::SimpleShape> AllGather::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto shape = input_tensors[0].get_padded_shape();  // TODO: Replace with get_logical_shape()
-    shape[this->dim] *= this->ring_size;
-    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
+std::vector<ttnn::TensorSpec> AllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    auto output_shape = input_tensors[0].get_padded_shape();  // TODO: Replace with get_logical_shape()
+    output_shape[this->dim] *= this->ring_size;
+
+    const auto& input_tensor = input_tensors[0];
+    TensorSpec spec(
+        output_shape,
+        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config));
+    if (this->output_mem_config.is_sharded()) {
+        return {TensorSpec(
+            output_shape,
+            TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
+    }
+    return std::vector<TensorSpec>(input_tensors.size(), spec);
 }
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors[0];
-    auto tile = input_tensor.get_tensor_spec().tile();
-    if (this->output_mem_config.is_sharded()) {
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            input_tensor.get_dtype(),
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            this->output_mem_config,
-            tile)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, tile);
-    }
+    return operation::default_create_output_tensors(*this, input_tensors, {});
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(
@@ -303,7 +300,7 @@ Tensor all_gather(
         topology == ttnn::ccl::Topology::Linear,
         "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     int32_t rank = input_tensor.get_logical_shape().rank();
 
@@ -333,7 +330,7 @@ Tensor all_gather(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
 
-            const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
+            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
             const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
             const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
 
@@ -344,7 +341,7 @@ Tensor all_gather(
                 } else {
                     new_coord.col = line_index % num_devices;
                 }
-                return mesh_view->find_device_id(new_coord);
+                return mesh_view.find_device_id(new_coord);
             };
 
             bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);

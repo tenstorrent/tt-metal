@@ -16,6 +16,13 @@ class HostEmbedding(torch.nn.Module):
         return self.emb(x)
 
 
+# Default configuration for Paged Attention
+class PagedAttentionConfig:
+    def __init__(self, block_size=32, max_num_blocks=1024):
+        self.block_size = block_size
+        self.max_num_blocks = max_num_blocks
+
+
 def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None):
     """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
     {{ system_prompt }}<|eot_id|><|start_header_id|>user<|end_header_id|>
@@ -37,10 +44,9 @@ def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None
     return begin_of_text + system_prompt + user_prompt + assistant_reply
 
 
-def apply_scaling(freqs: torch.Tensor):
-    # Llama-3.1 specific scaling
+def apply_scaling(freqs: torch.Tensor, scale_factor: float = 8):
+    # Llama-3.x specific scaling
     # Values obtained from grid search
-    scale_factor = 8
     low_freq_factor = 1
     high_freq_factor = 4
     old_context_len = 8192  # original llama3 length
@@ -61,7 +67,7 @@ def apply_scaling(freqs: torch.Tensor):
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-def precompute_freqs(dim: int, end: int, theta: float = 500000.0, use_scaled: bool = True):
+def precompute_freqs(dim: int, end: int, theta: float = 500000.0, use_scaled: bool = True, scale_factor: float = 8):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -76,7 +82,7 @@ def precompute_freqs(dim: int, end: int, theta: float = 500000.0, use_scaled: bo
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
     if use_scaled:
-        freqs = apply_scaling(freqs)
+        freqs = apply_scaling(freqs, scale_factor)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
@@ -97,49 +103,6 @@ def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
     return rot_emb_matrix
 
 
-def gather_rotary_emb(rot_emb_matrix, position_ids):
-    """
-    Gather the rotary embeddings for a given position_ids
-    """
-    batch_size, seqlen = position_ids.shape
-    emb_size, _, dhead = rot_emb_matrix.shape
-    position_ids = position_ids.view(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, dhead, dhead)
-    rot_emb = rot_emb_matrix.gather(0, position_ids).view(batch_size, seqlen, dhead, dhead)
-    return rot_emb
-
-
-def get_rotation_mat_batched(rot_mat, start_pos, seqlen, batch):
-    if isinstance(start_pos, int):
-        start_pos = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
-    position_ids = start_pos.view(seqlen, batch)
-    rot_emb = gather_rotary_emb(rot_mat, position_ids)
-    return rot_emb
-
-
-# Sample logits from a distribution
-def sample_top_p(probs: torch.Tensor, p: float):
-    assert 0 <= p <= 1
-
-    probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
-    probs_sum = torch.cumsum(probs_sort, dim=-1)
-    mask = probs_sum - probs_sort > p
-    probs_sort[mask] = 0.0
-    probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
-
-    next_token = torch.multinomial(probs_sort, num_samples=1)
-    return torch.gather(probs_idx, -1, next_token)
-
-
-def sample(logits: torch.Tensor, temperature: float, top_p: float):
-    if temperature > 0:
-        probs = torch.softmax(logits / temperature, dim=-1)
-        next_token = sample_top_p(probs.squeeze(), top_p)
-    else:
-        next_token = torch.argmax(logits, dim=-1)
-
-    return next_token
-
-
 def gather_cos_sin(position_ids, cos, sin):
     position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
     cos = cos.gather(0, position_id_expanded)
@@ -149,8 +112,8 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(head_dim, max_seq_len, mesh_device, seq_len):
-    cos, sin = precompute_freqs(head_dim, max_seq_len * 2)
+def get_prefill_rot_mat(head_dim, max_seq_len, mesh_device, seq_len, scale_factor):
+    cos, sin = precompute_freqs(head_dim, max_seq_len * 2, scale_factor=scale_factor)
     cos_gathered, sin_gathered = gather_cos_sin(torch.arange(0, seq_len), cos, sin)
     assert cos_gathered.size() == (1, 1, seq_len, head_dim)
     assert sin_gathered.size() == (1, 1, seq_len, head_dim)
@@ -245,6 +208,27 @@ def num_to_core_range_set(x):
     )
 
 
+def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
+    """
+    Helper function which copies host tensors to device tensors.
+    If no device_tensors are provided, it creates new device tensors and returns them.
+    """
+    if device_tensors is None:
+        assert mesh_device is not None, "mesh_device is required when device_tensors is None"
+        ret = []
+        for i in range(len(host_tensors)):
+            on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
+            ret.append(on_device)
+        return ret
+    else:
+        for i in range(len(host_tensors)):
+            if host_tensors[i] is None:
+                assert device_tensors[i] is None
+                continue
+            ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
+        return device_tensors
+
+
 def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
     """Helper function based on logic used in reference model:
     https://github.com/meta-llama/llama-models/blob/e4a6ed52a142bb9b5106dcbf48e41f97f8e7378e/models/llama3/reference_impl/model.py#L227C7-L231C83
@@ -273,3 +257,90 @@ def first_five(tensor, mesh_device):
     Helper function to return the first 5 elements of a tensor via torch
     """
     return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[0, 0, 0, :5]
+
+
+# Sample logits from a distribution
+def sample_top_p(probs: torch.Tensor, p: float):
+    assert 0 <= p <= 1
+
+    probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
+    probs_sum = torch.cumsum(probs_sort, dim=-1)
+    mask = probs_sum - probs_sort > p
+    probs_sort[mask] = 0.0
+    probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
+
+    next_token = torch.multinomial(probs_sort, num_samples=1)
+    return torch.gather(probs_idx, -1, next_token)
+
+
+def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True):
+    vocab_size = tt_input.shape[-1]
+    if mesh_device:
+        pt_input = ttnn.to_torch(
+            tt_input,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=list(mesh_device.shape)),
+        )[:, :1, :, :vocab_size]
+    else:  # input already on host
+        pt_input = tt_input[..., :vocab_size]
+
+    if temperature > 0:
+        probs = torch.softmax(pt_input / temperature, dim=-1)
+        pt_out = sample_top_p(probs.squeeze(), top_p)
+        if mesh_device:
+            pt_out = pt_out.view(1, 1, 1, -1)
+    else:
+        if mesh_device:
+            pt_out = torch.argmax(pt_input, dim=-1, keepdim=True).transpose(-1, -2)
+        else:
+            pt_out = torch.argmax(pt_input, dim=-1)
+
+    if mesh_device is None:
+        return pt_out
+    if on_host:
+        return (
+            ttnn.as_tensor(
+                pt_out,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                device=None,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None,
+            ),
+            pt_out,
+        )
+    else:
+        return (
+            ttnn.from_torch(
+                pt_out,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            ),
+            pt_out,
+        )
+
+
+def get_padded_prefill_len(seq_len):
+    """
+    If seq_len is less than 32, pad to 32
+    If seq_len is more than 32, pad to whichever is smaller: a power of 2 or a multiple of 1024
+    TODO: Generalize for max_mm_seq_len different from 1024
+    """
+    if seq_len <= 32:
+        return 32
+    pow_2_pad = nearest_pow_2(seq_len)
+    mult_1024_pad = 1024 * math.ceil(seq_len / 1024)
+    min_extended_pad = min(pow_2_pad, mult_1024_pad)
+    return min_extended_pad
+
+
+def get_block_size(kv_cache):
+    return kv_cache[0][0].shape[2]
+
+
+def num_blocks_in_seq(seq_len, block_size):
+    return math.ceil(seq_len / block_size)
+
+
+def nearest_pow_2(x):
+    return 2 ** math.ceil(math.log2(x))

@@ -4,21 +4,23 @@
 
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
-#include <malloc.h>
-
-#include <algorithm>  // for copy() and assign()
-#include <iterator>   // for back_inserter
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <fstream>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
-#include "allocator/allocator.hpp"
-#include "debug_tools.hpp"
 #include "dev_msgs.h"
 #include "device/device_handle.hpp"
 #include "llrt/hal.hpp"
-#include "noc/noc_parameters.h"
+#include "program_command_sequence.hpp"
 #include "tt_metal/command_queue.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
@@ -26,7 +28,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hw/inc/circular_buffer_constants.h"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
@@ -41,12 +42,6 @@
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)
 
 using namespace tt::tt_metal;
-
-using std::map;
-using std::pair;
-using std::set;
-using std::shared_ptr;
-using std::unique_ptr;
 
 namespace tt::tt_metal {
 
@@ -106,10 +101,10 @@ void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceComma
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = this->buffer.aligned_page_size();
-    const CoreCoord physical_core =
-        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
+    const CoreCoord virtual_core =
+        this->buffer.device()->virtual_core_from_logical_core(this->core, this->buffer.core_type());
     command.add_prefetch_relay_linear(
-        this->device->get_noc_unicast_encoding(this->noc_index, physical_core),
+        this->device->get_noc_unicast_encoding(this->noc_index, virtual_core),
         padded_page_size * this->pages_to_read,
         this->bank_base_address);
 }
@@ -246,13 +241,13 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
 
 void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-    const CoreCoord physical_core =
-        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
+    const CoreCoord virtual_core =
+        this->buffer.device()->virtual_core_from_logical_core(this->core, this->buffer.core_type());
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
         flush_prefetch,
         0,
-        this->device->get_noc_unicast_encoding(this->noc_index, physical_core),
+        this->device->get_noc_unicast_encoding(this->noc_index, virtual_core),
         this->bank_base_address,
         data_size_bytes);
 }
@@ -395,7 +390,7 @@ void EnqueueProgramCommand::assemble_stall_commands(ProgramCommandSequence& prog
             CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_STALL
 
-        program_command_sequence.stall_command_sequence =
+        program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx] =
             HostMemDeviceCommand(uncached_cmd_sequence_sizeB);
 
         // Wait for Noc Write Barrier
@@ -403,16 +398,16 @@ void EnqueueProgramCommand::assemble_stall_commands(ProgramCommandSequence& prog
         // Wait Noc Write Barrier, wait for binaries to be written to worker cores
         // Stall to allow binaries to commit to DRAM first
         // TODO: this can be removed for all but the first program run
-        program_command_sequence.stall_command_sequence.add_dispatch_wait_with_prefetch_stall(
+        program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx].add_dispatch_wait_with_prefetch_stall(
             true, this->dispatch_message_addr, this->expected_num_workers_completed);
     } else {
         // Wait command so previous program finishes
         uint32_t cached_cmd_sequence_sizeB =
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
 
-        program_command_sequence.stall_command_sequence =
+        program_command_sequence.stall_command_sequences[CachedStallSequenceIdx] =
             HostMemDeviceCommand(cached_cmd_sequence_sizeB);
-        program_command_sequence.stall_command_sequence.add_dispatch_wait(
+        program_command_sequence.stall_command_sequences[CachedStallSequenceIdx].add_dispatch_wait(
             false, this->dispatch_message_addr, this->expected_num_workers_completed);
     }
 }
@@ -662,10 +657,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                                     }
                                 }
                             }
-
-                            CoreCoord physical_core = device->physical_core_from_logical_core(core_coord, core_type);
+                            CoreCoord virtual_core = device->virtual_core_from_logical_core(core_coord, core_type);
                             unique_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
+                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, virtual_core)});
                         }
                     }
                 }
@@ -726,9 +720,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                         unicast_sub_cmd.reserve(kernel->logical_cores().size());
                         for (auto& core_coord : kernel->logical_cores()) {
                             // can make a vector of unicast encodings here
-                            CoreCoord physical_core = device->ethernet_core_from_logical_core(core_coord);
+                            CoreCoord virtual_core_coords = device->virtual_core_from_logical_core(core_coord, CoreType::ETH);
                             unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
+                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, virtual_core_coords)});
                         }
                     } else {
                         std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
@@ -876,6 +870,8 @@ void EnqueueProgramCommand::assemble_device_commands(
         }
     }
 
+    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+
     const auto& circular_buffers_unique_coreranges = program.circular_buffers_unique_coreranges();
     const uint16_t num_multicast_cb_sub_cmds = circular_buffers_unique_coreranges.size();
     std::vector<std::pair<uint32_t, uint32_t>> mcast_cb_payload;
@@ -883,7 +879,7 @@ void EnqueueProgramCommand::assemble_device_commands(
     uint32_t aligned_cb_config_size_bytes = 0;
     std::vector<std::vector<uint32_t>> cb_config_payloads(
         num_multicast_cb_sub_cmds,
-        std::vector<uint32_t>(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * NUM_CIRCULAR_BUFFERS, 0));
+        std::vector<uint32_t>(program.get_program_config(index).cb_size / sizeof(uint32_t), 0));
     std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_cb_config_sub_cmds;
     std::vector<std::pair<const void*, uint32_t>> multicast_cb_config_data;
     if (num_multicast_cb_sub_cmds > 0) {
@@ -891,46 +887,51 @@ void EnqueueProgramCommand::assemble_device_commands(
         multicast_cb_config_data.reserve(num_multicast_cb_sub_cmds);
         program_command_sequence.circular_buffers_on_core_ranges.resize(num_multicast_cb_sub_cmds);
         uint32_t i = 0;
-        uint32_t max_overall_base_index = 0;
+        uint32_t max_overall_index = 0;
+        uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
         for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
-            const CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start_coord);
-            const CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end_coord);
+            const CoreCoord virtual_start = device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+            const CoreCoord virtual_end = device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
 
             const uint32_t num_receivers = core_range.size();
             auto& cb_config_payload = cb_config_payloads[i];
-            uint32_t max_base_index = 0;
+            uint32_t max_index = 0;
             const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
             program_command_sequence.circular_buffers_on_core_ranges[i].reserve(
                 circular_buffers_on_corerange.size());
-            for (const shared_ptr<CircularBuffer>& cb : circular_buffers_on_corerange) {
+            for (const std::shared_ptr<CircularBuffer>& cb : circular_buffers_on_corerange) {
                 program_command_sequence.circular_buffers_on_core_ranges[i].emplace_back(cb);
-                const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-                const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-                for (const auto& buffer_index : cb->buffer_indices()) {
+                const uint32_t cb_address = cb->address();
+                const uint32_t cb_size = cb->size();
+                for (const auto& buffer_index : cb->local_buffer_indices()) {
                     // 1 cmd for all 32 buffer indices, populate with real data for specified indices
-
                     // cb config payload
-                    const uint32_t base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * (uint32_t)buffer_index;
+                    const uint32_t base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
                     cb_config_payload[base_index] = cb_address;
                     cb_config_payload[base_index + 1] = cb_size;
                     cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                    cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-                    max_base_index = std::max(max_base_index, base_index);
+                    cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
+                    max_index = std::max(max_index, base_index + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG);
+                }
+                for (const auto& buffer_index : cb->remote_buffer_indices()) {
+                    const uint32_t base_index =
+                        remote_offset_index +
+                        (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+                    cb_config_payload[base_index] = cb->config_address();
+                    cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
+                    max_index = std::max(max_index, base_index + UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                 }
             }
             multicast_cb_config_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                 .noc_xy_addr = this->device->get_noc_multicast_encoding(
-                    this->noc_index, CoreRange(physical_start, physical_end)),
+                    this->noc_index, CoreRange(virtual_start, virtual_end)),
                 .num_mcast_dests = (uint32_t)core_range.size()});
-            multicast_cb_config_data.emplace_back(
-                cb_config_payload.data(),
-                (max_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t));
-            max_overall_base_index = std::max(max_overall_base_index, max_base_index);
+            multicast_cb_config_data.emplace_back(cb_config_payload.data(), max_index * sizeof(uint32_t));
+            max_overall_index = std::max(max_overall_index, max_index);
             i++;
         }
         uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-        cb_config_size_bytes =
-            (max_overall_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t);
+        cb_config_size_bytes = max_overall_index * sizeof(uint32_t);
         aligned_cb_config_size_bytes = align(cb_config_size_bytes, l1_alignment);
         cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
             num_multicast_cb_sub_cmds,
@@ -949,7 +950,10 @@ void EnqueueProgramCommand::assemble_device_commands(
     const uint32_t max_length_per_sub_cmd = dispatch_constants::get(this->dispatch_core_type).scratch_db_size() / 2;
     const uint32_t max_paged_length_per_sub_cmd =
         max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
-    const auto &kernels_buffer = program.get_kernels_buffer();
+    if (program_transfer_info.kernel_bins.size()) {
+        TT_FATAL(program.get_kernels_buffer(this->device).get(), "Expected Kernel Binary Buffer to be allocated for program.");
+    }
+    const auto kernels_buffer = program.get_kernels_buffer(this->device);
     for (const auto& [cores, num_mcast_dests, kg_transfer_info] : program_transfer_info.kernel_bins) {
         bool write_linear;
         uint32_t noc_encoding;
@@ -1029,6 +1033,12 @@ void EnqueueProgramCommand::assemble_device_commands(
                         read_length = max_paged_length_per_sub_cmd;
                         write_length = read_length;
                     }
+                    if (!kernel_bins_dispatch_subcmds.back().empty()) {
+                        auto& back = kernel_bins_dispatch_subcmds.back().back();
+                        if (back.noc_xy_addr != noc_encoding) {
+                            back.flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
+                        }
+                    }
                     kernel_bins_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                         .noc_xy_addr = noc_encoding,
                         .addr = kernel_config_buffer_offset,
@@ -1050,9 +1060,13 @@ void EnqueueProgramCommand::assemble_device_commands(
                 }
             }
         }
-        // Unlink the last subcmd of the current core range
-        if (!write_linear) {
-            kernel_bins_dispatch_subcmds.back().back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
+    }
+    // Unlink the last subcmd of every dispatch, to ensure we don't hold the
+    // path reservation for an incredible long time. This also prevents a hang
+    // if the next mcast is to a different destination.
+    for (auto& subcmd_list : kernel_bins_dispatch_subcmds) {
+        if (!subcmd_list.empty()) {
+            subcmd_list.back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
         }
     }
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
@@ -1088,14 +1102,12 @@ void EnqueueProgramCommand::assemble_device_commands(
         kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
         const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
         for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
-            CoreCoord physical_start =
-                device->physical_core_from_logical_core(core_range.start_coord, kernel_group.get_core_type());
-            CoreCoord physical_end =
-                device->physical_core_from_logical_core(core_range.end_coord, kernel_group.get_core_type());
+            CoreCoord virtual_start = device->virtual_core_from_logical_core(core_range.start_coord, kernel_group.get_core_type());
+            CoreCoord virtual_end = device->virtual_core_from_logical_core(core_range.end_coord, kernel_group.get_core_type());
 
             multicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                 .noc_xy_addr = this->device->get_noc_multicast_encoding(
-                    this->noc_index, CoreRange(physical_start, physical_end)),
+                    this->noc_index, CoreRange(virtual_start, virtual_end)),
                 .num_mcast_dests = (uint32_t)core_range.size()});
             multicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
         }
@@ -1122,11 +1134,11 @@ void EnqueueProgramCommand::assemble_device_commands(
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                        CoreCoord physical_coord = device->physical_core_from_logical_core(
+                        CoreCoord virtual_coord = device->virtual_core_from_logical_core(
                             CoreCoord({x, y}), kernel_group.get_core_type());
                         unicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                             .noc_xy_addr =
-                                this->device->get_noc_unicast_encoding(this->noc_index, physical_coord)});
+                                this->device->get_noc_unicast_encoding(this->noc_index, virtual_coord)});
                         unicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
                     }
                 }
@@ -1160,7 +1172,7 @@ void EnqueueProgramCommand::assemble_device_commands(
 
     // Semaphores
     // Multicast Semaphore Cmd
-    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     for (uint32_t i = 0; i < num_multicast_semaphores; ++i) {
         uint32_t curr_sub_cmd_idx = 0;
         for (const auto& [num_sub_cmds_in_cmd, multicast_sem_payload_sizeB] : multicast_sem_payload[i]) {
@@ -1357,20 +1369,28 @@ void EnqueueProgramCommand::update_device_commands(
     const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs) {
     uint32_t i = 0;
     ZoneScopedN("program_loaded_on_device");
+    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
-        for (const shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
-            const uint32_t cb_address = cb->address() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-            const uint32_t cb_size = cb->size() >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
-            for (const auto& buffer_index : cb->buffer_indices()) {
+        for (const std::shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
+            const uint32_t cb_address = cb->address();
+            const uint32_t cb_size = cb->size();
+            for (const auto& buffer_index : cb->local_buffer_indices()) {
                 // 1 cmd for all 32 buffer indices, populate with real data for specified indices
 
                 // cb config payload
-                uint32_t base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * (uint32_t)buffer_index;
+                uint32_t base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
                 cb_config_payload[base_index] = cb_address;
                 cb_config_payload[base_index + 1] = cb_size;
                 cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES;
+                cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
+            }
+            for (const auto& buffer_index : cb->remote_buffer_indices()) {
+                const uint32_t base_index = remote_offset_index + (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                                                                      UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+                cb_config_payload[base_index] = cb->config_address();
+                cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
             }
         }
         i++;
@@ -1406,9 +1426,9 @@ void EnqueueProgramCommand::write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence, bool stall_first, bool stall_before_program) {
     TT_ASSERT(!(stall_first && stall_before_program));
     uint32_t preamble_fetch_size_bytes = program_command_sequence.preamble_command_sequence.size_bytes();
-
+    auto& curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
     uint32_t stall_fetch_size_bytes =
-        (stall_first || stall_before_program) ? program_command_sequence.stall_command_sequence.size_bytes() : 0;
+        (stall_first || stall_before_program) ? program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes() : 0;
 
     uint32_t runtime_args_fetch_size_bytes = program_command_sequence.runtime_args_fetch_size_bytes;
 
@@ -1435,7 +1455,7 @@ void EnqueueProgramCommand::write_program_command_sequence(
         if (stall_first) {
             // Must stall before writing runtime args
             this->manager.cq_write(
-                program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes, write_ptr);
             write_ptr += stall_fetch_size_bytes;
         }
 
@@ -1453,7 +1473,7 @@ void EnqueueProgramCommand::write_program_command_sequence(
 
             // Didn't stall before kernel config data, stall before remaining commands
             this->manager.cq_write(
-                program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes, write_ptr);
             write_ptr += stall_fetch_size_bytes;
 
             this->manager.cq_write(program_command_sequence_data, program_rem_fetch_size_bytes, write_ptr);
@@ -1483,7 +1503,7 @@ void EnqueueProgramCommand::write_program_command_sequence(
             this->manager.issue_queue_reserve(stall_fetch_size_bytes, this->command_queue_id);
             write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
             this->manager.cq_write(
-                program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes, write_ptr);
             this->manager.issue_queue_push_back(stall_fetch_size_bytes, this->command_queue_id);
             // One fetch queue entry for just the wait and stall, very inefficient
             this->manager.fetch_queue_reserve_back(this->command_queue_id);
@@ -1519,7 +1539,7 @@ void EnqueueProgramCommand::write_program_command_sequence(
             this->manager.issue_queue_reserve(stall_fetch_size_bytes, this->command_queue_id);
             write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
             this->manager.cq_write(
-                program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes, write_ptr);
             this->manager.issue_queue_push_back(stall_fetch_size_bytes, this->command_queue_id);
             // One fetch queue entry for just the wait and stall, very inefficient
             this->manager.fetch_queue_reserve_back(this->command_queue_id);
@@ -1572,14 +1592,21 @@ void EnqueueProgramCommand::process() {
         reservation = this->config_buffer_mgr.reserve(program.get_program_config_sizes());
     }
 
-    // Cache is only usable if caching is enabled and program is finalized
-    // If cache has a program entry but the program is not finalized, then the cache is stale
-    // Currently this is mapped by device, but will be mapped by multiple values in the future
+    // Access the program command cache
     auto& cached_program_command_sequences = program.get_cached_program_command_sequences();
-    uint64_t command_hash = this->device->id();
+    // Start constructing the cache entry, using the build_key
+    uint64_t command_hash = device->build_key();
+    if (not hal.is_coordinate_virtualization_enabled()) {
+        // When coordinate virtualization is not enabled, explicitly encode the device
+        // id into the command hash, to always assert on programs being reused across devices.
+        command_hash = (command_hash << 32) | (device->id());
+    }
+    bool is_cached = program.is_cached(); // Program is cached, its is assocated command stream was previously generated
     auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
-    bool is_cached = program.is_cached() && cached_cmd_iter != cached_program_command_sequences.end();
-    if (!is_cached) {
+    // Is the program was cached, the current command_hash, must match the one generated when the program was cached
+    // Finalizing the program multiple times/Regenerating program cache state is not currently supported
+    TT_FATAL((not is_cached) or cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
+    if (program.get_program_binary_status(device->id()) == ProgramBinaryStatus::InFlight) {
         // assemble_stall_commands is hardcoded to always wait for everything for now.
         this->config_buffer_mgr.free(this->expected_num_workers_completed);
     } else {
@@ -1610,6 +1637,7 @@ void EnqueueProgramCommand::process() {
         ProgramCommandSequence program_command_sequence;
         this->assemble_preamble_commands(program_command_sequence, kernel_config_addrs);
         this->assemble_stall_commands(program_command_sequence, true);
+        program_command_sequence.current_stall_seq_idx = UncachedStallSequenceIdx;
         // Runtime Args Command Sequence
         this->assemble_runtime_args_commands(program_command_sequence);
 
@@ -1625,6 +1653,7 @@ void EnqueueProgramCommand::process() {
         this->assemble_stall_commands(program_command_sequence, false);
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
         program.set_cached();
+        program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
     } else {
         static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
         static constexpr uint32_t tensix_l1_write_offset_offset =
@@ -1633,8 +1662,14 @@ void EnqueueProgramCommand::process() {
             (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
 
         auto& cached_program_command_sequence = cached_cmd_iter->second;
-
-        cached_program_command_sequence.stall_command_sequence.update_cmd_sequence(
+        if (program.get_program_binary_status(device->id()) != ProgramBinaryStatus::Committed) {
+            cached_program_command_sequence.current_stall_seq_idx = UncachedStallSequenceIdx;
+            program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
+        } else {
+            cached_program_command_sequence.current_stall_seq_idx = CachedStallSequenceIdx;
+        }
+        auto& curr_stall_seq_idx = cached_program_command_sequence.current_stall_seq_idx;
+        cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
             wait_count_offset, &sync_count, sizeof(uint32_t));
 
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
@@ -1729,9 +1764,9 @@ void EnqueueRecordEventCommand::process() {
             dispatch_location = dispatch_core_manager::instance().dispatcher_d_core(this->device->id(), channel, cq_id);
         }
 
-        CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
+        CoreCoord dispatch_virtual_core = this->device->virtual_core_from_logical_core(dispatch_location, core_type);
         unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{
-            .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, dispatch_physical_core)};
+            .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, dispatch_virtual_core)};
         event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
     }
 
@@ -1969,8 +2004,8 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
             enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_d_core(device->id(), channel, id);
         }
     }
-    this->physical_enqueue_program_dispatch_core =
-        device->physical_core_from_logical_core(enqueue_program_dispatch_core, core_type);
+    this->virtual_enqueue_program_dispatch_core =
+        device->virtual_core_from_logical_core(enqueue_program_dispatch_core, core_type);
 
     tt_cxy_pair completion_q_writer_location =
         dispatch_core_manager::instance().completion_queue_writer_core(device->id(), channel, this->id);
@@ -2040,7 +2075,7 @@ void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
     if (reset_launch_msg_state) {
         if (device->dispatch_s_enabled()) {
             uint16_t index_bitmask = 0;
-            for (uint8_t i = 0; i < num_sub_devices; ++i) {
+            for (uint32_t i = 0; i < num_sub_devices; ++i) {
                 index_bitmask |= 1 << i;
             }
             command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
@@ -2048,9 +2083,9 @@ void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
         }
         go_msg_t reset_launch_message_read_ptr_go_signal;
         reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
-        reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->physical_enqueue_program_dispatch_core.x;
-        reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->physical_enqueue_program_dispatch_core.y;
-        for (uint8_t i = 0; i < num_sub_devices; ++i) {
+        reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->virtual_enqueue_program_dispatch_core.x;
+        reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->virtual_enqueue_program_dispatch_core.y;
+        for (uint32_t i = 0; i < num_sub_devices; ++i) {
             reset_launch_message_read_ptr_go_signal.dispatch_message_offset = (uint8_t)dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
@@ -2473,20 +2508,23 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     if (not program.is_finalized()) {
         program.finalize(device);
-        TT_FATAL(!this->manager.get_bypass_mode(), "Tracing should only be used when programs have been cached");
-        if (const auto &kernels_buffer = program.get_kernels_buffer()) {
-            // Only stall for used sub-devices
+    }
+    if (program.get_program_binary_status(device->id()) == ProgramBinaryStatus::NotSent) {
+        // Write program binaries to device
+        program.allocate_kernel_bin_buf_on_device(device);
+        if (program.get_program_transfer_info().binary_data.size()) {
             this->enqueue_write_buffer(
-                *kernels_buffer, program.get_program_transfer_info().binary_data.data(), false, sub_device_ids);
+                *program.get_kernels_buffer(device), program.get_program_transfer_info().binary_data.data(), false, sub_device_ids);
         }
+        program.set_program_binary_status(device->id(), ProgramBinaryStatus::InFlight);
     }
 
     program.set_last_used_command_queue_for_testing(this);
 
 #ifdef DEBUG
-    if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
-        if (const auto &buffer = program.get_kernels_buffer()) {
+        if (const auto buffer = program.get_kernels_buffer(device)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
             this->enqueue_read_buffer(*buffer, read_data.data(), true, sub_device_ids);
             TT_FATAL(
@@ -2525,7 +2563,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         this->device,
         this->noc_index,
         program,
-        this->physical_enqueue_program_dispatch_core,
+        this->virtual_enqueue_program_dispatch_core,
         this->manager,
         this->get_config_buffer_mgr(sub_device_index),
         expected_workers_completed,
@@ -2543,9 +2581,9 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     this->enqueue_command(command, blocking, sub_device_ids);
 
 #ifdef DEBUG
-    if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
-        if (const auto& buffer = program.get_kernels_buffer()) {
+        if (const auto buffer = program.get_kernels_buffer(device)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
             this->enqueue_read_buffer(*buffer, read_data.data(), true, sub_device_ids);
             TT_FATAL(
@@ -2618,7 +2656,7 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
 
     auto trace_inst = this->device->get_trace(trace_id);
     auto command = EnqueueTraceCommand(
-        this->id, this->device, this->manager, trace_inst->desc, *trace_inst->buffer, this->expected_num_workers_completed, this->noc_index, this->physical_enqueue_program_dispatch_core);
+        this->id, this->device, this->manager, trace_inst->desc, *trace_inst->buffer, this->expected_num_workers_completed, this->noc_index, this->virtual_enqueue_program_dispatch_core);
 
     this->enqueue_command(command, false, {});
 
@@ -2909,7 +2947,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id);
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event, false, sub_device_ids);
-    if (tt::llrt::OptionsG.get_test_mode_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q > this->num_completed_completion_q_reads) {
             if (DPrintServerHangDetected()) {
                 // DPrint Server hang. Mark state and early exit. Assert in main thread.
@@ -3040,8 +3078,7 @@ void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
         }
         // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
         // previous launch message.
-        // TODO(jbauman): Give correct number once async bug is fixed.
-        this->config_buffer_mgr[i].init_add_buffer(0, 1);
+        this->config_buffer_mgr[i].init_add_buffer(0, launch_msg_buffer_num_entries - 1);
     }
 }
 
@@ -3183,7 +3220,7 @@ void EventSynchronize(const std::shared_ptr<Event>& event) {
         event->event_id);
 
     while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
-        if (tt::llrt::OptionsG.get_test_mode_enabled() && tt::watcher_server_killed_due_to_error()) {
+        if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled() && tt::watcher_server_killed_due_to_error()) {
             TT_FATAL(
                 false,
                 "Command Queue could not complete EventSynchronize. See {} for details.",

@@ -405,7 +405,7 @@ CoreType Buffer::core_type() const {
 }
 
 bool Buffer::is_l1() const {
-    return ::is_l1(buffer_type());
+    return tt::tt_metal::is_l1(buffer_type());
 }
 bool Buffer::is_dram() const {
     return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE;
@@ -425,33 +425,27 @@ CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
     return allocator::logical_core_from_bank_id(*this->allocator_, bank_id);
 }
 
-CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
-    switch (this->buffer_type_) {
-        case BufferType::DRAM:
-        case BufferType::TRACE: {
-            auto dram_channel = this->dram_channel_from_bank_id(bank_id);
-            return this->device_->dram_core_from_dram_channel(dram_channel);
-        }
-        case BufferType::L1:  // fallthrough
-        case BufferType::L1_SMALL: {
-            auto logical_core = this->logical_core_from_bank_id(bank_id);
-            return this->device_->worker_core_from_logical_core(logical_core);
-        }
-        case BufferType::SYSTEM_MEMORY: {
-            TT_THROW("Host buffer is located in system memory! Cannot retrieve NoC coordinates for it");
-        } break;
-        default: TT_THROW("Unsupported buffer type!");
-    }
-}
-
-CoreCoord Buffer::noc_coordinates() const { return this->noc_coordinates(0); }
-
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     uint32_t num_banks = allocator::num_banks(*this->allocator_, this->buffer_type_);
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     int pages_offset_within_bank = (int)page_index / num_banks;
     auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
+}
+
+DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index) const {
+    uint32_t num_banks = allocator::num_banks(*this->allocator_, this->buffer_type_);
+    TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
+    uint32_t offset;
+    if (is_sharded(this->buffer_layout())) {
+        auto shard_spec = this->shard_spec();
+        uint32_t pages_offset_within_bank = page_index % shard_spec.size();
+        offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+    } else {
+        uint32_t pages_offset_within_bank = page_index / num_banks;
+        offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+    }
+    return this->address() + offset;
 }
 
 uint32_t Buffer::alignment() const {
@@ -467,7 +461,7 @@ DeviceAddr Buffer::aligned_size() const {
 
 DeviceAddr Buffer::aligned_size_per_bank() const {
     uint32_t num_banks = is_sharded(this->buffer_layout_) ? this->num_cores().value() : this->device_->num_banks(this->buffer_type());
-    return tt::tt_metal::detail::SizeBytesPerBank(this->size_, this->page_size_, num_banks, this->alignment());
+    return tt::tt_metal::detail::SizeBytesPerBank(this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
@@ -550,7 +544,7 @@ tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann:
     const auto& shard_mode = from_json<tt_metal::ShardMode>(json_object.at("mode"));
     const auto& physical_shard_shape = from_json<std::optional<std::array<uint32_t, 2>>>(json_object.at("physical_shard_shape"));
     if (physical_shard_shape.has_value()) {
-        TT_FATAL(shard_mode == ShardMode::LOGICAL, "Physical shard shape can only be provided in logical sharding mode!");
+        TT_FATAL(shard_mode == tt::tt_metal::ShardMode::LOGICAL, "Physical shard shape can only be provided in logical sharding mode!");
         return tt_metal::ShardSpec{
             from_json<CoreRangeSet>(json_object.at("grid")),
             from_json<std::array<uint32_t, 2>>(json_object.at("shape")),

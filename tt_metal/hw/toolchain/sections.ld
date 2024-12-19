@@ -65,6 +65,7 @@ SECTIONS
     *(.text .stub .text.* .gnu.linkonce.t.*)
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
+    . = ALIGN(4);
   } > REGION_CODE :text
   .init.fini :
   {
@@ -73,41 +74,35 @@ SECTIONS
     ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections have contents");
   } > REGION_CODE :text
 
-  . = ALIGN(. + MEM_PAD, MEM_ALIGN);
+#if defined(TYPE_KERNEL)
+   __kernel_data_lma = .;
+#endif
+  . = ALIGN(ABSOLUTE(.) + MEM_PAD, MEM_ALIGN);
 
 #if defined(TYPE_FIRMWARE)
-  __fw_export_end_text = .;
+  __fw_export_end_text = ABSOLUTE(.);
 #if defined(TARGET_NCRISC)
-  PROVIDE (KERNEL_ENTRY_SYMBOL = __fw_export_end_text);
+  PROVIDE (KERNEL_ENTRY_SYMBOL = ABSOLUTE(__fw_export_end_text));
 #endif
 #endif
 
 #if defined(TYPE_KERNEL)
-  __kernel_init_local_l1_base = .;
+  __kernel_init_local_l1_base = ABSOLUTE(.);
 #endif
 
 #if defined(TYPE_FIRMWARE)
   PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
 #endif
-  .data DATA_START : ALIGN(4)
+  .data DATA_START :
+#if defined (TYPE_KERNEL)
+        AT(__kernel_data_lma)
+#endif
+	ALIGN(4)
   {
      . = .; /* Force section emission.  */
      __ldm_data_start = .;
      *(.rodata .rodata.* .gnu.linkonce.r.*)
      *(.rodata1)
-
-    PROVIDE_HIDDEN (__preinit_array_start = .);
-    KEEP (*(.preinit_array))
-    PROVIDE_HIDDEN (__preinit_array_end = .);
-    PROVIDE_HIDDEN (__init_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*)))
-    KEEP (*(.init_array))
-    PROVIDE_HIDDEN (__init_array_end = .);
-
-    PROVIDE_HIDDEN (__fini_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
-    KEEP (*(.fini_array))
-    PROVIDE_HIDDEN (__fini_array_end = .);
 
     *(.dynamic)
     *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
@@ -129,6 +124,16 @@ SECTIONS
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
     ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
   } > REGION_DATA :data
+  .init_array.fini_array :
+  {
+    /* We don't support global static constructors or destructors. make sure there aren't any.  */
+    KEEP (*(.preinit_array))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*)))
+    KEEP (*(.init_array))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
+    KEEP (*(.fini_array))
+    ASSERT(SIZEOF(.init_array.fini_array) == 0, ".{preinit,init,fini}_array sections have contents");
+  } > REGION_DATA :data
   .bss : ALIGN(4)
   {
     __ldm_bss_start = .;
@@ -144,8 +149,8 @@ SECTIONS
   } > REGION_DATA :data
 
 #ifdef TYPE_FIRMWARE
-  . = ALIGN(MEM_ALIGN);
-  __fw_export_ldm_end = .;
+  . = ALIGN(ABSOLUTE(.), MEM_ALIGN);
+  __fw_export_ldm_end = ABSOLUTE(.);
 #endif
 
 #ifdef TYPE_FIRMWARE

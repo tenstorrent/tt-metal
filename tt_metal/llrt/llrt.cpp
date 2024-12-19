@@ -32,6 +32,7 @@
 
 // FIXME: ARCH_NAME specific
 #include "dev_msgs.h" // RUN_MSG_DONE
+#include "dev_mem_map.h" // MEM_IERISC_FIRMWARE_BASE
 #include "eth_l1_address_map.h" // address_map
 
 
@@ -46,33 +47,20 @@ using std::uint64_t;
 
 ll_api::memory const& get_risc_binary(
     string const& path,
-    uint32_t core_type_idx,
-    uint32_t processor_class_idx,
-    uint32_t processor_type_idx,
-    ll_api::memory::PackSpans span_type,
-    ll_api::memory::Relocate relo_type) {
+    ll_api::memory::Loading loading) {
     static struct {
-      std::unordered_map<std::string, std::unique_ptr<ll_api::memory>> map;
+      std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
       std::condition_variable cvar;
     } cache;
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(path);
+    ll_api::memory const* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      auto *ptr = new ll_api::memory(path, relo_type);
-
-      // TODO: pass pack_spans into reader, generate text/data sizes
-      // from segment sizes and pack there
-      if (span_type == ll_api::memory::PackSpans::PACK) {
-          uint64_t data_start = tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::LOCAL);
-          uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
-              0 :
-              tt::tt_metal::hal.get_base_firmware_addr(core_type_idx, processor_class_idx, processor_type_idx);
-          ptr->pack_data_into_text(text_start, data_start);
-      }
+      ptr = new ll_api::memory(path, loading);
 
       lock.lock();
       // maps have iterator stability, so SLOT is still valid.
@@ -80,12 +68,16 @@ ll_api::memory const& get_risc_binary(
       // We can't wake just those waiting on this slot, so wake them
       // all. Should be a rare event anyway.
       cache.cvar.notify_all();
-    } else if (!slot->second) {
-        // Someone else is creating the initial entry, wait for them.
-        cache.cvar.wait(lock, [=] { return bool(slot->second); });
+    } else {
+        if (!slot->second) {
+            // Someone else is creating the initial entry, wait for them.
+            cache.cvar.wait(lock, [=] { return bool(slot->second); });
+        }
+        ptr = slot->second.get();
+        TT_ASSERT(ptr->get_loading() == loading);
     }
 
-    return *slot->second.get();
+    return *ptr;
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
@@ -104,9 +96,8 @@ std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &co
     return read_hex_vec;
 }
 
-CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &physical_core) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
+CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ethernet_core) {
+    return tt::Cluster::instance().get_logical_ethernet_core_from_virtual(chip_id, ethernet_core);
 }
 
 void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
@@ -176,7 +167,7 @@ uint32_t generate_risc_startup_addr(bool is_eth_core) {
 
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     std::vector<uint32_t> jump_to_fw;
-    jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id)));
+    jump_to_fw.push_back(generate_risc_startup_addr(tt::Cluster::instance().is_ethernet_core(core, chip_id)));
     write_hex_vec_to_core(chip_id, core, tt::stl::Span<const uint32_t>(jump_to_fw.data(), jump_to_fw.size()), 0);
 }
 
@@ -187,7 +178,7 @@ bool test_load_write_read_risc_binary(
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx) {
-    assert(is_worker_core(core, chip_id) or is_ethernet_core(core, chip_id));
+    assert(tt::Cluster::instance().is_worker_core(core, chip_id) or tt::Cluster::instance().is_ethernet_core(core, chip_id));
 
     uint64_t local_init_addr = tt::tt_metal::hal.get_binary_local_init_addr(core_type_idx, processor_class_idx, processor_type_idx);
 
@@ -224,7 +215,7 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 namespace internal_ {
 
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
-    bool is_eth_core = is_ethernet_core(core, chip_id);
+    bool is_eth_core = tt::Cluster::instance().is_ethernet_core(core, chip_id);
     bool is_active_eth_core = false;
     bool is_inactive_eth_core = false;
 
@@ -307,8 +298,8 @@ void wait_until_cores_done(
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.
-        if (llrt::OptionsG.get_watcher_enabled() ||
-            llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
+        if (llrt::RunTimeOptions::get_instance().get_watcher_enabled() ||
+            llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }

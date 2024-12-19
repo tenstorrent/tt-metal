@@ -121,7 +121,7 @@ install()
         prep_ubuntu
 
         echo "Installing packages..."
-        apt-get install -y "${UB_LIST[@]}"
+        DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${UB_LIST[@]}"
     fi
 }
 

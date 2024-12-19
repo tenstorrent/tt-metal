@@ -13,6 +13,40 @@
 
 namespace ttnn::operations::binary {
 
+namespace utils {
+    bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
+    switch (val) {
+        case BinaryOpType::ADD: return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
+        case BinaryOpType::SUB:
+        case BinaryOpType::MUL:
+        case BinaryOpType::DIV_FAST:
+        case BinaryOpType::RSUB:
+        case BinaryOpType::LOGADDEXP:
+        case BinaryOpType::LOGADDEXP2:
+        case BinaryOpType::LDEXP:
+        case BinaryOpType::SQUARED_DIFFERENCE:
+        case BinaryOpType::LOGICAL_OR:
+        case BinaryOpType::LOGICAL_XOR:
+        case BinaryOpType::LOGICAL_AND:
+        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::GT:
+        case BinaryOpType::LT:
+        case BinaryOpType::GTE:
+        case BinaryOpType::LTE:
+        case BinaryOpType::EQ:
+        case BinaryOpType::NE: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
+        case BinaryOpType::LEFT_SHIFT:
+        case BinaryOpType::RIGHT_SHIFT:
+        case BinaryOpType::BITWISE_XOR:
+        case BinaryOpType::BITWISE_AND:
+        case BinaryOpType::BITWISE_OR: return (a == DataType::INT32 && b == DataType::INT32);
+        case BinaryOpType::POWER: return true;
+        default: return false;
+    }
+    return false;
+}
+} // utils
+
 BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     ZoneScopedN("BinaryDeviceOperation::select_program_factory");
@@ -31,7 +65,17 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     auto width_b = input_shape_b[-1];
 
     if (height_a == height_b and width_a == width_b) {
-        return ElementWiseMultiCore{};
+        bool device_check = tensor_args.input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
+        BinaryOpType op = operation_attributes.binary_op_type;
+        DataType dtype1 = tensor_args.input_tensor_a.get_dtype();
+        DataType dtype2 = tensor_args.input_tensor_b->get_dtype();
+        bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2);
+
+        if(device_check && sfpu_op_check){
+            return ElementWiseMultiCoreSfpu{};
+        } else {
+            return ElementWiseMultiCore{};
+        }
     }
     if (height_b == 1 or width_b == 1) {
         if (height_b == 1 and width_b == 1) {
@@ -192,7 +236,7 @@ BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output
     auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
-    if (std::holds_alternative<ElementWiseMultiCore>(program_factory)) {
+    if (std::holds_alternative<ElementWiseMultiCore>(program_factory) or std::holds_alternative<ElementWiseMultiCoreSfpu>(program_factory)) {
         const auto& input_tensor_b = *tensor_args.input_tensor_b;
         if (operation_attributes.memory_config.is_sharded()) {
             ShardSpec shard_spec{CoreRangeSet(), {0, 0}};

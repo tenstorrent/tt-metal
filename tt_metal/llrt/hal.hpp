@@ -49,9 +49,9 @@ enum class HalL1MemAddrType : uint8_t {
     CORE_INFO,
     GO_MSG,
     LAUNCH_MSG_BUFFER_RD_PTR,
-    FW_VERSION_ADDR,  // Really only applicable to active eth core right now
     LOCAL,
-    COUNT             // Keep this last so it always indicates number of enum options
+    BANK_TO_NOC_SCRATCH,
+    COUNT  // Keep this last so it always indicates number of enum options
 };
 
 enum class HalDramMemAddrType : uint8_t { DRAM_BARRIER = 0, COUNT = 1 };
@@ -137,6 +137,9 @@ inline T HalCoreInfoType::get_binary_local_init_addr(uint32_t processor_class_id
 class Hal {
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
+    using ValidRegAddrFunc = std::function<bool(uint32_t)>;
+    using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
+    using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
 
 private:
     tt::ARCH arch_;
@@ -144,6 +147,10 @@ private:
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
+    uint32_t num_nocs_;
+    bool coordinate_virtualization_enabled_;
+    uint32_t virtual_worker_start_x_;
+    uint32_t virtual_worker_start_y_;
 
     void initialize_gs();
     void initialize_wh();
@@ -151,11 +158,16 @@ private:
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
+    ValidRegAddrFunc valid_reg_addr_func_;
+    NOCXYEncodingFunc noc_xy_encoding_func_;
+    NOCMulticastEncodingFunc noc_multicast_encoding_func_;
 
 public:
     Hal();
 
     tt::ARCH get_arch() const { return arch_; }
+
+    uint32_t get_num_nocs() const { return num_nocs_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const
@@ -163,6 +175,14 @@ public:
         return noc_index == 0 ? coord : (noc_size - 1 - coord);
     }
 
+    uint32_t noc_xy_encoding(uint32_t x, uint32_t y) const { return noc_xy_encoding_func_(x, y); }
+    uint32_t noc_multicast_encoding(uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) const {
+        return noc_multicast_encoding_func_(x_start, y_start, x_end, y_end);
+    }
+
+    bool is_coordinate_virtualization_enabled() const { return this->coordinate_virtualization_enabled_; };
+    std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
+    std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
@@ -199,6 +219,8 @@ public:
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
         return relocate_func_(addr, local_init_addr);
     }
+
+    uint32_t valid_reg_addr(uint32_t addr) { return valid_reg_addr_func_(addr); }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }

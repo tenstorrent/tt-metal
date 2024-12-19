@@ -20,15 +20,6 @@ from models.utility_functions import skip_for_grayskull
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "seq_len",
-    (
-        64 * 1024,
-        32 * 1024,
-        # 1024,
-        32,
-    ),
-)
-@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -37,13 +28,25 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize(
+    "seq_len",
+    (
+        64 * 1024,
+        32 * 1024,
+        32,
+    ),
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -76,9 +79,15 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
+        ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
-        memory_config=model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
+        memory_config=(
+            tt_model.model_config["MLP_ACT_MEMCFG"]
+            if model_args.is_galaxy
+            else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
+        )
         if mode == "decode"
         else ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -87,7 +96,12 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
     logger.info("Run Llama_MLP")
     tt_output = tt_model(tt_input, mode)
 
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+    )
+
+    tt_output_torch = tt_output_torch[:, :1, :, :]
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

@@ -17,7 +17,10 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include "tt_metal/include/tt_metal/program.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
@@ -92,10 +95,12 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
     return {1, 1};
 }
 
-std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal::GlobalSemaphore>>> create_programs(
+std::tuple<std::vector<tt_metal::Program>, std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer>>
+create_programs(
     tt_metal::Device* device,
     const CoreRangeSet& dram_reader_core,
     const CoreRangeSet& l1_receiver_cores,
+    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     const uint32_t& single_tile_size,
     const tt::DataFormat& tile_format,
     uint32_t m,
@@ -108,7 +113,6 @@ std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal:
     uint32_t cb_padding,
     const std::shared_ptr<tt::tt_metal::Buffer>& in0_buffer,
     const std::shared_ptr<tt::tt_metal::Buffer>& in1_buffer,
-    const std::shared_ptr<tt::tt_metal::Buffer>& in1_l1_buffer,
     const std::shared_ptr<tt::tt_metal::Buffer>& output_buffer,
     bool use_sub_devices) {
     log_info("created program");
@@ -155,6 +159,18 @@ std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal:
             .set_page_size(in1_reader_cb_index, single_tile_size);
     auto in1_reader_cb = tt_metal::CreateCircularBuffer(sender_program, dram_reader_core, in1_reader_cb_config);
 
+    uint32_t in1_receiver_cb_size = in1_block_h * in1_block_w * single_tile_size * cb_num_blocks / num_receivers;
+    uint32_t padded_global_cb_size = in1_receiver_cb_size + cb_padding;
+
+    auto global_cb = tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+        device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
+
+    uint32_t in1_writer_cb_index = 31;
+    tt_metal::CircularBufferConfig in1_writer_cb_config = tt_metal::CircularBufferConfig(in1_receiver_cb_size);
+    in1_writer_cb_config.remote_index(in1_writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
+    auto writer_cb = tt_metal::v1::experimental::CreateCircularBuffer(
+        sender_program, dram_reader_core, in1_writer_cb_config, *global_cb);
+
     // in0 reader CB
     uint32_t in0_reader_cb_index = 0;
     uint32_t in0_reader_cb_size = in0_block_h * in0_block_w * single_tile_size * num_blocks;
@@ -166,14 +182,15 @@ std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal:
     auto in0_reader_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
 
     // in1 receiver CB
-    uint32_t in1_receiver_cb_index = 1;
-    uint32_t in1_receiver_cb_size = in1_block_h * in1_block_w * single_tile_size * cb_num_blocks / num_receivers;
-    uint32_t in1_receiver_cb_addr = in1_l1_buffer->address();
-    tt_metal::CircularBufferConfig in1_receiver_cb_config =
-        tt_metal::CircularBufferConfig(in1_receiver_cb_size, {{in1_receiver_cb_index, tile_format}})
-            .set_page_size(in1_receiver_cb_index, single_tile_size)
-            .set_globally_allocated_address(*in1_l1_buffer);
-    auto in1_receiver_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in1_receiver_cb_config);
+    uint32_t in1_receiver_cb_index = 31;
+    uint32_t in1_pusher_cb_index = 1;
+    tt_metal::CircularBufferConfig in1_receiver_cb_config = tt_metal::CircularBufferConfig(in1_receiver_cb_size);
+    in1_receiver_cb_config.remote_index(in1_receiver_cb_index)
+        .set_page_size(single_tile_size)
+        .set_data_format(tile_format);
+    in1_receiver_cb_config.index(in1_pusher_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
+    auto in1_receiver_cb = tt_metal::v1::experimental::CreateCircularBuffer(
+        receiver_program, l1_receiver_cores, in1_receiver_cb_config, *global_cb);
 
     // output CB
     uint32_t output_cb_index = 16;
@@ -196,26 +213,6 @@ std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal:
     log_info("in1_reader_cb_size: {}", in1_reader_cb_size);
     log_info("in1_receiver_cb_size: {}", in1_receiver_cb_size);
 
-    // semaphore
-    std::vector<uint32_t> pages_acked_semaphore_ids(num_receivers);
-    std::vector<uint32_t> pages_sent_semaphore_ids(num_receivers);
-    std::vector<std::unique_ptr<GlobalSemaphore>> global_sems;
-    // Global semaphores use an actual address instead of an index
-    if (use_sub_devices) {
-        global_sems.reserve(num_receivers * 2);
-        for (uint32_t i = 0; i < num_receivers; ++i) {
-            global_sems.push_back(tt_metal::CreateGlobalSemaphore(device, all_cores, INVALID));
-            pages_acked_semaphore_ids[i] = global_sems.back()->address();
-            global_sems.push_back(tt_metal::CreateGlobalSemaphore(device, all_cores, INVALID));
-            pages_sent_semaphore_ids[i] = global_sems.back()->address();
-        }
-    } else {
-        for (uint32_t i = 0; i < num_receivers; ++i) {
-            pages_acked_semaphore_ids[i] = tt_metal::CreateSemaphore(sender_program, all_cores, INVALID);
-            pages_sent_semaphore_ids[i] = tt_metal::CreateSemaphore(sender_program, all_cores, INVALID);
-        }
-    }
-
     // in1 reader
     std::vector<uint32_t> in1_reader_compile_time_args = {
         (std::uint32_t)in1_buffer->address(),
@@ -236,11 +233,9 @@ std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal:
     // in1 writer
     std::vector<uint32_t> in1_writer_compile_time_args = {
         (std::uint32_t)tt_metal::NOC::RISCV_0_default,
-        (std::uint32_t)in1_receiver_cb_addr,
-        (std::uint32_t)in1_receiver_cb_size,
         (std::uint32_t)num_receivers,
         (std::uint32_t)num_layers,
-        (std::uint32_t)use_sub_devices};
+        (std::uint32_t)in1_writer_cb_index};
 
     auto in1_writer_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -266,10 +261,7 @@ std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal:
 
     // in1 receiver
     std::vector<uint32_t> in1_receiver_compile_time_args = {
-        (std::uint32_t)in1_receiver_cb_addr,
-        (std::uint32_t)in1_receiver_cb_size + cb_padding,
-        (std::uint32_t)num_layers,
-        (std::uint32_t)use_sub_devices};
+        (std::uint32_t)num_layers, (std::uint32_t)in1_receiver_cb_index};
 
     auto in1_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -341,12 +333,6 @@ std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal:
         auto l1_receiver_core_coord_physical = device->worker_core_from_logical_core(l1_receiver_core_coords[i]);
         writer_rt_args.push_back(l1_receiver_core_coord_physical.y);
     }
-    for (uint32_t i = 0; i < num_receivers; ++i) {
-        writer_rt_args.push_back(pages_acked_semaphore_ids[i]);
-    }
-    for (uint32_t i = 0; i < num_receivers; ++i) {
-        writer_rt_args.push_back(pages_sent_semaphore_ids[i]);
-    }
     for (uint32_t i = 0; i < num_layers; ++i) {
         writer_rt_args.push_back(in1_writer_page_size);
     }
@@ -372,11 +358,9 @@ std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal:
         std::vector<uint32_t> receiver_rt_args = {
             (std::uint32_t)vc & 0x3,
             (std::uint32_t)dram_reader_core_coord_physical.x,
-            (std::uint32_t)dram_reader_core_coord_physical.y};
+            (std::uint32_t)dram_reader_core_coord_physical.y,
+            (std::uint32_t)i};
         vc++;
-
-        receiver_rt_args.push_back(pages_acked_semaphore_ids[i]);
-        receiver_rt_args.push_back(pages_sent_semaphore_ids[i]);
 
         for (uint32_t i = 0; i < num_layers; ++i) {
             receiver_rt_args.push_back(single_tile_size);
@@ -408,7 +392,7 @@ std::tuple<std::vector<tt_metal::Program>, std::vector<std::unique_ptr<tt_metal:
         tt_metal::SetRuntimeArgs(receiver_program, in0_reader_kernel, l1_receiver_core_coords[i], in0_reader_rt_args);
     }
 
-    return {std::move(programs), std::move(global_sems)};
+    return {std::move(programs), std::move(global_cb)};
 }
 
 float to_float(bfloat16 bfloat16_num) { return bfloat16_num.to_float(); }
@@ -552,7 +536,8 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     BufferType buffer_type,
     tt::DataFormat data_format,
     CoreRangeSet cores,
-    uint32_t num_receivers) {
+    uint32_t num_receivers,
+    std::optional<DeviceAddr> address = std::nullopt) {
     uint32_t size_bytes;
     uint32_t page_size_bytes;
     if (data_format == tt::DataFormat::Bfp8_b) {
@@ -576,14 +561,22 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     log_info("page_size_bytes: {}", page_size_bytes);
     log_info("num_receivers: {}", num_receivers);
 
-    auto input_buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+    auto config = tt::tt_metal::ShardedBufferConfig{
         .device = device,
         .size = size_bytes,
         .page_size = page_size_bytes,
         .buffer_type = buffer_type,
         .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = shard_spec});
+        .shard_parameters = shard_spec};
+
+    std::shared_ptr<Buffer> input_buffer;
+    if (address.has_value()) {
+        input_buffer = CreateBuffer(config, address.value());
+    } else {
+        input_buffer = CreateBuffer(config);
+    }
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
+    tt::Cluster::instance().l1_barrier(device->id());
 
     log_info("created sharded tensor");
 
@@ -707,6 +700,8 @@ int main(int argc, char** argv) {
             l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
         }
         CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
+        std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
+        sender_receiver_core_mapping[dram_reader_core_coord] = l1_receiver_core;
         if (use_sub_devices) {
             SubDevice sender_sub_device = SubDevice(std::array{dram_reader_core});
             SubDevice receiver_sub_device = SubDevice(std::array{l1_receiver_core});
@@ -777,19 +772,6 @@ int main(int argc, char** argv) {
                 l1_receiver_core,
                 num_receivers);
 
-            // in1 L1 CB
-            vector<uint32_t> in1_buffer =
-                create_constant_vector_of_bfp8(kt * nt * single_tile_size + extra_cb_size, 0, false);
-            in1_l1_buffer = create_and_transfer_data_sharded_cb(
-                device,
-                in1_buffer,
-                kt + extra_kt,
-                nt,
-                tt_metal::BufferType::L1,
-                tt::DataFormat::Bfp8_b,
-                l1_receiver_core,
-                num_receivers);
-
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfp8(mt * nt * single_tile_size, 0, false);
             output_buffer = create_and_transfer_data_sharded_cb(
@@ -834,19 +816,6 @@ int main(int argc, char** argv) {
                 l1_receiver_core,
                 num_receivers);
 
-            // in1 L1 CB
-            vector<uint32_t> in1_buffer =
-                create_constant_vector_of_bfloat16(kt * nt * single_tile_size + extra_cb_size, 0);
-            in1_l1_buffer = create_and_transfer_data_sharded_cb(
-                device,
-                in1_buffer,
-                kt + extra_kt,
-                nt,
-                tt_metal::BufferType::L1,
-                tt::DataFormat::Float16_b,
-                l1_receiver_core,
-                num_receivers);
-
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfloat16(mt * nt * single_tile_size, 0);
             output_buffer = create_and_transfer_data_sharded_cb(
@@ -867,10 +836,11 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [programs, global_sems] = create_programs(
+        auto [programs, global_cb] = create_programs(
             device,
             dram_reader_core,
             l1_receiver_core,
+            sender_receiver_core_mapping,
             single_tile_size,
             tile_format,
             m,
@@ -883,7 +853,6 @@ int main(int argc, char** argv) {
             cb_padding,
             in0_buffer,
             in1_buffers[0],
-            in1_l1_buffer,
             output_buffer,
             use_sub_devices);
 
