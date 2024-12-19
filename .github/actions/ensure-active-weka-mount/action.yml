@@ -11,6 +11,5 @@ runs:
   steps:
     - name: Ensure active weka mount
       shell: bash
-      timeout-minutes: 5
       run: |
-        ./.github/scripts/cloud_utils/mount_weka.sh
+        timeout --preserve-status 300 ./.github/scripts/cloud_utils/mount_weka.sh
