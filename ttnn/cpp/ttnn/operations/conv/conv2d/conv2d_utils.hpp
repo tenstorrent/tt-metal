@@ -4,7 +4,6 @@
 
 #pragma once
 #include <optional>
-#include <unordered_set>
 
 #include "ttnn/core.hpp"
 #include "ttnn/operations/core/core.hpp"

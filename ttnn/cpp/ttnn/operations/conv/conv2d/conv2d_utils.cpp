@@ -10,9 +10,7 @@
 #include "conv2d_utils.hpp"
 #include "common/constants.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include "device/conv2d_op.hpp"
 #include "impl/buffers/buffer_constants.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
@@ -1073,8 +1071,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
 
-    if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED)
-    {
+    if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED)  {
 
         uint32_t conv_output_c_per_core = per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH;
 
@@ -1128,6 +1125,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         } else {
             tt::log_debug(tt::LogOp, "CB24 Size: {}", cb24_size);
         }
+
         //CB 25
         uint32_t cb25_size = tilized_act_block_num_bytes; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
 
@@ -1294,6 +1292,8 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         //CB 25
         uint32_t cb25_size = tilized_act_block_cb_size; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
 
+        bool need_unpad_after_untilize =
+            output_shard_shape[1] * output_shard_shape[0] < num_writer_output_tiles * TILE_HW;
         return{ output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb6_size + cb24_size + cb25_size};
     }
     return {0, 0};
