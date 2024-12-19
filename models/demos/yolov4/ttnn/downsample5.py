@@ -15,7 +15,13 @@ class Down5:
             torch_model = model.torch_model
         self.torch_model = torch_model
         self.conv1 = Conv(
-            torch_model, "down5.conv1", [1, 20, 20, 512], (2, 2, 1, 1), reshard=True, height_sharding=False
+            torch_model,
+            "down5.conv1",
+            [1, 20, 20, 512],
+            (2, 2, 1, 1),
+            reshard=True,
+            height_sharding=False,
+            deallocate=False,
         )
         self.conv2 = Conv(
             torch_model, "down5.conv2", [1, 10, 10, 1024], (1, 1, 0, 0), width_sharding=True, deallocate=False

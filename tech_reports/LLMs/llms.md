@@ -1,6 +1,6 @@
 # LLMs in TT-NN
 
-Authors: Mark O'Connor, Djordje Ivanovic, Jack (Xun) Cai, Kartik Paigwar
+Authors: Mark O'Connor, Djordje Ivanovic, Jack (Xun) Cai, Kartik Paigwar, Johanna Rock, Stuti Raizada
 
 ## Contents
 - [LLMs in TT-NN](#llms-in-tt-nn)
@@ -667,14 +667,314 @@ def forward(
 
 ## 3. Features
 ### 3.1 Generative Decoding
+
 ### 3.2 Prefill and Decode
-  - submodules, tests
-  - how to combine prefill and decode,
-  - slicing prefill to fit in L1
+
+Large language models require two distinct phases for inference due to the fundamental nature of transformer attention and autoregressive generation: prefill and decode.
+
+In our LLM implementations, the prefill phase is done sequentially for each user, but parallel for the prompt tokens of each user. During prefill, the model computes attention scores for all prompt tokens against each other and populates the key-value (KV) cache which will speed up the computation of the decode phase. At the end of the prefill phase, the first token for the following autoregressive generation will also be computed.
+
+The decode phase is parallel-computed for all users, but sequential for each token within a batch of users. Each new token can only be generated after the previous one, as the model must maintain causality in attention computations.
+
+#### **Technical Implementation Differences**
+
+The intermediate activations in prefill mode are kept in DRAM, due to the large size of the tensors which contain the entire sequence length. In decode mode, the intermediate activations are kept in L1 memory instead, since in this mode the sequence length to compute is just 1 (one token at the time), reducing latency.
+
+##### 1. Reshaping for Large Matrix Multiplications
+
+Please see the [attention source code](../../models/demos/llama3/tt/llama_attention.py) for reference.
+
+In prefill mode, when the input sequence length is very large, the model reshapes its input tensors to process sequences in smaller chunks in parallel for larger matrix multiplications, such as `wqkv`, `wo` in the attention module, and `w1`, `w2`, `w3` in the MLP module. This reshaping prevents running out of memory in cases of long prefill sequence lengths. For instance:
+
+```python
+if seq_len > 2048:
+    x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
+
+xqkv_fused = ttnn.linear(
+    x_11SH,
+    self.wqkv,
+    dtype=ttnn.bfloat16,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    compute_kernel_config=self.compute_kernel_config_hifi2,
+    program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+)
+```
+
+This reshaping is not needed for decode mode because it only processes one token at a time. Instead, the parallelization for decode mode is done over user batches, which currently only goes up to 32.
+
+##### 2. KV Cache Management
+
+The KV-cache is filled during prefill using the `ttnn.experimental.paged_fill_cache` operation. This supports page tables, which enables the hot-swapping of new users when the full model is deployed.
+
+```python
+# Fill cache with initial states
+ttnn.experimental.paged_fill_cache(
+    keys_BKSD,
+    k_fill,
+    page_table,
+    batch_idx=user_id
+)
+```
+
+Similarly, during decode, the KV-cache update is done by `ttnn.experimental.paged_update_cache`, which updates the new KV values for all the users currently processing, with their respective positions.
+
+```python
+# Update KV cache with a single new token
+ttnn.experimental.paged_update_cache(
+    keys,
+    k_heads_1BKD,
+    update_idxs_tensor=current_pos,
+    page_table=page_table
+)
+```
+
+##### 3. Attention Computation
+###### Prefill:
+```python
+# Split q_heads into num_groups and kv_heads for parallel group computation for grouped query attention (GQA)
+q_heads_84SD_8b = ttnn.reshape(
+    q_heads_1QSD_8b,
+    [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
+)
+
+# Prefill implements causal masking across the full sequence
+attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+    q_heads_84SD_8b,
+    k_heads_K1SD_8b,
+    v_heads_V1SD_8b,
+    is_causal=True,  # Ensures tokens only attend to previous tokens
+    scale=self.scale
+)
+```
+
+###### Decode:
+```python
+# Decode uses cached states instead of recomputing
+attn_output_11BH = ttnn.transformer.scaled_dot_product_attention_decode(
+    q_heads_1BQD,  # Only new token query
+    keys,          # Cached keys
+    values,        # Cached values
+    cur_pos_tensor=current_pos  # Track position for causal attention
+)
+```
+
+##### 4. Slicing Before the LM Head
+At the end of prefill, the model should generate the first decoded token, then signaling the start of the decode phase. To this end, the model slices the output of the last decoder layer to the last tile before computing the LM head. This is necessary because only last token from prefill is needed to start the autoregressive decoding.
+
+```python
+x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+```
+
+#### **Prefill vs. Decode: Comparison Summary**
+
+|  | Prefill Mode | Decode Mode |
+| --- | --- | --- |
+| Purpose | Bulk sequence processing for initialization or training | Incremental processing for autoregressive inference |
+| Demo Parallelization | Sequential for each user, parallel for the sequence length of each user | Parallel for 32 users, sequential for each token within a batch of users |
+| Batch and sequence Length | Processes long sequences (≥ 128 tokens), single user | Processes batch of users (≤ 32 users), single token |
+| Memory Use | DRAM, with reshaping into smaller chunks for long sequence lengths | L1 on-chip memory for fast, low-latency processing |
+| Attention | Handles sequences in bulk; more memory-intensive | Incremental attention with precomputed components |
+| LM head slicing | Slices to last tile before Lm head matmul to extract the last token | Slicing not required |
+
 ### 3.3 Multi-Device
-  - device mesh
-  - column parallel followed by row parallel
-  - sharding, CCL ops, reducing CCL overheads, etc.
+
+Please note that this section refers to sharding schemes across devices and not on a multi-core level. For details about different matmul versions and sharding on a core level, please see the [matmul configuration section](#44-op-configs).
+
+There are two main approaches for scaling across multiple devices: `data parallel` and `tensor parallel`.
+
+In data parallel scaling there are _multiple independent_ instances of the model running in parallel so that multiple batches of users are processed at the same time. This mode is used to increase throughput.
+
+In tensor parallel scaling there is _one_ instance of the model executed on multiple devices, where single operations are distributed across devices. This mode allows larger models, that would not typically fit on a single device, to run on multiple devices, and usually also reduces latency.
+
+There are also hybrid forms of those two modes where a cluster of devices runs multiple independent instances of the model, but each of those model instances uses multiple chips in a tensor parallel fashion.
+
+In the report [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md), there is a good introduction to using TTNN's key concepts for scaling to multiple devices. It shows how to use a single handle for a mesh of devices, and how a tensor can be sharded or replicated to that mesh of devices (tensor parallelism).
+The tensor handle is used analogously to single device tensors, with the only difference being that all operations on that tensor are then executed in parallel on each device and operate on their respective local chunk of data.
+
+TT-Metal supports different multi-device topologies. The most important ones for us are `Ring` topology, where all devices are connected in a ring shape with each other, and `Line` topology, where a (sub-)group of devices is connected in a line with each other. `Line` topology can be a 1D or 2D grid of devices, where each row and column are connected in a line.
+
+Below is a summary and example code of the most important concepts for mapping a tensor to a mesh of devices in TTNN:
+
+*Figure: Example usage of mesh_device, ShardTensorToMesh and ReplicateTensorToMesh*
+
+```python
+import ttnn
+
+# 2x4 mesh_device, Topology Ring: devices are connected in a ring
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), mesh_type=ttnn.MeshType.Ring)
+
+# Construct initial torch tensor
+torch_tensor = torch.rand((1,1,32,256), dtype=torch.bfloat16)
+
+# Convert to ttnn.Tensor, tilize and move onto mesh_device (2x4 devices) by sharding in dimension 3
+# mesh_tensor_sharded contains data on all 8 devices, where each device has a 32x32 sized chunk of the data
+mesh_tensor_sharded = ttnn.from_torch(
+    torch_input_tensor,
+    layout=ttnn.TILE_LAYOUT,
+    device=mesh_device,
+    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+)
+
+# Convert to ttnn.Tensor, tilize and move onto mesh_device (2x4 devices) by replication
+# mesh_tensor_replicated contains data on all 8 devices, where each device has the same 32x256 sized tensor
+mesh_tensor_replicated = ttnn.from_torch(
+    torch_input_tensor,
+    layout=ttnn.TILE_LAYOUT,
+    device=mesh_device,
+    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+)
+```
+
+The second key concept to scaling a model to multiple devices are Collective Communication Library (CCL) operations. They are used to efficiently exchange data between multiple devices. TTNN currently supports the following CCL Operations:
+- AllGather
+- ReduceScatter
+- AllReduce
+
+See the [CCL Developer Guide](../EthernetMultichip/CclDeveloperGuide.md) for more comprehensive coverage about CCL and their implementation details. Our library of supported operations can be found [here](../EthernetMultichip/CclDeveloperGuide.md#op-list-op-list).
+
+#### AllGather
+The AllGather operation collects data from all devices, concatenating each chunk along a specified dimension. The result is stored on each device (replication).
+
+- Supported Topologies: Ring, Linear
+- Supported number of links
+  - N300, T3000: 1
+  - TG: 4 along cluster_axis=0, 3 along cluster_axis=1
+- Arguments
+  - mesh_tensor: a tensor mapped to a mesh_device via mesh_mapper
+  - dim: the dimension to concatenate
+  - num_links: number of ethernet links to be used
+  - cluster_axis: cluster axis to gather along
+  - mesh_device: mesh device the tensor is mapped to
+
+*Figure: Example usage of Ring All-Gather on 2x4 mesh_device*
+
+```py
+# Execute All-Gather on the sharded tensor
+# Assuming mesh_tensor_sharded is a sharded tensor over 8 devices where each devices contains a 32x32 sized chunk of data, the output_tensor is of size 32x256
+output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=1)
+```
+
+*Figure: Example usage of Linear All-Gather on 2x4 mesh_device*
+
+```py
+# Execute All-Gather on the sharded tensor
+# Assuming mesh_tensor_sharded is a sharded tensor over 2x4 devices where each devices contains a 32x32 sized chunk of data, the output_tensor is of size 32x128 where each row has the same data
+output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=2, cluster_axis=1, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+```
+
+#### ReduceScatter
+The ReduceScatter operation reduces the data across all devices and shards the result of the reduction over a specified dimension across all devices.
+
+- Supported Topologies: Ring, Linear
+- Supported number of links: 1
+- Arguments
+  - mesh_tensor: a tensor mapped to a mesh_device via mesh_mapper
+  - dim: the dimension to concatenate
+  - cluster_axis: cluster axis to gather along
+  - num_links: number of ethernet links to be used
+  - topology: topology configuration ttnn.Ring or ttn.Linear
+
+*Figure: Example usage of Ring Reduce-Scatter on 2x4 mesh_device*
+
+```py
+# Execute Reduce-Scatter on the sharded tensor
+# Assuming mesh_tensor_sharded is a sharded tensor over 8 devices where each devices contains a 32x32 sized chunk of data, the output_tensor is again of size 32x32 on each devices but reduced over all devices
+output_tensor = ttnn.reduce_scatter(mesh_tensor_sharded, dim=3, num_links=1)
+```
+
+*Figure: Example usage of Linear Reduce-Scatter on 2x4 mesh_device*
+
+```py
+# Execute Reduce-Scatter on the sharded tensor
+# Assuming mesh_tensor_sharded is a sharded tensor over 2x4 devices where each devices contains a 32x32 sized chunk of data, the output_tensor is of size 32x32 on each device but reduces over each row of devices
+output_tensor = ttnn.reduce_scatter(mesh_tensor_sharded, dim=3, num_links=1, cluster_axis=1, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+```
+
+#### AllReduce
+The AllReduce operation reduces data across all devices and stores the entire tensor on each device (replication). It is performed using an AllGather followed by a ReduceScatter.
+
+A fused version of AllReduce is planned, but currently only the composite of AllGather+ReduceScatter is supported.
+
+#### Sharding schemes for decode
+In decode mode, activations are generally stored in L1 memory, while weights, which are too large, need to be stored in DRAM. The main bottleneck in decode mode is thereby DRAM bandwidth required to load model weights.
+
+The activations in decode mode are so small because they contain the batch size (=users) in the height dimension while sequence length is 1.
+The only exception is the attention operations computing `softmax(Q*KˆT)*V`. The activation width is the model dim (e.g. 8192 for Llama3-70b).
+Activations are not sharded in the height dimension; however, depending on the operation and model, they may be sharded in the width dimension.
+
+Matmul weights on the other hand can be sharded in width, height or both. Sharding weights across multiple devices significantly reduces DRAM pressure per device, resulting in notable latency improvements. Below is a summary of useful sharding schemes for sharding weights in decode mode. Which scheme to use will depend on the shape and size of the model weights and the target device topology.
+
+##### **1D Column parallel**
+
+Weights are sharded in width, such that each device contains a horizontal slice of the weights. For this scheme the activations need to be gathered beforehead, i.e. each device processes the whole activation. The result of a column parallel matmul is an activation that is sharded in width. An AllGather operation is used on dim=3 to gather (i.e., replicate) activations.
+
+<img src="images/column_parallel.png" style="width:500px;"/>
+
+##### **1D Row parallel**
+
+Weights are sharded in height, such that each device contains a vertical slice of the weights. For this scheme the activations need to be sharded beforehand, i.e. each device processes a width-shard of the activation. The result of a row parallel matmul are activation partials with the final result's output dimensions, each device containing a partial result. To reduce the activations, i.e. compute the final output, a ReduceScatter operation is used to compute the reduced result across all devices and shard the result along a specified dimension.
+Additionally an AllGather operation is used (ReduceScatter+AllGather = AllReduce) to gather the reduced shards and thus replicate the final output on each device.
+
+<img src="images/row_parallel.png" style="width:500px;"/>
+
+##### **1D Column parallel followed by row parallel (1D weight sharding) **
+
+1D Weight Sharding is a sharding scheme that combines column and row parallel matmuls and can reduce the data volume sent over CCL operation and thus speed up computation. It consists of a column parallel matmul followed by a row parallel matmul. In this scheme the initial activations are gathered, and the column parallel matmul produces width-sharded outputs. The row parallel matmul consumes those sharded activations and produces parial outputs. We need an AllReduce (ReduceScatter+AllGather) operation to compute the final reduced and gathered outputs.
+
+Optimization potential in this scheme depends highly on the input dimensions to the CCL operations. We can use this scheme for the MLP and any sequence of matmuls that expands and then narrows the output dimension again, becuase it moves the CCL operation to a more beneficial location in the computational graph and thus reduces the CCL data volume.
+
+Let's look at the MLP as concrete example: in Llama3-70b we have `FF1` and `FF3` with dimensions `[32, 8k] x [8k, 28k]` and then the `FF2` with dimension `[32, 28k] x [28k, 8k]`.
+If we gather after `FF1` and `FF3` we have to gather activations of size `[32, 28k/num_devices] -> [32, 28k]` for each of `FF1` and `FF3`; after the `FF2` we'd need to gather again `[32, 8k/num_devices] -> [32, 8k]`.
+If instead, we use the 1D weight sharding scheme and thus move the CCL operation after the `FF2`, we only have to ReduceScatter #num_devices partials of size `[32, 8k] -> [32, 8k/num_devices]` and then optionally AllGather to obtain the `[32, 8k]` gathered outputs.
+
+<img src="images/column_parallel_then_row_parallel.png" style="width:700px;"/>
+
+##### **2D Weight Sharding**
+
+In 2D Weight Sharding on a 2D cluster, weights are sharded both in width and height, such that each device contains a block of the weights.
+For this scheme the activations are width-sharded along `cluster_axis=0` and are replicated along `cluster_axis=1`, and the weights are block-sharded. Thus, each device processes a width-shard of the activation, and a block of the weights where the activations are replicated over one axis but the weights are not.
+The matmul result will be width-sharded along `cluster_axis=0` and contain partial results along `cluster_axis=1`.
+Typically an AllReduce (ReduceScatter+AllGather) is used to first reduce along `cluster_axis=1` and then gather the shards along `cluster_axis=0`.
+
+<img src="images/block_sharded.png" style="width:1000px;"/>
+
+##### **Optimal strategy**
+
+The optimal usage strategy of different parallelisation schemes depends on the specific shapes and model architecture, as well as the target device topology. To select the best parallelisation strategy, the overall data movement for each scheme can be computed; selecting the parallelisation stratgy with the lowest overall data movement will generally result in the best performance.
+
+To compute the data movement for a given parallelisation strategy, first the required sequence of parallelisation strategies and corresponding CCL operations is sketched out, and then the resulting dat movement is computed. The following table shows constraints on input and output activations for each parallelisation strategy. A partial activation always has to be reduced (ReduceScatter or AllReduce), while fractured activations may or may not need to be gathered, dependent on the consumer operation. A binary op for example is executed on the fractured activaiton to parallelise computation, while a matmul 1D column parallel operation requires inputs to be gathered in k.
+
+| Parallelisation strategy  | Input activation requirement | Output activation requirement |
+|---------------------------|-----------------|-----------------|
+| 1D Column parallel        | Gathered in k   | Fractured in k |
+| 1D row parallel           | Fractured in k  | Partials of full size |
+| 1D column + row parallel  | Gathered in k   | Partials of full size |
+| 2D parallel               | Fractured in k  | Partials over one cluster axis |
+
+The overall data movement (DM) is then computed using:
+
+| CCL operation     | DM for Line topology     | DM for Ring topology     |
+|-------------------|--------------------------|---------------------------|
+| AllGather         | DM = (K⋅N⋅DF/D)⋅(D−1)⋅D  | DM = (K⋅N⋅DF)⋅D⋅log2(D)   |
+| ReduceScatter     | DM = (K⋅N⋅DF)⋅(1-(1/D))    | DM = (K⋅N⋅DF) ⋅ (D-1) / D |
+
+where K and N are height and width of the weight tensor, DF is the data format multiplyer (number of bytes per datum) and D is the number of devices along the axis that the CCL operation is performed on. Ring topology is more optimised and results in less overall data movement.
+
+
+
+##### **Examplary parallelisation scheme: Llama3**
+
+For our [Llama3 family of models](../../models/demos/llama3) we are using the following sharding schemes in our multi-device architectures:
+
+| Matmul            | N300            | T3000           | TG              |
+|-------------------|-----------------|-----------------|-----------------|
+| [_QKV projection_](../../models/demos/llama3/tt/llama_attention.py) | Column parallel | Column parallel | 2D              |
+| [_Dense out_](../../models/demos/llama3/tt/llama_attention.py)  | Row parallel    | Row parallel    | 2D              |
+| [_FF1_](../../models/demos/llama3/tt/llama_mlp.py)             | Column parallel | Column parallel | 2D              |
+| [_FF3_](../../models/demos/llama3/tt/llama_mlp.py)             | Column parallel | Column parallel | 2D              |
+| [_FF2_](../../models/demos/llama3/tt/llama_mlp.py)             | Row parallel    | Row parallel    | 2D              |
+
+
 ### 3.4 Continuous Batching
   - quick intro and how it is implemented in demos.
 ### 3.5 vLLM Integration
@@ -712,10 +1012,42 @@ For performance work async mode should always be enabled. For debugging it can b
     - 1d, 2d, dram-sharded, ...
   - Implicitly padding weights in program config for matmuls
 ### 4.5 Accuracy
-  - How we measure it (PCC, perplexity, top-1/top-5, end-user tests, benchmarking)
-  - How much PCC is enough? Rules of thumb.
-  - Accuracy tests
-  - Debugging PCC issues
+
+While we work on maximizing the performance of large language models on Tenstorrent hardware, we must also ensure that the models are functionally correct and that they produce outputs of the expected quality. The subsections below will describe our methods for evaluating the accuracy (also referred to as functionality or correctness for our purposes) of a given model and how to debug issues pertaining to this.
+
+#### Accuracy Testing
+
+Below is a list of metrics that are used when evaluating accuracy:
+- **Pearson Correlation Coefficient (PCC)**: A measure of the linear relationship between two variables, where a PCC of 1 indicates a perfect positive correlation, and a PCC of 0 indicates no linear correlation.
+- **Top-1/5 accuracy**: A measure of how often the correct token appears as the Top-1/5 most likely tokens predicted by the model at each step in a sequence.
+- **Perplexity**: Measures how well the LLM predicts the text in the dataset, and is computed as $e^{\text{(avg negative log likelihood)}}$.
+- **Human ocular evaluation**: Manual assessment of the quality, coherence, and relevance of the text generated by a LLM.
+- **Specialized benchmark eval scores**: Metrics that evaluate specific capabilities of LLMs, such as MMLU for multitask language understanding, or BIG-bench for diverse general knowledge tasks.
+
+In order to thoroughly test the accuracy of a model, a bottom up approach is taken such that sub-modules of the model are tested all the way up to the full token generation.
+- **Sub-module unit tests**: Each sub-module of the model should have its own test. For example, the [llama3 models](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3) have a separate [MLP test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_mlp.py), [attention test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_attention.py), and [decoder layer test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_decoder.py). For each of these tests, the outputs produced by the TT implementation of the model are compared against those of the original reference model (typically from Hugging Face) on CPU for a small set of inputs. A good rule of thumb is that the MLP, attention, and other small sub-modules should have a PCC of ~0.999, while a PCC of ~0.998 would be reasonable for a full decoder layer.
+- **Model-level unit tests**: In addition to the sub-module unit tests, there should also be unit tests for a full layer of the model with all sub-modules, and the full model comprising of all layers. For example, the [llama3 model test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_model.py) runs 1 or many layers of the model over multiple iterations and checks the PCC against the reference model. A rule of thumb is that the full model PCC should be approximately ~0.99.
+- **Dataset evaluation**: Once a model has been brought up with sufficient accuracy on the smaller unit tests, it should be tested on a larger set of prompts such as a full dataset or a subset of it. For example, the [Falcon7b perplexity test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py) loads a subset of the [WikiText dataset](https://huggingface.co/datasets/Salesforce/wikitext) and computes several metrics (including perplexity and top-1/5 accuracy) for evaluating the TT model with respect to the ground truth from the dataset. The results of these metrics should be comparable (e.g. within a couple percentage points of difference) to those obtained from running the evaluation with the reference model on CPU / GPU.
+
+#### Debugging Accuracy
+
+If during model bringup or optimization it is observed that the model outputs do not seem reasonable or any of the evaluations above are failing, the following steps can be taken to debug the accuracy:
+1. Locate the smallest module test that is failing. The fewer the number of operations that could be causing the issue, the easier it will be to debug the root cause. In most cases, the issue should be able to be found using a 1 layer or submodule test.
+    - If the submodule and 1 layer tests are all passing with high PCC, some possible explanations are that 1) there is some corruption of data happening when executing multiple layers or 2) the failure is specific to a certain distribution of input data.
+    - If the dataset evaluation or a human occular (qualitative) evaluation is failing while the unit tests are passing, some possible explanations are that 1) there has not been sufficient testing of consecutive token generations in the unit tests, or 2) the PCC targets in the unit tests are too low.
+2. Once the smallest failing test has been found, it may be required to step through individual operations in the model and compare their outputs against that of the reference model. This can be achieved by manually setting breakpoints in the TT model execution and CPU model execution and comparing the outputs, or by storing intermediate outputs to files or intermediate variables within the model itself to compare once both models have executed.
+
+For the operations under suspicion, some possible things to try could be:
+- Use higher precision dataformats or math fidelities (e.g. HiFi vs LoFi)
+- Convert inputs and outputs to DRAM interleaved so that the problematic op(s) read/write to DRAM (as opposed to L1 or sharded)
+- Remove custom program configs and try the ttnn defaults
+- If using CCL operations, verify that the reduction dimensions are appropriately set (particularly for 2D weight sharding)
+- If loading cached weights which may have had their memory configurations modified, try disabling loading from caches (or regenerating them) to ensure the weights are generated from the torch tensors
+- If using sharded tensors, ensure that the sharding configurations of the producer and consumer ops match
+- Verify that the reference model does not have any bugs (i.e. check if there were any recent fixes for the reference model on GitHub/HuggingFace)
+
+In some cases, it may be possible that the issue is not with the model and that there is a bug with a ttnn operation. If this is suspected, it should be verified using a unit test with the exact same input/output configurations and an issue should be filed to the tt-metal team.
+
 ### 4.6 Performance Analysis
 
 ttnn performance has five components:
@@ -922,6 +1254,20 @@ self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
 
 As always, do not recreate these every single forward pass if you want your python thread to be fast (which you do).
 ### 4.8 Module Tests
+
+#### Llama3 Module and Test Differences
+
+In our current Llama3 model, the attention module class (`TtLlamaAttention`) implements two primary methods for attention computation: `forward_prefill` and `forward_decode`.
+To test these, we provide two separate attention test files, `test_attention_decode` and `test_attention_prefill`, which create the appropriate input tensors:
+- A tensor of size `(batch, dim)` in L1 for decode,
+- A tensor of size `(seqlen, dim)` in DRAM for prefill.
+
+Each attention test compares the attention module output and KV-cache correlation between the PyTorch host implementation and the TTNN device implementation.
+
+The current version of the MLP module class (`TtLlamaMLP`) handles prefill and decode in the same file but has some technical differences (mentioned in the section below).
+
+The decoder module (which encapsulates both attention and MLP) and model module (which encapsulates the decoder and the remaining parts of the Llama3 model) also handle prefill and decode in the same file, but they call the respective modes within the attention and MLP modules.
+
 ### 4.9 Performance Testing
 ### 4.10 Common Pitfalls
 #### 4.10.1 Error Messages

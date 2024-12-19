@@ -10,7 +10,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
@@ -2983,7 +2983,20 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     this->using_fast_dispatch = false;
     this->num_hw_cqs_ = num_hw_cqs;
     constexpr uint32_t harvesting_map_bits = 12;
-    this->build_key_ = ((uint32_t)this->num_hw_cqs_ << harvesting_map_bits);
+    constexpr uint32_t num_hw_cq_bits = 8;
+    constexpr uint32_t dispatch_core_axis_bits = 1;
+    constexpr uint32_t dispatch_core_type_bits = 1;
+    static_assert(dispatch_core_manager::MAX_NUM_HW_CQS <= (1 << num_hw_cq_bits));
+    static_assert(static_cast<uint32_t>(DispatchCoreAxis::COUNT) <= (1 << dispatch_core_axis_bits));
+    static_assert(static_cast<uint32_t>(DispatchCoreType::COUNT) <= (1 << dispatch_core_type_bits));
+    static_assert(harvesting_map_bits + num_hw_cq_bits + dispatch_core_axis_bits + dispatch_core_type_bits <= sizeof(this->build_key_) * CHAR_BIT);
+
+    // num_hw_cqs, dispatch_core_axis, dispatch_core_type all change the number of banks, so need to be part of the
+    // build key since we have defines based on number of banks.
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(this->id_);
+    this->build_key_ = (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type()) << (harvesting_map_bits + num_hw_cq_bits + dispatch_core_axis_bits)) |
+                       (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis()) << (harvesting_map_bits + num_hw_cq_bits)) |
+                       (static_cast<uint32_t>(num_hw_cqs_) << harvesting_map_bits);
     if (not hal.is_coordinate_virtualization_enabled()) {
         // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across devices with different cores harvested.
         this->build_key_ = (this->build_key_) | tt::Cluster::instance().get_harvesting_mask(this->id());

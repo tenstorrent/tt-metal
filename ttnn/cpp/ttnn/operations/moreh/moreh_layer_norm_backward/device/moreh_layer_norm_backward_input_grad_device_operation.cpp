@@ -27,12 +27,16 @@ void MorehLayerNormBackwardInputGradOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehLayerNormBackwardInputGradOperation::shape_return_value_t
-MorehLayerNormBackwardInputGradOperation::compute_output_shapes(
+MorehLayerNormBackwardInputGradOperation::spec_return_value_t
+MorehLayerNormBackwardInputGradOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input = tensor_args.input;
-    auto input_shape = input.get_shape();
-    return tensor_args.input.get_shape();
+    if (tensor_args.input_grad.has_value()) {
+        return tensor_args.input_grad->get_tensor_spec();
+    }
+    return TensorSpec(
+        tensor_args.input.get_logical_shape(),
+        TensorLayout(
+            tensor_args.output_grad.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
 MorehLayerNormBackwardInputGradOperation::tensor_return_value_t
@@ -41,13 +45,8 @@ MorehLayerNormBackwardInputGradOperation::create_output_tensors(
     if (tensor_args.input_grad.has_value()) {
         return tensor_args.input_grad.value();
     }
-    auto output_grad = tensor_args.output_grad;
     return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        output_grad.get_dtype(),
-        Layout::TILE,
-        output_grad.device(),
-        operation_attributes.memory_config);
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.output_grad.device());
 }
 
 std::tuple<

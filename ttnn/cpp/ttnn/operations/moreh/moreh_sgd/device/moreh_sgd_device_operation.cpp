@@ -45,18 +45,37 @@ void MorehSgdOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehSgdOperation::shape_return_value_t MorehSgdOperation::compute_output_shapes(
+MorehSgdOperation::spec_return_value_t MorehSgdOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input_tensor_shape = tensor_args.param_in.get_shape();
+    auto input_tensor_shape = tensor_args.param_in.get_logical_shape();
+    auto dtype = tensor_args.param_in.get_dtype();
+    Layout layout{Layout::TILE};
 
-    return {input_tensor_shape, input_tensor_shape};
+    std::vector<std::optional<TensorSpec>> ret;
+
+    if (tensor_args.param_out.has_value()) {
+        ret.push_back(tensor_args.param_out->get_tensor_spec());
+    } else {
+        ret.push_back(TensorSpec(
+            input_tensor_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.param_out_memory_config)));
+    }
+
+    if (tensor_args.momentum_buffer_out.has_value()) {
+        ret.push_back(tensor_args.momentum_buffer_out->get_tensor_spec());
+    } else if (operation_attributes.momentum != 0.0f) {
+        ret.push_back(TensorSpec(
+            input_tensor_shape,
+            TensorLayout(dtype, PageConfig(layout), operation_attributes.momentum_buffer_out_memory_config)));
+    } else {
+        ret.push_back(std::nullopt);
+    }
+
+    return ret;
 };
 
 MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& output_shapes = compute_output_shapes(operation_attributes, tensor_args);
-    auto dtype = tensor_args.param_in.get_dtype();
-    Layout layout{Layout::TILE};
+    const auto& output_specs = compute_output_specs(operation_attributes, tensor_args);
     auto device = tensor_args.param_in.device();
 
     std::vector<std::optional<Tensor>> ret;
@@ -64,24 +83,18 @@ MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensor
     if (tensor_args.param_out.has_value()) {
         ret.push_back(tensor_args.param_out.value());
     } else {
-        ret.push_back(create_device_tensor(
-            output_shapes.at(0).value(), dtype, layout, device, operation_attributes.param_out_memory_config));
+        ret.push_back(create_device_tensor(*output_specs[0], device));
     }
 
     if (tensor_args.momentum_buffer_out.has_value()) {
         ret.push_back(tensor_args.momentum_buffer_out.value());
-    } else if (operation_attributes.momentum != 0.0f) {
-        ret.push_back(create_device_tensor(
-            output_shapes.at(1).value(),
-            dtype,
-            layout,
-            device,
-            operation_attributes.momentum_buffer_out_memory_config));
+    } else if (output_specs[1].has_value()) {
+        ret.push_back(create_device_tensor(*output_specs[1], device));
     } else {
         ret.push_back(std::nullopt);
     }
 
-    return std::move(ret);
+    return ret;
 }
 
 std::tuple<MorehSgdOperation::operation_attributes_t, MorehSgdOperation::tensor_args_t> MorehSgdOperation::invoke(
