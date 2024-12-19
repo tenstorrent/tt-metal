@@ -68,14 +68,13 @@ def create_tt_tensors(
     return tt_tensor
 
 
-def compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsnorm, grid_offset=None):
+def compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsnorm):
     SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[core_grid[1], core_grid[0]],
         subblock_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
         block_h=1,
         block_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
         inplace=False,
-        grid_offset=grid_offset,
     )
 
     if is_rmsnorm:
@@ -85,7 +84,7 @@ def compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsn
 
 
 def compute_post_allgather_output(
-    tt_input_tensor, tt_weights, tt_stats_tensor, eps, is_rmsnorm, core_grid, input_width, grid_offset=None
+    tt_input_tensor, tt_weights, tt_stats_tensor, eps, is_rmsnorm, core_grid, input_width
 ):
     SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
@@ -93,7 +92,6 @@ def compute_post_allgather_output(
         block_h=1,
         block_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
         inplace=False,
-        grid_offset=grid_offset,
     )
 
     if is_rmsnorm:
@@ -317,9 +315,7 @@ def test_simulated_distributed_layernorm(
         tt_input_tensor = create_tt_tensors(
             torch_input_chunks[d], device, input_df, core_grid, input_width, grid_offset=grid_offset
         )
-        tt_pre_allgather_output = compute_pre_allgather_stats(
-            tt_input_tensor, core_grid, input_width, is_rmsnorm, grid_offset=grid_offset
-        )
+        tt_pre_allgather_output = compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsnorm)
         tt_pre_allgather_outputs.append(tt_pre_allgather_output)
 
     # Extract and concatenate statistics from pre-allgather outputs
@@ -348,14 +344,7 @@ def test_simulated_distributed_layernorm(
             torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True
         )
         tt_output_tensor = compute_post_allgather_output(
-            tt_input_tensor,
-            tt_weights,
-            tt_global_stats,
-            eps,
-            is_rmsnorm,
-            core_grid,
-            input_width,
-            grid_offset=grid_offset,
+            tt_input_tensor, tt_weights, tt_global_stats, eps, is_rmsnorm, core_grid, input_width
         )
         tt_output_chunks.append(ttnn.to_torch(tt_output_tensor).to(torch.bfloat16))
 

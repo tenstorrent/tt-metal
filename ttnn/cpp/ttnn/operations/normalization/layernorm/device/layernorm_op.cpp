@@ -218,11 +218,9 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                 if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
                     auto shard_spec = input_tensor.shard_spec().value();
                     shard_spec.shape[1] = output_shape[3];
-                    CoreCoord grid_offset = program_config.grid_offset.value_or(CoreCoord{0, 0});
-
-                    CoreRange first_core_range(grid_offset, grid_offset);
-                    CoreRangeSet core_range_set({first_core_range});
-                    shard_spec.grid = core_range_set;
+                    CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
+                    CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
+                    shard_spec.grid = output_grid;
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {TensorSpec(
@@ -292,7 +290,6 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                     program_config.subblock_w,
                     program_config.block_h,
                     program_config.block_w,
-                    program_config.grid_offset,
                     this->compute_kernel_config);
             } else {
                 return layernorm_multi_core(
