@@ -261,6 +261,9 @@ void py_module(py::module& module) {
         - Note: there are various additional constraints related to specific program
           configs chosen. Please look at the error messages carefully and fix
           problems appropriately.
+        - Note: If optional output tensor is specified, then dtype and memory config need to be checked as follows:
+          - if they are default then they should be set based on optional output tensor
+          - if the are not default then they should be compared and if there is a difference an error is reported
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
@@ -276,10 +279,7 @@ void py_module(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
-            optional_output_tensor (ttnn.Tensor) : User provided on-device output tensor where the result of matmul is to be written.
-                                                   If optional output tensor is specified, then dtype and memory config need to be checked as follows:
-                                                        if they are default then they should be set based on optional output tensor
-                                                        if the are not default then they should be compared and if there is a difference an error is reported
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
 
 
         Returns:
@@ -389,7 +389,7 @@ void py_module(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
-            optional_output_tensor (ttnn.Tensor) : User provided on-device output tensor where the result of linear is to be written.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
