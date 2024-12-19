@@ -53,11 +53,12 @@ public:
     DispatchKernel(
         int node_id,
         chip_id_t device_id,
+        chip_id_t servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
         bool h_variant,
         bool d_variant) :
-        FDKernel(node_id, device_id, cq_id, noc_selection) {
+        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
         config.is_h_variant = h_variant;
         config.is_d_variant = d_variant;
     }

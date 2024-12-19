@@ -10,7 +10,7 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"
-#include "tt_metal/impl/dispatch/arch.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 
 using namespace tt::tt_metal;
 

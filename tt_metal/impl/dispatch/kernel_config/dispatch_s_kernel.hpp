@@ -25,8 +25,9 @@ typedef struct dispatch_s_config {
 
 class DispatchSKernel : public FDKernel {
 public:
-    DispatchSKernel(int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection) :
-        FDKernel(node_id, device_id, cq_id, noc_selection) {}
+    DispatchSKernel(
+        int node_id, chip_id_t device_id, chip_id_t servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
+        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {}
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;

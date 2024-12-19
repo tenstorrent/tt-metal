@@ -31,7 +31,7 @@
 
 // FIXME: ARCH_NAME specific
 #include "eth_l1_address_map.h"
-#include "impl/dispatch/arch.hpp"
+#include "impl/dispatch/topology.hpp"
 
 namespace tt {
 
@@ -2234,11 +2234,11 @@ void Device::compile_command_queue_programs_new() {
     auto command_queue_program_ptr = std::make_unique<Program>();
     auto mmio_command_queue_program_ptr = std::make_unique<Program>();
     if (this->is_mmio_capable()) {
-        auto command_queue_program_ptr = create_cq_program(this);
+        auto command_queue_program_ptr = create_and_compile_cq_program(this);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
         this->setup_tunnel_for_remote_devices();
     } else {
-        auto command_queue_program_ptr = create_cq_program(this);
+        auto command_queue_program_ptr = create_and_compile_cq_program(this);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
     }
 }

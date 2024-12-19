@@ -36,8 +36,9 @@ typedef struct mux_config {
 
 class MuxKernel : public FDKernel {
 public:
-    MuxKernel(int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection) :
-        FDKernel(node_id, device_id, cq_id, noc_selection) {}
+    MuxKernel(
+        int node_id, chip_id_t device_id, chip_id_t servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
+        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {}
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;

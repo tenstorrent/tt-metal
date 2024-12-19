@@ -40,8 +40,14 @@ typedef struct eth_router_config {
 
 class EthRouterKernel : public FDKernel {
 public:
-    EthRouterKernel(int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection, bool as_mux) :
-        FDKernel(node_id, device_id, cq_id, noc_selection), as_mux(as_mux) {}
+    EthRouterKernel(
+        int node_id,
+        chip_id_t device_id,
+        chip_id_t servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        bool as_mux) :
+        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection), as_mux(as_mux) {}
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;

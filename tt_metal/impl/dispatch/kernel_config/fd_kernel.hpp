@@ -43,8 +43,13 @@ static std::vector<string> dispatch_kernel_file_names = {
 // from this class and implement the virtual functions as required.
 class FDKernel {
 public:
-    FDKernel(int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection) :
-        node_id(node_id), device_id(device_id), cq_id(cq_id), noc_selection(noc_selection) {};
+    FDKernel(
+        int node_id, chip_id_t device_id, chip_id_t servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
+        node_id(node_id),
+        device_id(device_id),
+        servicing_device_id(servicing_device_id),
+        cq_id(cq_id),
+        noc_selection(noc_selection) {};
     virtual ~FDKernel() = default;
 
     // Populate the static configs for this kernel (ones that do not depend on configs from other kernels), including
@@ -64,7 +69,12 @@ public:
 
     // Generator function to create a kernel of a given type. New kernels need to be added here.
     static FDKernel* Generate(
-        int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection, DispatchWorkerType type);
+        int node_id,
+        chip_id_t device_id,
+        chip_id_t servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        DispatchWorkerType type);
 
     // Register another kernel as upstream/downstream of this one
     void AddUpstreamKernel(FDKernel* upstream) { this->upstream_kernels.push_back(upstream); }
@@ -84,9 +94,6 @@ public:
         this->device = device;
         this->program = program;
     };
-
-    // Some kernels may need to be identified by what remote device they are servicing, this is set externally
-    void SetServicingDeviceId(chip_id_t id) { this->servicing_device_id = id; }
 
 protected:
     void configure_kernel_variant(

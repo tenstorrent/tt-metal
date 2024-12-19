@@ -29,8 +29,14 @@ typedef struct eth_tunneler_config {
 
 class EthTunnelerKernel : public FDKernel {
 public:
-    EthTunnelerKernel(int node_id, chip_id_t device_id, uint8_t cq_id, noc_selection_t noc_selection, bool is_remote) :
-        FDKernel(node_id, device_id, cq_id, noc_selection), is_remote(is_remote) {}
+    EthTunnelerKernel(
+        int node_id,
+        chip_id_t device_id,
+        chip_id_t servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        bool is_remote) :
+        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection), is_remote(is_remote) {}
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
