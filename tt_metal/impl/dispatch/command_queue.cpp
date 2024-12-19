@@ -243,9 +243,7 @@ void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand&
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
     const CoreCoord virtual_core =
         this->buffer.device()->virtual_core_from_logical_core(this->core, this->buffer.core_type());
-    bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
-        flush_prefetch,
         0,
         this->device->get_noc_unicast_encoding(this->noc_index, virtual_core),
         this->bank_base_address,
@@ -287,14 +285,12 @@ void EnqueueWriteShardedBufferCommand::add_buffer_data(HugepageDeviceCommand& co
 
 void EnqueueWriteBufferCommand::process() {
     uint32_t num_worker_counters = this->sub_device_ids.size();
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-
-    uint32_t cmd_sequence_sizeB =
-        align(
-            sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + // CQ_PREFETCH_CMD_RELAY_INLINE + (CQ_DISPATCH_CMD_WRITE_PAGED or
-                                                            // CQ_DISPATCH_CMD_WRITE_LINEAR)
-            data_size_bytes, pcie_alignment);
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB = align(
+        sizeof(CQPrefetchCmd) + // CQ_PREFETCH_CMD_RELAY_INLINE
+        sizeof(CQDispatchCmd) + // CQ_DISPATCH_CMD_WRITE_PAGED or CQ_DISPATCH_CMD_WRITE_LINEAR
+        data_size_bytes, pcie_alignment);
     if (this->issue_wait) {
         cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE * num_worker_counters;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
     }
@@ -975,8 +971,8 @@ void EnqueueProgramCommand::assemble_device_commands(
             if (write_linear) {
                 kernel_bins_unicast_cmds.emplace_back(2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE);
                 cmd_sequence_sizeB += 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-                kernel_bins_unicast_cmds.back().add_dispatch_write_linear(
-                    false,            // flush_prefetch
+                constexpr bool flush_prefetch = false;
+                kernel_bins_unicast_cmds.back().add_dispatch_write_linear<flush_prefetch>(
                     num_mcast_dests,  // num_mcast_dests
                     noc_encoding,     // noc_xy_addr
                     kg_transfer_info.dst_base_addrs[kernel_idx],
