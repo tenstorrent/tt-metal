@@ -4,7 +4,7 @@ TT_ENABLE_UNITY_BUILD(unit_tests_builder)
 
 target_link_libraries(
     unit_tests_builder
-    PUBLIC
+    PRIVATE
         test_metal_common_libs
         tt_builder_lib
 )
