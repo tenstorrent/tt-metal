@@ -21,6 +21,7 @@ struct LayerNormShardedMultiCoreProgramConfig {
     std::size_t block_h;
     std::size_t block_w;
     bool inplace;
+    std::optional<CoreCoord> grid_offset;
 };
 
 using LayerNormProgramConfig = std::variant<LayerNormDefaultProgramConfig, LayerNormShardedMultiCoreProgramConfig>;

@@ -17,13 +17,14 @@ void bind_normalization_layernorm_program_config(py::module& module) {
 
     py::class_<LayerNormShardedMultiCoreProgramConfig>(module, "LayerNormShardedMultiCoreProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool>(),
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, std::optional<CoreCoord>>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("subblock_w").noconvert(),
             py::arg("block_h").noconvert(),
             py::arg("block_w").noconvert(),
-            py::arg("inplace").noconvert())
+            py::arg("inplace").noconvert(),
+            py::arg("grid_offset").noconvert() = std::nullopt)
         .def(
             "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
 }
