@@ -1050,6 +1050,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
     }
 }
 
+template <uint32_t num_shard_grids, uint32_t pages_per_shard, uint32_t start_x_0, uint32_t start_y_0, uint32_t width_0, uint32_t height_0, uint32_t start_x_1 = 0 , uint32_t start_y_1 = 0 , uint32_t width_1 = 0 , uint32_t height_1 = 0,
+
 template <bool DRAM>
 struct InterleavedAddrGen {
     uint32_t bank_base_address;  // Base address for the whole tensor.
