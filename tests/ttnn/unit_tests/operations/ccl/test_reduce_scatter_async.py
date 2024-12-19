@@ -149,8 +149,18 @@ def run_reduce_scatter_test(
         for _ in range(num_devices)
     ]
     if debug:
-        input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
+        tile_id = 0
+        for w in range(input_tensors[-1].shape[0]):
+            for z in range(input_tensors[-1].shape[1]):
+                for y in range(0, input_tensors[-1].shape[2], 32):
+                    for x in range(0, input_tensors[-1].shape[3], 32):
+                        for yy in range(32):
+                            for xx in range(32):
+                                input_tensors[-1][w, z, y + yy, x + xx] = tile_id
+                        # input_tensors[-1][w,z,y:y+32,x:x+32] = tile_id
+                        tile_id += 1
     for i, canonical_input_tensor in enumerate(input_tensors):
+        logger.info(f"Creating input tensor on device {mesh_device.get_device_ids()[i]}")
         tt_input_tensors.append(
             ttnn.Tensor(canonical_input_tensor, input_dtype)
             .to(layout)
@@ -198,6 +208,7 @@ def run_reduce_scatter_test(
                 subdevice_id=ttnn.SubDeviceId(0),
             )
 
+            logger.info(f"Waiting for op {i}")
             for device_id in mesh_device.get_device_ids():
                 ttnn.synchronize_device(mesh_device.get_device(device_id), sub_device_ids=[ttnn.SubDeviceId(0)])
             logger.info(f"Done iteration {i}")
@@ -218,20 +229,32 @@ def run_reduce_scatter_test(
     assert len(golden_output_tensors) == len(tt_out_tensors)
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
+        logger.info(f"DEVICE {i}")
+        logger.info(f"Checking output from device {t.device().id()}")
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         eq, output = comp_pcc(tt_output_tensor, golden_output_tensors[i])
         mismatch = mismatch or not eq
         if not eq:
             logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
             if debug:
+                logger.info(f"FINAL OUTPUT TENSOR {tt_output_tensor}")
+                mismatch_tensor_shape = [
+                    tt_output_tensor.shape[0],
+                    tt_output_tensor.shape[1],
+                    tt_output_tensor.shape[2] // 32,
+                    tt_output_tensor.shape[3] // 32,
+                ]
+                mismatch_tensor = torch.zeros(mismatch_tensor_shape).bfloat16()
                 for w in range(tt_output_tensor.shape[0]):
                     for z in range(tt_output_tensor.shape[1]):
-                        for y in range(tt_output_tensor.shape[2]):
-                            for x in range(tt_output_tensor.shape[3]):
+                        for y in range(0, tt_output_tensor.shape[2], 32):
+                            for x in range(0, tt_output_tensor.shape[3], 32):
                                 if tt_output_tensor[w, z, y, x] != golden_output_tensors[i][w, z, y, x]:
+                                    mismatch_tensor[w, z, y // 32, x // 32] = 1
                                     logger.error(
                                         f"mismatch at {w}, {z}, {y}, {x}: {tt_output_tensor[w, z, y, x]} != {golden_output_tensors[i][w, z, y, x]}"
                                     )
+                logger.error(f"MISMATCH TENSOR {mismatch_tensor}")
 
         else:
             logger.info(f"output match for tensor {i}")
@@ -250,11 +273,22 @@ def run_reduce_scatter_test(
 @pytest.mark.parametrize(
     "per_chip_output_shape, dim, layout",
     [
+        ([1, 1, 32, 32 * 2], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 64, 32], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 64, 64], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 128], 0, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 128], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 128], 2, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 128], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 32], 2, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 64], 2, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 32 * 4], 3, ttnn.TILE_LAYOUT),
-        # ([1, 2, 224, 32 * 8], 3, ttnn.TILE_LAYOUT),
-        # ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
-        # ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 4096], 3, ttnn.TILE_LAYOUT),
+        ([1, 4, 32, 2304], 2, ttnn.TILE_LAYOUT),
+        ([1, 2, 224, 32 * 8], 3, ttnn.TILE_LAYOUT),
+        ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(

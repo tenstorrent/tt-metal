@@ -1183,7 +1183,6 @@ static void populate_partial_reduce_rt_args(
                 builder_config.program.get(), kernel_ids.math, w_logical, math_page_counts_out[w_logical]);
             auto output_tensor_ptrs = std::vector<Tensor const*>{
                 all_tensors.remote_output[line_direction], all_tensors.local_output_partial[line_direction]};
-            log_info(tt::LogOp, "direction: {}, worker_core (x={}, y={}) remote_output_tensor_addr: {}", line_direction, w_logical.x, w_logical.y, all_tensors.remote_output[line_direction]->buffer()->address());
             generate_multi_input_command_stream_kernel_rt_args(
                 builder_config.program.get(),
                 kernel_ids.writer,
@@ -1927,7 +1926,7 @@ static void log_worker_command_streams(WorkerCommandStreams const& command_strea
                 writer0_has ? get_cmd_str(command_streams.writer_cmds0.at(core)[i]) : "",
                 writer1_has ? get_cmd_str(command_streams.writer_cmds1.at(core)[i]) : "");
         }
-        log_info(tt::LogOp, "{}", ss.str());
+        log_debug(tt::LogOp, "{}", ss.str());
     }
 }
 
@@ -2012,7 +2011,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
          ProgramTensorsBundle::build_handle(local_partial_output_tensor_from_backward_direction)},
         {}};
 
-    log_info(tt::LogOp,
+    log_debug(tt::LogOp,
         "input_tensor.addr: {}, \n"
         "local_output_tensor.addr: {}, \n"
         "input_tensor_from_remote_forward_direction.addr: {}, \n"

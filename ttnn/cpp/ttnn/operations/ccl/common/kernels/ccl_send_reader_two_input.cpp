@@ -404,8 +404,6 @@ struct command_context_t final {
                 shape_t const global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
 
                 size_t const curr_tile_id = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
-                DPRINT << "wslc: " << (uint32_t)(command_tensor.worker_pages_per_slice) << "\n";
-                DPRINT << "t_start: " << (uint32_t)curr_tile_id << "\n";
                 cmd_specific_ctx.wrapped_worker_slice_read_ctx = wrapped_worker_slice_read_context{curr_tile_id};
 #endif
             } break;
@@ -674,6 +672,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
             cmd_ctx.command_tensor.worker_start_offset_in_slice,
             cmd_ctx.command_tensor.worker_pages_per_slice,
             cmd_ctx.command_tensor.tensor_slice_shape,
+            cmd_ctx.command_tensor.tensor_slice_offset,
             cmd_ctx.command_tensor.tensor_shape,
             contig_pages_advanced);
     }
@@ -848,6 +847,7 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& c
             cmd_ctx.command_tensor.worker_start_offset_in_slice,
             cmd_ctx.command_tensor.worker_pages_per_slice,
             cmd_ctx.command_tensor.tensor_slice_shape,
+            cmd_ctx.command_tensor.tensor_slice_offset,
             cmd_ctx.command_tensor.tensor_shape,
             contig_pages_advanced);
     }
