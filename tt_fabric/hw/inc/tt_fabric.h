@@ -183,6 +183,7 @@ typedef struct fvc_consumer_state {
         return false;
     }
 
+    template <bool live = true>
     inline uint32_t forward_data_from_fvc_buffer() {
         uint32_t total_words_to_forward = 0;
         uint32_t wrptr = sync_buf[sync_buf_rdptr];
@@ -203,34 +204,43 @@ typedef struct fvc_consumer_state {
         // depending on whether local buffer is wrapping, remote buffer is wrapping,
         // we are writing sync word etc.
 
-        uint32_t src_addr = 0;
-        uint32_t dest_addr = 0;  // should be second half of fvc buffer.
-        uint32_t words_remaining = total_words_to_forward;
-        while (words_remaining) {
-            uint32_t num_words_before_local_wrap = words_before_buffer_wrap(fvc_out_rdptr);
-            uint32_t num_words_before_remote_wrap = words_before_buffer_wrap(fvc_out_wrptr);
-            ;
-            uint32_t words_to_forward = std::min(num_words_before_local_wrap, num_words_before_remote_wrap);
-            words_to_forward = std::min(words_to_forward, words_remaining);
-            words_to_forward = std::min(words_to_forward, DEFAULT_MAX_ETH_SEND_WORDS);
-            src_addr = get_local_buffer_read_addr();
-            dest_addr = get_remote_buffer_write_addr();
+        if constexpr (live == true) {
+            uint32_t src_addr = 0;
+            uint32_t dest_addr = 0;  // should be second half of fvc buffer.
+            uint32_t words_remaining = total_words_to_forward;
+            while (words_remaining) {
+                uint32_t num_words_before_local_wrap = words_before_buffer_wrap(fvc_out_rdptr);
+                uint32_t num_words_before_remote_wrap = words_before_buffer_wrap(fvc_out_wrptr);
+                ;
+                uint32_t words_to_forward = std::min(num_words_before_local_wrap, num_words_before_remote_wrap);
+                words_to_forward = std::min(words_to_forward, words_remaining);
+                words_to_forward = std::min(words_to_forward, DEFAULT_MAX_ETH_SEND_WORDS);
+                src_addr = get_local_buffer_read_addr();
+                dest_addr = get_remote_buffer_write_addr();
 
+                internal_::eth_send_packet(
+                    0, src_addr / PACKET_WORD_SIZE_BYTES, dest_addr / PACKET_WORD_SIZE_BYTES, words_to_forward);
+                advance_out_rdptr(words_to_forward);
+                advance_out_wrptr(words_to_forward);
+                words_remaining -= words_to_forward;
+            }
+
+            // after sending all the data, send the last word which is pointer sync word.
+            volatile uint32_t* sync_ptr = (volatile uint32_t*)get_local_buffer_read_addr();
+            advance_out_rdptr(1);
+            sync_ptr[0] = fvc_out_wrptr;
+            sync_ptr[1] = 0;
+            sync_ptr[2] = 0;
+            sync_ptr[3] = fvc_out_rdptr;
             internal_::eth_send_packet(
-                0, src_addr / PACKET_WORD_SIZE_BYTES, dest_addr / PACKET_WORD_SIZE_BYTES, words_to_forward);
-            advance_out_rdptr(words_to_forward);
-            advance_out_wrptr(words_to_forward);
-            words_remaining -= words_to_forward;
+                0, ((uint32_t)sync_ptr) / PACKET_WORD_SIZE_BYTES, remote_ptr_update_addr / PACKET_WORD_SIZE_BYTES, 1);
+        } else {
+            advance_out_rdptr(total_words_to_forward);
+            advance_out_wrptr(total_words_to_forward);
+            advance_out_rdptr(1);
+            remote_rdptr.ptr = fvc_out_rdptr;
+            remote_rdptr.ptr_cleared = fvc_out_wrptr;
         }
-        // after sending all the data, send the last word which is pointer sync word.
-        volatile uint32_t* sync_ptr = (volatile uint32_t*)get_local_buffer_read_addr();
-        advance_out_rdptr(1);
-        sync_ptr[0] = fvc_out_wrptr;
-        sync_ptr[1] = 0;
-        sync_ptr[2] = 0;
-        sync_ptr[3] = fvc_out_rdptr;
-        internal_::eth_send_packet(
-            0, ((uint32_t)sync_ptr) / PACKET_WORD_SIZE_BYTES, remote_ptr_update_addr / PACKET_WORD_SIZE_BYTES, 1);
         sync_buf_advance_rdptr();
         return total_words_to_forward;
     }
