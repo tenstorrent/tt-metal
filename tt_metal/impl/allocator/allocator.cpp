@@ -236,7 +236,7 @@ void init_one_bank_per_channel(Allocator& allocator, const AllocatorConfig& allo
         BufferType::DRAM,
         bank_offsets,
         dram_bank_size,
-        alloc_config.alignment,
+        alloc_config.dram_alignment,
         alloc_config.dram_unreserved_base,
         alloc_config.disable_interleaved);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
@@ -251,7 +251,7 @@ void init_one_bank_per_channel(Allocator& allocator, const AllocatorConfig& allo
         BufferType::TRACE,
         bank_offsets,
         alloc_config.trace_region_size,
-        alloc_config.alignment,
+        alloc_config.dram_alignment,
         dram_bank_size + alloc_config.dram_unreserved_base,
         alloc_config.disable_interleaved);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
@@ -272,7 +272,7 @@ void init_one_bank_per_l1(Allocator& allocator, const AllocatorConfig& alloc_con
         BufferType::L1,
         bank_offsets,
         l1_bank_size,
-        alloc_config.alignment,
+        alloc_config.l1_alignment,
         alloc_config.l1_unreserved_base,
         alloc_config.disable_interleaved);
 
