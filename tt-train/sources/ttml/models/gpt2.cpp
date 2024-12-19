@@ -5,6 +5,8 @@
 #include "gpt2.hpp"
 
 #include "autograd/graph_utils.hpp"
+#include "autograd/tensor.hpp"
+#include "core/scoped.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
@@ -19,9 +21,13 @@ autograd::TensorPtr memory_efficient_runner(
         return forward_impl(input, mask);
     }
 
-    autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED);
-    auto out = forward_impl(input, mask);
-    autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED);
+    autograd::TensorPtr out;
+    {
+        auto scoped = ttml::core::Scoped(
+            []() { autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED); },
+            []() { autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED); });
+        out = forward_impl(input, mask);
+    }
     autograd::GradFunction grad = [input, mask, out, &forward_impl]() {
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());

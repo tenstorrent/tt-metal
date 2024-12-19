@@ -187,7 +187,10 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
 
     // verify time per step
     size_t num_steps_below = 0;
-    double expected_time_ms = memory_efficient ? 450 : 330.0;
+    const double expected_default_runner_time_ms = 330.0;
+    const double expected_memory_efficient_runner_time_ms = 450.0;
+    double expected_time_ms =
+        memory_efficient ? expected_memory_efficient_runner_time_ms : expected_default_runner_time_ms;
     for (auto &time : steps_time) {
         num_steps_below += (time < expected_time_ms);
     }
