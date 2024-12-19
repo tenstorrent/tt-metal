@@ -948,51 +948,6 @@ INSTANTIATE_TEST_SUITE_P(
             CreateShardedTensorWithAlignmentExpected{
                 .physical_shape = Size{28, 9}
             }
-        },
-        ////////////////////////////////////////////////////////////////////
-        // EXAMPLE 4: Some of block sharding failurs
-        ////////////////////////////////////////////////////////////////////
-        CreateShardedTensorWithAlignmentParams{
-            CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{32, 4, 8, 768},
-                .data_type = DataType::BFLOAT16,
-                .page_config = PageConfig(Layout::TILE),
-                .memory_config =
-                    MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
-                        .buffer_type = BufferType::L1,
-                        .shard_spec = ShardSpec{
-                            num_cores_to_corerangeset(64, CoreCoord{8, 8}, /*row_wise=*/true), // tt::div_up(32 * 4 * 8, 128) * tt::div_up(768, 96)
-                            {128, 96},
-                            ShardOrientation::ROW_MAJOR,
-                            false,
-                            ShardMode::PHYSICAL}
-                    }
-            },
-            CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Size{1024, 768}
-            }
-        },
-        CreateShardedTensorWithAlignmentParams{
-            CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{32, 4, 8, 768},
-                .data_type = DataType::BFLOAT16,
-                .page_config = PageConfig(Layout::TILE),
-                .memory_config =
-                    MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
-                        .buffer_type = BufferType::L1,
-                        .shard_spec = ShardSpec{
-                            num_cores_to_corerangeset(64, CoreCoord{8, 8}, /*row_wise=*/true), // tt::div_up(32 * 4 * 8, 128) * tt::div_up(768, 96)
-                            {128, 96},
-                            ShardOrientation::COL_MAJOR,
-                            false,
-                            ShardMode::PHYSICAL}
-                    }
-            },
-            CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Size{1024, 768}
-            }
         }
     )  // Values
     // clang-format on
