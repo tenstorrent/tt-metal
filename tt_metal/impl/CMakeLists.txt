@@ -12,6 +12,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/basic_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp

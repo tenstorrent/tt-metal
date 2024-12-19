@@ -431,12 +431,12 @@ Statistics FreeList::get_statistics() const {
     return stats;
 }
 
-void FreeList::dump_block(const boost::local_shared_ptr<Block>& block, std::ofstream& out) const {
+void FreeList::dump_block(const boost::local_shared_ptr<Block>& block, std::ostream& out) const {
     auto alloc_status = this->is_allocated(block) ? "Y" : "N";
     out << ",,," << (block->address + this->offset_bytes_) << "," << (block->size) << "," << alloc_status << "\n";
 }
 
-void FreeList::dump_blocks(std::ofstream& out) const {
+void FreeList::dump_blocks(std::ostream& out) const {
     out << ",,Blocks:,Address (B),Size (B),Allocated (Y/N)\n";
     boost::local_shared_ptr<Block> curr_block = this->block_head_;
     while (curr_block != nullptr) {
