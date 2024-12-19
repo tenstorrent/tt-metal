@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "tt_fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "tt_fabric/hw/inc/tt_fabric_interface.h"
 // clang-format on
 
 // seed to re-generate the data and validate against incoming data
@@ -41,22 +42,29 @@ void kernel_main() {
     tt_l1_ptr volatile uint32_t* poll_addr;
     uint32_t poll_val = 0;
     bool async_wr_check_failed = false;
+    uint32_t num_producers = 0;
+
+    // parse runtime args
+    num_producers = get_arg_val<uint32_t>(0);
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
     test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
 
-    poll_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
-
     if constexpr (ASYNC_WR == test_command) {
         uint32_t packet_rnd_seed = 0;
-        uint64_t curr_packet_words = 0, curr_payload_words = 0;
-        uint32_t src_endpoint_id = 1028;  // TODO: remove hardcoding, instead read as compile time args
+        uint64_t curr_packet_words = 0, curr_payload_words = 0, processed_packet_words_src = 0;
         uint32_t max_packet_size_mask, temp;
         uint32_t mismatch_addr, mismatch_val, expected_val;
         tt_l1_ptr uint32_t* read_addr;
         uint32_t start_val = 0;
         bool match;
+        tt_l1_ptr uint32_t* src_endpoint_ids;
+        tt_l1_ptr uint32_t* target_addresses;
+
+        // parse runtime args relevant to the command
+        src_endpoint_ids = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(1));
+        target_addresses = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(1 + num_producers));
 
         // compute max_packet_size_mask (borrowed from tx kernel)
         temp = max_packet_size_words;
@@ -72,43 +80,50 @@ void kernel_main() {
             max_packet_size_mask = (max_packet_size_mask << 1) + 1;
         }
 
-        packet_rnd_seed = prng_seed ^ src_endpoint_id;
-        read_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
+        for (uint32_t i = 0; i < num_producers; i++) {
+            packet_rnd_seed = prng_seed ^ src_endpoint_ids[i];
+            read_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_addresses[i]);
+            processed_packet_words_src = 0;
 
-        // read out the data
-        while (processed_packet_words < total_data_words) {
-            packet_rnd_seed = prng_next(packet_rnd_seed);
+            // read out the data
+            while (processed_packet_words_src < total_data_words) {
+                packet_rnd_seed = prng_next(packet_rnd_seed);
 
-            // get number of words to be read minus the header
-            curr_packet_words = packet_rnd_seed_to_size(packet_rnd_seed, max_packet_size_words, max_packet_size_mask);
-            curr_payload_words = curr_packet_words - PACKET_HEADER_SIZE_WORDS;
+                // get number of words to be read minus the header
+                curr_packet_words =
+                    packet_rnd_seed_to_size(packet_rnd_seed, max_packet_size_words, max_packet_size_mask);
+                curr_payload_words = curr_packet_words - PACKET_HEADER_SIZE_WORDS;
 
-            start_val = packet_rnd_seed & PAYLOAD_MASK;
+                start_val = packet_rnd_seed & PAYLOAD_MASK;
 
-            // get the value and addr to poll on
-            poll_val = start_val + curr_payload_words - 1;
-            poll_addr = read_addr + (curr_payload_words * PACKET_WORD_SIZE_BYTES / 4) - 1;
+                // get the value and addr to poll on
+                poll_val = start_val + curr_payload_words - 1;
+                poll_addr = read_addr + (curr_payload_words * PACKET_WORD_SIZE_BYTES / 4) - 1;
 
-            // poll on the last word in the payload
-            while (poll_val != *poll_addr);
+                // poll on the last word in the payload
+                while (poll_val != *poll_addr);
 
-            // check correctness
-            match =
-                check_packet_data(read_addr, curr_payload_words, start_val, mismatch_addr, mismatch_val, expected_val);
-            if (!match) {
-                async_wr_check_failed = true;
-                test_results[PQ_TEST_MISC_INDEX + 12] = mismatch_addr;
-                test_results[PQ_TEST_MISC_INDEX + 13] = mismatch_val;
-                test_results[PQ_TEST_MISC_INDEX + 14] = expected_val;
+                // check correctness
+                match = check_packet_data(
+                    read_addr, curr_payload_words, start_val, mismatch_addr, mismatch_val, expected_val);
+                if (!match) {
+                    async_wr_check_failed = true;
+                    test_results[PQ_TEST_MISC_INDEX + 12] = mismatch_addr;
+                    test_results[PQ_TEST_MISC_INDEX + 13] = mismatch_val;
+                    test_results[PQ_TEST_MISC_INDEX + 14] = expected_val;
+                    break;
+                }
+
+                read_addr += (curr_payload_words * PACKET_WORD_SIZE_BYTES / 4);
+                processed_packet_words += curr_packet_words;
+                processed_packet_words_src += curr_packet_words;
+                num_packets++;
             }
-
-            read_addr += (curr_payload_words * PACKET_WORD_SIZE_BYTES / 4);
-            processed_packet_words += curr_packet_words;
-            num_packets++;
         }
     } else if constexpr (ATOMIC_INC == test_command) {
+        poll_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
         // TODO: read in wrap boundary as well from compile args
-        num_packets = (total_data_words + PACKET_HEADER_SIZE_WORDS - 1) / PACKET_HEADER_SIZE_WORDS;
+        num_packets = num_producers * ((total_data_words + PACKET_HEADER_SIZE_WORDS - 1) / PACKET_HEADER_SIZE_WORDS);
         poll_val = atomic_increment * num_packets;
 
         // poll for the final value

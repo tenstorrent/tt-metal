@@ -38,6 +38,7 @@ int main(int argc, char** argv) {
     constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
     constexpr uint32_t default_rx_queue_start_addr = 0xa0000;
     constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
+    constexpr uint32_t default_tx_signal_address = 0x70000;
 
     constexpr uint32_t default_test_results_addr = 0x100000;
     constexpr uint32_t default_test_results_size = 0x40000;
@@ -49,10 +50,6 @@ int main(int argc, char** argv) {
     constexpr uint32_t default_tunneler_test_results_addr =
         0x39000;  // 0x8000 * 4 + 0x19000; 0x10000 * 4 + 0x19000 = 0x59000 > 0x40000 (256kB)
     constexpr uint32_t default_tunneler_test_results_size = 0x6000;  // 256kB total L1 in ethernet core - 0x39000
-    static_assert(
-        default_tunneler_test_results_addr + default_tunneler_test_results_size <=
-            eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_HARDCODED_TESTING_ADDR,
-        "Tunneler test results buffer exceeds available memory");
 
     constexpr uint32_t default_timeout_mcycles = 1000;
     constexpr uint32_t default_rx_disable_data_check = 0;
@@ -218,6 +215,8 @@ int main(int argc, char** argv) {
     uint32_t test_device_id_r =
         test_args::get_command_option_uint32(input_args, "--device_id_r", default_test_device_id_r);
 
+    uint32_t tx_signal_address = default_tx_signal_address;
+
     bool pass = true;
 
     std::map<string, string> defines = {
@@ -323,14 +322,16 @@ int main(int argc, char** argv) {
             log_info(LogTest, "Device {} router_mask = 0x{:04X}", device.first, router_mask);
             uint32_t sem_count = device_router_cores.size();
             device_router_map[device.first] = device_router_phys_cores;
+            std::vector<uint32_t> runtime_args = {
+                sem_count,    // 0: number of active fabric routers
+                router_mask,  // 1: active fabric router mask
+            };
             for (auto logical_core : device_router_cores) {
                 std::vector<uint32_t> router_compile_args = {
                     (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
                     tunneler_test_results_addr,        // 1: test_results_addr
                     tunneler_test_results_size,        // 2: test_results_size
-                    sem_count,                         // 3: number of active fabric routers
-                    router_mask,                       // 4: active fabric router mask
-                    0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 5: timeout_cycles
+                    0,                                 // 3: timeout_cycles
                 };
                 auto router_kernel = tt_metal::CreateKernel(
                     program_map[device.first],
@@ -338,6 +339,9 @@ int main(int argc, char** argv) {
                     logical_core,
                     tt_metal::EthernetConfig{
                         .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = defines});
+
+                tt_metal::SetRuntimeArgs(program_map[device.first], router_kernel, logical_core, runtime_args);
+
                 log_debug(
                     LogTest,
                     "Device {} router added on physical core {}",
@@ -361,8 +365,8 @@ int main(int argc, char** argv) {
                 tx_queue_start_addr,                                                    // 3: queue_start_addr_words
                 (tx_queue_size_bytes >> 4),                                             // 4: queue_size_words
                 routing_table_start_addr,                                               // 5: routeing table
-                router_phys_core.x,                                                     // 6: router_x
-                router_phys_core.y,                                                     // 7: router_y
+                0,                                                                      // 6: router_x
+                0,                                                                      // 7: router_y
                 test_results_addr,                                                      // 8: test_results_addr
                 test_results_size,                                                      // 9: test_results_size
                 prng_seed,                                                              // 10: prng_seed
@@ -376,9 +380,21 @@ int main(int argc, char** argv) {
                 fabric_command,                                                         // 18: fabric command
                 target_address,
                 atomic_increment,
-                (dev_r_mesh_id << 16 | dev_r_chip_id),  // 21: receiver/dest device/mesh id
+                tx_signal_address
 
             };
+
+            // setup runtime args
+            std::vector<uint32_t> runtime_args = {
+                (device_map[test_device_id_l]->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
+                0x410,                                                                  // 1: dest_noc_offset
+                router_phys_core.x,
+                router_phys_core.y,
+                (dev_r_mesh_id << 16 | dev_r_chip_id)};
+
+            if (ASYNC_WR == fabric_command) {
+                runtime_args.push_back(target_address);
+            }
 
             log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
@@ -390,6 +406,8 @@ int main(int argc, char** argv) {
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = compile_args,
                     .defines = defines});
+
+            tt_metal::SetRuntimeArgs(program_map[test_device_id_l], kernel, core, runtime_args);
         }
 
         if (check_txrx_timeout) {
@@ -409,6 +427,10 @@ int main(int argc, char** argv) {
             }
         }
 
+        for (uint32_t i = 0; i < num_src_endpoints; i++) {
+            tt::llrt::write_hex_vec_to_core(test_device_id_l, tx_phys_core[i], zero_buf, tx_signal_address);
+        }
+
         // clear test status to 0. it will be set to non-zero value by tx kernel.
         tt::llrt::write_hex_vec_to_core(test_device_id_l, tx_phys_core[0], zero_buf, test_results_addr);
 
@@ -421,7 +443,7 @@ int main(int argc, char** argv) {
         // to trigger tx kernels to start sending data.
         std::vector<uint32_t> tx_start(1, 1);
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
-            tt::llrt::write_hex_vec_to_core(test_device_id_l, tx_phys_core[i], tx_start, tx_queue_start_addr);
+            tt::llrt::write_hex_vec_to_core(test_device_id_l, tx_phys_core[i], tx_start, tx_signal_address);
         }
 
         // Wait for tx to return non-zero status.

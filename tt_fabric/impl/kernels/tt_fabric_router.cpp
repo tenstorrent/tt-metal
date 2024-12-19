@@ -17,9 +17,11 @@ constexpr uint32_t fvc_data_buf_size_words = get_compile_time_arg_val(0);
 constexpr uint32_t fvc_data_buf_size_bytes = fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES;
 constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(1);
 constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(2);
-constexpr uint32_t sync_val = get_compile_time_arg_val(3);
-constexpr uint32_t router_mask = get_compile_time_arg_val(4);
-constexpr uint32_t timeout_cycles = get_compile_time_arg_val(5);
+// constexpr uint32_t sync_val = get_compile_time_arg_val(3);
+// constexpr uint32_t router_mask = get_compile_time_arg_val(4);
+constexpr uint32_t timeout_cycles = get_compile_time_arg_val(3);
+uint32_t sync_val;
+uint32_t router_mask;
 
 constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
 constexpr uint32_t PACKET_QUEUE_TEST_STARTED = PACKET_QUEUE_STAUS_MASK | 0x0;
@@ -81,6 +83,9 @@ inline void notify_all_routers() {
 
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
+
+    sync_val = get_arg_val<uint32_t>(0);
+    router_mask = get_arg_val<uint32_t>(1);
 
     tt_fabric_init();
 

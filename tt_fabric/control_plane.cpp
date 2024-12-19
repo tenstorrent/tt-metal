@@ -186,6 +186,12 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         nw_chip_eth_coord = {0, 0, 1, 0, 0};
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
+    } else if (mesh_graph_desc_file.find("n300_mesh_graph_descriptor.yaml") != std::string::npos) {
+        cluster_desc_file_path = std::filesystem::path(tt::llrt::OptionsG.get_root_dir()) /
+                                 "tests/tt_metal/tt_fabric/common/n300_cluster_desc.yaml";
+        nw_chip_eth_coord = {0, 0, 0, 0, 0};
+        mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
+        mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
     } else {
         TT_FATAL(false, "Unsupported mesh graph descriptor file {}", mesh_graph_desc_file);
     }
