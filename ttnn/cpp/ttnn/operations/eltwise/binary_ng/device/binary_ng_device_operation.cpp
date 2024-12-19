@@ -197,16 +197,21 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
     auto subtile_broadcast_type = get_subtile_broadcast_type(
         input_tensor_a_arg.get_logical_shape()[-2],
         input_tensor_a_arg.get_logical_shape()[-1],
         input_tensor_b_arg.get_logical_shape()[-2],
         input_tensor_b_arg.get_logical_shape()[-1]);
 
+    ttnn::SmallVector<ttnn::operations::unary::UnaryOpType> activations(
+        post_activations.begin(), post_activations.end());
+
     return {
         operation_attributes_t{
             binary_op_type,
+            activations,
             std::nullopt,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             input_tensor_a_arg.get_dtype(),
@@ -223,10 +228,14 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const unary::UnaryOpType> post_activations) {
+    ttnn::SmallVector<unary::UnaryOpType> activations(post_activations.begin(), post_activations.end());
+
     return {
         operation_attributes_t{
             binary_op_type,
+            activations,
             scalar,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             input_tensor_a_arg.get_dtype(),

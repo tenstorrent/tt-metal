@@ -61,9 +61,14 @@ struct OpConfig {
 
     SfpuConfig preprocess_a{};
     SfpuConfig preprocess_b{};
-    SfpuConfig postprocess{};
+    std::optional<unary::UnaryOpType> postprocess = std::nullopt;
     FpuBinaryOp fpu_binary_op;
 };
+
+void add_activation_defines(
+    std::map<std::string, std::string>& defines,
+    tt::stl::Span<const unary::UnaryOpType> activations,
+    std::string_view prefix);
 
 struct Lowercase {
     std::string_view view;

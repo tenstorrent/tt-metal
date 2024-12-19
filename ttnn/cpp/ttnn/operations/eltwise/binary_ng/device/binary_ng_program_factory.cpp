@@ -184,7 +184,15 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     Buffer* c_buffer = c.buffer();
 
     auto op_type = operation_attributes.binary_op_type;
-    auto compute_kernel_defines = OpConfig(op_type).as_defines();
+    OpConfig op_config(op_type);
+    auto compute_kernel_defines = op_config.as_defines();
+
+    ttnn::SmallVector<unary::UnaryOpType> post_activations = operation_attributes.post_activations;
+    if (op_config.postprocess.has_value()) {
+        post_activations.insert(post_activations.begin(), op_config.postprocess.value());
+    }
+    add_activation_defines(compute_kernel_defines, post_activations, "POST");
+
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
 
