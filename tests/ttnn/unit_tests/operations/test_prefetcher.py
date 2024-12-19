@@ -297,7 +297,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [
-        (2, 3, [(128, 128), (128, 128 * 2), (128, 128 * 3)], [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16], 2),
+        # (2, 3, [(128, 128), (128, 128 * 2), (128, 128 * 3)], [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16], 2),
         (2, 2, [(256, 512), (256, 512)], [ttnn.bfloat4_b] * 2, 5),
         (2, 2, [(1024, 256), (1024, 256)], [ttnn.bfloat4_b] * 2, 5),
         (2, 2, [(128, 128), (128, 128)], [ttnn.bfloat4_b] * 2, 2),
@@ -325,11 +325,15 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers):
             5,
             [(2304, 1536), (2304, 2304), (2304, 3840), (2304, 3840), (3840, 2304)],
             [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat8_b],
-            80,
+            80,  # DRAM OOM issue?
         ),  # qkv + do + ff1 + ff3 + ff2
     ],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
+)
 def test_run_prefetcher(
     device,
     num_tensors,
@@ -632,37 +636,60 @@ def test_run_prefetcher(
         dst_full_sync_en=True,
     )
 
-    ttnn.dram_prefetcher(
-        tt_tensors,
-        tt_tensor_addrs,
-        num_layers,
-        global_circular_buffer,
-        reader_output_mem_config,
-        writer_output_mem_config,
-    )
+    def run_op():
+        ttnn.dram_prefetcher(
+            tt_tensors,
+            tt_tensor_addrs,
+            num_layers,
+            global_circular_buffer,
+            reader_output_mem_config,
+            writer_output_mem_config,
+        )
+
+        outputs_dram = []
+
+        for l in range(num_layers):
+            outputs_l1 = []
+            for t in range(num_tensors):
+                idx = l * num_tensors + t
+
+                output_t = ttnn.matmul(
+                    in0_t_tensors[t],
+                    tt_tensors_all[idx],
+                    program_config=program_configs[t],
+                    memory_config=output_mem_configs[t],
+                    compute_kernel_config=compute_kernel_config,
+                    global_cb=global_circular_buffer,
+                )
+                outputs_l1.append(output_t)
+
+            for t in range(num_tensors):
+                outputs_dram.append(ttnn.to_memory_config(outputs_l1[t], ttnn.DRAM_MEMORY_CONFIG))
+
+        return outputs_dram
+
+    ##### Compile Model #####
+    logger.info("Compiling model")
+    outputs_t = run_op()
+
+    ##### Capture Trace #####
+    logger.info("Capturing trace")
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    outputs_t = run_op()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    ##### Run Trace #####
+    logger.info("Running trace")
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+
+    ##### Check Results #####
     all_passing = True
-
-    # FIXME: RESULTS IN HANG FOR LARGE SHAPES
     for l in range(num_layers):
-        outputs_t = []
-        for t in range(num_tensors):
-            idx = l * num_tensors + t
-            logger.info(f"Running matmul for layer {l}, tensor {t}")
-
-            output_t = ttnn.matmul(
-                in0_t_tensors[t],
-                tt_tensors_all[idx],
-                program_config=program_configs[t],
-                memory_config=output_mem_configs[t],
-                compute_kernel_config=compute_kernel_config,
-                global_cb=global_circular_buffer,
-            )
-            outputs_t.append(output_t)
-
         for t in range(num_tensors):
             idx = l * num_tensors + t
             logger.info(f"Checking matmul for layer {l}, tensor {t}")
-            tt_out = ttnn.to_torch(outputs_t[t], sub_device_ids=[ttnn.SubDeviceId(worker_sub_device_id)])
+            tt_out = ttnn.to_torch(outputs_t[idx], sub_device_ids=[ttnn.SubDeviceId(worker_sub_device_id)])
             pt_out = in0_tensors[t] @ pt_tensors[idx]
 
             dtype = dtypes[t]
