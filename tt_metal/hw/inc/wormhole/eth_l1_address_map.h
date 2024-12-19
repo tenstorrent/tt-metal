@@ -68,8 +68,6 @@ struct address_map {
         (FABRIC_ROUTER_CONFIG_BASE + sizeof(tt::tt_fabric::fabric_router_l1_config_t) + 31) & ~31;
     static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_L1_LOADING_SIZE - ERISC_L1_UNRESERVED_BASE;
 
-    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_HARDCODED_TESTING_ADDR = 0x3F000;
-
     static_assert((ERISC_L1_UNRESERVED_BASE % 32) == 0);
 
     // This scratch address is same as ERISC_L1_UNRESERVED_BASE, as the scratch space is used to copy data during
