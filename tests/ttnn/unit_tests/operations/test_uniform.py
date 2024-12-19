@@ -95,7 +95,6 @@ def run_uniform(shape, rand_range, dtype, device, seed=0, compute_kernel_options
         )
 
 
-@pytest.mark.skip("#16066: Undefined behaviour. It will fail on some runs and pass on others since it's stochastic.")
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
@@ -111,7 +110,6 @@ def run_uniform(shape, rand_range, dtype, device, seed=0, compute_kernel_options
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("seed", [2024, 19, 522021])
 def test_uniform(shape, rand_range, dtype, seed, device):
-    # for _ in range(200):
     torch.manual_seed(seed)
     run_uniform(shape, rand_range, dtype, device, seed=seed)
 
