@@ -60,7 +60,9 @@ void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensor
     } else {
         TT_FATAL(
             ashape[3] == bshape[2],
-            "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op");  // A.K == B.K
+            "Dimension K (A.shape[3]and B.shape[2]) must match for A shape: {} and B shape: {} in attn_matmul op",
+            ashape,
+            bshape);  // A.K == B.K
     }
 }
 

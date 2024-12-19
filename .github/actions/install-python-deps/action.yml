@@ -18,6 +18,7 @@ runs:
         cache-dependency-path: |
           tt_metal/python_env/requirements-dev.txt
           docs/requirements-docs.txt
+          tests/sweep_framework/requirements-sweeps.txt
           pyproject.toml
           create_venv.sh
         install-cmd: ./create_venv.sh

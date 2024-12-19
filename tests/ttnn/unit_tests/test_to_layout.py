@@ -140,3 +140,27 @@ def test_to_layout_device(device, h, w, input_layout, output_layout):
     torch_brought_back = ttnn.to_torch(new_layout_tensor)
 
     assert_with_pcc(torch_input_tensor, torch_brought_back)
+
+
+@pytest.mark.parametrize("shape", [[1, 50, 1, 3, 768], [1, 1370, 1, 3, 1280]])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_to_layout_5D(shape, input_layout, output_layout, device):
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.to_layout(input_tensor, output_layout)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[1, 1, 58, 1, 37, 256], [1, 1, 64, 1, 90, 1280]])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_to_layout_6D(shape, input_layout, output_layout, device):
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.to_layout(input_tensor, output_layout)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)

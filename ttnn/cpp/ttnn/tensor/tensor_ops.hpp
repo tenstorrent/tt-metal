@@ -41,13 +41,11 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
 Tensor tensor_cpu(
     const Tensor& input_tensor, bool blocking, uint8_t cq_id, const std::vector<SubDeviceId>& sub_device_ids);
 
-Tensor tensor_cpu_sharded(const Tensor& input_tensor);
-
 void tensor_print(const Tensor& input_tensor);
 
 Tensor tensor_pad(
     const Tensor& input_tensor,
-    const tt::tt_metal::LegacyShape& output_tensor_shape,
+    const ttnn::SimpleShape& output_tensor_shape,
     const ttnn::SimpleShape& input_tensor_start,
     float pad_value);
 
@@ -59,5 +57,8 @@ Tensor tensor_unpad(
 Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value);
 
 Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_shape);
+
+Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape);
+Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape);
 
 }  // namespace tt::tt_metal::tensor_ops
