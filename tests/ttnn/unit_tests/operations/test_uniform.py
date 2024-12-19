@@ -149,5 +149,5 @@ def test_uniform_callback(shape, rand_range, dtype, seed, device, use_program_ca
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_uniform_with_compute_kernel_options(shape, seed, rand_range, dtype, device, compute_kernel_options):
-    torch.manual_seed(0)
+    torch.manual_seed(seed)
     run_uniform(shape, rand_range, dtype, device, seed=seed, compute_kernel_options=compute_kernel_options)
