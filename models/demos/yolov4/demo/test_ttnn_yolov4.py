@@ -52,7 +52,7 @@ def gen_yolov4_boxes_confs(output):
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_yolov4(device, reset_seeds, model_location_generator):
+def test_yolov4(device, reset_seeds, model_location_generator, input_path):
     torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
@@ -68,7 +68,11 @@ def test_yolov4(device, reset_seeds, model_location_generator):
 
     ttnn_model = TtYOLOv4(weights_pth, device)
 
-    imgfile = "models/demos/yolov4/demo/giraffe_320.jpg"
+    if input_path == "":
+        imgfile = "models/demos/yolov4/demo/giraffe_320.jpg"
+    else:
+        imgfile = input_path
+    # imgfile = "models/demos/yolov4/demo/giraffe_320.jpg"
     width = 320
     height = 320
     img = cv2.imread(imgfile)
