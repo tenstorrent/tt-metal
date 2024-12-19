@@ -150,37 +150,41 @@ void kernel_main() {
 #endif
         noc_async_read(src_noc_addr, weight_l1_addr, width_size);
         noc_async_read_barrier();
-        DPRINT << "Weight: [" << ENDL();
-        for (uint32_t i = 0; i < weight_stick_size / 2; i++) {
-            DPRINT << BF16(weight_l1_ptr[i]) << ", ";
-        }
-        DPRINT << "]" << ENDL();
+        // DPRINT << "Weight: [" << ENDL();
+        // for (uint32_t i = 0; i < weight_stick_size / 2; i++) {
+        //     DPRINT << BF16(weight_l1_ptr[i]) << ", ";
+        // }
+        // DPRINT << "]" << ENDL();
         cb_push_back(cb_id_in0, 1);
     };
 
-    uint32_t curr_row = batch_offset;
+    uint32_t curr_tile = batch_offset;
     uint32_t offset = weights_offset;
     uint32_t index = index_idx;
     bool read_indices = true;
+    DPRINT << "Starting tile: " << curr_tile << " offset: " << offset << ENDL();
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
-            DPRINT << "Offset: " << offset << ENDL();  // 120 + 72 = 192 + 256 = 448
-            uint64_t noc_input_src_addr = get_noc_addr(curr_row, input) + (offset * 4);
-            noc_async_read(noc_input_src_addr, input_l1_addr, 32 * 32 * 4);
+            uint64_t noc_input_src_addr = get_noc_addr(curr_tile, input) + (offset * sizeof(uint32_t));
+            noc_async_read(noc_input_src_addr, input_l1_addr, input_block_size_bytes);
             noc_async_read_barrier();
             read_indices = false;
         }
-        DPRINT << "index: " << index << ENDL();
         read_block(index, weight_stick_size);
         index++;
         if (index == rows_per_block) {
+            DPRINT << "Read 16, offset: " << offset << ENDL();
             index = 0;
             read_indices = true;
-            offset += input_block_size_bytes;
-            // if (offset == input_page_size) {
-            // offset = 0;
-            // curr_row++;
-            // }
+            uint32_t face = offset / (16 * 16);
+            if (offset == 32 * 32) {
+                curr_tile++;
+                offset = 0;
+            } else if (face % 2 == 0) {
+                offset += 16 * 16;
+            } else {
+                offset -= 16 * 15;
+            }
         }
     }
 }

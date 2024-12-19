@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random, run_for_wormhole_b0
+from models.utility_functions import torch_random, skip_for_wormhole_b0
 
 
 def test_base_case(device):
@@ -398,3 +398,160 @@ def test_tg_llama_sharded_embedding(
     )
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(output_tensor, torch_output_tensor[:, 0, :].unsqueeze(1))
+
+def get_random_factors(N):
+    if N == 0:
+        raise ValueError("Input number must be non-zero.")
+
+    # Get all divisors of N
+    divisors = [i for i in range(1, abs(N) + 1) if N % i == 0]
+
+    # Randomly select a divisor (excluding N itself to ensure two factors)
+    A = random.choice(divisors[:-1])
+
+    # Compute the second factor
+    B = N // A
+
+    return A, B
+
+
+# [1,3,2,4,5,6,2,1]
+# [1,3,2,4,5,6,2,1]
+
+
+@pytest.mark.parametrize("batch_size", [4])
+@pytest.mark.parametrize("sentence_size", [64])
+@pytest.mark.parametrize("hidden_embedding_dim", [5])  # Bert_Num_Cols_768, Llama_Num_Cols
+@pytest.mark.parametrize(
+    "vocabulary_size", [10]
+)  # Bert_Position_Embeddings_512, Bert_Word_Embeddings_30528, Llama_Position_Embeddings,
+@pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+def test_tiled_correct(
+    device,
+    batch_size,
+    sentence_size,
+    hidden_embedding_dim,
+    vocabulary_size,
+    input_mem_config,
+    output_mem_config,
+    layout,
+):
+    torch.manual_seed(1234)
+
+    # get 2 random numbers whose product is equal to volume
+    # sentence_size, batch_size = get_random_factors(volume)
+    # if(sentence_size == 1):
+    #     sentence_size = batch_size
+    #     batch_size = 1
+
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
+    # torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    row_indices = torch.arange(0, vocabulary_size, dtype=torch.float32)
+    torch_weights = row_indices.unsqueeze(1).expand(-1, hidden_embedding_dim)
+    print(torch_weights)
+    # torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    torch_embedding = torch.nn.Embedding.from_pretrained(torch_weights)
+    torch_output_tensor = torch_embedding(torch_input_tensor)
+
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT),
+        device,
+        memory_config=input_mem_config,
+    )
+    weights = ttnn.to_device(
+        ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        device,
+        memory_config=input_mem_config,
+    )
+
+    # output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        embeddings_type=ttnn.EmbeddingsType.GENERIC,  # Default embeddings type
+        dtype=ttnn.bfloat16,
+        memory_config=output_mem_config,  # Default memory config
+        queue_id=0,  # Default queue id
+        layout=layout,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # print("Reversed ttnn Tensor:")
+    # print(reverse_embedding_output(output_tensor, torch_weights))
+    # print("Reversed torch Tensor:")
+    # print(reverse_embedding_output(torch_output_tensor, torch_weights))
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+# @pytest.mark.parametrize("batch_size", [1, 4])
+# @pytest.mark.parametrize("sentence_size", [64, 1153])
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("sentence_size", [1153])
+# @pytest.mark.parametrize("volume", [256, 1153])
+@pytest.mark.parametrize("hidden_embedding_dim", [5])  # Bert_Num_Cols_768, Llama_Num_Cols
+@pytest.mark.parametrize(
+    "vocabulary_size", [10]
+)  # Bert_Position_Embeddings_512, Bert_Word_Embeddings_30528, Llama_Position_Embeddings,
+@pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+def test_tiled_wrong(
+    device,
+    batch_size,
+    sentence_size,
+    # volume,
+    hidden_embedding_dim,
+    vocabulary_size,
+    input_mem_config,
+    output_mem_config,
+    layout,
+):
+    torch.manual_seed(1234)
+
+    # get 2 random numbers whose product is equal to volume
+    # sentence_size, batch_size = get_random_factors(volume)
+    # if(sentence_size == 1):
+    #     sentence_size = batch_size
+    #     batch_size = 1
+
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
+    # torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    row_indices = torch.arange(0, vocabulary_size, dtype=torch.float32)
+    torch_weights = row_indices.unsqueeze(1).expand(-1, hidden_embedding_dim)
+    print(torch_weights)
+    # torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    torch_embedding = torch.nn.Embedding.from_pretrained(torch_weights)
+    torch_output_tensor = torch_embedding(torch_input_tensor)
+
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT),
+        device,
+        memory_config=input_mem_config,
+    )
+    weights = ttnn.to_device(
+        ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+        device,
+        memory_config=input_mem_config,
+    )
+
+    # output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        embeddings_type=ttnn.EmbeddingsType.GENERIC,  # Default embeddings type
+        dtype=ttnn.bfloat16,
+        memory_config=output_mem_config,  # Default memory config
+        queue_id=0,  # Default queue id
+        layout=layout,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # print("Reversed ttnn Tensor:")
+    # print(reverse_embedding_output(output_tensor, torch_weights))
+    print("Reversed torch Tensor:")
+    print(reverse_embedding_output(torch_output_tensor, torch_weights))
+
+    assert_with_pcc(torch_output_tensor, output_tensor)

@@ -432,7 +432,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 
     // Double units_per_core until it fits within total_cores
     while (required_cores > total_cores) {
-        units_per_core *= 2;
+        units_per_core += alignment;
         required_cores = (units_to_divide + units_per_core - 1) / units_per_core;
     }
 
