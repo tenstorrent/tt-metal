@@ -34,7 +34,6 @@ autograd::TensorPtr relu(const autograd::TensorPtr& tensor) {
 }
 
 autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
-    return relu(tensor);
     auto out = autograd::create_tensor();
     out->set_value(ttnn::gelu(tensor->get_value()));
     autograd::GradFunction grad = [tensor, out]() {
