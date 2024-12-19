@@ -60,14 +60,15 @@ def test_yolov4(
         weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
     else:
         weights_pth = str(model_path / "yolov4.pth")
-    ttnn_model = TtYOLOv4(weights_pth)
+    ttnn_model = TtYOLOv4(weights_pth, device)
 
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
     logger.info(f"Compiling model with warmup run")
     profiler.start(f"inference_and_compile_time")
-    out1, out2, out3 = ttnn_model(device, ttnn_input)
+    ttnn_output_tensor = ttnn_model(device, ttnn_input)
+
     profiler.end(f"inference_and_compile_time")
 
     inference_and_compile_time = profiler.get("inference_and_compile_time")
@@ -79,10 +80,7 @@ def test_yolov4(
     for idx in range(iterations):
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
-        out1, out2, out3 = ttnn_model(device, ttnn_input)
-        outputs.append(ttnn.from_device(out1, blocking=False))
-        outputs.append(ttnn.from_device(out2, blocking=False))
-        outputs.append(ttnn.from_device(out3, blocking=False))
+        ttnn_output_tensor = ttnn_model(device, ttnn_input)
         profiler.end(f"inference_time_{idx}")
         profiler.end("inference_time")
 
