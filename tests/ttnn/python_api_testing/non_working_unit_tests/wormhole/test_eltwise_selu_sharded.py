@@ -82,7 +82,7 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, X, Y",
     (test_sweep_args),
 )
-def test_eltwise_neg(
+def test_eltwise_selu(
     input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, X, Y, device
 ):
     run_tests(
@@ -94,7 +94,7 @@ def test_eltwise_neg(
         hw_as_shard_shape,
         X,
         Y,
-        ttnn.get_golden_function(ttnn.neg),
-        ttnn.neg,
+        ttnn.get_golden_function(ttnn.selu),
+        ttnn.selu,
         device,
     )
