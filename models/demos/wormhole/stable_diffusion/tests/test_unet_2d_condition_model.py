@@ -72,7 +72,6 @@ def unsqueeze_all_params_to_4d(params):
         (2, 4, 64, 64),
     ],
 )
-@pytest.mark.skip(reason="#15931: Failing, skip for now")
 def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
     device.enable_program_cache()
 
@@ -204,7 +203,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     #     print(iter)
     # print(f"Time taken for 50 iterations: {total_time}")
     # print(f"Samples per second: {50 / total_time}")
-    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.981)
+    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.996)
     print(output)
     assert passing
 
