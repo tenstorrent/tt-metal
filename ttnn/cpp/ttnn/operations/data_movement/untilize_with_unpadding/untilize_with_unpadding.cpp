@@ -13,7 +13,7 @@
 
 using namespace tt::tt_metal;
 
-LegacyShape squeeze_output_shape(tt::tt_metal::LegacyShape output_shape) {
+ttnn::SimpleShape squeeze_output_shape(ttnn::SimpleShape output_shape) {
     if (output_shape.rank() > 4) {
         std::vector<uint32_t> output_shape_4d(output_shape.rank());
         output_shape_4d[0] = 1;
@@ -25,7 +25,7 @@ LegacyShape squeeze_output_shape(tt::tt_metal::LegacyShape output_shape) {
         output_shape_4d[1] = output_shape[1 + extra_rank];
         output_shape_4d[2] = output_shape[2 + extra_rank];
         output_shape_4d[3] = output_shape[3 + extra_rank];
-        return tt::tt_metal::LegacyShape(output_shape_4d);
+        return ttnn::SimpleShape(output_shape_4d);
     }
     return output_shape;
 }
@@ -58,7 +58,7 @@ MassagedUntilizeVal build_ndiml_untilize_val(BaseUntilizeValType base_untilize) 
 ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::LegacyShape& output_tensor_end,
+    const ttnn::SimpleShape& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     bool use_pack_untilize) {
@@ -66,12 +66,12 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;
 
     std::vector<uint32_t> output_end_vector;
-    tt::tt_metal::LegacyShape output_end = tt::tt_metal::LegacyShape{};
+    ttnn::SimpleShape output_end{};
     if (input_tensor.get_shape().rank() > 4) {
         for (auto index = 0; index < input_tensor.get_shape().rank(); ++index) {
             output_end_vector.push_back(input_tensor.get_shape()[index] - 1);
         }
-        output_end = squeeze_output_shape(LegacyShape(output_end_vector));
+        output_end = squeeze_output_shape(ttnn::SimpleShape(output_end_vector));
     } else {
         output_end = output_tensor_end;
     }
@@ -95,7 +95,7 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
 
 ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::LegacyShape& output_tensor_end,
+    const ttnn::SimpleShape& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     bool use_pack_untilize) {
