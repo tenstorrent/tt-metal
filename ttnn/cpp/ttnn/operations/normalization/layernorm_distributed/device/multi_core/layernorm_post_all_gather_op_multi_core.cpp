@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
 
     const uint32_t Wt = W / TILE_WIDTH;
     const uint32_t Ht = H / TILE_HEIGHT;
-    const uint32_t stats_tiles_cols = stats.get_legacy_shape()[-1] / TILE_WIDTH;
+    const uint32_t stats_tiles_cols = stats.get_tensor_spec().physical_shape().width() / TILE_WIDTH;
     const uint32_t tile_cols_per_device = is_rmsnorm ? 1 : 2;
     const uint32_t num_devices = stats_tiles_cols / tile_cols_per_device;
     TT_FATAL(num_devices > 0, "Number of devices must be greater than 0");
@@ -251,7 +251,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     };
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_legacy_shape()[-1] * gamma.value().element_size();
+        auto gamma_stick_size = gamma.value().get_tensor_spec().physical_shape().width() * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
         reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);

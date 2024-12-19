@@ -46,7 +46,10 @@ void Softmax::validate(
             } else {
                 if (mask.get_layout() == Layout::ROW_MAJOR) {
                     tt::tt_metal::LegacyShape expected_shape = {
-                        mask.get_legacy_shape()[0], 1, input_tensor.get_legacy_shape()[-1] / TILE_WIDTH, TILE_WIDTH};
+                        mask.get_legacy_shape()[0],
+                        1,
+                        input_tensor.get_tensor_spec().physical_shape().width() / TILE_WIDTH,
+                        TILE_WIDTH};
                     TT_FATAL(mask.get_legacy_shape() == expected_shape, "Error");
                 }
                 for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
@@ -135,8 +138,8 @@ operation::ProgramWithCallbacks Softmax::create_program(
     auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     const auto& mask = optional_input_tensors.at(0);
-    // bool causal_mask = mask.has_value() ? mask.value().get_legacy_shape()[-2] == mask.value().get_legacy_shape()[-1]
-    // : false;
+    // bool causal_mask = mask.has_value() ? mask.value().get_legacy_shape()[-2] ==
+    // mask.value().get_tensor_spec().physical_shape().width() : false;
     bool causal_mask = this->is_causal_mask;
 
     return std::visit(
@@ -299,7 +302,10 @@ Tensor scale_mask_softmax(
                 .target_layout = Layout::TILE};
             std::optional<ttnn::operations::experimental::auto_format::FormatParams> mask_format_params = std::nullopt;
             if (mask.has_value()) {
-                TT_FATAL(input_tensor.get_legacy_shape()[-1] == mask.value().get_legacy_shape()[-1], "Error");
+                TT_FATAL(
+                    input_tensor.get_tensor_spec().physical_shape().width() ==
+                        mask.value().get_tensor_spec().physical_shape().width(),
+                    "Error");
                 TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.value().get_legacy_shape()[0], "Error");
                 TT_FATAL(
                     mask.value().get_legacy_shape()[-2] == 1 or mask.value().get_legacy_shape()[-2] == TILE_HEIGHT,

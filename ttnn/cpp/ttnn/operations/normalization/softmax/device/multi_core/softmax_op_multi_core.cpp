@@ -157,8 +157,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         reader_compile_time_args.push_back(mask_is_dram);
     }
     if (causal_mask) {
-        uint32_t num_tiles_causal_mask =
-            mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+        uint32_t num_tiles_causal_mask = mask.value().get_tensor_spec().physical_shape().width() *
+                                         mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
         reader_compile_time_args.push_back(num_tiles_causal_mask);
     }
 
@@ -682,7 +682,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     // hw_dims_only_causal_mask does not support RM Layout atm
     bool use_row_major_kernel = (mask.has_value() and mask->get_layout() == Layout::ROW_MAJOR);
     if (use_row_major_kernel) {
-        auto mask_stick_size = mask->get_legacy_shape()[3] * mask->element_size();
+        auto mask_stick_size = mask->get_tensor_spec().physical_shape().height() * mask->element_size();
         bool mask_stick_size_is_power_of_two = is_power_of_two_at_least_32(mask_stick_size);
         reader_compile_time_args.push_back((std::uint32_t)mask_stick_size_is_power_of_two);
         if (mask_stick_size_is_power_of_two) {
@@ -827,7 +827,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t num_tiles_in_attn_mask = 0;
     uint32_t num_tiles_of_attn_mask_needed_per_core = 0;
     if (hw_dims_only_causal_mask) {
-        num_tiles_in_attn_mask = mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_HW;
+        num_tiles_in_attn_mask =
+            mask.value().get_tensor_spec().physical_shape().width() * mask.value().get_legacy_shape()[-2] / TILE_HW;
         num_tiles_of_attn_mask_needed_per_core = block_ht * block_wt;
     }
     uint32_t num_cores_per_batch_index = 0;

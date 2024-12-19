@@ -28,23 +28,26 @@ void GroupNorm::validate(
     TT_FATAL(a.get_dtype() == DataType::BFLOAT16, "Error");
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-    TT_FATAL(a.get_legacy_shape()[3] % this->num_groups == 0, "channel must be divisible by num_groups!");
+    TT_FATAL(
+        a.get_tensor_spec().physical_shape().width() % this->num_groups == 0,
+        "channel must be divisible by num_groups!");
     TT_FATAL(a.get_legacy_shape()[1] == 1, "input tensor shape[1] must be 1!");
 
     if (gamma.has_value()) {
         if (gamma.value().get_layout() == Layout::TILE) {
             TT_FATAL(
-                a.get_legacy_shape()[3] == gamma.value().get_legacy_shape()[3],
+                a.get_tensor_spec().physical_shape().width() ==
+                    gamma.value().get_tensor_spec().physical_shape().width(),
                 "{} != {}",
-                a.get_legacy_shape()[3],
-                gamma.value().get_legacy_shape()[3]);
+                a.get_tensor_spec().physical_shape().width(),
+                gamma.value().get_tensor_spec().physical_shape().width());
             TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(gamma.value().get_legacy_shape()[2] == TILE_HEIGHT, "Error");
         } else {
             TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL((gamma.value().get_legacy_shape()[3] == TILE_WIDTH), "Error");
+            TT_FATAL((gamma.value().get_tensor_spec().physical_shape().width() == TILE_WIDTH), "Error");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -57,14 +60,16 @@ void GroupNorm::validate(
 
     if (beta.has_value()) {
         if (beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[3] == beta.value().get_legacy_shape()[3], "Error");
+            TT_FATAL(
+                a.get_tensor_spec().physical_shape().width() == beta.value().get_tensor_spec().physical_shape().width(),
+                "Error");
             TT_FATAL(a.device() == beta.value().device(), "Error");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(beta.value().get_legacy_shape()[2] == TILE_HEIGHT, "Error");
         } else {
             TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL(beta.value().get_legacy_shape()[3] == TILE_WIDTH, "Error");
+            TT_FATAL(beta.value().get_tensor_spec().physical_shape().width() == TILE_WIDTH, "Error");
             TT_FATAL(a.device() == beta.value().device(), "Error");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -76,7 +81,7 @@ void GroupNorm::validate(
         TT_FATAL(input_mask.value().get_layout() == Layout::TILE, "Error");
         TT_FATAL(input_mask.value().get_legacy_shape()[1] == this->num_groups, "Error");
         TT_FATAL(input_mask.value().get_legacy_shape()[2] == TILE_HEIGHT, "Error");
-        TT_FATAL(input_mask.value().get_legacy_shape()[3] % TILE_WIDTH == 0, "Error");
+        TT_FATAL(input_mask.value().get_tensor_spec().physical_shape().width() % TILE_WIDTH == 0, "Error");
     }
 }
 std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
