@@ -17,7 +17,7 @@ struct ExecuteDramPrefetcher {
         std::vector<ttnn::Tensor>& tensors,
         const Tensor& tensor_addrs,
         const uint32_t num_layers,
-        const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+        const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
         const MemoryConfig& reader_output_mem_config,
         const MemoryConfig& writer_output_mem_config);
 };
