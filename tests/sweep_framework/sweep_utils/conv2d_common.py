@@ -178,35 +178,63 @@ def run_conv2d_short_sweep(
     input_specs,
     device,
 ) -> list:
-    [
-        batch_size,
-        output_channels,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        groups,
-        has_bias,
-        dilation,
-    ] = input_specs
+    # for tt-forge suite, extra argument is input datatype
+    if len(input_specs) == 15:
+        [
+            batch_size,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            kernel_height,
+            kernel_width,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            groups,
+            has_bias,
+            dilation,
+            datatype,
+        ] = input_specs
+    else:
+        [
+            batch_size,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            kernel_height,
+            kernel_width,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            groups,
+            has_bias,
+            dilation,
+        ] = input_specs
+        datatype = "bfloat16"
     print(input_specs)
+
+    if datatype == "float32":
+        ttnn_datatype = ttnn.float32
+        torch_datatype = torch.float32
+    else:
+        ttnn_datatype = ttnn.bfloat16
+        torch_datatype = torch.bfloat16
 
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, kernel_height, kernel_width]
     conv_bias_shape = [1, 1, 1, output_channels]
-    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch_datatype).float()
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
-    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch_datatype).float()
 
     torch_bias_tensor = None
     if has_bias:
-        torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
+        torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch_datatype).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
         torch_weight_tensor,
@@ -217,13 +245,17 @@ def run_conv2d_short_sweep(
         groups=groups,
     )
 
-    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
+    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn_datatype)
     tt_bias_tensor = None
     if has_bias:
-        tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
+        tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn_datatype)
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn_datatype)
 
+    conv_config = ttnn.Conv2dConfig(
+        dtype=ttnn_datatype,
+        weights_dtype=ttnn_datatype,
+    )
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -240,6 +272,7 @@ def run_conv2d_short_sweep(
         input_height=input_height,
         input_width=input_width,
         groups=groups,
+        conv_config=conv_config,
         return_output_dim=True,
         return_weights_and_bias=True,
     )
