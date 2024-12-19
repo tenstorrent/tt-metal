@@ -33,7 +33,8 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t& queue_id);
+    const uint8_t& queue_id,
+    std::optional<ttnn::Tensor>& optional_output_tensor);
 
 struct MatmulOperation {
     static Tensor invoke(
@@ -47,7 +48,8 @@ struct MatmulOperation {
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const CoreGrid> core_grid = std::nullopt,
-        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt);
+        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 struct LinearOperation {
@@ -63,7 +65,8 @@ struct LinearOperation {
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const CoreGrid> core_grid = std::nullopt,
-        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt);
+        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 }  // namespace matmul
