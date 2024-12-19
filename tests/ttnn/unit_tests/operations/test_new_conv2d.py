@@ -44,13 +44,14 @@ from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 def write_to_file(file_name, data):
     data = data.cpu().numpy()
     with open(file_name, "w") as f:
-        for i in range(1):
+        for i in range(data.shape[0]):
             for j in range(data.shape[2]):
                 for k in range(data.shape[3]):
                     for l in range(data.shape[1]):
                         f.write(str(data[i][l][j][k]) + " ")
                     f.write("\n")
                 f.write("\n")
+            f.write("\n")
 
 
 def write_to_file_special(file_name, data):
@@ -59,7 +60,7 @@ def write_to_file_special(file_name, data):
         for i in range(data.shape[0]):
             for j in range(data.shape[1]):
                 for k in range(data.shape[2]):
-                    for l in range(16):
+                    for l in range(data.shape[3]):
                         f.write(str(data[i][j][k][l]) + " ")
                     f.write("\n")
 
@@ -248,6 +249,8 @@ def run_conv(
     else:
         pcc = 0.997
 
+    # write_to_file("golden_tensor.txt", torch_out_golden_tensor.float())
+    # write_to_file("output_tensor_1.txt", torch_output_tensor.float())
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
     assert passing
