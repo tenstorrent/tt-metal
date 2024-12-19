@@ -56,7 +56,7 @@ jobs:
           {arch: wormhole_b0, type: N150},
           {arch: wormhole_b0, type: N300}
         ]
-    runs-on: ["cloud-virtual-machine", "${{ matrix.runner-hw-info.type }}", "in-service"]
+    runs-on: ["cloud-virtual-machine", "${{ matrix.runner-hw-info.type }}", "issue-15821"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

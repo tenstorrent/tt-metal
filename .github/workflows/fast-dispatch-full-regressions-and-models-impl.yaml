@@ -163,7 +163,7 @@ jobs:
       ARCH_NAME: wormhole_b0
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
+    runs-on: ["cloud-virtual-machine", "issue-15821", "${{ matrix.card }}"]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - uses: ./.github/actions/retry-command

@@ -24,7 +24,7 @@ jobs:
           # {
           #   name: "N300_performance",
           #   arch: wormhole_b0,
-          #   runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+          #   runs-on: ["N300", "pipeline-perf", "bare-metal", "issue-15821"],
           #   cmd: run_n300_perf_tests
           # }
         ]
