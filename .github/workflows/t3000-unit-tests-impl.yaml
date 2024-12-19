@@ -6,7 +6,7 @@ on:
       extra-tag:
         required: false
         type: string
-        default: "in-service"
+        default: "issue-15821"
 
 jobs:
   t3000-unit-tests:
@@ -36,8 +36,7 @@ jobs:
     runs-on:
       - arch-wormhole_b0
       - config-t3000
-      - pipeline-functional
-      - ${{ inputs.extra-tag }}
+      - issue-12830
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
