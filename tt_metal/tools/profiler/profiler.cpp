@@ -22,6 +22,9 @@ namespace tt {
 
 namespace tt_metal {
 
+constexpr uint32_t PROFILER_OP_ID = 0;
+constexpr uint32_t ALL_RISC_ID = 6;
+
 static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
@@ -225,60 +228,6 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
     }
 }
 
-void DeviceProfiler::aggregate(tracy::TTDeviceEvent event) {
-    uint32_t trace_op_id = event.run_num;
-
-    if (device_aggregates_trace_counter.find(event.run_num) != device_aggregates_trace_counter.end()) {
-        if (device_aggregates_trace_counter.at(event.run_num).find(event.risc) !=
-            device_aggregates_trace_counter.at(event.run_num).end()) {
-            trace_op_id += 20000 * device_aggregates_trace_counter.at(event.run_num).at(event.risc);
-        } else {
-            device_aggregates_zone_counter.at(event.run_num).insert({event.risc, 0});
-            device_aggregates_trace_counter.at(event.run_num).insert({event.risc, 0});
-        }
-    } else {
-        device_aggregates_zone_counter.insert({event.run_num, {{event.risc, 0}}});
-        device_aggregates_trace_counter.insert({event.run_num, {{event.risc, 0}}});
-    }
-
-    // std::cout << event.core_x << "," << event.core_y << "," << event.risc << ","<< event.timestamp<< "," <<
-    // event.zone_phase << "," << trace_op_id<< "," << device_aggregates_zone_counter.at(event.run_num).at(event.risc)<<
-    // std::endl;
-
-    if (device_aggregates.find(trace_op_id) != device_aggregates.end()) {
-        if (device_aggregates.at(trace_op_id).find(event.risc) != device_aggregates.at(trace_op_id).end()) {
-            auto min_event = device_aggregates.at(trace_op_id).at(event.risc).begin();
-            auto max_event = --device_aggregates.at(trace_op_id).at(event.risc).end();
-            if (device_aggregates.at(trace_op_id).at(event.risc).size() > 1) {
-                if (event.timestamp < min_event->timestamp) {
-                    device_aggregates.at(trace_op_id).at(event.risc).erase(min_event);
-                    device_aggregates.at(trace_op_id).at(event.risc).insert(event);
-                } else if (event.timestamp > max_event->timestamp) {
-                    device_aggregates.at(trace_op_id).at(event.risc).erase(max_event);
-                    device_aggregates.at(trace_op_id).at(event.risc).insert(event);
-                }
-            } else {
-                device_aggregates.at(trace_op_id).at(event.risc).insert(event);
-            }
-        } else {
-            device_aggregates.at(trace_op_id).insert({event.risc, {event}});
-        }
-    } else {
-        device_aggregates.insert({trace_op_id, {{event.risc, {event}}}});
-    }
-
-    if (event.zone_phase == tracy::TTDeviceEventPhase::begin) {
-        device_aggregates_zone_counter.at(event.run_num).at(event.risc)++;
-    } else if (event.zone_phase == tracy::TTDeviceEventPhase::end) {
-        device_aggregates_zone_counter.at(event.run_num).at(event.risc)--;
-    }
-    TT_ASSERT(device_aggregates_zone_counter.at(event.run_num).at(event.risc) >= 0, "Wrong device zone order");
-    if (device_aggregates_zone_counter.at(event.run_num).at(event.risc) == 0) {
-        log_info("Trace run finished for op {} , trace op id {}", event.run_num, trace_op_id);
-        device_aggregates_trace_counter.at(event.run_num).at(event.risc)++;
-    }
-}
-
 void DeviceProfiler::dumpResultToFile(
     uint32_t run_id,
     uint32_t run_host_id,
@@ -474,6 +423,71 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
 #endif
 }
 
+void DeviceProfiler::aggregate(tracy::TTDeviceEvent event) {
+    if (event.run_num == PROFILER_OP_ID) {
+        if (device_aggregates.find(PROFILER_OP_ID) != device_aggregates.end()) {
+            if (device_aggregates.at(PROFILER_OP_ID).find(ALL_RISC_ID) != device_aggregates.at(PROFILER_OP_ID).end()) {
+                device_aggregates.at(PROFILER_OP_ID).at(ALL_RISC_ID).insert(event);
+            } else {
+                device_aggregates.at(PROFILER_OP_ID).insert({ALL_RISC_ID, {event}});
+            }
+        } else {
+            device_aggregates.insert({PROFILER_OP_ID, {{ALL_RISC_ID, {event}}}});
+        }
+    } else {
+        uint32_t trace_op_id = event.run_num;
+
+        if (device_aggregates_trace_counter.find(event.run_num) != device_aggregates_trace_counter.end()) {
+            if (device_aggregates_trace_counter.at(event.run_num).find(event.risc) !=
+                device_aggregates_trace_counter.at(event.run_num).end()) {
+                trace_op_id += 20000 * device_aggregates_trace_counter.at(event.run_num).at(event.risc);
+            } else {
+                device_aggregates_zone_counter.at(event.run_num).insert({event.risc, 0});
+                device_aggregates_trace_counter.at(event.run_num).insert({event.risc, 0});
+            }
+        } else {
+            device_aggregates_zone_counter.insert({event.run_num, {{event.risc, 0}}});
+            device_aggregates_trace_counter.insert({event.run_num, {{event.risc, 0}}});
+        }
+
+        // std::cout << event.core_x << "," << event.core_y << "," << event.risc << ","<< event.timestamp<< "," <<
+        // event.zone_phase << "," << trace_op_id<< "," <<
+        // device_aggregates_zone_counter.at(event.run_num).at(event.risc)<< std::endl;
+
+        if (device_aggregates.find(trace_op_id) != device_aggregates.end()) {
+            if (device_aggregates.at(trace_op_id).find(event.risc) != device_aggregates.at(trace_op_id).end()) {
+                auto min_event = device_aggregates.at(trace_op_id).at(event.risc).begin();
+                auto max_event = --device_aggregates.at(trace_op_id).at(event.risc).end();
+                if (device_aggregates.at(trace_op_id).at(event.risc).size() > 1) {
+                    if (event.timestamp < min_event->timestamp) {
+                        device_aggregates.at(trace_op_id).at(event.risc).erase(min_event);
+                        device_aggregates.at(trace_op_id).at(event.risc).insert(event);
+                    } else if (event.timestamp > max_event->timestamp) {
+                        device_aggregates.at(trace_op_id).at(event.risc).erase(max_event);
+                        device_aggregates.at(trace_op_id).at(event.risc).insert(event);
+                    }
+                } else {
+                    device_aggregates.at(trace_op_id).at(event.risc).insert(event);
+                }
+            } else {
+                device_aggregates.at(trace_op_id).insert({event.risc, {event}});
+            }
+        } else {
+            device_aggregates.insert({trace_op_id, {{event.risc, {event}}}});
+        }
+
+        if (event.zone_phase == tracy::TTDeviceEventPhase::begin) {
+            device_aggregates_zone_counter.at(event.run_num).at(event.risc)++;
+        } else if (event.zone_phase == tracy::TTDeviceEventPhase::end) {
+            device_aggregates_zone_counter.at(event.run_num).at(event.risc)--;
+        }
+        TT_ASSERT(device_aggregates_zone_counter.at(event.run_num).at(event.risc) >= 0, "Wrong device zone order");
+        if (device_aggregates_zone_counter.at(event.run_num).at(event.risc) == 0) {
+            device_aggregates_trace_counter.at(event.run_num).at(event.risc)++;
+        }
+    }
+}
+
 void DeviceProfiler::pushTracyDeviceResults() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
@@ -489,17 +503,21 @@ void DeviceProfiler::pushTracyDeviceResults() {
             auto startEvent = risc.second.begin();
             auto endEvent = --risc.second.end();
             std::string zone_name = fmt::format(
-                "{} CORES ({},{})->({},{})",
+                "{} ({},{})->({},{})",
                 tracy::riscName[startEvent->risc],
                 startEvent->core_x,
                 startEvent->core_y,
                 endEvent->core_x,
                 endEvent->core_y);
             for (auto event : risc.second) {
-                event.core_x = 100;
-                event.core_y = 100;
-                event.zone_name = zone_name;
+                if (event.run_num != PROFILER_OP_ID) {
+                    event.core_x = 100;
+                    event.core_y = 100;
+                    event.zone_name = zone_name;
+                }
                 device_events.insert(event);
+                // std::cout <<  event.run_num << "," << event.core_x << "," << event.core_y << "," << event.risc <<
+                // ","<< event.timestamp<< "," << event.zone_phase << std::endl;
             }
         }
     }
