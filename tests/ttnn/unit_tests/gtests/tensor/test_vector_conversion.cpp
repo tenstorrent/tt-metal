@@ -56,6 +56,16 @@ std::vector<T> arange(int64_t start, int64_t end, int64_t step) {
     return result;
 }
 
+// Creates a vector with alternating ones and zeros.
+std::vector<float> ones_and_zeros(int total_size) {
+    std::vector<float> result;
+    result.reserve(total_size);
+    for (int i = 0; i < total_size; ++i) {
+        result.push_back(i % 2 == 0 ? 0.0f : 1.0f);
+    }
+    return result;
+}
+
 template <typename T>
 class VectorConversionTest : public ::testing::Test {};
 
@@ -130,35 +140,35 @@ TEST_P(BlockFloatVectorConversionTest, InvalidLayout) {
 
 TEST_P(BlockFloatVectorConversionTest, Roundtrip) {
     ttnn::SimpleShape shape{128, 128};
-    std::vector<float> input;
-    input.reserve(shape.volume());
-    for (int i = 0; i < shape.volume(); ++i) {
-        input.push_back(i % 2 == 0 ? 0.0f : 1.0f);
-    }
+    std::vector<float> input = ones_and_zeros(shape.volume());
+
     auto output = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE)).to_vector<float>();
     EXPECT_THAT(output, Pointwise(Eq(), input));
 }
 
-TEST_P(BlockFloatVectorConversionTest, AddPadding) {
+TEST_P(BlockFloatVectorConversionTest, RoundtripWithPadding) {
     ttnn::SimpleShape shape{14, 47};
-    std::vector<float> input(shape.volume(), 1.0f);
+    std::vector<float> input = ones_and_zeros(shape.volume());
 
     auto output = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
 
     EXPECT_THAT(output.get_logical_shape(), ShapeIs(14, 47));
     EXPECT_THAT(output.get_padded_shape(), ShapeIs(32, 64));
+
+    EXPECT_THAT(output.to_vector<float>(), Pointwise(Eq(), input));
 }
 
-TEST_P(BlockFloatVectorConversionTest, AddPaddingWithCustomTile) {
+TEST_P(BlockFloatVectorConversionTest, RoundtripWithPaddingAndCustomTile) {
     ttnn::SimpleShape shape{14, 47};
-    std::vector<float> input(shape.volume(), 1.0f);
+    std::vector<float> input = ones_and_zeros(shape.volume());
 
-    TensorSpec spec(
-        shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR, Tile({16, 16})), MemoryConfig{}));
+    TensorSpec spec(shape, TensorLayout(GetParam(), PageConfig(Layout::TILE, Tile({16, 16})), MemoryConfig{}));
     auto output = Tensor::from_vector(input, spec);
 
     EXPECT_THAT(output.get_logical_shape(), ShapeIs(14, 47));
-    EXPECT_THAT(output.get_padded_shape(), ShapeIs(14, 47));
+    EXPECT_THAT(output.get_padded_shape(), ShapeIs(16, 48));
+
+    EXPECT_THAT(output.to_vector<float>(), Pointwise(Eq(), input));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -175,13 +185,12 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
 
     TensorSpec spec(
         shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{.buffer_type = BufferType::L1}));
-    auto output_tensor = Tensor::from_vector(input, spec, device_);
+    auto output = Tensor::from_vector(input, spec, device_);
 
-    EXPECT_TRUE(is_device_tensor(output_tensor));
-    EXPECT_TRUE(output_tensor.memory_config().is_l1());
+    EXPECT_TRUE(is_device_tensor(output));
+    EXPECT_TRUE(output.memory_config().is_l1());
 
-    auto output = output_tensor.to_vector<float>();
-    EXPECT_THAT(output, Pointwise(Eq(), input));
+    EXPECT_THAT(output.to_vector<float>(), Pointwise(Eq(), input));
 }
 
 }  // namespace
