@@ -76,7 +76,7 @@ jobs:
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
-      - in-service
+      - issue-15821
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/prepare-metal-run

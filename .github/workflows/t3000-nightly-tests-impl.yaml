@@ -6,7 +6,7 @@ on:
       extra-tag:
         required: false
         type: string
-        default: "in-service"
+        default: "issue-15821"
 
 jobs:
   t3000-nightly-tests:
