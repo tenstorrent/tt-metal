@@ -473,7 +473,7 @@ static TensorMemoryLayout select_shard_spec(
             Shape({batch_size, in_channels, input_height, input_width}),
             Shape({1, 1, weight_matrix_rows, weight_matrix_cols}),
             Shape({batch_size, output_height, output_width, out_channels}),
-            out_channels, groups, kernel_size, conv_config, true, true);
+            out_channels, groups, kernel_size, conv_config, conv_out_memory_config, true, true);
         return {
             std::max<uint32_t>(
                 parallel_config.grid.num_cores(),
@@ -1032,7 +1032,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
     const OptimizedConvBlockConfig& block_config, const OptimizedConvParallelizationConfig& pconfig,
     const Shape& input_shape, const Shape& weights_shape, const Shape& output_shape,
     uint32_t output_channels, uint32_t groups, std::array<uint32_t, 2> kernel_size,
-    const Conv2dConfig& conv_config, bool enable_bias, bool use_non_tile_height
+    const Conv2dConfig& conv_config, const MemoryConfig& output_memory_config, const  bool enable_bias, bool use_non_tile_height
     ) {
 
     bool untilize_out = conv_config.output_layout == Layout::ROW_MAJOR;
@@ -1120,7 +1120,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
 
         //CB 24
         uint32_t cb24_size = partials_block_num_bytes;
-        if(untilize_out==false && interm_dtype == output_dtype ) {
+        if(interm_dtype == output_dtype ) {
             cb24_size = 0;
         } else {
             tt::log_debug(tt::LogOp, "CB24 Size: {}", cb24_size);
@@ -1228,7 +1228,17 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
 
         return {output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb7_size + cb24_size + cb25_size + cb27_size};
     } else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        uint32_t output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
+
+        auto output_shard_shape = output_memory_config.shard_spec.value().shape;
+
+        uint32_t output_size = 0;
+        if(untilize_out) {
+            TT_FATAL(output_dtype == DataType::BFLOAT16, "Output dtype must be BFLOAT16 for untilize");
+            const uint32_t output_datum_size = 2;
+            output_size =  output_shard_shape[1] * output_shard_shape[0] * output_datum_size;
+        } else {
+         output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
+        }
 
         uint32_t bias_block_num_bytes = per_core_out_matrix_width_ntiles * bias_tile_size;
 
@@ -1243,7 +1253,7 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
 
         uint32_t output_block_ntiles = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles;
 
-        uint32_t num_blocks_act_w = weight_matrix_height_ntiles / act_block_w_ntiles;
+        uint32_t num_blocks_act_w = 1;
         uint32_t num_blocks_act_h = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
         uint32_t in0_num_blocks_w =
             num_blocks_act_w * conv_act_c_blocks;  // Fold outer c_block loop together with weight_block_num_tiles = 9
@@ -1293,8 +1303,17 @@ std::pair<uint32_t,uint32_t> conv2d::estimate_L1_usage(
         uint32_t cb25_size = tilized_act_block_cb_size; tt::log_debug(tt::LogOp, "CB25 Size: {}", cb25_size);
 
         bool need_unpad_after_untilize =
-            output_shard_shape[1] * output_shard_shape[0] < num_writer_output_tiles * TILE_HW;
-        return{ output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb6_size + cb24_size + cb25_size};
+            output_shard_shape[1] * output_shard_shape[0] < per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * tt::constants::TILE_HW;
+
+        tt::log_debug(tt::LogOp, "Need Unpad after untilize: {}", need_unpad_after_untilize);
+
+        uint32_t cb28_size = 0;
+        if(need_unpad_after_untilize && !use_non_tile_height && untilize_out) {
+            cb28_size = output_block_ntiles * output_tile_size;
+            tt::log_debug(tt::LogOp, "CB28 Size: {}", cb28_size);
+        }
+
+        return{ output_size, cb0_size + cb1_size + cb2_size + cb5_size + cb6_size + cb24_size + cb25_size + cb28_size};
     }
     return {0, 0};
 

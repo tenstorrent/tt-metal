@@ -265,7 +265,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
                     .enable_weights_double_buffer = enable_weights_double_buffer,
                     .enable_split_reader = enable_split_reader,
                     .enable_subblock_padding = enable_subblock_padding
-                },
+                }, this->memory_config,
                 has_bias, use_non_tile_height);
     if(calc_CB_size > 0) {
         if(calc_CB_size != actual_cb_size) {

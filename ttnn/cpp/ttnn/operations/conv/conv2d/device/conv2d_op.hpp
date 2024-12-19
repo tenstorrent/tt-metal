@@ -183,6 +183,8 @@ struct OptimizedConvNew {
         "parallelization_config",
         "block_config",
         "sliding_window_config",
+        "memory_config",
+        "compute_kernel_config",
         "output_channels",
         "untilize_out",
         "has_bias",
@@ -199,6 +201,8 @@ struct OptimizedConvNew {
             std::cref(this->parallelization_config),
             std::cref(this->block_config),
             std::cref(this->sliding_window_config),
+            std::cref(this->memory_config),
+            std::cref(this->compute_kernel_config),
             std::cref(this->output_channels),
             std::cref(this->untilize_out),
             std::cref(this->has_bias),
@@ -239,7 +243,7 @@ std::pair<uint32_t,uint32_t> estimate_L1_usage(
     const OptimizedConvBlockConfig& block_config, const OptimizedConvParallelizationConfig& pconfig,
     const Shape& input_shape, const Shape& weights_shape, const Shape& output_shape,
     uint32_t output_channels, uint32_t groups, std::array<uint32_t, 2> kernel_size,
-    const Conv2dConfig& conv_config, bool enable_bias, bool use_non_tile_height
+    const Conv2dConfig& conv_config, const MemoryConfig& output_memory_config, bool enable_bias, bool use_non_tile_height
     );
 
 }  // namespace conv2d
