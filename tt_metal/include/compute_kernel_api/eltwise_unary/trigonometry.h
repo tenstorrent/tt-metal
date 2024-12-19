@@ -18,10 +18,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sin_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_sine_init<APPROX>()));
-}
-
+ALWI void sin_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sine_init<APPROX>())); }
 
 /**
  * Performs element-wise computation of the trigonometric sine operation on each element of a tile
@@ -31,21 +28,18 @@ ALWI void sin_tile_init() {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid
+ * Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
+ * less than the size of the DST register buffer | True     |
  */
-ALWI void sin_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_sine_op<APPROX>(idst)));
-}
+ALWI void sin_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_sine_op<APPROX>(idst))); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cos_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_cosine_init<APPROX>()));
-}
-
+ALWI void cos_tile_init() { MATH((llk_math_eltwise_unary_sfpu_cosine_init<APPROX>())); }
 
 /**
  * Performs element-wise computation of the trigonometric cosine operation on each element of a tile
@@ -55,22 +49,18 @@ ALWI void cos_tile_init() {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid
+ * Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
+ * less than the size of the DST register buffer | True     |
  */
-ALWI void cos_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_cosine_op<APPROX>(idst)));
-}
+ALWI void cos_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_cosine_op<APPROX>(idst))); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tan_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_tan_init<APPROX>()));
-}
-
-
+ALWI void tan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tan_init<APPROX>())); }
 
 /**
  * Performs element-wise computation of the trigonometric tan operation on each element of a tile
@@ -80,11 +70,11 @@ ALWI void tan_tile_init() {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid
+ * Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
+ * less than the size of the DST register buffer | True     |
  */
-ALWI void tan_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_tan_op<APPROX>(idst)));
-}
-} // namespace ckernel
+ALWI void tan_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tan_op<APPROX>(idst))); }
+}  // namespace ckernel

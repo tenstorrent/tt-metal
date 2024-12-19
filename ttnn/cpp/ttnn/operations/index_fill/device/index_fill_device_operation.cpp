@@ -24,13 +24,9 @@ void IndexFillOperation::validate(
     TT_FATAL(
         operation_attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Index fill: Not currently supporting sharding");
-    TT_FATAL(index.get_logical_shape().rank() == 1,
-        "Index fill: Index tensor must be 1D!");
-    TT_FATAL(
-        dim < input.get_logical_shape().rank() && dim >= 0,
-        "Index fill: Invalid dimension");
-    TT_FATAL(index.get_logical_shape().rank() == 1,
-        "Index fill: Index tensor must be 1D!");
+    TT_FATAL(index.get_logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
+    TT_FATAL(dim < input.get_logical_shape().rank() && dim >= 0, "Index fill: Invalid dimension");
+    TT_FATAL(index.get_logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
 }
 void IndexFillOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -40,20 +36,16 @@ void IndexFillOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate(operation_attributes, tensor_args);
 }
-IndexFillOperation::shape_return_value_t IndexFillOperation::compute_output_shapes(
+IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input.get_logical_shape();
+    return TensorSpec(
+        tensor_args.input.get_logical_shape(),
+        tensor_args.input.get_tensor_spec().tensor_layout().with_memory_config(operation_attributes.memory_config));
 }
 IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    const auto& input = tensor_args.input;
-    return create_device_tensor(
-        output_shape,
-        input.tensor_attributes->dtype,
-        input.tensor_attributes->layout,
-        input.device(),
-        operation_attributes.memory_config);
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input.device());
 }
 std::tuple<IndexFillOperation::operation_attributes_t, IndexFillOperation::tensor_args_t> IndexFillOperation::invoke(
     const Tensor& input,

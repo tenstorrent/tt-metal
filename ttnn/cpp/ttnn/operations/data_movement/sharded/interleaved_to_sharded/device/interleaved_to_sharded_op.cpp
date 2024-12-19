@@ -8,6 +8,7 @@
 
 #include "interleaved_to_sharded_program_factory.hpp"
 
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
@@ -43,7 +44,7 @@ std::vector<Tensor> InterleavedToShardedDeviceOperation::create_output_tensors(c
 operation::ProgramWithCallbacks InterleavedToShardedDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return detail::interleaved_to_sharded_multi_core(input_tensor, output_tensor);
+    return detail::interleaved_to_sharded_multi_core(input_tensor, output_tensor, this->keep_l1_aligned);
 }
 
 

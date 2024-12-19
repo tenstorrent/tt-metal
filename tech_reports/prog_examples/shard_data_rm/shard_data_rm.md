@@ -94,13 +94,13 @@ Data will be read to the circular buffers on each core through the DRAM buffer, 
 
 ``` cpp
 bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-uint32_t input_cb_index = CB::c_in0;
+uint32_t input_cb_index = CBIndex::c_0;
 CircularBufferConfig input_cb_config = CircularBufferConfig(shard_size * input_unit_size, {{input_cb_index, cb_data_format}})
     .set_page_size(input_cb_index, input_unit_size);
 auto cb_input = tt_metal::CreateCircularBuffer(program, cores, input_cb_config);
 ```
 
-Across each core, the `CircularBuffer` indicated by the index corresponding to `CB::c_in0` will be used to store the data. Through the `CircularBufferConfig` object, we specify the total size of the buffer, which is dependent on the shard and data size, and we also specify the page size.
+Across each core, the `CircularBuffer` indicated by the index corresponding to `CBIndex::c_0` will be used to store the data. Through the `CircularBufferConfig` object, we specify the total size of the buffer, which is dependent on the shard and data size, and we also specify the page size.
 The corresponding `CircularBuffer` objects are then allocated with this configuration across each of the designated cores.
 
 # Create data movement kernels for sharding

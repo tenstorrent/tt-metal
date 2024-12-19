@@ -3,7 +3,6 @@ target_link_libraries(watcher_dump PRIVATE tt_metal)
 target_include_directories(
     watcher_dump
     PRIVATE
-        ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tt_metal/common

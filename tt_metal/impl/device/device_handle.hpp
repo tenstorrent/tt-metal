@@ -30,14 +30,14 @@ class DeviceHandle {
 
     DeviceHandle(DeviceKey key) : key(key) {}
 
-   public:
+public:
     DeviceHandle() = default;
 
     // TODO remove with v0
-    auto operator->() const -> Device *;
+    auto operator->() const -> Device*;
 
     // TODO remove with v0
-    operator Device *() const;
+    operator Device*() const;
 };
 
 }  // namespace v1

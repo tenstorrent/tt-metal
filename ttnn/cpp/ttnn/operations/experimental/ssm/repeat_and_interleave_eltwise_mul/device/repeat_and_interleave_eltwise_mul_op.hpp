@@ -23,5 +23,4 @@ struct RepeatAndInterleaveEltwiseMul {
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
-
 }  // namespace ttnn::operations::experimental::ssm

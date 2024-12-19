@@ -17,17 +17,19 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
     if (is_sender) {
         erisc_info->channels[0].bytes_sent = 0;
         erisc_info->channels[0].receiver_ack = 0;
-        while (eth_txq_is_busy()) {}
+        while (eth_txq_is_busy()) {
+        }
         eth_send_bytes(handshake_register_address, handshake_register_address, 16);
-        while (eth_txq_is_busy()) {}
+        while (eth_txq_is_busy()) {
+        }
         internal_::eth_send_packet(
             0,
             ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
             ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
             1);
-        while (erisc_info->channels[0].bytes_sent != 0) {}
+        while (erisc_info->channels[0].bytes_sent != 0) {
+        }
     } else {
-
         while (erisc_info->channels[0].bytes_sent == 0) {
         }
         eth_receiver_channel_done(0);
@@ -37,7 +39,6 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
 static constexpr bool MERGE_MSG = true;
 static constexpr uint32_t MAX_CHANNELS = 64;
 void kernel_main() {
-
     uint32_t arg_idx = 0;
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_messages = get_arg_val<uint32_t>(arg_idx++);
@@ -52,7 +53,7 @@ void kernel_main() {
     std::array<volatile eth_channel_sync_t*, MAX_CHANNELS> channel_syncs;
     {
         uint32_t channel_addr = handshake_addr + sizeof(eth_channel_sync_t);
-        for (uint8_t i = 0; i < num_channels*2; i++) {
+        for (uint8_t i = 0; i < num_channels * 2; i++) {
             erisc_info->channels[i].bytes_sent = 0;
             erisc_info->channels[i].receiver_ack = 0;
             messages_complete[i] = 0;
@@ -85,21 +86,19 @@ void kernel_main() {
     uint32_t ready_to_send_payload_available = 0;
     uint32_t wait_ack = 0;
 
-
     uint32_t idle_count = 0;
     uint32_t idle_max = 1000000000;
     {
         DeviceZoneScopedN("MAIN-TEST-BODY");
         uint32_t r_i = 0;
         uint32_t s_i = 0;
-        while (channels_complete < num_channels*2) {
+        while (channels_complete < num_channels * 2) {
             uint32_t sender_channel = senders_start + s_i;
 
             const bool sender_check_ack = (wait_ack >> s_i) & 0x1;
             if (sender_check_ack) {
-                bool acked = MERGE_MSG ?
-                    channel_syncs[sender_channel]->bytes_sent == 0:
-                    eth_is_receiver_channel_send_done(sender_channel);
+                bool acked = MERGE_MSG ? channel_syncs[sender_channel]->bytes_sent == 0
+                                       : eth_is_receiver_channel_send_done(sender_channel);
                 if (acked) {
                     messages_complete[sender_channel]++;
                     wait_ack &= ~(1 << s_i);
@@ -134,17 +133,13 @@ void kernel_main() {
             const bool try_send_payload_available = (ready_to_send_payload_available >> s_i) & 0x1;
             if constexpr (!MERGE_MSG) {
                 if (try_send_payload_available && !eth_txq_is_busy()) {
-
-                    eth_send_payload_complete_signal_over_channel(
-                        sender_channel, message_size_payload);
+                    eth_send_payload_complete_signal_over_channel(sender_channel, message_size_payload);
 
                     ready_to_send_payload_available &= ~(1 << s_i);
                     wait_ack |= (1 << s_i);
                     idle_count = 0;
                 }
             }
-
-
 
             // Receiver
             uint8_t receiver_channel = receivers_start + r_i;
@@ -188,7 +183,4 @@ void kernel_main() {
             }
         }
     }
-
-
-
 }

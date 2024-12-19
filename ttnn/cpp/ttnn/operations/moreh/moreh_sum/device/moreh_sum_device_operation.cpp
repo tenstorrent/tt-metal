@@ -48,8 +48,7 @@ void validate_tensors(
     validate_input_with_dim(input, operation_attributes.dim);
 
     if (output.has_value()) {
-        validate_output_with_keepdim(
-            input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
+        validate_output_with_keepdim(input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
     }
 }
 
@@ -63,8 +62,12 @@ void MorehSumOperation::validate_on_program_cache_hit(
     validate_tensors(operation_attributes, tensor_args);
 };
 
-MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes(
+MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output.has_value()) {
+        return {tensor_args.output->get_tensor_spec()};
+    }
+
     const auto& input = tensor_args.input;
     const auto& input_shape = input.get_shape();
     const auto input_rank = input_shape.rank();
@@ -102,8 +105,9 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)
         for (int i = 0; i < input_rank; ++i) {
             bool is_reduced_dim = (i == operation_attributes.dim);
-            if (is_reduced_dim && !is_tile_dim)
+            if (is_reduced_dim && !is_tile_dim) {
                 continue;
+            }
 
             shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input_shape.value[i]));
             pad_dimensions.push_back(
@@ -115,7 +119,13 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
     }
 
     log_debug(tt::LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);
-    return {output_shape};
+    return TensorSpec(
+        output_shape.logical_shape(),
+        TensorLayout::fromLegacyPaddedShape(
+            tensor_args.input.get_dtype(),
+            PageConfig(tensor_args.input.get_layout()),
+            operation_attributes.memory_config,
+            output_shape));
 };
 
 MorehSumOperation::tensor_return_value_t MorehSumOperation::create_output_tensors(
@@ -126,12 +136,7 @@ MorehSumOperation::tensor_return_value_t MorehSumOperation::create_output_tensor
     }
 
     log_debug(tt::LogOp, "{}:{} create output tensor", __func__, __LINE__);
-    return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        tensor_args.input.get_dtype(),
-        tensor_args.input.get_layout(),
-        tensor_args.input.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
 std::tuple<MorehSumOperation::operation_attributes_t, MorehSumOperation::tensor_args_t> MorehSumOperation::invoke(

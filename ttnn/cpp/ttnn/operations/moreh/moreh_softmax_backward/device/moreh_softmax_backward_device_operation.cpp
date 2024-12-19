@@ -95,25 +95,28 @@ void MorehSoftmaxBackwardOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-MorehSoftmaxBackwardOperation::shape_return_value_t MorehSoftmaxBackwardOperation::compute_output_shapes(
+MorehSoftmaxBackwardOperation::spec_return_value_t MorehSoftmaxBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.output_tensor.get_shape();
+    if (tensor_args.input_grad_tensor.has_value()) {
+        return tensor_args.input_grad_tensor->get_tensor_spec();
+    }
+    return TensorSpec(
+        tensor_args.output_tensor.get_logical_shape(),
+        TensorLayout(
+            tensor_args.output_tensor.get_dtype(),
+            PageConfig(tensor_args.output_tensor.get_layout()),
+            operation_attributes.memory_config));
 }
 
 MorehSoftmaxBackwardOperation::tensor_return_value_t MorehSoftmaxBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_grad_tensor = tensor_args.input_grad_tensor;
-    if (input_grad_tensor.has_value())
+    if (input_grad_tensor.has_value()) {
         return input_grad_tensor.value();
+    }
 
-    const auto& output_tensor = tensor_args.output_tensor;
-    const auto& input_grad_shape = output_tensor.get_shape();
     return create_device_tensor(
-        input_grad_shape,
-        output_tensor.get_dtype(),
-        output_tensor.get_layout(),
-        output_tensor.device(),
-        operation_attributes.memory_config);
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.output_tensor.device());
 }
 
 std::tuple<MorehSoftmaxBackwardOperation::operation_attributes_t, MorehSoftmaxBackwardOperation::tensor_args_t>

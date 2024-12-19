@@ -21,13 +21,11 @@ inline void calculate_bitwise_xor(const uint value) {
         vInt input = dst_reg[0];
         vInt v = value;
         vInt res = input ^ v;
-        v_if(res > INT_MIN && res < 0)
-        {
+        v_if(res > INT_MIN && res < 0) {
             res = 0 - res;
             res = setsgn(res, v);
         }
-        v_endif
-        dst_reg[0] = res;
+        v_endif dst_reg[0] = res;
         dst_reg++;
     }
 }

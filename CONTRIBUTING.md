@@ -8,7 +8,6 @@ Table of Contents
   - [Machine setup](#machine-setup)
     - [Hugepages setup](#hugepages-setup)
   - [Developing tt-metal](#developing-tt-metal)
-    - [Setting up Git](#setting-up-git)
     - [Setting logger level](#setting-logger-level)
     - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
   - [Tests in tt-metal](#tests-in-tt-metal)
@@ -22,6 +21,8 @@ Table of Contents
     - [Debugging host-side code](#debugging-host-side-code)
     - [Debugging device-side code](#debugging-device-side-code)
     - [Debugging device hangs](#debugging-device-hangs)
+      - [Using watcher](#using-watcher)
+      - [Using watcher hang dump tool](#using-watcher-hang-dump-tool)
   - [Contribution standards](#contribution-standards)
     - [File structure and formats](#file-structure-and-formats)
     - [CI/CD Principles](#cicd-principles)
@@ -29,10 +30,16 @@ Table of Contents
     - [Skipping CI/CD for documentation updates](#skipping-cicd-for-documentation-updates)
     - [Documentation](#documentation)
     - [Git rules and guidelines](#git-rules-and-guidelines)
+      - [Creating a branch](#creating-a-branch)
+      - [Saving your changes](#saving-your-changes)
+      - [Saving the commit to origin and create a pull request](#saving-the-commit-to-origin-and-create-a-pull-request)
+      - [Rebasing your branch](#rebasing-your-branch)
+      - [Merging to main](#merging-to-main)
     - [Code reviews](#code-reviews)
     - [New feature and design specifications](#new-feature-and-design-specifications)
     - [Release flows](#release-flows)
     - [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
+    - [Further reading](#further-reading)
   - [Hardware troubleshooting](#hardware-troubleshooting)
     - [Resetting an accelerator board](#resetting-an-accelerator-board)
 
@@ -89,17 +96,7 @@ set up for users.
 
 Please refer to the [README](README.md) for source installation and environment
 setup instructions, then please read the [Getting Started
-page](docs/source/get_started/get_started.rst).
-
-### Setting up Git
-
-We use `#` as a special character to denote issue numbers in our commit
-messages. Please change your comment character in your Git to not conflict with
-this:
-
-```
-git config core.commentchar ">"
-```
+page](docs/source/tt-metalium/get_started/get_started.rst).
 
 ### Setting logger level
 
@@ -115,7 +112,7 @@ TT_METAL_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 ### Building and viewing the documentation locally
 
 1. First, ensure that you have [built the project and activated the Python
-environment](docs/source/get_started/get_started.rst), along with any required
+environment](docs/source/tt-metalium/get_started/get_started.rst), along with any required
 `PYTHONPATH` variables.
 
 2. Build the HTML documentation.
@@ -254,8 +251,8 @@ The new fangled way we run our tests is with Googletest. The way we generally
 structure our tests with this framework is to bundle it into a single
 executable.
 
-You can use `--gtest_filter_test` to filter out the specific test you'd like.
-For example, to build and run the `CommonFixture.DRAMLoopbackSingleCore` on
+You can use `--gtest_filter` to filter out the specific test you'd like.
+For example, to build and run the `DispatchFixture.TensixDRAMLoopbackSingleCore` on
 fast dispatch, you can
 
 1. Build the unit tests:
@@ -264,7 +261,7 @@ fast dispatch, you can
    ```
 2. Run the test:
    ```
-   ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommonFixture.DRAMLoopbackSingleCore"
+   ./build/test/tt_metal/unit_tests_api --gtest_filter="DispatchFixture.TensixDRAMLoopbackSingleCore"
    ```
 
 On slow dispatch, to run another specific test, the equivalent would be:
@@ -273,7 +270,7 @@ On slow dispatch, to run another specific test, the equivalent would be:
 2. Run with the slow dispatch mode:
    ```
    export TT_METAL_SLOW_DISPATCH_MODE=1
-   ./build/test/tt_metal/unit_tests/fast_dispatch --gtest_filter_test="BasicFixture.TestL1BuffersAllocatedTopDown"
+   ./build/test/tt_metal/unit_tests/unit_tests_api --gtest_filter="DeviceSingleCardBufferFixture.TestL1BuffersAllocatedTopDown"
    ```
 
 We have split our tests into the two dispatch modes for less pollution of state
@@ -303,7 +300,7 @@ running such tests.
   - To debug the C++ binding file itself:
     - Ensure the python file you wish to debug is standalone and has a main function.
     - Run `gdb --args python <python file>`
-  - Breakpoints can be added for future loaded libraries. For example, to add a breakpoint to `Device` object construtor:
+  - Breakpoints can be added for future loaded libraries. For example, to add a breakpoint to `Device` object constructor:
 ```
 (gdb) b device.cpp:Device::Device
 No source file named device.cpp.
@@ -344,19 +341,19 @@ Breakpoint 1, tt::tt_metal::Device::Device (this=0x3c, device_id=21845, num_hw_c
 TT_METAL_WATCHER=10 ./your_program
 ...
                  Always | WARNING  | Watcher detected NOC error and stopped device: bad alignment in NOC transaction.
-                 Always | WARNING  | Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1): brisc using noc0 tried to access DRAM core w/ physical coords (x=0,y=11) DRAM[addr=0x00003820,len=102400], misaligned with local L1[addr=0x00064010]
+                 Always | WARNING  | Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 1): brisc using noc0 tried to access DRAM core w/ physical coords (x=0,y=11) DRAM[addr=0x00003820,len=102400], misaligned with local L1[addr=0x00064010]
                  Always | INFO     | Last waypoint: NARW,   W,   W,   W,   W
                  Always | INFO     | While running kernels:
                  Always | INFO     |  brisc : tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp
                  Always | INFO     |  ncrisc: blank
                  Always | INFO     |  triscs: blank
-                   Test | INFO     | Reported error: Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1): brisc using noc0 tried to access DRAM core w/ physical coords (x=0,y=11) DRAM[addr=0x00003820,len=102400], misaligned with local L1[addr=0x00064010]
+                   Test | INFO     | Reported error: Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 1): brisc using noc0 tried to access DRAM core w/ physical coords (x=0,y=11) DRAM[addr=0x00003820,len=102400], misaligned with local L1[addr=0x00064010]
                  Always | FATAL    | Watcher detected NOC error and stopped device: bad alignment in NOC transaction.
 ```
   - If no such error is reported, but the program is hanging, check the watcher log generated in `generated/watcher/watcher.log`. There is a legend at the top of the log showing how to interpret it, and a sample portion of a log is shown below:
 ```
 Legend:
-    Comma separated list specifices waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2
+    Comma separated list specifies waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2
     I=initialization sequence
     W=wait (top of spin loop)
     R=run (entering kernel)
@@ -374,22 +371,22 @@ Legend:
     k_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)
 ...
 Dump #7 at 8.992s
-Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 1,y= 0) phys(x= 2,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 2,y= 0) phys(x= 3,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 3,y= 0) phys(x= 4,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 4,y= 0) phys(x= 6,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 5,y= 0) phys(x= 7,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 6,y= 0) phys(x= 8,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 7,y= 0) phys(x= 9,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 0,y= 7) phys(x= 1,y=10):  NTW,UAPW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|2|0
-Device 0 worker core(x= 1,y= 7) phys(x= 2,y=10):  NTW, HQW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|1|0
-Device 0 worker core(x= 2,y= 7) phys(x= 3,y=10):  NTW, HQW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|3|0
-Device 0 worker core(x= 3,y= 7) phys(x= 4,y=10):  NTW,UAPW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|7|0
-Device 0 worker core(x= 4,y= 7) phys(x= 6,y=10): NABD,   W,   W,   W,   W  rmsg:H0G|Bnt smsg:DDDD k_ids:4|0|0
-Device 0 worker core(x= 5,y= 7) phys(x= 7,y=10): NABD,   W,   W,   W,   W  rmsg:H0G|Bnt smsg:DDDD k_ids:6|0|0
-Device 0 worker core(x= 6,y= 7) phys(x= 8,y=10):   GW,   W,   W,   W,   W  rmsg:H0D|bnt smsg:DDDD k_ids:0|0|0
-Device 0 worker core(x= 7,y= 7) phys(x= 9,y=10):   GW,   W,   W,   W,   W  rmsg:H0D|bnt smsg:DDDD k_ids:0|0|0
+Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 1,y= 0) virtual(x= 2,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 2,y= 0) virtual(x= 3,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 3,y= 0) virtual(x= 4,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 4,y= 0) virtual(x= 6,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 5,y= 0) virtual(x= 7,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 6,y= 0) virtual(x= 8,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 7,y= 0) virtual(x= 9,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 0,y= 7) virtual(x= 1,y=10):  NTW,UAPW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|2|0
+Device 0 worker core(x= 1,y= 7) virtual(x= 2,y=10):  NTW, HQW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|1|0
+Device 0 worker core(x= 2,y= 7) virtual(x= 3,y=10):  NTW, HQW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|3|0
+Device 0 worker core(x= 3,y= 7) virtual(x= 4,y=10):  NTW,UAPW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|7|0
+Device 0 worker core(x= 4,y= 7) virtual(x= 6,y=10): NABD,   W,   W,   W,   W  rmsg:H0G|Bnt smsg:DDDD k_ids:4|0|0
+Device 0 worker core(x= 5,y= 7) virtual(x= 7,y=10): NABD,   W,   W,   W,   W  rmsg:H0G|Bnt smsg:DDDD k_ids:6|0|0
+Device 0 worker core(x= 6,y= 7) virtual(x= 8,y=10):   GW,   W,   W,   W,   W  rmsg:H0D|bnt smsg:DDDD k_ids:0|0|0
+Device 0 worker core(x= 7,y= 7) virtual(x= 9,y=10):   GW,   W,   W,   W,   W  rmsg:H0D|bnt smsg:DDDD k_ids:0|0|0
 k_id[0]: blank
 k_id[1]: tt_metal/impl/dispatch/kernels/cq_prefetch.cpp
 k_id[2]: tt_metal/impl/dispatch/kernels/cq_dispatch.cpp
@@ -432,6 +429,44 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   - In the future, this tool will be expanded to show more debug information available from the host side.
 
 ## Contribution standards
+This project has adopted C++ formatting and style as defined in `.clang-format`.
+There are additional requirements such as license headers.
+
+## Pre-commit Hook Integration for Formatting and Linting
+
+As part of maintaining consistent code formatting across the project, we have integrated the [pre-commit](https://pre-commit.com/) framework into our workflow. The pre-commit hooks will help automatically check and format code before commits are made, ensuring that we adhere to the project's coding standards.
+
+### What is Pre-commit?
+
+Pre-commit is a framework for managing and maintaining multi-language pre-commit hooks. It helps catch common issues early by running a set of hooks before code is committed, automating tasks like:
+
+- Formatting code (e.g., fixing trailing whitespace, enforcing end-of-file newlines)
+- Running linters (e.g., `clang-format`, `black`, `flake8`)
+- Checking for merge conflicts or other common issues.
+
+For more details on pre-commit, you can visit the [official documentation](https://pre-commit.com/).
+
+### How to Set Up Pre-commit Locally
+
+To set up pre-commit on your local machine, follow these steps:
+
+1. **Install Pre-commit**:
+   Ensure you have Python installed, then run:
+   ```bash
+   pip install pre-commit
+   ```
+   *Note:* pre-commit is already installed if you are using the python virtual environment.
+2. **Install the Git Hook Scripts**:
+   In your local repository, run the following command to install the pre-commit hooks:
+   ```bash
+   pre-commit install
+   ```
+   This command will configure your local Git to run the defined hooks automatically before each commit.
+3. **Run Pre-commit Hooks Manually**:
+   You can also run the hooks manually against all files at any time with:
+   ```bash
+   pre-commit run --all-files
+   ```
 
 ### File structure and formats
 
@@ -493,7 +528,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   on the link to [all post-commit workflows](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
   selecting your branch, and pressing "Run workflow".
 
-  ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/_static/all-post-commit-workflows-button.png)
+  ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/common/_static/all-post-commit-workflows-button.png)
 
   You can see the status of your CI run by clicking on the specific run you
   dispatched.
@@ -519,24 +554,11 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 
 ### Git rules and guidelines
 
-- Any commit message must be accompanied with an appropriate GitHub issue
-  number with a colon and following message. The message must start with an
-  imperative verb and description of what was done. Preferably a reason is
-  included. Ex.
-  ```
-  #41: Fix data format error in Gelu op.
-  ```
+- Filing an issue is encouraged for any item that needs alignment or long term tracking.
 
-- The following is not allowed in commit messages:
-  - Commit messages which state that a code review or comments are being
-    addressed. You must explicitly state what you are doing in each commit even
-    if it's just cosmetic.
+- Link your issue under the `Ticket` headline in your PR description.
 
-- If you are working on a branch and would like to skip the Git commit hooks,
-  you may delete the `git_hooks` Makefile directive in `/module.mk` before your
-  first build. However, you are responsible for making sure your final
-  submission follows the contribution guidelines. Failure to do so constitutes
-  a violation of these contribution guidelines.
+- Use descriptive commit messages
 
 - Merge commits are not allowed in our main branch. We enforce a linear
   history.
@@ -546,30 +568,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   - Squash and merge
   - Rebase and merge
 
-  If you use squashing, when GitHub asks you to enter a new commit message,
-  ensure that your commit message follows our required format as outlined above
-  in this section. Failure to do so is a violation of our standards.
-
-### Git commit runbook
-
-The tt-metal repository has a single main branch, with pull requests being
-merged in via rebase or squash merge.
-
-For a pull request, you will need to deal with a local branch and an origin
-branch.
-
-The local branch should be on your machine, and you should interact with it
-through the command line or Visual Studio. The following uses the command line.
-
-The origin branch is on Github and you should use the Github UI to interact
-with the branch.
-
-#### Creating the initial Pull Request (PR)
-
-You need to have an issue. Either someone creates one and assigns it to you, or
-you need to create an issue. For example issue 123.
-
-#### Creating a branch on a machine
+#### Creating a branch
 
 Include the user, the issue number, and optionally a description of the change.
 / and - are used as separators between user and issue number. And - and _
@@ -602,14 +601,8 @@ git restore '*'
 git restore --staged abc.py # if the file was already added
 ```
 
-Once you are satisfied that everything works, create a commit. The message
-needs to specify the issue number, with a pound sign and a colon, and the
-description should describe the change itself, and cannot be generic and refer
-to something else, such as saying that you are addressing reviewer feedback.
-Please see [Git rules and guidelines](#git-rules-and-guidelines) for details.
-
 ```
-git commit -m"#123: rename method x"
+git commit -m "Rename method x"
 ```
 
 Note: each commit on the main branch and any feature branch where multiple
@@ -831,6 +824,12 @@ After that, the UI will usually delete your branch.
 
 - Use Loguru for Python logging.
 - Use Tenstorrent logger for C++ logging.
+
+### Further reading
+
+- [General best practices](contributing/BestPractices.md)
+- [Error message best practices](contributing/ErrorMessageBestPractices.md)
+- [Working with Clang Tidy](contributing/ClangTidy.md)
 
 ## Hardware troubleshooting
 

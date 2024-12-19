@@ -26,8 +26,7 @@ void MorehMeanOperation::validate_tensors(
     validate_input_with_dim(input, operation_attributes.dim);
 
     if (output.has_value()) {
-        validate_output_with_keepdim(
-            input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
+        validate_output_with_keepdim(input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
     }
 }
 MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory(
@@ -54,8 +53,12 @@ void MorehMeanOperation::validate_on_program_cache_hit(
     validate_tensors(operation_attributes, tensor_args);
 };
 
-MorehMeanOperation::shape_return_value_t MorehMeanOperation::compute_output_shapes(
+MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output.has_value()) {
+        return {tensor_args.output->get_tensor_spec()};
+    }
+
     auto input_shape = tensor_args.input.get_shape();
     auto output_shape = input_shape;
     auto input_rank = input_shape.rank();
@@ -74,7 +77,14 @@ MorehMeanOperation::shape_return_value_t MorehMeanOperation::compute_output_shap
             output_shape.value[dim] = 1;
         }
 
-        return Shape(tt::tt_metal::LegacyShape(output_shape.value, padding));
+        Shape result_shape(tt::tt_metal::LegacyShape(output_shape.value, padding));
+        return TensorSpec(
+            result_shape.logical_shape(),
+            TensorLayout::fromLegacyPaddedShape(
+                tensor_args.input.get_dtype(),
+                PageConfig(tensor_args.input.get_layout()),
+                operation_attributes.memory_config,
+                result_shape));
     }
 
     ttnn::SmallVector<uint32_t> shape;
@@ -87,15 +97,23 @@ MorehMeanOperation::shape_return_value_t MorehMeanOperation::compute_output_shap
     // e.g. (2, 64, 64) with dim 0 to be (64, 64)
     for (int i = 0; i < input_rank; ++i) {
         bool is_reduced_dim = (i == dim);
-        if (is_reduced_dim && !is_tile_dim)
+        if (is_reduced_dim && !is_tile_dim) {
             continue;
+        }
 
         shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input_shape.value[i]));
         pad_dimensions.push_back((is_reduced_dim && is_tile_dim) ? (Padding::PadDimension{0, 31}) : (input_padding[i]));
     }
 
     auto padding = Padding(pad_dimensions, input_padding.pad_value());
-    return Shape(tt::tt_metal::LegacyShape(shape, padding));
+    Shape result_shape(tt::tt_metal::LegacyShape(shape, padding));
+    return TensorSpec(
+        result_shape.logical_shape(),
+        TensorLayout::fromLegacyPaddedShape(
+            tensor_args.input.get_dtype(),
+            PageConfig(tensor_args.input.get_layout()),
+            operation_attributes.memory_config,
+            result_shape));
 }
 
 MorehMeanOperation::tensor_return_value_t MorehMeanOperation::create_output_tensors(
@@ -105,12 +123,7 @@ MorehMeanOperation::tensor_return_value_t MorehMeanOperation::create_output_tens
         return {output.value()};
     }
 
-    return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        tensor_args.input.get_dtype(),
-        tensor_args.input.get_layout(),
-        tensor_args.input.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
 std::tuple<MorehMeanOperation::operation_attributes_t, MorehMeanOperation::tensor_args_t> MorehMeanOperation::invoke(

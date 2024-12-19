@@ -9,14 +9,6 @@ repos:
     - id: check-yaml
       args: ["--unsafe"]
     - id: check-added-large-files
-- repo: local
-  hooks:
-    - id: verify-commit-message
-      name: Verify commit message format
-      entry: python -m infra.git_hooks.verify_commit_message
-      language: python
-      verbose: true
-      stages: [commit-msg]
 # Using this mirror lets us use mypyc-compiled black, which is about 2x faster
 - repo: https://github.com/psf/black-pre-commit-mirror
   rev: 23.10.1
@@ -31,8 +23,11 @@ repos:
   rev: v1.35.1
   hooks:
     - id: yamllint
-# - repo: https://github.com/pre-commit/mirrors-clang-format
-#   rev: v18.1.5
-#   hooks:
-#     - id: clang-format
-#       types_or: [c++, c]
+- repo: https://github.com/pre-commit/mirrors-clang-format
+  rev: v19.1.4
+  hooks:
+    - id: clang-format
+      entry: git-clang-format
+      require_serial: true
+      types_or: [c++, c]
+      args: ["--style=file"]

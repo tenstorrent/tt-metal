@@ -45,6 +45,7 @@ parameters = {
         ],
         "enable_async": [True],
         "num_iters": [1],
+        "tile": [(32, 32)],
     },
 }
 
@@ -58,6 +59,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["num_links"],
         test_vector["input_dtype"],
         test_vector["layout"],
+        test_vector["tile"],
     )
     if is_known_failure:
         return True, f"Skipping unsupported case {message}."
@@ -90,6 +92,7 @@ def run(
     mem_config,
     enable_async,
     num_iters,
+    tile,
     *,
     device,
 ) -> list:
@@ -108,7 +111,9 @@ def run(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(all_devices[i], mem_config))
+        tt_input_tensors.append(
+            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile)).to(layout).to(all_devices[i], mem_config)
+        )
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):

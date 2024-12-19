@@ -11,7 +11,6 @@ target_sources(
 target_link_libraries(
     tt_metal
     PUBLIC
-        metal_header_directories
         Metalium::Metal::Impl
         Metalium::Metal::STL
         umd::device
@@ -44,9 +43,9 @@ target_precompile_headers(
 target_include_directories(
     tt_metal
     PUBLIC
-        ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}
+        include
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 add_dependencies(tt_metal hw_toolchain)

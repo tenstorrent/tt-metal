@@ -96,6 +96,40 @@ run_t3000_llama3_70b_tests() {
   fi
 }
 
+run_t3000_llama3_accuracy_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_accuracy_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.2-1B
+  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  # Llama3.2-3B
+  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.1-8B
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  # Llama3.2-11B
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  # Llama3.1-70B
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+
+  # Run test accuracy llama3 - 1B, 3B, 8B, 11B and 70B weights
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py -k perf ; fail+=$?
+    echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_accuracy_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_llama3.2-11b-vision_freq_tests() {
   # Record the start time
   fail=0
@@ -276,6 +310,9 @@ run_t3000_tests() {
 
   # Run llama3-70b tests
   run_t3000_llama3_70b_tests
+
+  # Run llama3 accuracy tests
+  run_t3000_llama3_accuracy_tests
 
   # Run Llama3.2-11B Vision tests
   run_t3000_llama3.2-11b-vision_freq_tests

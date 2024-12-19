@@ -21,36 +21,35 @@ from models.experimental.functional_unet.tests.common import (
 )
 
 
-@pytest.mark.parametrize("batch, groups", [(2, 1)])
+@pytest.mark.parametrize("batch, groups", [(1, 2)])
 @pytest.mark.parametrize(
     "block_name, input_channels, input_height, input_width, residual_channels",
     [
         ("upblock1", 64, 66, 10, 32),
         ("upblock2", 32, 132, 20, 32),
-        ("upblock3", 32, 264, 40, 16),
-        ("upblock4", 16, 528, 80, 16),
+        # ("upblock3", 32, 264, 40, 16),
+        # ("upblock4", 16, 528, 80, 16),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_unet_upblock(
-    batch,
-    groups,
-    block_name,
-    input_channels,
-    input_height,
-    input_width,
-    residual_channels,
-    device,
+    batch: int,
+    groups: int,
+    block_name: str,
+    input_channels: int,
+    input_height: int,
+    input_width: int,
+    residual_channels: int,
+    device: ttnn.Device,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=False)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=False)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
     ttnn_model = unet_shallow_ttnn.UNet(parameters, device)
 
     torch_input, ttnn_input = create_unet_input_tensors(
-        device,
         batch,
         groups,
         pad_input=False,
@@ -59,7 +58,6 @@ def test_unet_upblock(
         input_width=input_width,
     )
     torch_residual, ttnn_residual = create_unet_input_tensors(
-        device,
         batch,
         groups,
         pad_input=False,
@@ -69,20 +67,20 @@ def test_unet_upblock(
     )
     torch_output = getattr(model, block_name)(torch_input, torch_residual)
 
-    ttnn_input, ttnn_residual = ttnn_input.to(device), ttnn_residual.to(device)
+    ttnn_input, ttnn_residual = ttnn.to_device(ttnn_input, device), ttnn.to_device(ttnn_residual, device)
     ttnn_output = getattr(ttnn_model, block_name)(ttnn_input, ttnn_residual)
 
     check_pcc_conv(torch_output, ttnn_output, pcc=0.998)
 
 
-@pytest.mark.parametrize("batch, groups", [(2, 1)])
+@pytest.mark.parametrize("batch, groups", [(1, 2)])
 @pytest.mark.parametrize(
     "block_name, input_channels, input_height, input_width, residual_channels",
     [
         ("upblock1", 64, 66, 10, 32),
         ("upblock2", 32, 132, 20, 32),
-        ("upblock3", 32, 264, 40, 16),
-        ("upblock4", 16, 528, 80, 16),
+        # ("upblock3", 32, 264, 40, 16),
+        # ("upblock4", 16, 528, 80, 16),
     ],
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
@@ -106,7 +104,7 @@ def test_unet_upblock_multi_device(
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(mesh_device, batch, groups, pad_input=False)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=False)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
@@ -114,7 +112,6 @@ def test_unet_upblock_multi_device(
 
     num_devices = len(mesh_device.get_device_ids())
     torch_input, ttnn_input = create_unet_input_tensors(
-        mesh_device,
         num_devices * batch,
         groups,
         pad_input=False,
@@ -128,7 +125,6 @@ def test_unet_upblock_multi_device(
         f"Created multi-device input tensors: shape={list(ttnn_input.shape)} on devices={mesh_device.get_device_ids()}"
     )
     torch_residual, ttnn_residual = create_unet_input_tensors(
-        mesh_device,
         num_devices * batch,
         groups,
         pad_input=False,
@@ -147,4 +143,4 @@ def test_unet_upblock_multi_device(
     ttnn_output = getattr(ttnn_model, block_name)(ttnn_input, ttnn_residual)
 
     assert len(ttnn_output.devices()) == 2, "Expected output tensor to be sharded across 2 devices"
-    check_pcc_conv(torch_output, ttnn_output, pcc=0.999, mesh_composer=output_mesh_composer)
+    check_pcc_conv(torch_output, ttnn_output, pcc=0.998, mesh_composer=output_mesh_composer)

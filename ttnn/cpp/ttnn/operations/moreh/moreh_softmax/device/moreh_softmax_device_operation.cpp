@@ -106,21 +106,28 @@ void MorehSoftmaxOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-MorehSoftmaxOperation::shape_return_value_t MorehSoftmaxOperation::compute_output_shapes(
+MorehSoftmaxOperation::spec_return_value_t MorehSoftmaxOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input.get_shape();
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output->get_tensor_spec();
+    }
+
+    return TensorSpec(
+        tensor_args.input.get_logical_shape(),
+        TensorLayout(
+            tensor_args.input.get_dtype(),
+            PageConfig(tensor_args.input.get_layout()),
+            operation_attributes.memory_config));
 }
 
 MorehSoftmaxOperation::tensor_return_value_t MorehSoftmaxOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output = tensor_args.output;
-    if (output.has_value())
+    if (output.has_value()) {
         return output.value();
+    }
 
-    const auto& input = tensor_args.input;
-    const auto& output_shape = input.get_shape();
-    return create_device_tensor(
-        output_shape, input.get_dtype(), input.get_layout(), input.device(), operation_attributes.memory_config);
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
 std::tuple<MorehSoftmaxOperation::operation_attributes_t, MorehSoftmaxOperation::tensor_args_t>

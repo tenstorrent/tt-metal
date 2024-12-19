@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::transformer {
 
-void py_bind_sdpa_decode(py::module &module) {
+void py_bind_sdpa_decode(py::module& module) {
     auto doc =
         R"doc(
         A version of scaled dot product attention specifically for decode.
@@ -54,16 +54,16 @@ void py_bind_sdpa_decode(py::module &module) {
         ttnn::transformer::scaled_dot_product_attention_decode,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor_q,
-               const ttnn::Tensor &input_tensor_k,
-               const ttnn::Tensor &input_tensor_v,
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const ttnn::Tensor& input_tensor_v,
                const bool is_causal,
-               const std::optional<const Tensor> attn_mask,
-               const std::vector<uint32_t> cur_pos,
-               const std::optional<const Tensor> cur_pos_tensor,
+               const std::optional<const Tensor>& attn_mask,
+               const std::vector<uint32_t>& cur_pos,
+               const std::optional<const Tensor>& cur_pos_tensor,
                std::optional<float> scale,
-               const std::optional<MemoryConfig> &memory_config,
+               const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                uint8_t queue_id) {
@@ -102,20 +102,19 @@ void py_bind_sdpa_decode(py::module &module) {
         ttnn::transformer::paged_scaled_dot_product_attention_decode,
         doc,
         ttnn::pybind_overload_t{
-            [](
-                const PagedOperationType &self,
-                const ttnn::Tensor &input_tensor_q,
-                const ttnn::Tensor &input_tensor_k,
-                const ttnn::Tensor &input_tensor_v,
-                const ttnn::Tensor &page_table_tensor,
-                const bool is_causal,
-                const std::optional<const Tensor> attn_mask,
-                const std::optional<const Tensor> &cur_pos_tensor,
-                std::optional<float> scale,
-                const std::optional<MemoryConfig> &memory_config,
-                std::optional<SDPAProgramConfig> program_config,
-                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-                uint8_t queue_id) {
+            [](const PagedOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const ttnn::Tensor& input_tensor_v,
+               const ttnn::Tensor& page_table_tensor,
+               const bool is_causal,
+               const std::optional<const Tensor>& attn_mask,
+               const std::optional<const Tensor>& cur_pos_tensor,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               uint8_t queue_id) {
                 return self(
                     queue_id,
                     input_tensor_q,

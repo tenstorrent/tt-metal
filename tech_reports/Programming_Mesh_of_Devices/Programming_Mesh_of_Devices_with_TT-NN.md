@@ -41,7 +41,7 @@ TT-NN library natively supports multi-device operations, enabling users to scale
 
 - **MeshDevice**: This "virtual device" abstraction defines a logical 2-D mesh of connected physical devices. Operations that "run on device" are distributed through SPMD across all devices captured in the mesh.
 
-- **Input Data Distribution**: Defines how input data resident in host-memory is distributed to DeviceMesh on-device memory. When operations are distributed to MeshDevice, the operation within a single-device scope works on its local input data.
+- **Input Data Distribution**: Defines how input data resident in host-memory is distributed to MeshDevice on-device memory. When operations are distributed to MeshDevice, the operation within a single-device scope works on its local input data.
 
 - **Tensor**: Defines a N-dimensional matrix containing elements of a single data type. In a MeshDevice context, a Tensor, or colloquially referred to as MeshTensor, represents a collection of tensor shards distributed across devices in a 2D Mesh.
 
@@ -138,7 +138,7 @@ torch_tensor[..., 0:32] = 1.0
 torch_tensor[..., 32:64] = 2.0
 
 # Convert to ttnn.Tensor; MeshTensor holds buffers to two shards in host-memory
-mesh_tensor: ttnn.Tensor = ttnn.from_torch(
+mesh_tensor = ttnn.from_torch(
     torch_tensor,
     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
     layout=ttnn.TILE_LAYOUT,
@@ -165,7 +165,7 @@ ttnn.Tensor([[[[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
 Let's now transfer to device:
 
 ```py
-> mesh_tensor = ttnn.to_device(mesh_tensor, device_mesh)
+> mesh_tensor = ttnn.to_device(mesh_tensor, mesh_device)
 > mesh_tensor
 
 device_id:0
@@ -185,8 +185,8 @@ ttnn.Tensor([[[[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
 
 We now see that the following:
 
-- 32x32 chunk with elements of 1.0 is residing in Device 11 DRAM
-- 32x32 chunk with elements of 2.0 is residing in Device 10 DRAM
+- 32x32 chunk with elements of 1.0 is residing in Device 0 DRAM
+- 32x32 chunk with elements of 2.0 is residing in Device 1 DRAM
 
 We can also visualize this tensor distributed across our MeshDevice. The visualization will color devices that have shards resident to the device.
 
@@ -194,9 +194,9 @@ We can also visualize this tensor distributed across our MeshDevice. The visuali
 ttnn.visualize_mesh_device(mesh_device, tensor=mesh_tensor)
 
 >
-                  DeviceMesh(rows=1, cols=2):
+                  MeshDevice(rows=1, cols=2):
 ┌──────────────────────────────┬──────────────────────────────┐
-│         Dev. ID: 11          │         Dev. ID: 10          │
+│         Dev. ID: 0           │         Dev. ID: 1           │
 │            (0, 0)            │            (0, 1)            │
 │  ttnn.Shape([1, 1, 32, 32])  │  ttnn.Shape([1, 1, 32, 32])  │
 └──────────────────────────────┴──────────────────────────────┘
@@ -299,11 +299,11 @@ import ttnn
 mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), mesh_type=ttnn.MeshType.Ring)
 
 # Construct test tensor of data; 8 chunks of 32x32
-torch_tensor = torch.rand((1,1,32,128), dtype=torch.bfloat16)
+torch_tensor = torch.rand((1,1,32,256), dtype=torch.bfloat16)
 
 # Convert to ttnn.Tensor, tilize and move onto devices across mesh DRAM
 mesh_tensor = ttnn.from_torch(
-    torch_input_tensor,
+    torch_tensor,
     layout=ttnn.TILE_LAYOUT,
     device=mesh_device,
     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
@@ -316,11 +316,14 @@ output_tensor = ttnn.all_gather(mesh_tensor, dim=3, num_links=1)
 
 #### 5.2.2 Programming Example: All-Gather (Line)
 
-This time, we'll issue the CCL Line All-Gather operation along the cluster y-axis:
+Here we issue a Line All-Gather operation along the cluster-axis 0 (y-dimension), where the y-dimension is the height of the cluster.
+This kicks off four parallel CCL Line All-Gather operations, one for each column in the cluster. Each "line" is a list of two devices.
 
 <img src="images/image5_line_all_gather.png" style="width:500px;"/>
 
-*Figure 6: Line All-Gather execution on 2x4 MeshDevice *
+*Figure 6: Line All-Gather execution on 2x4 MeshDevice*
+
+The result tensor for each device in the column is the concatenation in `dim=3` for each device in the column. The per-device tensor shape is `[1, 1, 32, 32]` before the operation and `[1, 1, 32, 64]` after the operation.
 
 ```py
 import ttnn
@@ -328,7 +331,7 @@ import ttnn
 mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), mesh_type=ttnn.MeshType.Ring)
 
 # Construct test tensor of data; 8 chunks of 32x32
-torch_tensor = torch.rand((1,1,32,128), dtype=torch.bfloat16)
+torch_tensor = torch.rand((1,1,32,256), dtype=torch.bfloat16)
 
 # Convert to ttnn.Tensor, tilize and move onto devices across mesh DRAM
 mesh_tensor = ttnn.from_torch(
@@ -339,7 +342,15 @@ mesh_tensor = ttnn.from_torch(
 )
 
 # Execute Line All-Gather on the tensor
-output_tensor = ttnn.all_gather(mesh_tensor, dim=3, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+output_tensor = ttnn.all_gather(
+    mesh_tensor,
+    dim=3,
+    cluster_axis=0,
+    mesh_device=mesh_device,
+    topology=ttnn.Topology.Linear,
+)
+
+ttnn.close_mesh_device(mesh_device)
 ```
 
 

@@ -20,7 +20,7 @@ struct EriscDatamoverConfig {
     static constexpr std::size_t usable_l1_base_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     static constexpr std::size_t semaphore_size = 32;
-    static constexpr std::size_t handshake_location_size = 16;  // ethernet word size
+    static constexpr std::size_t handshake_location_size = 16;    // ethernet word size
     static constexpr std::size_t handshake_padding_multiple = 3;  // ethernet word size
     // The EDM uses this fixed address as a source for a first level ack sent from receiver -> sender
     // side. We have this dedicated source address to avoid a race between first and second level ack
@@ -39,16 +39,18 @@ struct EriscDatamoverConfig {
     static uint32_t get_buffers_region_start_offset(std::size_t num_edm_channels);
     static std::size_t get_eth_word_size();
     static uint32_t get_buffers_base_address(std::size_t num_edm_channels);
-    static uint32_t compute_buffer_size(std::size_t num_edm_channels, std::size_t num_buffers_per_channel = 1, uint32_t page_size = eth_word_size_bytes);
-
+    static uint32_t compute_buffer_size(
+        std::size_t num_edm_channels,
+        std::size_t num_buffers_per_channel = 1,
+        uint32_t page_size = eth_word_size_bytes);
 };
 
 struct CCLOpConfig {
-   public:
-    CCLOpConfig(
-        std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology);
+public:
+    CCLOpConfig(std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology);
 
     uint32_t get_page_size() const;
+    Tile get_tile() const;
     Topology get_topology() const;
     bool is_input_sharded() const;
     bool is_output_sharded() const;
@@ -57,20 +59,22 @@ struct CCLOpConfig {
     Tensor const& get_output_tensor(std::size_t i) const;
     std::map<string, string> emit_worker_defines() const;
 
-   private:
+private:
     uint32_t page_size;
     uint32_t shard_grid_size;
     Topology topology;
     bool input_sharded;
     bool output_sharded;
     bool is_row_major;
+    tt::DataFormat df;
+    Tile tile;
 
     std::vector<Tensor> const* input_tensors;
     std::vector<Tensor> const* output_tensors;
 };
 
 class EriscDatamoverBuilder {
-   private:
+private:
     struct ChannelBufferSpec {
         ChannelBufferSpec(
             bool is_sender,
@@ -131,7 +135,7 @@ class EriscDatamoverBuilder {
     bool enable_sender;
     bool enable_receiver;
 
-   public:
+public:
     struct ChannelBufferInterface {
         std::size_t channel;
         uint32_t eth_buffer_l1_address;
@@ -160,7 +164,6 @@ class EriscDatamoverBuilder {
         num_senders(0),
         num_receivers(0),
         chip_id(chip_id) {
-
         TT_ASSERT(num_buffers_per_channel > 0);
         TT_ASSERT(local_buffer_addresses.size() == local_semaphore_addresses.size());
         active_channels.reserve(num_channel_buffers);
@@ -188,7 +191,13 @@ class EriscDatamoverBuilder {
         this->num_senders++;
         auto channel = active_channels.size();
         active_channels.emplace_back(
-            true, worker_semaphore_id, num_eth_messages_to_forward, channel, this->num_buffers_per_channel, worker_coords, expected_message_size_bytes);
+            true,
+            worker_semaphore_id,
+            num_eth_messages_to_forward,
+            channel,
+            this->num_buffers_per_channel,
+            worker_coords,
+            expected_message_size_bytes);
         log_trace(tt::LogOp, "Adding sender channel:");
         log_trace(tt::LogOp, "\tworker_semaphore_id: {}", active_channels.back().worker_semaphore_id);
         log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
@@ -200,14 +209,16 @@ class EriscDatamoverBuilder {
         TT_ASSERT(local_buffer_addresses.size() > channel);
         TT_ASSERT(local_semaphore_addresses.size() > channel);
 
-        return ChannelBufferInterface{channel, local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
+        return ChannelBufferInterface{
+            channel, local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
     }
 
     // This function is used to set the maximum message size for a given channel. If the maximum
     // message size is < EDM channel buffer size, then the buffer size passed to the EDM for this channel
     // will be trimmed be no larger than the largest message to save on unnecessary eth bandwidth.
     void set_max_message_size_bytes(std::size_t channel, std::size_t max_message_size_bytes) {
-        active_channels.at(channel).largest_message_size_bytes = std::max<uint32_t>(active_channels.at(channel).largest_message_size_bytes, max_message_size_bytes);
+        active_channels.at(channel).largest_message_size_bytes =
+            std::max<uint32_t>(active_channels.at(channel).largest_message_size_bytes, max_message_size_bytes);
     }
 
     [[nodiscard]]
@@ -220,7 +231,13 @@ class EriscDatamoverBuilder {
         this->num_receivers++;
         auto channel = active_channels.size();
         active_channels.emplace_back(
-            false, worker_semaphore_id, num_eth_messages_to_forward, channel, this->num_buffers_per_channel, worker_coords, expected_message_size_bytes);
+            false,
+            worker_semaphore_id,
+            num_eth_messages_to_forward,
+            channel,
+            this->num_buffers_per_channel,
+            worker_coords,
+            expected_message_size_bytes);
         log_trace(tt::LogOp, "Adding receiver channel:");
         log_trace(tt::LogOp, "\tworker_semaphore_id: {}", active_channels.back().worker_semaphore_id);
         log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
@@ -229,11 +246,12 @@ class EriscDatamoverBuilder {
         log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
         TT_ASSERT(local_buffer_addresses.size() > channel);
         TT_ASSERT(local_semaphore_addresses.size() > channel);
-        return ChannelBufferInterface{channel, local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
+        return ChannelBufferInterface{
+            channel, local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
     }
 
     [[nodiscard]]
-    std::vector<uint32_t> emit_compile_time_args() const {
+    std::vector<uint32_t> get_compile_time_args() const {
         return std::vector<uint32_t>{
             static_cast<uint32_t>(this->enable_sender ? 1 : 0),
             static_cast<uint32_t>(this->enable_receiver ? 1 : 0),
@@ -244,12 +262,11 @@ class EriscDatamoverBuilder {
             1,
             static_cast<uint32_t>(this->num_senders > 0 && active_channels.at(0).is_sender),
             this->num_buffers_per_channel,
-            chip_id
-            };
+            chip_id};
     }
 
     [[nodiscard]]
-    std::vector<uint32_t> emit_runtime_args() const {
+    std::vector<uint32_t> get_runtime_args() const {
         std::vector<uint32_t> args;
         uint32_t size = 3 + active_channels.size() * 6;
         for (auto const& channel : active_channels) {
@@ -286,7 +303,7 @@ class EriscDatamoverBuilder {
     }
 
     void dump_to_log() const {
-        auto const& rt_args = this->emit_runtime_args();
+        auto const rt_args = this->get_runtime_args();
         log_trace(tt::LogOp, "EDM RT Args:");
         for (auto const& arg : rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);

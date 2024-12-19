@@ -124,7 +124,7 @@ class TtFalconMLP:
         hidden_states = ttnn.get_device_tensors(
             ttnn.reduce_scatter(
                 ttnn.aggregate_as_tensor(hidden_states),
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,  # only unidirectional supported for now
                 memory_config=self.model_config["DEFAULT_MEMCFG"],
@@ -200,7 +200,7 @@ class TtFalconMLP:
         hidden_states = ttnn.get_device_tensors(
             ttnn.reduce_scatter(
                 ttnn.aggregate_as_tensor(hidden_states),
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,  # only one link supported for now
                 memory_config=self.model_config["DEFAULT_MEMCFG"],

@@ -39,8 +39,8 @@ void kernel_main() {
         noc_async_read(noc_addr, tmp_buf, dram_page_size);
         noc_async_read_barrier();
 
-        auto l1_ptr = reinterpret_cast<char *>(l1_addr);
-        auto tmp_buf_ptr = reinterpret_cast<char *>(tmp_buf);
+        auto l1_ptr = reinterpret_cast<char*>(l1_addr);
+        auto tmp_buf_ptr = reinterpret_cast<char*>(tmp_buf);
 
         for (uint32_t k = 0; k < horz_expand_count; k++) {
             memcpy(l1_ptr, tmp_buf_ptr, element_per_row * datasize_bytes);

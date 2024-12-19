@@ -18,14 +18,10 @@ MorehAdamWDeviceOperation::program_factory_t MorehAdamWDeviceOperation::select_p
 
 void MorehAdamWDeviceOperation::validate_inputs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    check_tensor(
-        tensor_args.param_in, "moreh_adamw", "param_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
-    check_tensor(
-        tensor_args.grad, "moreh_adamw", "grad", {DataType::BFLOAT16, DataType::BFLOAT8_B});
-    check_tensor(
-        tensor_args.exp_avg_in, "moreh_adamw", "exp_avg_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
-    check_tensor(
-        tensor_args.exp_avg_sq_in, "moreh_adamw", "exp_avg_sq_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    check_tensor(tensor_args.param_in, "moreh_adamw", "param_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    check_tensor(tensor_args.grad, "moreh_adamw", "grad", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    check_tensor(tensor_args.exp_avg_in, "moreh_adamw", "exp_avg_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    check_tensor(tensor_args.exp_avg_sq_in, "moreh_adamw", "exp_avg_sq_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
 
     if (tensor_args.max_exp_avg_sq_in.has_value()) {
         check_tensor(
@@ -69,51 +65,73 @@ void MorehAdamWDeviceOperation::validate_on_program_cache_hit(
     validate_inputs(attributes, tensor_args);
 }
 
-MorehAdamWDeviceOperation::shape_return_value_t MorehAdamWDeviceOperation::compute_output_shapes(
+MorehAdamWDeviceOperation::spec_return_value_t MorehAdamWDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input_tensor_shape = tensor_args.param_in.get_shape();
+    auto output_shape = tensor_args.param_in.get_logical_shape();
+    auto dtype = tensor_args.param_in.get_dtype();
+    auto memory_config = operation_attributes.memory_config;
 
-    return {
-        input_tensor_shape,
-        input_tensor_shape,
-        input_tensor_shape,
-        input_tensor_shape,
-    };
+    std::vector<std::optional<TensorSpec>> result;
+    TensorSpec outSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
+
+    if (tensor_args.param_out.has_value()) {
+        result.push_back(tensor_args.param_out->get_tensor_spec());
+    } else {
+        result.push_back(outSpec);
+    }
+
+    if (tensor_args.exp_avg_out.has_value()) {
+        result.push_back(tensor_args.exp_avg_out->get_tensor_spec());
+    } else {
+        result.push_back(outSpec);
+    }
+
+    if (tensor_args.exp_avg_sq_out.has_value()) {
+        result.push_back(tensor_args.exp_avg_sq_out->get_tensor_spec());
+    } else {
+        result.push_back(outSpec);
+    }
+
+    if (tensor_args.max_exp_avg_sq_out.has_value()) {
+        result.push_back(tensor_args.max_exp_avg_sq_out->get_tensor_spec());
+    } else if (operation_attributes.amsgrad) {
+        result.push_back(outSpec);
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    return result;
 }
 
 MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
-    auto dtype = tensor_args.param_in.get_dtype();
-    Layout layout{Layout::TILE};
+    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
     auto device = tensor_args.param_in.device();
 
     tensor_return_value_t result;
 
-    auto memory_config = operation_attributes.memory_config;
-
     if (tensor_args.param_out.has_value()) {
         result.push_back(tensor_args.param_out.value());
     } else {
-        result.push_back(create_device_tensor(output_shapes.at(0), dtype, layout, device, memory_config));
+        result.push_back(create_device_tensor(*output_specs[0], device));
     }
 
     if (tensor_args.exp_avg_out.has_value()) {
         result.push_back(tensor_args.exp_avg_out.value());
     } else {
-        result.push_back(create_device_tensor(output_shapes.at(1), dtype, layout, device, memory_config));
+        result.push_back(create_device_tensor(*output_specs[1], device));
     }
 
     if (tensor_args.exp_avg_sq_out.has_value()) {
         result.push_back(tensor_args.exp_avg_sq_out.value());
     } else {
-        result.push_back(create_device_tensor(output_shapes.at(2), dtype, layout, device, memory_config));
+        result.push_back(create_device_tensor(*output_specs[2], device));
     }
 
     if (tensor_args.max_exp_avg_sq_out.has_value()) {
         result.push_back(tensor_args.max_exp_avg_sq_out.value());
-    } else if (operation_attributes.amsgrad) {
-        result.push_back(create_device_tensor(output_shapes.at(3), dtype, layout, device, memory_config));
+    } else if (output_specs[3].has_value()) {
+        result.push_back(create_device_tensor(*output_specs[3], device));
     } else {
         result.push_back(std::nullopt);
     }

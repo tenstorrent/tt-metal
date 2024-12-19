@@ -16,13 +16,12 @@
 inline constexpr uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
 namespace tt {
-  /**
-   * @brief Specifies the target devices on which the graph can be run.
-  */
-  enum class TargetDevice : std::uint8_t
-  {
-      Silicon = 0,
-      Simulator = 1,
-      Invalid = 0xFF,
-  };
-}
+/**
+ * @brief Specifies the target devices on which the graph can be run.
+ */
+enum class TargetDevice : std::uint8_t {
+    Silicon = 0,
+    Simulator = 1,
+    Invalid = 0xFF,
+};
+}  // namespace tt

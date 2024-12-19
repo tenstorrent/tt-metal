@@ -6,9 +6,9 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
+#include "utils.hpp"
 
 using std::vector;
 using namespace tt;
@@ -39,6 +39,13 @@ int main(int argc, char **argv) {
 
         constexpr uint32_t default_timeout_mcycles = 1000;
         constexpr uint32_t default_rx_disable_data_check = 0;
+        constexpr uint32_t default_rx_disable_header_check = 0;
+
+        constexpr uint32_t default_tx_skip_pkt_content_gen = 0;
+        constexpr uint8_t default_tx_pkt_dest_size_choice = 0; // pkt_dest_size_choices_t
+
+        constexpr uint32_t default_tx_data_sent_per_iter_low = 20;
+        constexpr uint32_t default_tx_data_sent_per_iter_high = 240;
 
         std::vector<std::string> input_args(argv, argv + argc);
         if (test_args::has_command_option(input_args, "-h") ||
@@ -59,6 +66,11 @@ int main(int argc, char **argv) {
             log_info(LogTest, "  --test_result_buf_size: Test results buffer size, default = {} bytes", default_test_result_buf_size);
             log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
             log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
+            log_info(LogTest, "  --rx_disable_header_check: Disable header check on RX, default = {}", default_rx_disable_header_check);
+            log_info(LogTest, "  --tx_skip_pkt_content_gen: Skip packet content generation during tx, default = {}", default_tx_skip_pkt_content_gen);
+            log_info(LogTest, "  --tx_pkt_dest_size_choice: choice for how packet destination and packet size are generated, default = {}", default_tx_pkt_dest_size_choice); // pkt_dest_size_choices_t
+            log_info(LogTest, "  --tx_data_sent_per_iter_low: the criteria to determine the amount of tx data sent per iter is low (unit: words); if both 0, then disable counting it in tx kernel, default = {}", default_tx_data_sent_per_iter_low);
+            log_info(LogTest, "  --tx_data_sent_per_iter_high: the criteria to determine the amount of tx data sent per iter is high (unit: words); if both 0, then disable counting it in tx kernel, default = {}", default_tx_data_sent_per_iter_high);
             tt_metal::CloseDevice(device);
             return 0;
         }
@@ -78,6 +90,11 @@ int main(int argc, char **argv) {
         uint32_t test_result_buf_size = test_args::get_command_option_uint32(input_args, "--test_result_buf_size", default_test_result_buf_size);
         uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
         uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
+        uint32_t rx_disable_header_check = test_args::get_command_option_uint32(input_args, "--rx_disable_header_check", default_rx_disable_header_check);
+        uint32_t tx_skip_pkt_content_gen = test_args::get_command_option_uint32(input_args, "--tx_skip_pkt_content_gen", default_tx_skip_pkt_content_gen);
+        uint8_t  tx_pkt_dest_size_choice = (uint8_t) test_args::get_command_option_uint32(input_args, "--tx_pkt_dest_size_choice", default_tx_pkt_dest_size_choice);
+        uint32_t tx_data_sent_per_iter_low = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_low", default_tx_data_sent_per_iter_low);
+        uint32_t tx_data_sent_per_iter_high = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_high", default_tx_data_sent_per_iter_high);
 
         assert(is_power_of_2(tx_queue_size_bytes) && (tx_queue_size_bytes >= 1024));
         assert(is_power_of_2(rx_queue_size_bytes) && (rx_queue_size_bytes >= 1024));
@@ -110,6 +127,10 @@ int main(int argc, char **argv) {
                 0xaa, // 15: src_endpoint_start_id
                 0xbb, // 16: dest_endpoint_start_id
                 timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
+                tx_skip_pkt_content_gen, // 18: skip_pkt_content_gen
+                tx_pkt_dest_size_choice, // 19: pkt_dest_size_choice
+                tx_data_sent_per_iter_low, // 20: data_sent_per_iter_low
+                tx_data_sent_per_iter_high, // 21: data_sent_per_iter_high
             };
 
         std::vector<uint32_t> traffic_gen_rx_compile_args =
@@ -132,7 +153,12 @@ int main(int argc, char **argv) {
                 0xaa, // 15: src_endpoint_start_id
                 0xbb, // 16: dest_endpoint_start_id
                 timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
+                rx_disable_header_check, // 18: disable_header_check
             };
+
+        std::map<string, string> common_defines = {
+            {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
+        };
 
         auto tg_tx = tt_metal::CreateKernel(
             program,
@@ -142,7 +168,7 @@ int main(int argc, char **argv) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = traffic_gen_tx_compile_args,
-                .defines = {}
+                .defines = common_defines,
             }
         );
 
@@ -154,7 +180,7 @@ int main(int argc, char **argv) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = traffic_gen_rx_compile_args,
-                .defines = {}
+                .defines = common_defines,
             }
         );
 
@@ -218,7 +244,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

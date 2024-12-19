@@ -71,8 +71,8 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_hit
     validate_tensors(operation_attributes, tensor_args);
 }
 
-MorehGroupNormBackwardGammaBetaGradOperation::shape_return_value_t
-MorehGroupNormBackwardGammaBetaGradOperation::compute_output_shapes(
+MorehGroupNormBackwardGammaBetaGradOperation::spec_return_value_t
+MorehGroupNormBackwardGammaBetaGradOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& output_grad = tensor_args.output_grad;
@@ -91,38 +91,62 @@ MorehGroupNormBackwardGammaBetaGradOperation::compute_output_shapes(
     dgamma_dbeta_padding[2] = Padding::PadDimension{0, TILE_HEIGHT - 1};
     dgamma_dbeta_padding[3] = Padding::PadDimension{0, TILE_WIDTH - (c % TILE_WIDTH)};
     Shape dgamma_dbeta_shape(tt::tt_metal::LegacyShape(dgamma_dbeta_origin_shape, dgamma_dbeta_padding));
-    return {dgamma_dbeta_shape, dgamma_dbeta_shape};
+
+    auto dtype = tensor_args.output_grad.get_dtype();
+    Layout layout{Layout::TILE};
+
+    std::vector<std::optional<TensorSpec>> result(2);
+    const auto gamma_requires_grad = operation_attributes.are_required_outputs[0];
+    const auto beta_requires_grad = operation_attributes.are_required_outputs[1];
+
+    if (gamma_requires_grad) {
+        if (tensor_args.gamma_grad.has_value()) {
+            result[0] = tensor_args.gamma_grad->get_tensor_spec();
+        } else {
+            result[0] = TensorSpec(
+                dgamma_dbeta_shape.logical_shape(),
+                TensorLayout::fromLegacyPaddedShape(
+                    dtype, PageConfig(layout), operation_attributes.gamma_grad_memory_config, dgamma_dbeta_shape));
+        }
+    }
+
+    if (beta_requires_grad) {
+        if (tensor_args.beta_grad.has_value()) {
+            result[1] = tensor_args.beta_grad->get_tensor_spec();
+        } else {
+            result[1] = TensorSpec(
+                dgamma_dbeta_shape.logical_shape(),
+                TensorLayout::fromLegacyPaddedShape(
+                    dtype, PageConfig(layout), operation_attributes.beta_grad_memory_config, dgamma_dbeta_shape));
+        }
+    }
+
+    return result;
 }
 
 MorehGroupNormBackwardGammaBetaGradOperation::tensor_return_value_t
 MorehGroupNormBackwardGammaBetaGradOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& output_shapes = compute_output_shapes(operation_attributes, tensor_args);
-    auto dtype = tensor_args.output_grad.get_dtype();
-    Layout layout{Layout::TILE};
+    const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
     auto device = tensor_args.output_grad.device();
 
     std::vector<std::optional<Tensor>> result(2);
-    const auto gamma_requires_grad = operation_attributes.are_required_outputs[0];
-    const auto beta_requires_grad = operation_attributes.are_required_outputs[1];
 
     // gamma_grad
-    if (gamma_requires_grad) {
+    if (output_specs[0].has_value()) {
         if (tensor_args.gamma_grad.has_value()) {
             result[0] = tensor_args.gamma_grad.value();
         } else {
-            result[0] = create_device_tensor(
-                output_shapes[0].value(), dtype, layout, device, operation_attributes.gamma_grad_memory_config);
+            result[0] = create_device_tensor(*output_specs[0], device);
         }
     }
 
     // beta_grad
-    if (beta_requires_grad) {
+    if (output_specs[1].has_value()) {
         if (tensor_args.beta_grad.has_value()) {
             result[1] = tensor_args.beta_grad.value();
         } else {
-            result[1] = create_device_tensor(
-                output_shapes[1].value(), dtype, layout, device, operation_attributes.beta_grad_memory_config);
+            result[1] = create_device_tensor(*output_specs[1], device);
         }
     }
 
@@ -139,8 +163,8 @@ MorehGroupNormBackwardGammaBetaGradOperation::invoke(
     const Tensor& rstd,
     const uint32_t num_groups,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor> gamma_grad,
-    const std::optional<const Tensor> beta_grad,
+    const std::optional<const Tensor>& gamma_grad,
+    const std::optional<const Tensor>& beta_grad,
     const std::optional<MemoryConfig>& gamma_grad_memory_config,
     const std::optional<MemoryConfig>& beta_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {

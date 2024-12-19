@@ -15,9 +15,8 @@
 // Writes to Specified Circular Buffers in L1
 // Expects n provided src_addr, src_noc_x, src_noc_y, and cb_id_in
 void kernel_main() {
-
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles  = get_arg_val<uint32_t>(1);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
     const uint32_t num_tiles_per_block = get_arg_val<uint32_t>(2);
     uint32_t curr_repeat_idx = get_arg_val<uint32_t>(3);
     uint32_t curr_idx_in_block = get_arg_val<uint32_t>(4);
@@ -34,10 +33,7 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id_in);
 
     InterleavedAddrGenFast<src_is_dram> src_addr_gen = {
-        .bank_base_address = src_addr,
-        .page_size = tile_size_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = src_addr, .page_size = tile_size_bytes, .data_format = data_format};
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         cb_reserve_back(cb_id_in, ublock_size_tiles);

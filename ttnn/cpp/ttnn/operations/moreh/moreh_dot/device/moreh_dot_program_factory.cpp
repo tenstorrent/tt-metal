@@ -5,7 +5,6 @@
 #include "moreh_dot_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_metal/tt_metal.cpp"
 
 namespace ttnn::operations::moreh::moreh_dot {
 MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::create(
@@ -58,12 +57,12 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
         std::set<CoreRange>{CoreRange(core, core)},
         cb_data_format,
         {
-            {CB::c_in0, in0_t},
-            {CB::c_in1, in1_t},
-            {CB::c_in2, in2_t},
-            {CB::c_out0, out0_t},
-            {CB::c_intermed0, im0_t},
-            {CB::c_intermed1, im1_t},
+            {CBIndex::c_0, in0_t},
+            {CBIndex::c_1, in1_t},
+            {CBIndex::c_2, in2_t},
+            {CBIndex::c_16, out0_t},
+            {CBIndex::c_24, im0_t},
+            {CBIndex::c_25, im1_t},
         });
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -71,15 +70,12 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
         (std::uint32_t)is_dram(src1_buffer),
         *reinterpret_cast<uint32_t*>(&scaler)};
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)CB::c_out0, (std::uint32_t)is_dram(dst_buffer)};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CBIndex::c_16, (std::uint32_t)is_dram(dst_buffer)};
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
 
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
     std::map<string, string> compute_defines;

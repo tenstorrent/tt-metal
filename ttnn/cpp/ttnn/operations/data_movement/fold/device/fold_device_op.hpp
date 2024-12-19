@@ -29,24 +29,26 @@ struct Fold {
 
     struct SingleCore {
         struct shared_variables_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(const operation_attributes_t& operation_attributes,
-                                       const tensor_args_t& tensor_args,
-                                       tensor_return_value_t& output_tensor);
-        static void override_runtime_arguments(cached_program_t& cached_program,
-                                               const operation_attributes_t& operation_attributes,
-                                               const tensor_args_t& tensor_args,
-                                               tensor_return_value_t& output_tensor);
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output_tensor);
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output_tensor);
     };
 
     struct MultiCore {
         struct shared_variables_t {
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             uint32_t stride_h;
             uint32_t stride_w;
             uint32_t cb_src0;
@@ -55,13 +57,15 @@ struct Fold {
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(const operation_attributes_t& operation_attributes,
-                                       const tensor_args_t& tensor_args,
-                                       tensor_return_value_t& output_tensor);
-        static void override_runtime_arguments(cached_program_t& cached_program,
-                                               const operation_attributes_t& operation_attributes,
-                                               const tensor_args_t& tensor_args,
-                                               tensor_return_value_t& output_tensor);
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output_tensor);
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output_tensor);
     };
 
     using program_factory_t = std::variant<SingleCore, MultiCore>;
@@ -82,8 +86,8 @@ struct Fold {
         uint32_t pad_w);
 };
 
-} // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
 constexpr auto fold = ttnn::register_operation<"ttnn::prim::fold", ttnn::operations::data_movement::Fold>();
-} // namespace ttnn::prim
+}  // namespace ttnn::prim

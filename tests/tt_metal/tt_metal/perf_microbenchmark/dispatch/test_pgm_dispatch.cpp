@@ -2,10 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -42,37 +39,47 @@ uint32_t n_kgs_g;
 bool brisc_enabled_g;
 bool ncrisc_enabled_g;
 bool trisc_enabled_g;
+bool erisc_enabled_g;
+uint32_t erisc_count_g;
 bool lazy_g;
 bool time_just_finish_g;
 bool use_global_g;
 bool use_trace_g;
+bool dispatch_from_eth_g;
 
-void init(int argc, char **argv) {
+void init(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
-    if (test_args::has_command_option(input_args, "-h") ||
-        test_args::has_command_option(input_args, "--help")) {
+    if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
         log_info(LogTest, "Usage:");
         log_info(LogTest, "  -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
         log_info(LogTest, "  -i: iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, "  -s: size of kernels in powers of 2 bytes (default {}, min {})", DEFAULT_KERNEL_SIZE_K * 1024, MIN_KERNEL_SIZE_BYTES);
+        log_info(
+            LogTest,
+            "  -s: size of kernels in powers of 2 bytes (default {}, min {})",
+            DEFAULT_KERNEL_SIZE_K * 1024,
+            MIN_KERNEL_SIZE_BYTES);
         log_info(LogTest, "  -x: X end of inclusive core range (default {})", 0);
         log_info(LogTest, "  -y: Y end of inclusive core range (default {})", 0);
         log_info(LogTest, "  -c: number of CBs (default {}, max {})", 0, MAX_CBS);
         log_info(LogTest, "  -a: number of runtime args (default {}, max {})", 0, MAX_ARGS);
-        log_info(LogTest, "  -ca: number of common runtime args multicast to all cores (default {}, max {})", 0, MAX_ARGS);
+        log_info(
+            LogTest, " -ca: number of common runtime args multicast to all cores (default {}, max {})", 0, MAX_ARGS);
         log_info(LogTest, "  -S: number of semaphores (default {}, max {})", 0, NUM_SEMAPHORES);
         log_info(LogTest, " -kg: number of kernel groups (default 1)");
         log_info(LogTest, "  -g: use a 4 byte global variable (additional spans");
-        log_info(LogTest, "  -rs:run \"slow\" kernels for exactly <n> cycles (default 0)");
-        log_info(LogTest, "  -rf:run \"fast\" kernels for exactly <n> cycles (default 0)");
-        log_info(LogTest, "  -nf:run <n> fast kernels between slow kernels (default 0)");
+        log_info(LogTest, " -rs: run \"slow\" kernels for exactly <n> cycles (default 0)");
+        log_info(LogTest, " -rf: run \"fast\" kernels for exactly <n> cycles (default 0)");
+        log_info(LogTest, " -nf: run <n> fast kernels between slow kernels (default 0)");
         log_info(LogTest, "  -b: disable brisc kernel (default enabled)");
         log_info(LogTest, "  -n: disable ncrisc kernel (default enabled)");
         log_info(LogTest, "  -t: disable trisc kernels (default enabled)");
+        log_info(LogTest, "  +e: enable erisc kernels (default disabled)");
+        log_info(LogTest, " -ec: erisc count (default 1 if enabled)");
         log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
-        log_info(LogTest, "  -tr: enable trace (default disabled)");
+        log_info(LogTest, " -tr: enable trace (default disabled)");
+        log_info(LogTest, " -de: dispatch from eth cores (default tensix)");
         exit(0);
     }
 
@@ -93,6 +100,7 @@ void init(int argc, char **argv) {
     slow_kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-rs", 0);
     nfast_kernels_g = test_args::get_command_option_uint32(input_args, "-nf", 0);
     use_trace_g = test_args::has_command_option(input_args, "-tr");
+    dispatch_from_eth_g = test_args::has_command_option(input_args, "-de");
     if (kernel_size_g < MIN_KERNEL_SIZE_BYTES) {
         log_fatal("Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
@@ -120,18 +128,23 @@ void init(int argc, char **argv) {
     brisc_enabled_g = !test_args::has_command_option(input_args, "-b");
     ncrisc_enabled_g = !test_args::has_command_option(input_args, "-n");
     trisc_enabled_g = !test_args::has_command_option(input_args, "-t");
+    erisc_enabled_g = test_args::has_command_option(input_args, "+e");
+    erisc_count_g = test_args::get_command_option_uint32(input_args, "-ec", 1);
 
     workers_g = CoreRange({0, 0}, {core_x, core_y});
 
     if (nfast_kernels_g != 0 && slow_kernel_cycles_g <= fast_kernel_cycles_g) {
-        log_error("The number of fast kernels is non-zero, but slow_kernel_ cycles ({}) is <= fast_kernel_cycles ({})",
-                  slow_kernel_cycles_g, fast_kernel_cycles_g );
+        log_error(
+            "The number of fast kernels is non-zero, but slow_kernel_ cycles ({}) is <= fast_kernel_cycles ({})",
+            slow_kernel_cycles_g,
+            fast_kernel_cycles_g);
         log_error("For meaningful results, run multiple fast kernels between single slow kernels");
         exit(0);
     }
 }
 
-void set_runtime_args(tt_metal::Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, CoreRange kg) {
+void set_runtime_args(
+    tt_metal::Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, CoreRange kg) {
     for (int core_idx_y = kg.start_coord.y; core_idx_y <= kg.end_coord.y; core_idx_y++) {
         for (int core_idx_x = kg.start_coord.x; core_idx_x <= kg.end_coord.x; core_idx_x++) {
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
@@ -140,13 +153,10 @@ void set_runtime_args(tt_metal::Program& program, tt_metal::KernelHandle kernel_
     }
 }
 
-void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
-
+void initialize_program(tt_metal::Device* device, tt_metal::Program& program, uint32_t run_cycles) {
     program = tt_metal::CreateProgram();
 
-    std::map<string, string> defines = {
-        {"KERNEL_BYTES", std::to_string(kernel_size_g)}
-    };
+    std::map<string, string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size_g)}};
     if (run_cycles != 0) {
         defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(run_cycles)));
     }
@@ -164,13 +174,13 @@ void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
     common_args.resize(n_common_args_g);
 
     for (int i = 0; i < n_cbs_g; i++) {
-        tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(16, {{i, tt::DataFormat::Float16_b}})
-            .set_page_size(i, 16);
+        tt_metal::CircularBufferConfig cb_config =
+            tt_metal::CircularBufferConfig(16, {{i, tt::DataFormat::Float16_b}}).set_page_size(i, 16);
         auto cb = tt_metal::CreateCircularBuffer(program, workers_g, cb_config);
     }
 
     // first kernel group is possibly wide, remaining kernel groups are 1 column each
-    CoreRange kg = { workers_g.start_coord, { workers_g.end_coord.x - n_kgs_g + 1, workers_g.end_coord.y }};
+    CoreRange kg = {workers_g.start_coord, {workers_g.end_coord.x - n_kgs_g + 1, workers_g.end_coord.y}};
     for (uint32_t i = 0; i < n_kgs_g; i++) {
         defines.insert(std::pair<string, string>(string("KG_") + std::to_string(i), ""));
 
@@ -179,7 +189,10 @@ void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
                 kg,
-                tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = defines});
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .defines = defines});
             set_runtime_args(program, dm0, args, kg);
             tt_metal::SetCommonRuntimeArgs(program, dm0, common_args);
         }
@@ -189,7 +202,10 @@ void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
                 kg,
-                tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines = defines});
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                    .defines = defines});
             set_runtime_args(program, dm1, args, kg);
             tt_metal::SetCommonRuntimeArgs(program, dm1, common_args);
         }
@@ -204,36 +220,57 @@ void initialize_program(tt_metal::Program& program, uint32_t run_cycles) {
             tt_metal::SetCommonRuntimeArgs(program, compute, common_args);
         }
 
-        kg.start_coord = { kg.end_coord.x + 1, kg.end_coord.y };
+        kg.start_coord = {kg.end_coord.x + 1, kg.end_coord.y};
         kg.end_coord = kg.start_coord;
+    }
+
+    if (erisc_enabled_g) {
+        auto erisc_cores = device->get_active_ethernet_cores(true);
+        if (erisc_count_g > erisc_cores.size()) {
+            log_fatal(
+                "Requested number of erisc cores {} exceeds actual erisc core count {}",
+                erisc_count_g,
+                erisc_cores.size());
+            exit(0);
+        }
+        auto erisc_core = erisc_cores.begin();
+        for (uint32_t i = 0; i < erisc_count_g; i++, erisc_core++) {
+            auto eth_kernel = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+                *erisc_core,
+                tt::tt_metal::EthernetConfig{
+                    .eth_mode = Eth::RECEIVER,
+                    .noc = NOC::NOC_0,
+                    .defines = defines,
+                });
+            tt_metal::SetRuntimeArgs(program, eth_kernel, *erisc_core, args);
+            tt_metal::SetCommonRuntimeArgs(program, eth_kernel, common_args);
+        }
     }
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     init(argc, argv);
 
-    tt::llrt::OptionsG.set_kernels_nullified(true);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(true);
 
     bool pass = true;
     try {
-        int device_id = 0;
-        tt_metal::Device* device;
-        if (use_trace_g) {
-            device = tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000);
-        } else {
-            device = tt_metal::CreateDevice(device_id);
-        }
-
+        const chip_id_t device_id = 0;
+        DispatchCoreType dispatch_core_type = dispatch_from_eth_g ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+        tt_metal::Device* device = tt_metal::CreateDevice(
+            device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
         CommandQueue& cq = device->command_queue();
 
         tt_metal::Program program[2];
-        initialize_program(program[0], slow_kernel_cycles_g);
-        initialize_program(program[1], fast_kernel_cycles_g);
+        initialize_program(device, program[0], slow_kernel_cycles_g);
+        initialize_program(device, program[1], fast_kernel_cycles_g);
 
         // Cache stuff
         for (int i = 0; i < warmup_iterations_g; i++) {
             EnqueueProgram(cq, program[0], false);
-            if (nfast_kernels_g > 0) {
+            for (int j = 0; j < nfast_kernels_g; j++) {
                 EnqueueProgram(cq, program[1], false);
             }
         }
@@ -241,7 +278,7 @@ int main(int argc, char **argv) {
         auto main_program_loop = [&]() {
             for (int i = 0; i < iterations_g; i++) {
                 EnqueueProgram(cq, program[0], false);
-                if (nfast_kernels_g > 0) {
+                for (int j = 0; j < nfast_kernels_g; j++) {
                     EnqueueProgram(cq, program[1], false);
                 }
             }
@@ -276,7 +313,12 @@ int main(int argc, char **argv) {
         }
         log_info(LogTest, "Warmup iterations: {}", warmup_iterations_g);
         log_info(LogTest, "Iterations: {}", iterations_g);
-        log_info(LogTest, "Grid: ({}-{}) ({} cores)", workers_g.start_coord.str(), workers_g.end_coord.str(), workers_g.size());
+        log_info(
+            LogTest,
+            "Grid: ({}-{}) ({} cores)",
+            workers_g.start_coord.str(),
+            workers_g.end_coord.str(),
+            workers_g.size());
         log_info(LogTest, "Kernel size: {}", kernel_size_g);
         if (nfast_kernels_g != 0) {
             log_info(LogTest, "Fast kernel cycles: {}", fast_kernel_cycles_g);
@@ -292,7 +334,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Sems: {}", n_sems_g);
         log_info(LogTest, "Lazy: {}", lazy_g);
 
-        std::chrono::duration<double> elapsed_seconds = (end-start);
+        std::chrono::duration<double> elapsed_seconds = (end - start);
         log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
         log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
 
@@ -302,7 +344,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

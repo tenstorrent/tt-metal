@@ -5,8 +5,8 @@ target_link_libraries(
     test_common_libs
     INTERFACE
         pthread
-        gtest
-        gtest_main
+        gmock_main
+        nlohmann_json::nlohmann_json
         magic_enum
         fmt::fmt-header-only
         span
@@ -18,5 +18,5 @@ endif(TT_METAL_BUILD_TESTS)
 
 if(TTNN_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_eager) # this should go away and be replaced with link to ttnn
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ttnn/unit_tests/gtests)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ttnn)
 endif(TTNN_BUILD_TESTS)

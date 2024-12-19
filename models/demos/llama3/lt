@@ -8,12 +8,12 @@ import subprocess
 import shutil
 import curses
 import threading
-import subprocess
 import shlex
 import re
 import time
 import signal
 import psutil
+import json
 
 
 def ensure_less_installed():
@@ -44,12 +44,277 @@ def ensure_ttsmi_installed():
     os.makedirs(config_dir, exist_ok=True)
     config_file = os.path.join(config_dir, f"reset_config_{hostname}.json")
 
+    device = get_device()
     try:
-        subprocess.run(["tt-smi", "-g", config_file], check=True)
+        if device == "TG":
+            generate_tg_config_file()
+        else:
+            subprocess.run(["tt-smi", "-g", config_file], check=True)
         print(f"Generated reset config file: {config_file}")
     except subprocess.CalledProcessError as e:
         print(f"Error generating reset config file: {e}")
         sys.exit(1)
+
+    if device == "TG":  # Reset TG device on program start
+        print("Resetting device on program start...")
+        reset_device_sync(config_file)
+
+
+def reset_device_sync(config_file):
+    reset_cmd = ["tt-smi", "-r", config_file]
+    try:
+        print(f"Resetting device using config file: {config_file}")
+        result = subprocess.run(reset_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        print(f"Device reset successfully: {result.stdout}")
+    except subprocess.CalledProcessError as e:
+        print(f"Error during device reset: {e.stderr}")
+        sys.exit(1)
+
+
+def get_device():
+    smi_ls = ["tt-smi", "-ls"]
+    smi_ls_output = subprocess.run(smi_ls, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout
+    total_devices = count_devices(smi_ls_output)
+
+    if total_devices == 1:
+        device = "N150"
+    elif total_devices == 2:
+        device = "N150"
+    elif total_devices == 8:
+        device = "T3K"
+    else: # TG has 36 devices
+        device = "TG"
+
+    # Old method of getting device name based on hostname
+    # hostname = os.environ.get("HOSTNAME", "unknown")
+    # if "t30" in hostname:
+    #     device = "T3K"
+    # elif "glx" in hostname:
+    #     device = "TG"
+
+    return device
+
+
+def list_supported_devices(device):
+    if device == "TG":
+        return "n150, n300, t3k, tg"
+    elif device == "T3K":
+        return "n150, n300, t3k"
+    elif device == "N300":
+        return "n150, n300"
+    else:  # N150
+        return "n150"
+
+
+# Counts number of devices using `tt-smi -ls` output
+def count_devices(output):
+    # Split the output into available boards section
+    sections = output.split('All available boards on host')
+    available_boards = sections[1].split('Boards that can be reset')[0]
+
+    # Count total PCI devices (ignoring N/A)
+    total_pci_devices = len([line for line in available_boards.split('\n') if ('Wormhole' or 'Grayskull' or 'Blackhole') in line])
+
+    return total_pci_devices
+
+
+class OutputEntryList:
+    def __init__(self):
+        self._entries = []
+        # Create logs directory
+        os.makedirs("logs", exist_ok=True)
+        # Load existing state
+        self._load_state()
+
+    def _load_state(self):
+        try:
+            with open("logs/state.json", "r") as f:
+                state = json.load(f)
+                for entry_data in state:
+                    entry = Entry(
+                        entry_data["command_name"],
+                        entry_data["model"],
+                        entry_data["device"],
+                        entry_data["command_input"],
+                    )
+                    # Restore saved attributes
+                    entry.status = (
+                        "Cancelled"
+                        if entry_data["status"]
+                        in [
+                            "Waiting",
+                            "Running",
+                            "Resetting",
+                            "Initializing device",
+                            "Starting",
+                            "Prefill",
+                            "Decode",
+                            "Terminating",
+                            "Exiting",
+                        ]
+                        else entry_data["status"]
+                    )
+                    entry.output = entry_data["output"]
+                    entry.log_id = entry_data["log_id"]
+                    entry.speed = entry_data["speed"]
+                    entry.pcc = entry_data["pcc"]
+                    self._entries.append(entry)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+    def save_state(self):
+        state = []
+        for entry in self._entries:
+            entry_data = {
+                "command_name": entry.command_name,
+                "model": entry.model,
+                "device": entry.device,
+                "command_input": entry.command_input,
+                "status": entry.status,
+                "output": entry.output,
+                "log_id": entry.log_id,
+            }
+            if hasattr(entry, "speed"):
+                entry_data["speed"] = entry.speed
+            if hasattr(entry, "pcc"):
+                entry_data["pcc"] = entry.pcc
+            state.append(entry_data)
+
+        with open("logs/state.json", "w") as f:
+            json.dump(state, f, indent=2)
+
+    def __len__(self):
+        return len(self._entries)
+
+    def __getitem__(self, index):
+        return self._entries[index]
+
+    def __iter__(self):
+        return iter(self._entries)
+
+    def append(self, entry):
+        if entry.log_id is None:
+            entry.log_id = self.next_log_id()
+
+        # Remove any existing logs with same ID
+        for existing_file in os.listdir("logs"):
+            if existing_file.startswith(entry.log_prefix):
+                os.remove(os.path.join("logs", existing_file))
+
+        # Set parent list reference before appending
+        entry.set_parent_list(self)
+        self._entries.append(entry)
+        self.save_state()
+
+    def pop(self, index):
+        result = self._entries.pop(index)
+
+        try:
+            os.remove(result.get_log_filename())
+        except (OSError, FileNotFoundError):
+            pass
+
+        # Mark all subsequent entries as changed
+        for entry in self._entries[index:]:
+            entry.mark_changed()
+
+        self.save_state()
+        return result
+
+    def index(self, entry):
+        return self._entries.index(entry)
+
+    def get_entries(self):
+        return self._entries
+
+    def next_log_id(self):
+        # Fix potential issue with list comprehension on dictionary access
+        max_id = 0
+        for entry in self._entries:
+            if entry.log_id > max_id:
+                max_id = entry.log_id
+        return max_id + 1
+
+
+class Entry:
+    def __init__(self, command_name, model, device, command_input):
+        self.command_name = command_name
+        self.model = model
+        self.device = device.upper()
+        self.command_input = command_input
+        self.status = "Waiting"
+        self.output = ""
+        self.process = None
+        self.log_file = None
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.log_id = None  # Will be set by OutputEntryList
+        self.speed = None
+        self.pcc = None
+        self.thread = None
+        self.changed = True  # Initialize as changed to ensure first draw
+        self._parent_list = None  # Reference to parent OutputEntryList
+
+    @property
+    def log_prefix(self):
+        """Generate the log file prefix based on the entry's log ID"""
+        return f"{self.log_id:04d}-"
+
+    def mark_changed(self):
+        self.changed = True
+
+    def mark_drawn(self):
+        self.changed = False
+
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        # Mark as changed whenever any attribute is modified
+        # (except for 'changed' itself to avoid recursion)
+        if name != "changed" and hasattr(self, "changed"):
+            self.changed = True
+        # Save state if we have a parent list and this isn't an unpersisted attribute
+        if (
+            hasattr(self, "_parent_list")
+            and self._parent_list
+            and name not in ["process", "log_file", "stop_event", "lock", "thread"]
+        ):
+            self._parent_list.save_state()
+
+    def __getitem__(self, key):
+        # Support dictionary-style access for backward compatibility
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Support dictionary-style assignment for backward compatibility
+        setattr(self, key, value)
+
+    def get(self, key, default=None):
+        # Support dictionary-style get() for backward compatibility
+        return getattr(self, key, default)
+
+    def get_log_filename(self):
+        """Generate log filename based on entry properties"""
+        command_name = self._get_command_name()
+        filename = f"{self.log_prefix}{self.device}-{self.model}-{command_name}.log"
+        return os.path.join("logs", filename.replace("/", "_"))
+
+    def _get_command_name(self):
+        """Extract command name from command input"""
+        if "pytest" in self.command_input:
+            match = re.search(r"pytest\s+([\S]+)", self.command_input)
+            if match:
+                test_file = match.group(1)
+                return os.path.basename(test_file).split(".")[0]
+            return "pytest"
+        return os.path.basename(shlex.split(self.command_input)[0])
+
+    def open_log_file(self):
+        """Open and return log file for writing"""
+        self.log_file = open(self.get_log_filename(), "w")
+        return self.log_file
+
+    def set_parent_list(self, parent_list):
+        self._parent_list = parent_list
 
 
 def main(stdscr):
@@ -62,16 +327,22 @@ def main(stdscr):
 
     max_y, max_x = stdscr.getmaxyx()
 
+    host_device = get_device()
+
     # Input fields positions (reordered)
     input_fields = [
         {"label": "Command [demo]", "value": "", "x": 0, "y": 0},
         {"label": "Model (1b, 3b, 8b, 11b, 70b) [all]", "value": "", "x": 0, "y": 1},
-        {"label": "Device (n150, n300, t3k) [all]", "value": "", "x": 0, "y": 2},
+        {
+            "label": f"Device ({list_supported_devices(host_device)}) [all]",
+            "value": "",
+            "x": 0,
+            "y": 2,
+        },
     ]
 
-    output_entries = []
+    output_entries = OutputEntryList()
     current_line = 0  # Index of the current line (input fields + output entries)
-    total_lines = len(input_fields)
 
     screen_lock = threading.Lock()
     screen_needs_update = threading.Event()  # New event to signal screen updates
@@ -105,8 +376,7 @@ def main(stdscr):
         if new_max_y != last_drawn_state["max_y"] or new_max_x != last_drawn_state["max_x"]:
             stdscr.clear()
             last_drawn_state["max_y"], last_drawn_state["max_x"] = new_max_y, new_max_x
-            last_drawn_state["input_fields"] = []  # Reset to force redraw
-            last_drawn_state["output_entries"] = []  # Reset to force redraw
+            last_drawn_state["current_line"] = -1  # Reset to force redraw
             screen_needs_update.set()
 
         if screen_needs_update.is_set():
@@ -123,6 +393,8 @@ def main(stdscr):
         if exiting and all(
             entry["status"] in ["Exiting", "Cancelled", "Error", "Finished"] for entry in output_entries
         ):
+            # Save state before exiting
+            output_entries.save_state()
             return
 
         if c == -1:
@@ -176,7 +448,9 @@ def main(stdscr):
                         # Submit command
                         command_input = input_fields[0]["value"] or "demo"
                         model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b"
-                        device_input = input_fields[2]["value"] or "n150,n300,t3k"
+                        device_input = (
+                            input_fields[2]["value"] or list_supported_devices(host_device)
+                        )
 
                         if command_input == "modules":
                             command_input = "rmsnorm,attention,attention-prefill,mlp,lm-head"
@@ -184,43 +458,42 @@ def main(stdscr):
                         if command_input == "tests":
                             command_input = "embedding,rmsnorm,attention,attention-prefill,mlp,lm-head,decoder,decoder-prefill,model,model-prefill"
 
+                        if command_input == "table":
+                            command_input = "accuracy,demo,accuracy-acc,demo-acc"
+
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
                         devices = parse_list(device_input)
                         commands = parse_list(command_input, allow_space=False)
 
                         # Generate combinations (reordered)
+                        # Ignore invalid combinations:
+                        # - 11b and 11b-b models on n150 device
+                        # - 70b model on n150 and n300 devices
+                        # - Vision commands on non-vision (11b) models
                         combinations = [
                             (c, m, d)
                             for c in commands
                             for m in models
                             for d in devices
-                            if not ((m in ["11b", "11b-b"] and d == "n150") or (m == "70b" and d in ["n150", "n300"]))
+                            if not (
+                                (m in ["11b", "11b-b"] and d == "n150")
+                                or (m == "70b" and d in ["n150", "n300"])
+                                or ("vision" in c and m not in ["11b", "11b-b"])
+                            )
                         ]
 
                         # Create output entries
                         for command, model, device in combinations:
                             command_name = get_command_name(command)
-                            entry = {
-                                "command_name": command_name,
-                                "model": model,
-                                "device": device.upper(),
-                                "status": "Waiting",
-                                "output": "",
-                                "process": None,
-                                "log_file": None,
-                                "index": len(output_entries),
-                                "stop_event": threading.Event(),
-                                "lock": threading.Lock(),
-                                "command_input": command,  # Save the individual command
-                            }
+                            entry = Entry(command_name, model, device, command)
                             output_entries.append(entry)
-                        # Update total_lines
-                        total_lines = len(input_fields) + len(output_entries)
+
                         current_line = 0
                         screen_needs_update.set()
                     else:
                         # Otherwise if not the last field, move to next field
+                        total_lines = len(input_fields) + len(output_entries)
                         current_line = (current_line + 1) % total_lines
                         screen_needs_update.set()
                 else:
@@ -228,13 +501,13 @@ def main(stdscr):
                     entry_index = current_line - len(input_fields)
                     if entry_index < len(output_entries):
                         entry = output_entries[entry_index]
-                        if entry["log_file"]:
+                        if os.path.exists(entry.get_log_filename()):
                             # Save current terminal state
                             curses.def_prog_mode()
                             # Exit curses temporarily
                             curses.endwin()
                             # Run less command
-                            os.system(f"less -R {entry['log_file'].name}")
+                            os.system(f"less -R {entry.get_log_filename()}")
                             # Resume curses
                             curses.reset_prog_mode()
                             stdscr.refresh()
@@ -253,20 +526,26 @@ def main(stdscr):
                 entry_index = current_line - len(input_fields)
                 if entry_index < len(output_entries):
                     entry = output_entries[entry_index]
-                    with entry["lock"]:
-                        if entry["process"] and entry["process"].poll() is None:
-                            # Cancel the running process
-                            entry["stop_event"].set()
-                            terminate_process_tree(entry["process"].pid)
-                            entry["status"] = "Terminating"
-                        elif entry["status"] != "Resetting":
-                            # Remove the entry if it's already cancelled
-                            output_entries.pop(entry_index)
-                            total_lines -= 1
-                            if current_line >= total_lines:
-                                current_line = total_lines - 1
+                    if cancel_entry(entry):
+                        output_entries.pop(entry_index)
+                        total_lines = len(input_fields) + len(output_entries)
+                        if current_line >= total_lines:
+                            current_line = total_lines - 1
                     screen_needs_update.set()
+        elif c == ord("X") and current_line >= len(input_fields):  # Shift-X to clear all entries
+            to_remove = []
+            for entry in output_entries:
+                if cancel_entry(entry):
+                    to_remove.append(entry)
+            for entry in to_remove:
+                entry_index = output_entries.index(entry)
+                output_entries.pop(entry_index)
+            screen_needs_update.set()
+            total_lines = len(input_fields) + len(output_entries)
+            if current_line >= total_lines:
+                current_line = total_lines - 1
         elif c == 9:  # Tab key
+            total_lines = len(input_fields) + len(output_entries)
             current_line = (current_line + 1) % total_lines
             screen_needs_update.set()
         elif c == ord("r") and current_line >= len(input_fields):
@@ -278,14 +557,23 @@ def main(stdscr):
                         # Reset the entry to "Waiting" status
                         entry["status"] = "Waiting"
                         entry["output"] = ""
-                        if "speed" in entry:
-                            del entry["speed"]
-                        if "pcc" in entry:
-                            del entry["pcc"]
+                        entry["speed"] = None
+                        entry["pcc"] = None
                         entry["process"] = None
                         entry["log_file"] = None
                         entry["stop_event"].clear()
                         screen_needs_update.set()
+        elif c == ord("m") and current_line >= len(input_fields):
+            # Export results to markdown
+            export_results_to_markdown(output_entries, stdscr)
+            last_drawn_state["current_line"] = -1  # Reset to force redraw
+            screen_needs_update.set()
+        elif c == ord("p") and current_line >= len(input_fields):
+            # Reparse the selected entry's log file
+            entry_index = current_line - len(input_fields)
+            if entry_index < len(output_entries):
+                entry = output_entries[entry_index]
+                reparse_log_file(entry, screen_needs_update)
         else:
             if current_line < len(input_fields) and not exiting:
                 current_field = current_line
@@ -303,6 +591,7 @@ def define_color_pairs():
     COLOR_LIGHT_RED = 174  # Light pastel red
     COLOR_LIGHT_PURPLE = 183  # Light pastel purple
     COLOR_GRAY = 250  # Light gray
+    COLOR_GRAY_DARK = 244  # Dark gray
     COLOR_WHITE = 15  # Bright white
     COLOR_BLACK = 16  # Black
 
@@ -321,9 +610,10 @@ def define_color_pairs():
     curses.init_pair(9, COLOR_LIGHT_GREEN, -1)  # PCC > 0.99
     curses.init_pair(10, COLOR_LIGHT_YELLOW, -1)  # PCC 0.98-0.99
     curses.init_pair(11, COLOR_LIGHT_RED, -1)  # PCC < 0.98
+    curses.init_pair(12, COLOR_GRAY_DARK, -1)  # Accuracy percentages
 
     # Add a new color pair for the help bar
-    curses.init_pair(12, COLOR_LIGHT_CYAN, -1)
+    curses.init_pair(13, COLOR_LIGHT_CYAN, -1)
 
     # Store the color pair numbers for use in the rest of the program
     global COLOR_PAIR_SELECTED
@@ -338,6 +628,7 @@ def define_color_pairs():
     global COLOR_PAIR_PCC_GREEN
     global COLOR_PAIR_PCC_YELLOW
     global COLOR_PAIR_PCC_RED
+    global COLOR_PAIR_PCC_ACCURACY
     global COLOR_PAIR_HELP_BAR
 
     COLOR_PAIR_SELECTED = curses.color_pair(1)
@@ -352,7 +643,8 @@ def define_color_pairs():
     COLOR_PAIR_PCC_GREEN = curses.color_pair(9)
     COLOR_PAIR_PCC_YELLOW = curses.color_pair(10)
     COLOR_PAIR_PCC_RED = curses.color_pair(11)
-    COLOR_PAIR_HELP_BAR = curses.color_pair(12)
+    COLOR_PAIR_PCC_ACCURACY = curses.color_pair(12)
+    COLOR_PAIR_HELP_BAR = curses.color_pair(13)
 
 
 def draw_changes(stdscr, input_fields, output_entries, current_line, last_drawn_state):
@@ -385,28 +677,24 @@ def draw_changes(stdscr, input_fields, output_entries, current_line, last_drawn_
     output_start_y = header_y + 1
     for idx, entry in enumerate(output_entries):
         y = output_start_y + idx
-        if y >= max_y - 3:  # Change this line from max_y - 2 to max_y - 3
+        if y >= max_y - 3:
             break
-        if (
-            idx >= len(last_drawn_state["output_entries"])
-            or entry != last_drawn_state["output_entries"][idx]
-            or current_line != last_drawn_state["current_line"]
-        ):
+
+        # Only draw if entry has changed or selection state changed
+        if entry.changed or current_line != last_drawn_state["current_line"]:
             draw_output_entry(stdscr, entry, y, current_line == len(input_fields) + idx, max_x)
+            entry.mark_drawn()  # Mark as drawn after updating
 
     # Clear any extra lines if output entries were removed
     for y in range(
         output_start_y + len(output_entries),
-        min(
-            output_start_y + len(last_drawn_state["output_entries"]), max_y - 3
-        ),  # Change this line from max_y - 2 to max_y - 3
+        min(output_start_y + len(last_drawn_state["output_entries"]), max_y - 3),
     ):
         stdscr.move(y, 0)
         stdscr.clrtoeol()
 
-    # Update last_drawn_state
-    last_drawn_state["output_entries"] = [entry.copy() for entry in output_entries]
     last_drawn_state["current_line"] = current_line
+    last_drawn_state["output_entries"] = [{"log_id": entry.log_id} for entry in output_entries]
 
 
 def draw_input_field(stdscr, field, is_selected, max_x):
@@ -423,13 +711,13 @@ def draw_input_field(stdscr, field, is_selected, max_x):
 
 def draw_output_entry(stdscr, entry, y, is_selected, max_x):
     cols = [
-        entry["command_name"],
-        entry["model"],
-        entry["device"],
-        entry["status"],
-        entry.get("speed", ""),
-        entry.get("pcc", ""),
-        entry["output"],
+        entry.command_name,
+        entry.model,
+        entry.device,
+        entry.status,
+        entry.speed if entry.speed else "",
+        entry.pcc if entry.pcc else "",
+        entry.output,
     ]
     col_widths = [20, 10, 10, 20, 10, 10, max_x - 85]  # Adjusted widths to accommodate the PCC column
 
@@ -441,7 +729,7 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
         else:
             color = curses.color_pair(0)
             if i == 3:  # Status column
-                status = entry["status"]
+                status = entry.status
                 if status == "Waiting" or status == "Cancelled":
                     color = COLOR_PAIR_WAITING
                 elif status in ["Running", "Initializing device", "Prefill", "Decode", "Starting"] or status.startswith(
@@ -458,13 +746,16 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
                 color = COLOR_PAIR_SPEED
             elif i == 5:  # PCC column
                 if col:
-                    pcc_value = float(col)
-                    if pcc_value > 0.99:
-                        color = COLOR_PAIR_PCC_GREEN
-                    elif 0.98 < pcc_value <= 0.99:
-                        color = COLOR_PAIR_PCC_YELLOW
-                    else:
-                        color = COLOR_PAIR_PCC_RED
+                    try:
+                        pcc_value = float(col)
+                        if pcc_value > 0.99:
+                            color = COLOR_PAIR_PCC_GREEN
+                        elif 0.98 < pcc_value <= 0.99:
+                            color = COLOR_PAIR_PCC_YELLOW
+                        else:
+                            color = COLOR_PAIR_PCC_RED
+                    except ValueError:
+                        color = COLOR_PAIR_PCC_ACCURACY
             else:
                 color = curses.color_pair(0)
             stdscr.addstr(y, x, col_text, color)
@@ -527,10 +818,19 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     env["FAKE_DEVICE"] = entry["device"]
     env["LLAMA_DIR"] = get_llama_dir(entry["model"])
 
+    # Open log file
+    entry.open_log_file()
+
+    env["ACTUAL_DEVICE"] = get_device()
+
     # Define command shortcuts
     command_shortcuts = {
-        "demo": "pytest models/demos/llama3/demo/demo.py -k instruct_weights-1",
-        "demo_1layer": "pytest models/demos/llama3/demo/demo.py -k single_layer",
+        "accuracy": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k 'attention-performance and file'",
+        "accuracy-acc": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k 'attention-acc and file'",
+        "demo": "pytest models/demos/llama3/demo/demo.py -k performance-batch-1",
+        "demo-acc": "pytest models/demos/llama3/demo/demo.py -k accuracy-batch-1",
+        "demo-32": "pytest models/demos/llama3/demo/demo.py -k performance-batch-32",
+        "demo-long": "pytest models/demos/llama3/demo/demo.py -k performance-long",
         "attention": "pytest models/demos/llama3/tests/test_llama_attention.py",
         "attention-prefill": "pytest models/demos/llama3/tests/test_llama_attention_prefill.py",
         "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py",
@@ -539,9 +839,10 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "decoder": "pytest models/demos/llama3/tests/test_llama_decoder.py",
         "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py",
         "lm-head": "pytest models/demos/llama3/tests/test_lm_head.py",
-        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k full",
-        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k quick",
-        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py",
+        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k 'performance-256 and full'",
+        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k 'performance-256 and quick'",
+        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py -k performance-4096",
+        # Vision tests (require 11B weights)
         "vision-mlp": "pytest models/demos/llama3/tests/multimodal/test_llama_image_mlp.py",
         "vision-attn": "pytest models/demos/llama3/tests/multimodal/test_llama_image_attention.py",
         "vision-block": "pytest models/demos/llama3/tests/multimodal/test_llama_image_block.py",
@@ -555,8 +856,6 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "vision-encoder": "pytest models/demos/llama3/tests/multimodal/test_llama_vision_encoder.py",
         "vision-text-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_text.py",
         "vision-vision-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_vision.py",
-        "perf": "pytest models/demos/llama3/tests/test_llama_perf.py -k 1024",
-        "accuracy": "pytest models/demos/llama3/tests/test_llama_accuracy.py",
     }
 
     # Check if the command is a shortcut and replace it if necessary
@@ -575,16 +874,17 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     # Prepare the command
     cmd_list = shlex.split(command_input)
 
-    # Open log file
-    log_filename = get_log_filename(entry["device"], entry["model"], command_input)
-    os.makedirs("logs", exist_ok=True)
-    entry["log_file"] = open(os.path.join("logs", log_filename), "w")
-
     # If the command is invalid, write the output to the log file and return before trying to run the bad command
     if entry["status"] == "Error":
         entry["log_file"].write(entry["output"] + "\n")
         entry["log_file"].flush()
         return
+
+    # Write the command to the log file
+    entry["log_file"].write(
+        f"FAKE_DEVICE={entry['device']} LLAMA_DIR={get_llama_dir(entry['model'])} ACTUAL_DEVICE={get_device()} {command_input}"
+        + "\n"
+    )
 
     # Start the subprocess
     entry["process"] = subprocess.Popen(
@@ -600,31 +900,35 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
 
 def process_output(entry, screen_lock, output_entries, screen_needs_update):
-    process = entry["process"]
-    log_file = entry["log_file"]
+    process = entry.process
+    log_file = entry.log_file
     previous_line = ""
     try:
         for line in iter(process.stdout.readline, ""):
-            if entry["stop_event"].is_set():
-                break
             # Write to log file
             log_file.write(line)
             log_file.flush()
 
             # Update status and output based on output
-            status, output, speed, pcc = parse_output_line(line, previous_line, entry["status"])
+            status, output, speed, pcc = parse_output_line(line, previous_line, entry.status)
             previous_line = line.strip()
-            with entry["lock"]:
-                if status != entry["status"] or output or speed is not None or pcc is not None:
-                    entry["status"] = status
+
+            with entry.lock:
+                if status != entry.status or output or speed is not None or pcc is not None:
+                    entry.status = status  # This will mark entry as changed via __setattr__
                     if output:
-                        entry["output"] = output
+                        entry.output = output
                     if speed is not None:
-                        entry["speed"] = f"{speed:.1f}"
+                        entry.speed = f"{speed:.1f}"
                     if pcc is not None:
-                        current_pcc = entry.get("pcc")
-                        if current_pcc is None or float(pcc) < float(current_pcc):
-                            entry["pcc"] = pcc
+                        try:
+                            pcc_value = float(pcc)
+                            if entry.pcc is None or pcc_value < float(entry.pcc):
+                                entry.pcc = pcc
+                        except ValueError:
+                            entry.pcc = pcc
+                    # Save state whenever process status changes
+                    output_entries.save_state()
                     screen_needs_update.set()
 
             with screen_lock:
@@ -637,20 +941,24 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
         # Wait for the process to fully terminate
         process.wait()
 
-        with entry["lock"]:
+        with entry.lock:
             if process.returncode != 0:
-                exception_name = find_exception_in_log(entry["log_file"].name)
-                entry["status"] = "Error"
-                if exception_name:
-                    entry["output"] = exception_name
+                if entry.stop_event.is_set():
+                    entry.status = "Cancelled"
+                else:
+                    exception_name = find_exception_in_log(entry.log_file.name)
+                    entry.status = "Error"
+                    if exception_name:
+                        entry.output = exception_name
                     reset_device_async(entry, screen_lock, screen_needs_update)
-                    screen_needs_update.set()
             else:
-                entry["status"] = "Finished"
-        entry["process"] = None
+                entry.status = "Finished"
+            # Save state when process completes
+            output_entries.save_state()
+        entry.process = None
         log_file.close()
 
-        screen_needs_update.set()  # Ensure screen is updated after process termination
+        screen_needs_update.set()
 
 
 def parse_output_line(line, previous_line, current_status):
@@ -661,12 +969,23 @@ def parse_output_line(line, previous_line, current_status):
     speed_match = re.search(r"@ (\d+\.\d+) tok/s/user", line)
     if speed_match:
         speed = float(speed_match.group(1))
+    else:
+        # Check for end_to_end_inference time from perf test
+        latency_match = re.search(r"end_to_end_inference: (\d+\.\d+)s", line)
+        if latency_match:
+            speed = 1000 * float(latency_match.group(1))  # convert to ms
 
     # Check for PCC information
     pcc = None
     pcc_match = re.search(r"PCC: (\d+\.\d+)", line)
     if pcc_match:
         pcc = f"{float(pcc_match.group(1)):.5f}"
+    else:
+        # Check for Top-1/Top-5 accuracy format
+        acc_match = re.search(r"Top-1: (\d+)% \| Top-5: (\d+)%", line)
+        if acc_match:
+            top1, top5 = acc_match.groups()
+            pcc = f"{top1.strip():<3s}|{top5.strip():>3s}"
 
     if "Initializing device" in line:
         return "Initializing device", None, speed, pcc
@@ -746,13 +1065,6 @@ def get_command_name(command_input):
     return command_name
 
 
-def get_log_filename(device, model, command_input):
-    command_name = get_command_name(command_input)
-    filename = f"{device}-{model}-{command_name}.log"
-    filename = filename.replace("/", "_")
-    return filename
-
-
 def find_exception_in_log(log_filename):
     exception_name = None
     with open(log_filename, "r") as f:
@@ -797,6 +1109,35 @@ def terminate_process_tree(pid):
         pass  # Process already terminated
 
 
+def generate_tg_config_file():
+    hostname = os.environ.get("HOSTNAME", "unknown")
+    host_name_config = hostname.split("-special-")[0]  # e.g. aus-glx-NR
+    mobo_name_config = (
+        host_name_config.split("-")[0]
+        + "-"
+        + host_name_config.split("-")[1]
+        + "-mgmt-"
+        + host_name_config.split("-")[2]
+    )  # e.g. aus-glx-mgmt-NR
+    config_file = os.path.expanduser(f"~/.config/tenstorrent/reset_config_{hostname}.json")
+    config = {
+        "time": "",
+        "host_name": host_name_config,
+        "wh_link_reset": {"pci_index": [0, 1, 2, 3]},
+        "re_init_devices": True,
+        "wh_mobo_reset": [
+            {
+                "nb_host_pci_idx": [0, 1, 2, 3],
+                "mobo": mobo_name_config,
+                "disabled_ports": ["0:0", "0:1", "0:2", "1:0", "1:1", "1:2", "6:2", "7:2"],
+            }
+        ],
+    }
+    with open(config_file, "w") as f:
+        json.dump(config, f)
+        f.close()
+
+
 def reset_device_async(entry, screen_lock, screen_needs_update):
     def reset_thread():
         hostname = os.environ.get("HOSTNAME", "unknown")
@@ -807,12 +1148,12 @@ def reset_device_async(entry, screen_lock, screen_needs_update):
         except subprocess.CalledProcessError as e:
             pass
         finally:
-            with entry["lock"]:
-                entry["status"] = previous_status
+            with entry.lock:
+                entry.status = previous_status
             screen_needs_update.set()
 
-    previous_status = entry["status"]
-    entry["status"] = "Resetting"
+    previous_status = entry.status
+    entry.status = "Resetting"
     reset_thread = threading.Thread(target=reset_thread)
     reset_thread.daemon = True
     reset_thread.start()
@@ -827,13 +1168,164 @@ def draw_help_bar(stdscr, current_line, num_input_fields, num_output_entries):
 
 def get_help_text(current_line, num_input_fields, num_output_entries):
     if current_line == 0:
-        return "Shortcuts: demo, attention, mlp, decoder, decoder-prefill, model, model-prefill, model-quick | Enter: Submit | ↑↓: Navigate fields | Esc: Exit"
+        return "Shortcuts: demo, demo-1layer, attention, mlp, rmsnorm, decoder, model, model-quick, 'help' for full list | Enter: Submit | ↑↓: Navigate fields | Esc: Exit"
     elif current_line <= num_input_fields - 1:
         return "Enter: Next field | ↑↓: Navigate fields | Esc: Exit"
     else:
-        return (
-            "Enter: View log | Backspace/x: Cancel/remove entry | r: Restart entry | ↑↓: Navigate entries | Esc: Exit"
-        )
+        return "Enter: View log | Backspace/x: Cancel entry | X: Cancel all | r: Restart entry | p: Reparse log | ↑↓: Navigate entries | Esc: Exit"
+
+
+def cancel_entry(entry):
+    """Handle removal of a single entry, returning True if entry was removed"""
+    with entry["lock"]:
+        if entry["process"] and entry["process"].poll() is None:
+            # Cancel the running process
+            entry["stop_event"].set()
+            terminate_process_tree(entry["process"].pid)
+            entry["status"] = "Terminating"
+            # Entry is still running, so don't remove it
+            return False
+        elif entry["status"] != "Resetting":
+            # Safe to remove the entry if it's already cancelled
+            return True
+    # Entry is running/resetting, so don't remove it
+    return False
+
+
+def export_results_to_markdown(output_entries, stdscr):
+    # Initialize ordered lists to maintain entry order
+    perf_entries = []
+    acc_entries = []
+
+    # Collect results from entries in their original order
+    for entry in output_entries:
+        if entry.status == "Finished":
+            key = (entry.model, entry.device)
+
+            if entry.command_name == "demo" or entry.command_name == "accuracy":
+                # Get speed from demo entry
+                speed = entry.speed if entry.command_name == "demo" else None
+                # Get accuracy from accuracy entry
+                top1, top5 = "N/A", "N/A"
+                if entry.command_name == "accuracy" and entry.pcc:
+                    match = re.match(r"(\d+)\s*\|\s*(\d+)", entry.pcc)
+                    if match:
+                        top1, top5 = match.group(1), match.group(2)
+
+                # Find existing entry or create new one
+                existing_entry = next((e for e in perf_entries if e[0] == key), None)
+                if existing_entry:
+                    if speed:
+                        existing_entry[3] = speed
+                    if top1 != "N/A":
+                        existing_entry[1:3] = [top1, top5]
+                else:
+                    perf_entries.append([key, top1, top5, speed or "N/A"])
+
+            elif entry.command_name == "demo-acc" or entry.command_name == "accuracy-acc":
+                # Same logic for accuracy configuration
+                speed = entry.speed if entry.command_name == "demo-acc" else None
+                top1, top5 = "N/A", "N/A"
+                if entry.command_name == "accuracy-acc" and entry.pcc:
+                    match = re.match(r"(\d+)\s*\|\s*(\d+)", entry.pcc)
+                    if match:
+                        top1, top5 = match.group(1), match.group(2)
+
+                existing_entry = next((e for e in acc_entries if e[0] == key), None)
+                if existing_entry:
+                    if speed:
+                        existing_entry[3] = speed
+                    if top1 != "N/A":
+                        existing_entry[1:3] = [top1, top5]
+                else:
+                    acc_entries.append([key, top1, top5, speed or "N/A"])
+
+    # Create markdown content
+    markdown_lines = [
+        "## LlamaOptimizations.performance",
+        "",
+        "This configuration uses bfp4 MLP FF1+FF3 for all models.",
+        "",
+        "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |",
+        "|-------|--------|-----------|-----------|---------------|",
+    ]
+
+    # Add rows for performance table in original order
+    for entry in perf_entries:
+        (model, device), top1, top5, speed = entry
+        markdown_lines.append(f"| {model} | {device} | {top1} | {top5} | {speed} |")
+
+    # Add accuracy table
+    markdown_lines.extend(
+        [
+            "",
+            "## LlamaOptimizations.accuracy",
+            "",
+            "This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model.",
+            "",
+            "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |",
+            "|-------|--------|-----------|-----------|---------------|",
+        ]
+    )
+
+    # Add rows for accuracy table in original order
+    for entry in acc_entries:
+        (model, device), top1, top5, speed = entry
+        markdown_lines.append(f"| {model} | {device} | {top1} | {top5} | {speed} |")
+
+    # Write to PERF.md
+    with open("PERF.md", "w") as f:
+        f.write("\n".join(markdown_lines) + "\n")
+
+    # Clear screen and show message
+    stdscr.clear()
+    stdscr.addstr(0, 0, "\n".join(markdown_lines))
+    stdscr.addstr(len(markdown_lines) + 2, 0, f"Table written to {os.path.abspath('PERF.md')}")
+    stdscr.addstr(len(markdown_lines) + 3, 0, "Press any key to return...")
+    stdscr.refresh()
+
+    # Temporarily make getch() blocking
+    stdscr.nodelay(False)
+
+    # Wait for a key press and flush input buffer
+    stdscr.getch()
+    curses.flushinp()
+
+    # Restore non-blocking mode
+    stdscr.nodelay(True)
+
+
+def reparse_log_file(entry, screen_needs_update):
+    """Reparse an entry's log file to update speed and pcc values."""
+    try:
+        with open(entry.get_log_filename(), "r") as f:
+            previous_line = ""
+            status = entry.status  # Preserve the current status
+
+            # Reset speed and pcc before reparsing
+            entry.speed = None
+            entry.pcc = None
+
+            for line in f:
+                new_status, output, speed, pcc = parse_output_line(line, previous_line, status)
+                previous_line = line.strip()
+
+                if speed is not None:
+                    entry.speed = f"{speed:.1f}"
+                if pcc is not None:
+                    try:
+                        pcc_value = float(pcc)
+                        if entry.pcc is None or pcc_value < float(entry.pcc):
+                            entry.pcc = pcc
+                    except ValueError:
+                        entry.pcc = pcc
+                if output:
+                    entry.output = output
+
+            screen_needs_update.set()
+
+    except FileNotFoundError:
+        pass  # Log file doesn't exist
 
 
 if __name__ == "__main__":

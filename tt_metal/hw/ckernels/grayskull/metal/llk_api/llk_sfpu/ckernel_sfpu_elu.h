@@ -17,23 +17,21 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_elu(uint slope)
-{
+inline void calculate_elu(uint slope) {
     // SFPU microcode
     constexpr bool zero_negative = true;
     Converter c_slope;
     c_slope.u = slope;
 
-    #pragma GCC unroll 0
+#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
 
-        v_if (v < 0.0f) {
+        v_if(v < 0.0f) {
             vFloat v_exp = calculate_exponential_body_improved<true, zero_negative>(v);
             vFloat s = c_slope.f;
-            v = s*(v_exp - 1.0f);
+            v = s * (v_exp - 1.0f);
         }
         v_endif;
 

@@ -6,9 +6,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 
-namespace ttnn {
-
-namespace types {
+namespace ttnn::types {
 
 const Shape Shape::to_rank(size_t new_rank) const {
     auto padded_shape = value;
@@ -19,11 +17,11 @@ const Shape Shape::to_rank(size_t new_rank) const {
 
     int cur_idx = static_cast<int>(rank()) - 1;
     int new_idx = static_cast<int>(new_rank) - 1;
-    for(;cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
+    for (; cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
         new_shape[new_idx] = shape[cur_idx];
         new_padded_shape[new_idx] = padded_shape[cur_idx];
     }
-    for(;cur_idx >= 0; cur_idx--) {
+    for (; cur_idx >= 0; cur_idx--) {
         TT_FATAL(shape[cur_idx] == 1, "Can't convert shape rank");
         TT_FATAL(padded_shape[cur_idx] == 1, "Can't convert shape rank");
     }
@@ -31,39 +29,9 @@ const Shape Shape::to_rank(size_t new_rank) const {
     return Shape(std::move(new_shape), std::move(new_padded_shape));
 }
 
-}
-
-}
+}  // namespace ttnn::types
 
 namespace tt::tt_metal {
-
-static DistributedTensorConfig create_shard_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
-    return ShardTensor(std::stoi(metadata.at("shard_dim")));
-}
-static DistributedTensorConfig create_shard_2d_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
-    return ShardTensor2D(ShardMesh(std::stoi(metadata.at("mesh_shape_y")), std::stoi(metadata.at("mesh_shape_x"))));
-}
-static DistributedTensorConfig create_replicate_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
-    if (auto it = metadata.find("replication_factor"); it != metadata.end()) {
-        return ReplicateTensor(std::stoi(it->second));
-    }
-    TT_THROW("Unsupported Replication strategy:");
-}
-
-DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
-    if (auto it = metadata.find("strategy"); it != metadata.end()) {
-        const std::string& strategy = it->second;
-        if (strategy == "shard") {
-            return create_shard_distributed_tensor_config(metadata);
-        } else if (strategy == "shard_2d") {
-            return create_shard_2d_distributed_tensor_config(metadata);
-        } else if (strategy == "replicate") {
-            return create_replicate_distributed_tensor_config(metadata);
-        }
-    }
-    TT_THROW("Unsupported DistributedTensorConfig strategy:");
-}
-
 
 tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype) {
     switch (datatype) {
@@ -96,9 +64,9 @@ const uint32_t Padding::get_normalized_index(std::int64_t index) const {
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
     TT_FATAL(
         normalized_index >= 0 and normalized_index < rank,
-            "Index is out of bounds for the rank, should be between 0 and {} however is {}",
-            rank - 1,
-            normalized_index);
+        "Index is out of bounds for the rank, should be between 0 and {} however is {}",
+        rank - 1,
+        normalized_index);
     return normalized_index;
 }
 
@@ -172,9 +140,7 @@ const uint32_t LegacyShape::operator[](const std::int64_t index) const {
 const uint32_t* LegacyShape::begin() const { return this->dimensions_.data(); }
 const uint32_t* LegacyShape::end() const { return this->dimensions_.data() + this->rank_; }
 
-const Padding& LegacyShape::padding() const {
-    return this->padding_;
-}
+const Padding& LegacyShape::padding() const { return this->padding_; }
 
 const LegacyShape LegacyShape::without_padding() const {
     auto padding = this->padding_;
@@ -188,8 +154,7 @@ const LegacyShape LegacyShape::without_padding() const {
     return LegacyShape(shape_without_padding);
 }
 
-ttnn::SimpleShape LegacyShape::logical_shape() const
-{
+ttnn::SimpleShape LegacyShape::logical_shape() const {
     const LegacyShape logical = without_padding();
 
     ttnn::SmallVector<uint32_t> values(rank());
@@ -204,9 +169,9 @@ const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
     TT_FATAL(
         normalized_index >= 0 and normalized_index < rank,
-            "Index is out of bounds for the rank, should be between 0 and {} however is {}",
-            rank - 1,
-            normalized_index);
+        "Index is out of bounds for the rank, should be between 0 and {} however is {}",
+        rank - 1,
+        normalized_index);
     return normalized_index;
 }
 
@@ -217,19 +182,6 @@ Array4D LegacyShape::to_array_4D() const {
         ret_array[i] = this->operator[](i);
     }
     return ret_array;
-}
-
-bool operator==(const ReplicateTensor& a, const ReplicateTensor& b) {
-    return a.replication_factor == b.replication_factor; // All instances are considered equal because there are no data members.
-}
-bool operator==(const AllGatherTensor&, const AllGatherTensor&) {
-    return true; // All instances are considered equal because there are no data members.
-}
-bool operator==(const ShardTensor& lhs, const ShardTensor& rhs) {
-    return lhs.shard_dimension == rhs.shard_dimension; // Equal if they have the same shard_dimension.
-}
-bool operator==(const ShardTensor2D& lhs, const ShardTensor2D& rhs) {
-    return lhs.shard_mesh == rhs.shard_mesh; // Equal if they have the same shard_mesh.
 }
 
 bool operator==(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::LegacyShape& shape_b) {
@@ -245,7 +197,9 @@ bool operator==(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::Le
     return true;  // Ignore the padding when comparing shapes
 }
 
-bool operator!=(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::LegacyShape& shape_b) { return not(shape_a == shape_b); }
+bool operator!=(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::LegacyShape& shape_b) {
+    return not(shape_a == shape_b);
+}
 
 bool MemoryConfig::is_sharded() const {
     switch (this->memory_layout) {
@@ -261,7 +215,8 @@ bool MemoryConfig::is_l1() const { return buffer_type == BufferType::L1 or buffe
 bool MemoryConfig::is_dram() const { return buffer_type == BufferType::DRAM; }
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
-    return config_a.buffer_type == config_b.buffer_type && config_a.memory_layout == config_b.memory_layout && config_a.shard_spec == config_b.shard_spec;
+    return config_a.buffer_type == config_b.buffer_type && config_a.memory_layout == config_b.memory_layout &&
+           config_a.shard_spec == config_b.shard_spec;
 }
 
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
@@ -271,76 +226,14 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
     return os;
 }
 
-void dump_memory_config(std::ostream& output_stream, const MemoryConfig& memory_config) {
-    output_stream.write(reinterpret_cast<const char*>(&VERSION_ID), sizeof(std::uint8_t));
-    output_stream.write(reinterpret_cast<const char*>(&memory_config.memory_layout), sizeof(TensorMemoryLayout));
-    output_stream.write(reinterpret_cast<const char*>(&memory_config.buffer_type), sizeof(BufferType));
-
-    bool has_shard_spec = memory_config.shard_spec.has_value();
-    output_stream.write(reinterpret_cast<const char*>(&has_shard_spec), sizeof(bool));
-    if (has_shard_spec) {
-        const auto& shard_spec = memory_config.shard_spec.value();
-        const auto& core_ranges = shard_spec.grid.ranges();
-        std::size_t num_core_ranges = core_ranges.size();
-        output_stream.write(reinterpret_cast<const char*>(&num_core_ranges), sizeof(std::size_t));
-        for (const auto& core_range : core_ranges) {
-            output_stream.write(reinterpret_cast<const char*>(&core_range), sizeof(CoreRange));
-        }
-        output_stream.write(reinterpret_cast<const char*>(&shard_spec.shape), sizeof(std::array<uint32_t, 2>));
-        output_stream.write(reinterpret_cast<const char*>(&shard_spec.orientation), sizeof(ShardOrientation));
-        output_stream.write(reinterpret_cast<const char*>(&shard_spec.halo), sizeof(bool));
+std::vector<DeviceBuffer> MultiDeviceStorage::get_buffers() const {
+    std::lock_guard<std::mutex> lock(buffer_mtx);
+    std::vector<DeviceBuffer> buf_vec;
+    buf_vec.reserve(buffers.size());
+    for (const auto& pair : buffers) {
+        buf_vec.push_back(pair.second);
     }
-}
-
-void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config) {
-    std::ofstream output_stream(file_name, std::ios::out | std::ios::binary);
-    if (not output_stream) {
-        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
-    }
-    dump_memory_config(output_stream, memory_config);
-}
-
-MemoryConfig load_memory_config(std::ifstream& input_stream) {
-    std::uint8_t version_id;
-    TensorMemoryLayout memory_layout;
-    BufferType buffer_type;
-    bool has_shard_spec;
-    input_stream.read(reinterpret_cast<char*>(&version_id), sizeof(std::uint8_t));
-    if (version_id != VERSION_ID) {
-        throw std::runtime_error(fmt::format("Unsupported version_id: {}", version_id));
-    }
-    input_stream.read(reinterpret_cast<char*>(&memory_layout), sizeof(TensorMemoryLayout));
-    input_stream.read(reinterpret_cast<char*>(&buffer_type), sizeof(BufferType));
-    input_stream.read(reinterpret_cast<char*>(&has_shard_spec), sizeof(bool));
-
-    std::optional<ShardSpec> shard_spec = std::nullopt;
-    if (has_shard_spec) {
-        std::size_t num_core_ranges;
-        std::set<CoreRange> core_ranges;
-        std::array<uint32_t, 2> shape;
-        ShardOrientation orientation;
-        bool halo;
-
-        input_stream.read(reinterpret_cast<char*>(&num_core_ranges), sizeof(std::size_t));
-        for (auto index = 0; index < num_core_ranges; index++) {
-            CoreRange core_range{{}, {}};
-            input_stream.read(reinterpret_cast<char*>(&core_range), sizeof(CoreRange));
-            core_ranges.insert(core_range);
-        }
-        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(std::array<uint32_t, 2>));
-        input_stream.read(reinterpret_cast<char*>(&orientation), sizeof(ShardOrientation));
-        input_stream.read(reinterpret_cast<char*>(&halo), sizeof(bool));
-        shard_spec = {CoreRangeSet{core_ranges}, shape, orientation, halo};
-    }
-    return MemoryConfig{memory_layout, buffer_type, shard_spec};
-}
-
-MemoryConfig load_memory_config(const std::string& file_name) {
-    std::ifstream input_stream(file_name, std::ios::in | std::ios::binary);
-    if (not input_stream) {
-        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
-    }
-    return load_memory_config(input_stream);
+    return buf_vec;
 }
 
 }  // namespace tt::tt_metal

@@ -13,11 +13,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-random.seed(0)
-
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
@@ -28,15 +23,23 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
         + gen_shapes([32, 32], [256, 256], [32, 32], 16),
-        "grad_dtype": [ttnn.bfloat16],
-        "input_a_dtype": [ttnn.bfloat16],
-        "grad_layout": [ttnn.TILE_LAYOUT],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "grad_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["grad_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Unary operation requires tensor to be in Tile layout."
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -55,8 +58,7 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     torch_grad_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), grad_dtype

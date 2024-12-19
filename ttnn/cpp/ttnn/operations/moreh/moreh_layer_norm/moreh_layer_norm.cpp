@@ -6,6 +6,8 @@
 
 #include "ttnn/operations/moreh/moreh_layer_norm/device/moreh_layer_norm_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_layer_norm {
 std::vector<std::optional<Tensor>> MorehLayerNorm::invoke(
     const Tensor& input,
@@ -38,7 +40,9 @@ OptionalTensors MorehLayerNorm::create_async_optional_output_tensors(
 
     return {
         std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta})),
-        return_mean ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta})) : std::nullopt,
-        return_rstd ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta})) : std::nullopt};
+        return_mean ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta}))
+                    : std::nullopt,
+        return_rstd ? std::optional<Tensor>(operation::get_workers_for_op_output({input}, {gamma, beta}))
+                    : std::nullopt};
 }
 }  // namespace ttnn::operations::moreh::moreh_layer_norm

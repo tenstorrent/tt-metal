@@ -17,12 +17,12 @@ To build and execute, you may use the following commands. Note that we include t
 The number of buffers we're using in DRAM will stay the same. However, we need to declare some circular buffers to enable data transfer between the reader, compute, and writer engines.
 
 ``` cpp
-constexpr uint32_t src0_cb_index = CB::c_in0;
+constexpr uint32_t src0_cb_index = CBIndex::c_0;
 constexpr uint32_t num_input_tiles = 2;
 CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
 CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-constexpr uint32_t output_cb_index = CB::c_out0;
+constexpr uint32_t output_cb_index = CBIndex::c_16;
 constexpr uint32_t num_output_tiles = 2;
 CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size);
 CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
@@ -77,8 +77,7 @@ SetRuntimeArgs(
     core,
     {
         dst_dram_buffer.address(),
-        static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().x),
-        static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().y),
+        dst_bank_id,
         num_tiles
     }
 );

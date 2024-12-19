@@ -5,8 +5,9 @@
 #include "attn_matmul_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
 
-namespace ttnn::operations::experimental::matmul {
+using namespace tt::tt_metal;
 
+namespace ttnn::operations::experimental::matmul {
 
 void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     // input_a: [q_len, q_heads, batch, head_dim]
@@ -59,11 +60,14 @@ void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensor
     } else {
         TT_FATAL(
             ashape[3] == bshape[2],
-            "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op");  // A.K == B.K
+            "Dimension K (A.shape[3]and B.shape[2]) must match for A shape: {} and B shape: {} in attn_matmul op",
+            ashape,
+            bshape);  // A.K == B.K
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> AttnMatmulDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> AttnMatmulDeviceOperation::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     // input_a: [q_len, q_heads, batch, head_dim]
     // input_b: [batch, kv_heads, head_dim, kv_len]
     // intermediate: [q_heads, batch, batch, kv_len]
@@ -84,11 +88,11 @@ std::vector<tt::tt_metal::LegacyShape> AttnMatmulDeviceOperation::compute_output
 std::vector<Tensor> AttnMatmulDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {create_device_tensor(
-            compute_output_shapes(input_tensors).at(0),
-            this->output_dtype,
-            Layout::TILE,
-            input_tensor.device(),
-            this->output_mem_config)};
+        compute_output_shapes(input_tensors).at(0),
+        this->output_dtype,
+        Layout::TILE,
+        input_tensor.device(),
+        this->output_mem_config)};
 }
 
 operation::ProgramWithCallbacks AttnMatmulDeviceOperation::create_program(
@@ -114,8 +118,14 @@ operation::ProgramWithCallbacks AttnMatmulDeviceOperation::create_program(
 }
 
 const operation::Hash AttnMatmulDeviceOperation::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensors.at(0).get_storage()));
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(1).storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensors.at(1).get_storage()));
+    TT_ASSERT(
+        std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage()),
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(input_tensors.at(0).get_storage()));
+    TT_ASSERT(
+        std::holds_alternative<DeviceStorage>(input_tensors.at(1).storage()),
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(input_tensors.at(1).get_storage()));
 
     return operation::hash_operation<AttnMatmulDeviceOperation>(
         this->transpose_hw,
@@ -127,5 +137,4 @@ const operation::Hash AttnMatmulDeviceOperation::compute_program_hash(const std:
         input_tensors.at(1).dtype());
 }
 
-
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::matmul

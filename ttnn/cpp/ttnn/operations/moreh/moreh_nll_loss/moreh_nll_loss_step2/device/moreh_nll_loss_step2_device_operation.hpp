@@ -27,7 +27,7 @@ struct MorehNllLossStep2DeviceOperation {
         const std::optional<Tensor>& output_tensor;
     };
 
-    using shape_return_value_t = ttnn::Shape;
+    using spec_return_value_t = ttnn::TensorSpec;
 
     using tensor_return_value_t = ttnn::Tensor;
 
@@ -62,14 +62,14 @@ struct MorehNllLossStep2DeviceOperation {
 
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const Tensor& target_tensor,
-        const std::string reduction,
+        const std::string& reduction,
         const std::optional<Tensor>& weight_tensor,
         const std::optional<Tensor>& divisor_tensor,
         const std::optional<Tensor>& output_tensor,

@@ -24,14 +24,18 @@ else()
     FIND_AND_SET_CLANG17()
 endif()
 
+list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(version)
+ParseGitDescribe()
 project(
     Metalium
-    VERSION 0.50.0
+    VERSION ${VERSION_NUMERIC}
     DESCRIPTION "Tenstorrent Metalium"
     HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
     LANGUAGES
         CXX
 )
+message(STATUS "Metalium version: ${PROJECT_VERSION}")
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(
@@ -40,10 +44,9 @@ if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     )
 endif()
 
-list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
-
 include(project_options)
 include(unity)
+include(clang-tidy)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -87,7 +90,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         GLOBAL
         PROPERTY
             GLOBAL_DEPENDS_NO_CYCLES
-                ON
+                FALSE #FIXME(14541): We've got work to do :(
     )
 
     if(ENABLE_CCACHE)
@@ -106,9 +109,6 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
-
-# Set default values for variables/options
-set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
 
 ############################################################################################################################
 # Project Options
@@ -157,7 +157,14 @@ unset(SANITIZER_ENABLED)
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-include(dependencies)
+set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
+include(CPM)
+if(CMAKE_VERSION VERSION_LESS 3.25)
+    # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
+    add_subdirectory(dependencies EXCLUDE_FROM_ALL)
+else()
+    add_subdirectory(dependencies EXCLUDE_FROM_ALL SYSTEM)
+endif()
 
 if(WITH_PYTHON_BINDINGS)
     set(Python3_FIND_STRATEGY LOCATION)
@@ -195,10 +202,14 @@ target_link_libraries(
         numa
 )
 
+if(NOT DEFINED ENV{ARCH_NAME})
+    message(FATAL_ERROR "Please set ARCH_NAME to grayskull, wormhole_b0, or blackhole")
+endif(NOT DEFINED ENV{ARCH_NAME})
 string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
 add_compile_definitions(ARCH_${ARCH_NAME_DEF})
 add_compile_options(
     -Werror
+    -Wno-deprecated-declarations
     -Wdelete-non-virtual-dtor
     -Wreturn-type
     -Wswitch
@@ -218,9 +229,7 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-this-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-builtins>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-declarations>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated-declarations>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-attributes>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overflow>"
@@ -248,41 +257,6 @@ if(ENABLE_TRACY)
     add_compile_definitions(TRACY_ENABLE)
     add_compile_options(-fno-omit-frame-pointer)
     add_link_options(-rdynamic)
-endif()
-
-add_library(metal_header_directories INTERFACE)
-target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
-foreach(lib ${BoostPackages})
-    target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
-endforeach()
-
-if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
-    target_include_directories(
-        metal_header_directories
-        INTERFACE
-            tt_metal/hw/inc/wormhole
-            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
-            ${UMD_HOME}/device/wormhole
-    )
-else()
-    target_include_directories(
-        metal_header_directories
-        INTERFACE
-            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}
-            ${UMD_HOME}/device/$ENV{ARCH_NAME}
-    )
-endif()
-
-if(WITH_PYTHON_BINDINGS)
-    # Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
-    add_library(pch_pybinds INTERFACE)
-    target_precompile_headers(
-        pch_pybinds
-        INTERFACE
-            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
-            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
-            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
-    )
 endif()
 
 ############################################################################################################################
@@ -346,3 +320,7 @@ add_custom_target(
 )
 
 include(packaging)
+
+if(BUILD_TT_TRAIN)
+    add_subdirectory(tt-train)
+endif()

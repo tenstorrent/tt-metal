@@ -61,10 +61,10 @@ void kernel_main() {
     for (int i = 0; i < iterations; i++) {
         cmd_ptr = cmd_cb_base;
         for (uint32_t j = 0; j < (cmd_cb_pages - 1) / page_batch_size; j++) {
-
             cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(page_batch_size);
             for (uint32_t k = 0; k < page_batch_size; k++) {
-                noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
+                noc_async_write(
+                    cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
                 cmd_ptr += dispatch_cb_page_size;
                 dispatch_data_ptr += dispatch_cb_page_size;
                 if (dispatch_data_ptr == dispatch_cb_end) {

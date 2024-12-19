@@ -5,6 +5,8 @@
 #include "downsample.hpp"
 #include "device/downsample_op.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::downsample {
 
 Tensor ExecuteDownsample::invoke(

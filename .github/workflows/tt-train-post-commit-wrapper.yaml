@@ -1,0 +1,28 @@
+name: "[post-commit] tt-train C++ tests"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  static-checks:
+    uses: ./.github/workflows/all-static-checks.yaml
+    secrets: inherit
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  tt-train-cpp-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          # Disabled due to https://github.com/tenstorrent/tt-metal/issues/16012
+          # { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/tt-train-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}

@@ -18,6 +18,28 @@ set(TYPES
     kernel
 )
 
+include(FetchContent)
+set(SFPI_x86_64_Linux_RELEASE
+    "v6.0.0/sfpi-release.tgz"
+    "d837d26a2312d27815179995fdea83bd"
+)
+if(DEFINED SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE)
+    set(SFPI_RELEASE "${SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE}")
+    list(GET SFPI_RELEASE 0 SFPI_FILE)
+    list(GET SFPI_RELEASE 1 SFPI_MD5)
+    FetchContent_Declare(
+        sfpi
+        URL
+            "https://github.com/tenstorrent/sfpi/releases/download/${SFPI_FILE}"
+        URL_HASH "MD5=${SFPI_MD5}"
+        SOURCE_DIR
+        "${PROJECT_SOURCE_DIR}/runtime/sfpi"
+    )
+    FetchContent_MakeAvailable(sfpi)
+else()
+    message(FATAL_ERROR "SFPI binaries for ${CMAKE_HOST_SYSTEM_PROCESSOR}-${CMAKE_HOST_SYSTEM_NAME} not available")
+endif()
+
 foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
     set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
@@ -49,24 +71,9 @@ foreach(ARCH IN LISTS ARCHS)
 
             # add output file to the custom target
             list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_FILE})
-        endforeach(
-            TYPE
-            IN
-            LISTS
-            TYPES
-        )
-    endforeach(
-        PROC
-        IN
-        LISTS
-        PORCS
-    )
-endforeach(
-    ARCH
-    IN
-    LISTS
-    ARCHS
-)
+        endforeach()
+    endforeach()
+endforeach()
 
 # Function appends b0 if its wormhole
 function(get_alias INPUT_STRING OUTPUT_VAR)
@@ -78,29 +85,14 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
 endfunction()
 
 # Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++)
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
 # Define flags for each architecture
-set(GPP_FLAGS_grayskull
-    -mgrayskull
-    -march=rv32iy
-    -mtune=rvtt-b1
-    -mabi=ilp32
-)
-set(GPP_FLAGS_wormhole
-    -mwormhole
-    -march=rv32imw
-    -mtune=rvtt-b1
-    -mabi=ilp32
-)
-set(GPP_FLAGS_blackhole
-    -mblackhole
-    -march=rv32iml
-    -mtune=rvtt-b1
-    -mabi=ilp32
-)
+set(GPP_FLAGS_grayskull -mcpu=tt-gs)
+set(GPP_FLAGS_wormhole -mcpu=tt-wh)
+set(GPP_FLAGS_blackhole -mcpu=tt-bh)
 
 # Define common flags for all architectures
 set(GPP_FLAGS_common
@@ -111,6 +103,7 @@ set(GPP_FLAGS_common
     -fno-exceptions
     -Wall
     -Werror
+    -Wno-deprecated-declarations
     -Wno-unknown-pragmas
     -Wno-error=multistatement-macros
     -Wno-error=parentheses
@@ -193,18 +186,8 @@ foreach(ARCH IN LISTS ARCHS)
             VERBATIM
         )
         list(APPEND PREPROCESSED_O_FILES ${HW_OUTPUT_FILE})
-    endforeach(
-        HWLIB
-        IN
-        LISTS
-        HWLIBS
-    )
-endforeach(
-    ARCH
-    IN
-    LISTS
-    ARCHS
-)
+    endforeach()
+endforeach()
 
 # custom target that depends on all the output files
 add_custom_target(
@@ -213,4 +196,17 @@ add_custom_target(
     DEPENDS
         ${PREPROCESSED_LD_FILES}
         ${PREPROCESSED_O_FILES}
+)
+
+add_library(hw INTERFACE)
+add_library(Metalium::Metal::Hardware ALIAS hw)
+
+set(currentArch "$ENV{ARCH_NAME}")
+string(REPLACE "wormhole_b0" "wormhole" currentArch "${currentArch}")
+target_include_directories(
+    hw
+    INTERFACE
+        inc
+        inc/${currentArch}
+        $<$<STREQUAL:${currentArch},wormhole>:${CMAKE_CURRENT_SOURCE_DIR}/inc/wormhole/wormhole_b0_defines>
 )

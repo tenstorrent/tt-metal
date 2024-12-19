@@ -9,21 +9,26 @@
 
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
+#include "tt_metal/tt_stl/any_range.hpp"
 
 //==================================================
 //                  PROGRAM MANAGEMENT
 //==================================================
 
-namespace tt::tt_metal{
+namespace tt::tt_metal {
 namespace v1 {
+
+MAKE_ANY_RANGE(
+    SizedCircularBufferRange, stl::AnySizedInputRange<CircularBufferHandle, stl::default_any_range_capacity, 24>);
+
+MAKE_ANY_RANGE(CircularBufferRange, stl::AnyInputRange<CircularBufferHandle, 96, 32>);
 
 /**
  * @brief Creates a Program object, which bundles kernels, circular buffers, and semaphores for execution on the device.
  *
  * @return Program handle to the created program.
  */
-Program CreateProgram();
-
+ProgramHandle CreateProgram();
 
 /**
  * @brief Creates a data movement or compute kernel and adds it to the program.
@@ -35,10 +40,10 @@ Program CreateProgram();
  * @return KernelHandle representing the kernel ID.
  */
 KernelHandle CreateKernel(
-    Program program,
+    ProgramHandle& program,
     std::string_view file_name,
-    const CoreRangeSet &core_spec,
-    const DataMovementConfig &config);
+    const CoreRangeSet& core_spec,
+    const DataMovementConfig& config);
 
 /**
  * @brief Creates a data movement or compute kernel and adds it to the program.
@@ -50,10 +55,7 @@ KernelHandle CreateKernel(
  * @return KernelHandle representing the kernel ID.
  */
 KernelHandle CreateKernel(
-    Program program,
-    std::string_view file_name,
-    const CoreRangeSet &core_spec,
-    const ComputeConfig &config);
+    ProgramHandle& program, std::string_view file_name, const CoreRangeSet& core_spec, const ComputeConfig& config);
 
 /**
  * @brief Creates a data movement or compute kernel and adds it to the program.
@@ -65,11 +67,7 @@ KernelHandle CreateKernel(
  * @return KernelHandle representing the kernel ID.
  */
 KernelHandle CreateKernel(
-    Program program,
-    std::string_view file_name,
-    const CoreRangeSet &core_spec,
-    const EthernetConfig &config);
-
+    ProgramHandle& program, std::string_view file_name, const CoreRangeSet& core_spec, const EthernetConfig& config);
 
 /**
  * @brief Initializes a semaphore on specified cores.
@@ -81,11 +79,10 @@ KernelHandle CreateKernel(
  * @return Semaphore address as a uint32_t.
  */
 uint32_t CreateSemaphore(
-    Program program,
-    const CoreRangeSet &core_spec,
-    uint32_t initial_value,
+    ProgramHandle& program,
+    const CoreRangeSet& core_spec,
+    std::uint32_t initial_value,
     CoreType core_type = CoreType::WORKER);
-
 
 /**
  * @brief Creates a Circular Buffer in L1 memory of specified cores and adds it to the program.
@@ -95,10 +92,8 @@ uint32_t CreateSemaphore(
  * @param config Configuration for the circular buffer.
  * @return CBHandle representing the Circular Buffer ID.
  */
-CBHandle CreateCircularBuffer(
-    Program program,
-    const CoreRangeSet &core_spec,
-    const CircularBufferConfig &config);
+CircularBufferHandle CreateCircularBuffer(
+    ProgramHandle& program, const CoreRangeSet& core_spec, const CircularBufferConfig& config);
 
 /**
  * @brief Gets the configuration of a circular buffer.
@@ -107,25 +102,24 @@ CBHandle CreateCircularBuffer(
  * @param cb_handle Handle of the circular buffer.
  * @return Reference to the CircularBufferConfig.
  */
-const CircularBufferConfig &GetCircularBufferConfig(Program program, CBHandle cb_handle);
+const CircularBufferConfig& GetCircularBufferConfig(ProgramHandle& program, CircularBufferHandle cb_handle);
 
 /**
  * @brief Retrieves the circular buffers associated with the program.
  *
  * @param program The program to query.
- * @return Reference to a vector of shared pointers to CircularBuffer objects.
+ * @return A sized input range of CircularBufferHandle.
  */
-const std::vector<CircularBuffer> &GetCircularBuffers(Program program);
+SizedCircularBufferRange GetCircularBuffers(ProgramHandle& program);
 
 /**
  * @brief Retrieves the circular buffers associated with the program on a specific core range.
  *
  * @param program The program to query.
  * @param cr The core range to consider.
- * @return Vector of shared pointers to CircularBuffer objects on the core range.
+ * @return An input range of CircularBufferHandle on the given core range.
  */
-std::vector<CircularBuffer> GetCircularBuffersOnCoreRange(Program program, const CoreRange &cr);
-
+CircularBufferRange GetCircularBuffersOnCoreRange(ProgramHandle& program, CoreRange cr);
 
 //==================================================
 //                 PROGRAM FUNCTIONS
@@ -138,7 +132,7 @@ std::vector<CircularBuffer> GetCircularBuffersOnCoreRange(Program program, const
  * @param cb_handle Handle of the circular buffer.
  * @param total_size New total size of the circular buffer in bytes.
  */
-void UpdateCircularBufferTotalSize(Program program, CBHandle cb_handle, uint32_t total_size);
+void UpdateCircularBufferTotalSize(ProgramHandle& program, CircularBufferHandle cb_handle, std::uint32_t total_size);
 
 /**
  * @brief Updates the address of a dynamic circular buffer.
@@ -147,16 +141,38 @@ void UpdateCircularBufferTotalSize(Program program, CBHandle cb_handle, uint32_t
  * @param cb_handle Handle of the circular buffer.
  * @param buffer Dynamically allocated L1 buffer that shares address space with the circular buffer.
  */
-void UpdateDynamicCircularBufferAddress(Program program, CBHandle cb_handle, const Buffer buffer);
+void UpdateDynamicCircularBufferAddress(
+    ProgramHandle& program, CircularBufferHandle cb_handle, const BufferHandle& buffer);
 
+namespace experimental {
 
 /**
- * @brief Captures dependencies for multi-device execution in the program.
+ * @brief Creates a Circular Buffer in L1 memory of specified cores using the address space of the
+ * global circular bufferand adds it to the program.
  *
- * @param program The program to modify.
+ * @param program The program to which the buffer will be added.
+ * @param core_spec Specifies the cores where the circular buffer will be configured.
+ * @param config Configuration for the circular buffer.
+ * @param global_circular_buffer Global circular buffer to use the address space and configuration of.
+ * @return CBHandle representing the Circular Buffer ID.
  */
-void CaptureMultiDeviceDependencies(Program program);
+CBHandle CreateCircularBuffer(
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const CircularBufferConfig& config,
+    const GlobalCircularBuffer& global_circular_buffer);
 
+/**
+ * @brief Updates the address of a dynamic global circular buffer.
+ *
+ * @param program The program containing the circular buffer.
+ * @param cb_handle Handle of the circular buffer.
+ * @param buffer Dynamically allocated global L1 buffer that shares address space with the circular buffer.
+ */
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const GlobalCircularBuffer& global_circular_buffer);
 
-} // namespace v1
-} // namespace tt::tt_metal
+}  // namespace experimental
+
+}  // namespace v1
+}  // namespace tt::tt_metal

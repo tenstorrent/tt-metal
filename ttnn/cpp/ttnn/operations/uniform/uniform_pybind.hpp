@@ -9,5 +9,5 @@
 namespace py = pybind11;
 
 namespace ttnn::operations::uniform {
-void bind_uniform_operation(py::module &module);
+void bind_uniform_operation(py::module& module);
 }  // namespace ttnn::operations::uniform

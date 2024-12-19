@@ -8,7 +8,10 @@
 using namespace std::literals;
 
 enum E { A, B };
-struct foo { int a; E b; };
+struct foo {
+    int a;
+    E b;
+};
 
 constexpr auto f = foo{.a = 42, .b = B};
 

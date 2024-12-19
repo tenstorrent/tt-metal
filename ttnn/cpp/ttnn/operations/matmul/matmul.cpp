@@ -58,7 +58,13 @@ ttnn::Tensor bound_matmul(
     const auto height_b = input_tensor_b_shape[-2];
 
     if (width_a != height_b) {
-        TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor ({} != {}). The shape of first tensor was {} and the shape of second tensor was {})", width_a, height_b, input_tensor_a_shape, input_tensor_b_shape);
+        TT_THROW(
+            "ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor ({} != {}). "
+            "The shape of first tensor was {} and the shape of second tensor was {})",
+            width_a,
+            height_b,
+            input_tensor_a_shape,
+            input_tensor_b_shape);
     }
 
     const bool has_program_config = parameters.program_config.has_value();
@@ -98,9 +104,9 @@ Tensor MatmulOperation::invoke(
     const Tensor& input_tensor_b,
     const bool transpose_a,
     const bool transpose_b,
-    const std::optional<const MemoryConfig> memory_config,
+    const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
-    const std::optional<const MatmulProgramConfig> program_config,
+    const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
@@ -136,9 +142,9 @@ Tensor LinearOperation::invoke(
     const std::optional<const Tensor>& bias,
     const bool transpose_a,
     const bool transpose_b,
-    const std::optional<const MemoryConfig> memory_config,
+    const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
-    const std::optional<const MatmulProgramConfig> program_config,
+    const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,

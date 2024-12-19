@@ -16,8 +16,8 @@ namespace ccl {
 
 struct ExecuteReduceScatter {
     static ttnn::Tensor invoke(
-        const Tensor &input_tensor,
-        const uint32_t scatter_dim,
+        const Tensor& input_tensor,
+        const int32_t dim,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
@@ -29,7 +29,7 @@ struct ExecuteReduceScatter {
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const uint32_t scatter_dim,
+        const int32_t dim,
         ttnn::operations::reduction::ReduceType math_op,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,

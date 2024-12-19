@@ -22,12 +22,12 @@ jobs:
     steps:
       # Metalium
       - name: Clone Metalium
-        uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+        uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Generate docker tag
         id: generate-docker-tag
         uses: ./.github/actions/generate-docker-tag
         with:
-          image: ubuntu-22.04-amd64
+          image: tt-metalium/ubuntu-22.04-amd64
       - name: Docker login
         uses: docker/login-action@v3
         with:

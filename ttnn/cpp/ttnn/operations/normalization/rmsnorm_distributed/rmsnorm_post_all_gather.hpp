@@ -26,7 +26,8 @@ struct ExecuteRMSNormPostAllGather {
 
 }  // namespace operations::normalization
 
-constexpr auto rms_norm_post_all_gather =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::rms_norm_post_all_gather", ttnn::operations::normalization::ExecuteRMSNormPostAllGather>();
+constexpr auto rms_norm_post_all_gather = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::rms_norm_post_all_gather",
+    ttnn::operations::normalization::ExecuteRMSNormPostAllGather>();
 
 }  // namespace ttnn

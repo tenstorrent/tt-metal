@@ -26,7 +26,6 @@ struct ArgMaxOperation {
         const bool use_muticore = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
-
 };
 
 }  // namespace operations::reduction

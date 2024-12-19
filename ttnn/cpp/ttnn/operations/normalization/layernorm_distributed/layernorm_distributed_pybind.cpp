@@ -7,13 +7,11 @@
 #include "layernorm_pre_all_gather.hpp"
 #include "layernorm_post_all_gather.hpp"
 
-
 namespace ttnn::operations::normalization::detail {
 
 namespace py = pybind11;
 
 void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
-
     ttnn::bind_registered_operation(
         module,
         ttnn::layer_norm_pre_all_gather,
@@ -30,7 +28,6 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
 }
 
 void bind_normalization_layernorm_post_all_gather_operation(py::module& module) {
-
     ttnn::bind_registered_operation(
         module,
         ttnn::layer_norm_post_all_gather,

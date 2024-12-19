@@ -4,10 +4,14 @@
 
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 
+#include <utility>
+
 #include "device/copy_device_operation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
+
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
@@ -35,7 +39,7 @@ ttnn::Tensor AssignOperation::invoke(
                CopyDeviceOperation{output_mem_config, output_dtype.value_or(input.get_dtype())},
                {input},
                {},
-               {optional_output_tensor},
+               {std::move(optional_output_tensor)},
                queue_id)
         .at(0);
 }
