@@ -29,7 +29,7 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
 
     */
 
-    TT_FATAL(global_cb.has_value(), "Global circular buffer must be provided");
+    TT_FATAL(global_cb != nullptr, "Global circular buffer must be provided");
     // Check that all tensors' k is divisible by number of cores in global CB receiver
     uint32_t num_receiver_cores = global_cb->receiver_cores().num_cores();
     for (const auto& tensor : input_tensors) {
