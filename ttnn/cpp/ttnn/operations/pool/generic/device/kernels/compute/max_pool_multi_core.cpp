@@ -68,7 +68,7 @@ inline void reduce_h_fused(
     constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
-    cb_reserve_back(out_cb_id, 1);
+    cb_reserve_back(out_cb_id, num_output_tiles);
     const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + (in_stick_index & 0x1)) : in_cb_id;
     cb_wait_front(curr_in_cb_id, 1);
     tile_regs_acquire();
@@ -76,8 +76,8 @@ inline void reduce_h_fused(
     for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
         reduce_tile_math(c_i,  num_faces_in_tile /* reduce 1 or 2 faces */);
     }
-    //if (curr_in_cb_id != in_cb_id) {
-        dprint_tensix_dest_reg(0);
+    // if (curr_in_cb_id != in_cb_id) {
+    // dprint_tensix_dest_reg(0);
     //}
     cb_pop_front(curr_in_cb_id, 1);
     tile_regs_wait();
@@ -87,7 +87,7 @@ inline void reduce_h_fused(
     //if (curr_in_cb_id != in_cb_id) {
     //    print_tile_rows(out_cb_id, 32, 0, false);
     //}
-    cb_push_back(out_cb_id, 1);
+    cb_push_back(out_cb_id, num_output_tiles);
 }
 
 namespace NAMESPACE {
