@@ -136,7 +136,9 @@ static OptimizedConvBlockConfig get_opt_block_config(
         out_channels,
         device->compute_with_storage_grid_size(),
         shard_orientation,
-        !use_non_tile_height);
+        true,
+        !use_non_tile_height,
+        conv_config.act_block_h_override);
 
     auto output_parallel_config = parallel_config;
     if(conv_config.shard_layout.value() == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !mm_conv) {
@@ -162,8 +164,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
         in_channels,
         get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment);
 
-    uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
-        conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
+    uint32_t nhw_out_padded_ntile = conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
 
     return determine_per_core_conv_block_config(
         parallel_config,
