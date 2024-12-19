@@ -42,7 +42,7 @@
 
 #include "llrt/hal.hpp"
 
-#include "third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "umd/device/tt_simulation_device.h"
 
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"

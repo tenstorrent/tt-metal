@@ -92,7 +92,6 @@ class TtLlamaAttention(LightweightModule):
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
 
-        self.layer_num = layer_num
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
@@ -317,8 +316,8 @@ class TtLlamaAttention(LightweightModule):
         # KV update
         ###
         if kv_cache:
-            keys = kv_cache[self.layer_num][0]
-            values = kv_cache[self.layer_num][1]
+            keys = kv_cache[0]
+            values = kv_cache[1]
         else:
             keys = self.layer_past[0]
             values = self.layer_past[1]
@@ -536,7 +535,7 @@ class TtLlamaAttention(LightweightModule):
 
         # Fill KV-Cache
         if kv_cache:
-            keys_BKSD, values_BKSD = kv_cache[self.layer_num][0], kv_cache[self.layer_num][1]
+            keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 

@@ -1776,8 +1776,9 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
-
-    int32_t num_tiles = a.volume() / TILE_HW;
+    const auto tile = a.get_tensor_spec().tile();
+    const uint32_t tile_hw = tile.get_tile_hw();
+    int32_t num_tiles = a.volume() / tile_hw;
 
     tt::tt_metal::Device* device = a.device();
 
@@ -1793,7 +1794,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
 
     auto& all_cores = shard_spec.grid;
     uint32_t num_cores = all_cores.num_cores();
-    uint32_t num_tiles_per_shard = shard_spec.numel() / TILE_HW;
+    uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
 
     tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
@@ -1848,11 +1849,22 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
         total_cores,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
 
-    uint32_t Wt = shard_spec.shape[1] / TILE_WIDTH;
-    uint32_t Ht = a.get_legacy_shape()[-2] / TILE_HEIGHT;
-    uint32_t HtWt = Ht * Wt;
-    uint32_t N = shard_spec.shape[0] / a.get_legacy_shape()[-2];
-    uint32_t NHtWt = N * HtWt;
+    auto padded_shape = a.get_padded_shape();
+    auto shard_shape = shard_spec.shape;
+
+    uint32_t H = padded_shape[2], W = padded_shape[3];
+    uint32_t Hs = shard_shape[0], Ws = shard_shape[1];
+
+    uint32_t Hts = Hs / tile.tile_shape[0];
+    uint32_t Wts = Ws / tile.tile_shape[1];
+
+    uint32_t Ht = H / tile.tile_shape[0];
+    uint32_t Ht_per_shard = std::min(Ht, Hts);
+
+    uint32_t num_hw_blocks_per_shard = Hts > Ht ? Hts / Ht : 1;
+
+    uint32_t HtWt_tile_size = Ht_per_shard * Wts;
+    uint32_t num_blocks = num_hw_blocks_per_shard * HtWt_tile_size;
 
     auto bbox = all_cores.bounding_box();
     std::vector<CoreCoord> cores =
@@ -1862,13 +1874,17 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     std::vector<std::vector<uint32_t>> unary_compute_args = {cores.size(), std::vector<uint32_t>(5)};
     std::vector<std::vector<uint32_t>> unary_writer_args = {cores.size(), std::vector<uint32_t>(1)};
     std::fill(
-        unary_reader_args.begin(), unary_reader_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{NHtWt});
+        unary_reader_args.begin(),
+        unary_reader_args.begin() + all_cores.num_cores(),
+        std::vector<uint32_t>{num_blocks});
     std::fill(
         unary_compute_args.begin(),
         unary_compute_args.begin() + all_cores.num_cores(),
-        std::vector<uint32_t>{NHtWt, HtWt, N, Ht, Wt});
+        std::vector<uint32_t>{num_blocks, HtWt_tile_size, num_hw_blocks_per_shard, Ht_per_shard, Wts});
     std::fill(
-        unary_writer_args.begin(), unary_writer_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{NHtWt});
+        unary_writer_args.begin(),
+        unary_writer_args.begin() + all_cores.num_cores(),
+        std::vector<uint32_t>{num_blocks});
 
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, cores, unary_reader_args);
     tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, cores, unary_compute_args);
@@ -1899,7 +1915,11 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
 
         auto shard_spec = src_tensor.shard_spec().value();
 
-        uint32_t num_tiles_per_shard = shard_spec.numel() / TILE_HW;
+        const auto tile = src_tensor.get_tensor_spec().tile();
+        const uint32_t tile_hw = tile.get_tile_hw();
+        int32_t num_tiles = src_tensor.volume() / tile_hw;
+
+        uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
 
         if (src0_sharded) {
             UpdateDynamicCircularBufferAddressAndTotalSize(
@@ -1911,11 +1931,22 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
                 program, cb_output, *dst_buffer, num_tiles_per_shard * dst_single_tile_size);
         }
 
-        uint32_t Wt = shard_spec.shape[1] / TILE_WIDTH;
-        uint32_t Ht = src_tensor.get_legacy_shape()[-2] / TILE_HEIGHT;
-        uint32_t HtWt = Ht * Wt;
-        uint32_t N = shard_spec.shape[0] / src_tensor.get_legacy_shape()[-2];
-        uint32_t NHtWt = N * HtWt;
+        auto padded_shape = src_tensor.get_padded_shape();
+        auto shard_shape = shard_spec.shape;
+
+        uint32_t H = padded_shape[2], W = padded_shape[3];
+        uint32_t Hs = shard_shape[0], Ws = shard_shape[1];
+
+        uint32_t Hts = Hs / tile.tile_shape[0];
+        uint32_t Wts = Ws / tile.tile_shape[1];
+
+        uint32_t Ht = H / tile.tile_shape[0];
+        uint32_t Ht_per_shard = std::min(Ht, Hts);
+
+        uint32_t num_hw_blocks_per_shard = Hts > Ht ? Hts / Ht : 1;
+
+        uint32_t HtWt_tile_size = Ht_per_shard * Wts;
+        uint32_t num_blocks = num_hw_blocks_per_shard * HtWt_tile_size;
 
         const auto& all_cores = shard_spec.grid;
         bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
@@ -1927,13 +1958,17 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
         std::vector<std::vector<uint32_t>> unary_compute_args = {cores.size(), std::vector<uint32_t>(5)};
         std::vector<std::vector<uint32_t>> unary_writer_args = {cores.size(), std::vector<uint32_t>(1)};
         std::fill(
-            unary_reader_args.begin(), unary_reader_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{NHtWt});
+            unary_reader_args.begin(),
+            unary_reader_args.begin() + all_cores.num_cores(),
+            std::vector<uint32_t>{num_blocks});
         std::fill(
             unary_compute_args.begin(),
             unary_compute_args.begin() + all_cores.num_cores(),
-            std::vector<uint32_t>{NHtWt, HtWt, N, Ht, Wt});
+            std::vector<uint32_t>{num_blocks, HtWt_tile_size, num_hw_blocks_per_shard, Ht_per_shard, Wts});
         std::fill(
-            unary_writer_args.begin(), unary_writer_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{NHtWt});
+            unary_writer_args.begin(),
+            unary_writer_args.begin() + all_cores.num_cores(),
+            std::vector<uint32_t>{num_blocks});
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, cores, unary_reader_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, cores, unary_compute_args);

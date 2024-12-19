@@ -5,4 +5,4 @@ set(DISTRIBUTED_SRC
 )
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
-target_link_libraries(distributed PUBLIC common)
+target_link_libraries(distributed PUBLIC common PRIVATE Metalium::Metal::Impl)
