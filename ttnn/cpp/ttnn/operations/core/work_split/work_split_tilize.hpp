@@ -183,16 +183,15 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     uint32_t blocks_per_core,
     bool has_cliff,
     uint32_t nblocks_per_core_cliff) {
-    TT_FATAL(
-        logical_shape.rank() >= 2, "Logical shape rank needs to be >=2. Shape: {}", "Error", logical_shape, padding);
+    TT_FATAL(padding.rank() >= 2 && padding.rank() <= 4, "Rank needs to be >=2. Shape: {} {}", logical_shape, padding);
 
     auto input_w = logical_shape.rank() >= 4 ? logical_shape[-4] : 1;
     auto input_z = logical_shape.rank() >= 3 ? logical_shape[-3] : 1;
     auto input_y = logical_shape.rank() >= 2 ? logical_shape[-2] : 1;
 
-    auto padding_w = logical_shape.rank() >= 4 ? padding[padding.get_normalized_index(-4)].back : 0;
-    auto padding_z = logical_shape.rank() >= 3 ? padding[padding.get_normalized_index(-3)].back : 0;
-    auto padding_y = logical_shape.rank() >= 2 ? padding[padding.get_normalized_index(-2)].back : 0;
+    auto padding_w = padding.rank() >= 4 ? padding[-4].back : 0;
+    auto padding_z = padding.rank() >= 3 ? padding[-3].back : 0;
+    auto padding_y = padding.rank() >= 2 ? padding[-2].back : 0;
 
     // total work is a full rep followed by a padding.
     auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w).to_block_reps();
