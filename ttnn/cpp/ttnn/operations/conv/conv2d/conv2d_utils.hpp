@@ -24,14 +24,14 @@ struct Conv2dConfig {
     DataType weights_dtype = DataType::BFLOAT16;
     string activation = "";
     uint32_t input_channels_alignment = 32;
-    bool deallocate_activation = false;
-    bool reallocate_halo_output = false;
-    uint32_t act_block_h_override = 0;  // This argument is ignored when shard_layout == WIDTH_SHARDED.
-    uint32_t act_block_w_div =
-        1;  // Amount by which the maximum possible act_block_width is divided. Max act_block_w = in_channels /
-            // (total_num_cores * TILE_WIDTH); Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
-    bool reshard_if_not_optimal = false;    // if true, override_sharding_config should not be set to true
-    bool override_sharding_config = false;  // if true, reshard_if_not_optimal should not be set to true
+    bool deallocate_activation = false; // If user tensor will be deallocated if it's on device.
+    bool reallocate_halo_output = true; // If true after halo device op is done, the output tensor will be reallocated.
+                                        // in case deallocate_activation is set to true.
+    uint32_t act_block_h_override = 0; // This argument is ignored when shard_layout == WIDTH_SHARDED.
+    uint32_t act_block_w_div = 1; // Amount by which the maximum possible act_block_width is divided. Max act_block_w = in_channels / (total_num_cores * TILE_WIDTH);
+                                  // Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
+    bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
+    bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
     std::optional<TensorMemoryLayout> shard_layout = std::nullopt;
     std::optional<CoreRangeSet> core_grid = std::nullopt;  // used only if override_sharding_config is true
     bool transpose_shards = true;  // used only if override_sharding_config is true and if height sharding is false
