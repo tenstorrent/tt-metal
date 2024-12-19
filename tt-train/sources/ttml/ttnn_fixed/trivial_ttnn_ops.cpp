@@ -49,7 +49,7 @@ tt::tt_metal::Tensor divide(const tt::tt_metal::Tensor& a, const tt::tt_metal::T
     return ttnn::multiply(a, inv_b);
 }
 
-tt::tt_metal ::Tensor mean_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
+tt::tt_metal::Tensor mean_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
     auto res = ttnn::moreh_mean(
         t,
         dim,
