@@ -10,6 +10,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 
 
+# Related to issue 16181
 def run_tests(
     input_shape,
     dtype,
