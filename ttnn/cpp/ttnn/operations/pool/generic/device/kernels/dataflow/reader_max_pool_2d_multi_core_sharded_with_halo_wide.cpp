@@ -63,7 +63,7 @@ void kernel_main() {
 
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
 
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(14);
+    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(13);
 
     // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
 
