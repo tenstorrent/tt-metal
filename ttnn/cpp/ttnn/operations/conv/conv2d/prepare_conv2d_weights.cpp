@@ -594,7 +594,29 @@ static OptimizedConvBlockConfig get_opt_block_config(
             .shard_scheme = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
             .shard_orientation = parallel_config.shard_orientation};
         log_debug(tt::LogOp, "Changing width sharded output grid to  {}", output_parallel_config.grid);
+/*=======
+    ParallelConfig parallel_config;
+    if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
+        parallel_config = {
+            .grid = input_memory_config.shard_spec.value().grid,
+            .shard_scheme = input_memory_config.memory_layout,
+            .shard_orientation = input_memory_config.shard_spec.value().orientation};
+    } else {
+        parallel_config = determine_parallel_config(
+            conv_config.shard_layout.value(),
+            batch_size,
+            in_channels,
+            output_height,
+            output_width,
+            out_channels,
+            device->compute_with_storage_grid_size(),
+            shard_orientation,
+            !mm_conv,
+            !use_non_tile_height);
+    >>>>>>> 187922d5f1 (#14179: Delete convd_host_weights and update all tests using conv2d.)*/
     }
+    ParallelConfig output_parallel_config =
+        determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, mm_conv);
 
     uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
@@ -649,6 +671,11 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     validate_weight_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
+
+    //const auto& original_weights_shape = weight_tensor.get_logical_shape();
+    std::cout << weight_block_h_ntiles << " " << weight_block_w_ntiles << " " << act_block_h_ntiles << std::endl;
+    std::cout << "parallel config -> " << parallel_config.grid.num_cores() << " " << (int)parallel_config.shard_scheme
+              << " " << (int)parallel_config.shard_orientation << std::endl;
 
     const auto& original_weights_shape = weight_tensor.get_logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
@@ -827,8 +854,28 @@ ttnn::Tensor prepare_conv_weights(
         !use_non_tile_height,
         is_non_tile_mul_width);
 
-    ParallelConfig output_parallel_config = determine_output_parallel_config(
+    /*ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
+    ParallelConfig parallel_config;
+    if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
+        std::cout << "should not come here " << std::endl;
+        parallel_config = {
+            .grid = input_memory_config.shard_spec.value().grid,
+            .shard_scheme = input_memory_config.memory_layout,
+            .shard_orientation = input_memory_config.shard_spec.value().orientation};
+    } else {
+        parallel_config = determine_parallel_config(
+            conv_config.shard_layout.value(),
+            batch_size,
+            in_channels,
+            output_height,
+            output_width,
+            out_channels,
+            device->compute_with_storage_grid_size(),
+            shard_orientation,
+            !mm_conv,
+            !use_non_tile_height);
+    }*/
 
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt;
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
@@ -870,8 +917,6 @@ ttnn::Tensor prepare_conv_bias(
     T* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
-    TT_FATAL(
-        !ttnn::is_tensor_on_device_or_multidevice(bias_tensor), "Error: bias tensor must be on host for preparation.");
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
 
@@ -907,8 +952,6 @@ ttnn::Tensor prepare_conv_bias(
 
     const bool use_non_tile_height = check_non_tile_height(conv_config, out_channels);
 
-    bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
-
     ParallelConfig parallel_config = determine_parallel_config(
         conv_config.shard_layout.value(),
         batch_size,
@@ -924,6 +967,29 @@ ttnn::Tensor prepare_conv_bias(
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
+/*=======
+    ParallelConfig parallel_config;
+    if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
+        parallel_config = {
+            .grid = input_memory_config.shard_spec.value().grid,
+            .shard_scheme = input_memory_config.memory_layout,
+            .shard_orientation = input_memory_config.shard_spec.value().orientation};
+    } else {
+        bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
+        parallel_config = determine_parallel_config(
+            conv_config.shard_layout.value(),
+            batch_size,
+            in_channels,
+            output_height,
+            output_width,
+            out_channels,
+            device->compute_with_storage_grid_size(),
+            shard_orientation,
+            !mm_conv,
+            !use_non_tile_height,
+            is_non_tile_mul_width);
+    }
+>>>>>>> 187922d5f1 (#14179: Delete convd_host_weights and update all tests using conv2d.)*/
 
     ttnn::Tensor bias_tensor_ = bias_tensor;
     TT_FATAL(bias_tensor_.shape()[3] == out_channels, "Bias must have the same length as output channels");

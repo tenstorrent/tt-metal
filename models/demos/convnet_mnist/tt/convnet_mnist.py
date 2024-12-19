@@ -35,24 +35,41 @@ def convnet_mnist(
         packer_l1_acc=False,
     )
     x = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    tt_weight = parameters.conv1.weight
+    tt_bias = parameters.conv1.bias
+    conv_kwargs = {
+        "in_channels": 1,
+        "out_channels": 32,
+        "batch_size": batch_size,
+        "input_height": input_tensor.shape[1],
+        "input_width": input_tensor.shape[2],
+        "kernel_size": (3, 3),
+        "stride": (1, 1),
+        "padding": (0, 0),
+        "dilation": (1, 1),
+        "groups": 1,
+        "device": device,
+        "conv_config": conv_config,
+    }
+
+    if not ttnn.is_tensor_storage_on_device(tt_weight):
+        tt_weight = ttnn.prepare_conv_weights(
+            weight_tensor=tt_weight,
+            weights_format="OIHW",
+            input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            input_layout=x.get_layout(),
+            **conv_kwargs,
+        )
+        tt_weight = ttnn.to_device(tt_weight, device)
+
     x = ttnn.conv2d(
         input_tensor=x,
-        weight_tensor=parameters.conv1.weight,
-        in_channels=1,
-        out_channels=32,
-        device=device,
-        bias_tensor=parameters.conv1.bias,
-        kernel_size=(3, 3),
-        stride=(1, 1),
-        padding=(0, 0),
-        batch_size=batch_size,
-        input_height=input_tensor.shape[1],
-        input_width=input_tensor.shape[2],
-        conv_config=conv_config,
+        weight_tensor=tt_weight,
+        **conv_kwargs,
         compute_config=compute_config,
         conv_op_cache={},
         debug=True,
-        groups=1,
         return_output_dim=False,
         return_weights_and_bias=False,
     )
@@ -81,13 +98,40 @@ def convnet_mnist(
             dilation=[1, 1],
         )
 
+    tt_weight = parameters.conv2.weight
+    tt_bias = parameters.conv2.bias
+    conv_kwargs = {
+        "input_layout": x.get_layout(),
+        "in_channels": 32,
+        "out_channels": 64,
+        "batch_size": batch_size,
+        "input_height": 15,
+        "input_width": 15,
+        "kernel_size": (3, 3),
+        "stride": (1, 1),
+        "padding": (0, 0),
+        "dilation": (1, 1),
+        "groups": 1,
+        "device": device,
+        "conv_config": conv_config,
+    }
+
+    if not ttnn.is_tensor_storage_on_device(tt_weight):
+        tt_weight = ttnn.prepare_conv_weights(
+            weight_tensor=tt_weight,
+            weights_format="OIHW",
+            input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            **conv_kwargs,
+        )
+        tt_weight = ttnn.to_device(tt_weight, device)
+
     x, [out_height, out_width] = ttnn.conv2d(
         input_tensor=x,
-        weight_tensor=parameters.conv2.weight,
+        weight_tensor=tt_weight,
         in_channels=32,
         out_channels=64,
         device=device,
-        bias_tensor=parameters.conv2.bias,
+        bias_tensor=tt_bias,
         kernel_size=(3, 3),
         stride=(1, 1),
         padding=(0, 0),

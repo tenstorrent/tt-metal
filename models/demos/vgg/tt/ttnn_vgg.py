@@ -115,22 +115,50 @@ def ttnn_vgg16(
             tt_weight = ttnn.to_layout(ttnn.from_device(tt_weight), layout=ttnn.ROW_MAJOR_LAYOUT)
             tt_bias = parameters.features[conv_feature_ids[iter_conv_id]].bias
             tt_bias = ttnn.to_layout(ttnn.from_device(tt_bias), layout=ttnn.ROW_MAJOR_LAYOUT)
+
+            conv_kwargs = {
+                "in_channels": conv_ttnn_params[iter_conv_id][0],
+                "out_channels": conv_ttnn_params[iter_conv_id][1],
+                "batch_size": batch_size,
+                "input_height": conv_ttnn_params[iter_conv_id][2],
+                "input_width": conv_ttnn_params[iter_conv_id][3],
+                "kernel_size": (3, 3),
+                "stride": (1, 1),
+                "padding": (1, 1),
+                "dilation": (1, 1),
+                "groups": 1,
+                "device": device,
+                "conv_config": conv_config,
+            }
+
+            if not ttnn.is_tensor_storage_on_device(tt_weight):
+                tt_weight = ttnn.prepare_conv_weights(
+                    weight_tensor=tt_weight,
+                    weights_format="OIHW",
+                    input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                    input_layout=tt_x.get_layout(),
+                    **conv_kwargs,
+                )
+
+                tt_bias = (
+                    ttnn.prepare_conv_bias(
+                        bias_tensor=tt_bias,
+                        input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                        input_layout=tt_x.get_layout(),
+                        **conv_kwargs,
+                    )
+                    if tt_bias is not None
+                    else None
+                )
+
+                tt_weight = ttnn.to_device(tt_weight, device)
+                tt_bias = ttnn.to_device(tt_bias, device) if tt_bias else None
             # Call ttnn.conv
             conv_op_cache = {}
             [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
                 input_tensor=tt_x,
                 weight_tensor=tt_weight,
-                in_channels=conv_ttnn_params[iter_conv_id][0],
-                out_channels=conv_ttnn_params[iter_conv_id][1],
-                device=device,
-                bias_tensor=tt_bias,
-                kernel_size=(3, 3),
-                stride=(1, 1),
-                padding=(1, 1),
-                batch_size=batch_size,
-                input_height=conv_ttnn_params[iter_conv_id][2],
-                input_width=conv_ttnn_params[iter_conv_id][3],
-                conv_config=conv_config,
+                **conv_kwargs,
                 compute_config=compute_config,
                 conv_op_cache=conv_op_cache,
                 return_output_dim=True,
@@ -244,6 +272,43 @@ def ttnn_vgg11(
             tt_weight = ttnn.to_layout(ttnn.from_device(tt_weight), layout=ttnn.ROW_MAJOR_LAYOUT)
             tt_bias = parameters.features[conv_feature_ids_2[iter_conv_id]].bias
             tt_bias = ttnn.to_layout(ttnn.from_device(tt_bias), layout=ttnn.ROW_MAJOR_LAYOUT)
+
+            conv_kwargs = {
+                "input_layout": tt_x.get_layout(),
+                "in_channels": conv_ttnn_params_2[iter_conv_id][0],
+                "out_channels": conv_ttnn_params_2[iter_conv_id][1],
+                "batch_size": batch_size,
+                "input_height": conv_ttnn_params_2[iter_conv_id][2],
+                "input_width": conv_ttnn_params_2[iter_conv_id][3],
+                "kernel_size": (3, 3),
+                "stride": (1, 1),
+                "padding": (1, 1),
+                "dilation": (1, 1),
+                "groups": 1,
+                "device": device,
+                "conv_config": conv_config,
+            }
+
+            if not ttnn.is_tensor_storage_on_device(tt_weight):
+                tt_weight = ttnn.prepare_conv_weights(
+                    weight_tensor=tt_weight,
+                    weights_format="OIHW",
+                    input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                    **conv_kwargs,
+                )
+
+                tt_bias = (
+                    ttnn.prepare_conv_bias(
+                        bias_tensor=tt_bias,
+                        input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                        **conv_kwargs,
+                    )
+                    if tt_bias is not None
+                    else None
+                )
+
+                tt_weight = ttnn.to_device(tt_weight, device)
+                tt_bias = ttnn.to_device(tt_bias, device) if tt_bias else None
 
             # Call ttnn.conv
             conv_op_cache = {}

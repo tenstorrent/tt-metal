@@ -63,22 +63,48 @@ class Conv:
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
+        conv_kwargs = {
+            "in_channels": input_tensor.shape[3],
+            "out_channels": self.out_channels,
+            "batch_size": input_tensor.shape[0],
+            "input_height": input_tensor.shape[1],
+            "input_width": input_tensor.shape[2],
+            "kernel_size": self.kernel_size,
+            "stride": (self.conv_params[0], self.conv_params[1]),
+            "padding": (self.conv_params[2], self.conv_params[3]),
+            "dilation": (1, 1),
+            "groups": self.groups,
+            "device": device,
+            "conv_config": conv_config,
+        }
+
+        if not ttnn.is_tensor_storage_on_device(self.weights):
+            self.weights = ttnn.prepare_conv_weights(
+                weight_tensor=self.weights,
+                weights_format="OIHW",
+                input_memory_config=input_tensor.memory_config(),
+                input_layout=input_tensor.get_layout(),
+                **conv_kwargs,
+            )
+            self.bias = (
+                ttnn.prepare_conv_bias(
+                    bias_tensor=self.bias,
+                    input_memory_config=input_tensor.memory_config(),
+                    input_layout=input_tensor.get_layout(),
+                    **conv_kwargs,
+                )
+                if self.bias is not None
+                else None
+            )
+            self.weights = ttnn.to_device(self.weights, device)
+            self.bias = ttnn.to_device(self.bias, device) if self.bias else None
+
         [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
-            in_channels=input_tensor.shape[3],
-            out_channels=self.out_channels,
-            device=device,
-            kernel_size=self.kernel_size,
-            stride=(self.conv_params[0], self.conv_params[1]),
-            padding=(self.conv_params[2], self.conv_params[3]),
-            batch_size=input_tensor.shape[0],
-            input_height=input_tensor.shape[1],
-            input_width=input_tensor.shape[2],
-            conv_config=conv_config,
+            **conv_kwargs,
             compute_config=compute_config,
-            groups=self.groups,
             return_output_dim=True,
             return_weights_and_bias=False,
         )

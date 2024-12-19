@@ -147,6 +147,37 @@ class UNetConv2D:
         self.bias = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
     def __call__(self, x):
+        conv_kwargs = {
+            "input_layout": x.get_layout(),
+            "in_channels": self.in_channels,
+            "out_channels": self.out_channels,
+            "batch_size": self.batch_size,
+            "input_height": self.input_height,
+            "input_width": self.input_width,
+            "kernel_size": self.kernel_size,
+            "stride": self.stride,
+            "padding": self.padding,
+            "dilation": [1, 1],
+            "groups": self.groups,
+            "device": self.device,
+            "conv_config": self.conv_config,
+        }
+
+        if not ttnn.is_tensor_storage_on_device(self.weight):
+            self.weight = ttnn.prepare_conv_weights(
+                weight_tensor=self.weight,
+                weights_format="OIHW",
+                input_memory_config=x.memory_config(),
+                **conv_kwargs,
+            )
+            self.bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.bias,
+                input_memory_config=x.memory_config(),
+                **conv_kwargs,
+            )
+            self.weight = ttnn.to_device(self.weight, self.device)
+            self.bias = ttnn.to_device(self.bias, self.device) if self.bias else None
+
         x, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
