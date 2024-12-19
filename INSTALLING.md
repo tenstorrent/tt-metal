@@ -84,27 +84,6 @@ pip install git+https://github.com/tenstorrent/tt-flash.git
 
 ---
 
-#### Setup Hugepages
-
-- Download and install HugePages:
-```sh
-wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
-sudo -E python3 setup_hugepages.py first_pass
-```
-
-- Reboot to load changes:
-```
-sudo reboot
-```
-
-- Enable/check HugePages setup:
-  - Ensure you are in the same directory where setup_hugepages.py was downloaded.
-```sh
-sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
-```
-
----
-
 #### Update Device TT-Firmware with TT-Flash
 
 - Check if TT-Flash is installed:
