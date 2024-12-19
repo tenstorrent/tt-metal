@@ -217,6 +217,9 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
     auto output_padding = Padding(
         {{0, 0}, {0, 0}, {0, 0}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Zero);
     auto output_shape = tt::tt_metal::LegacyShape({batch_size, conv_output_h, conv_output_w, padded_shape_c}, output_padding);
+    if(conv_output_w == 1){
+        output_shape = tt::tt_metal::LegacyShape({batch_size, conv_output_w, conv_output_h, padded_shape_c}, output_padding); //handing conv1d transpose.
+    }
 
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->memory_config.is_sharded()) {
