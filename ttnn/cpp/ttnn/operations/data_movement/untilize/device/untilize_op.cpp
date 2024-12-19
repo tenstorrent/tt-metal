@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks Untilize::create_program(
     auto& output_tensor = output_tensors.at(0);
     if (this->use_multicore) {
         return detail::untilize_multi_core(
-            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->sub_core_grids);
     } else {
         return detail::untilize_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
