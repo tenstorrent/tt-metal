@@ -409,6 +409,9 @@ int main(int argc, char** argv) {
             }
         }
 
+        // clear test status to 0. it will be set to non-zero value by tx kernel.
+        tt::llrt::write_hex_vec_to_core(test_device_id_l, tx_phys_core[0], zero_buf, test_results_addr);
+
         for (auto device : device_map) {
             log_info(LogTest, "Launching on {}", device.first);
             tt_metal::detail::LaunchProgram(device.second, program_map[device.first], false);
@@ -421,6 +424,24 @@ int main(int argc, char** argv) {
             tt::llrt::write_hex_vec_to_core(test_device_id_l, tx_phys_core[i], tx_start, tx_queue_start_addr);
         }
 
+        // Wait for tx to return non-zero status.
+        while (1) {
+            auto tx_status = tt::llrt::read_hex_vec_from_core(test_device_id_l, tx_phys_core[0], test_results_addr, 4);
+            if ((tx_status[0] & 0xFFFF) != 0) {
+                break;
+            }
+        }
+
+        log_info(LogTest, "Tx Finished");
+
+        // terminate fabric routers
+        for (auto [device_id, router_phys_cores] : device_router_map) {
+            for (auto phys_core : router_phys_cores) {
+                tt::llrt::write_hex_vec_to_core(device_id, phys_core, zero_buf, FABRIC_ROUTER_SYNC_SEM);
+            }
+        }
+
+        // wait for all kernels to finish.
         for (auto device : device_map) {
             tt_metal::detail::WaitProgramDone(device.second, program_map[device.first]);
         }
