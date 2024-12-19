@@ -35,6 +35,68 @@ def test_remainder_fp32(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
+        ttnn.remainder,
+    ],
+)
+def test_remainder_range_fp32(device, ttnn_function):
+    torch.manual_seed(0)
+    low, high = 1, 10
+    input_shape = (32, 32)
+    dtype = torch.float32
+    x_torch = (high - low) * torch.rand(input_shape, dtype=dtype) + low
+    y_torch = (high - low) * torch.rand(input_shape, dtype=dtype) + low
+    z_torch = torch.remainder(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_div = ttnn.remainder(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt_div)
+    # torch.set_printoptions(linewidth=200, threshold = 10000 , precision=15, sci_mode = False, edgeitems=17)
+    # print(tt_out)
+    # print(z_torch)
+
+    status = torch.allclose(z_torch, tt_out, atol=1e-6, rtol=1e-5, equal_nan=False)
+    assert status
+
+    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out)
+    print(status)  # pcc = 1.0
+    assert status >= 0.99
+
+
+@skip_for_grayskull("Unsupported dtype for Grayskull")
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.divide,
+    ],
+)
+def test_sfpu_div_fp32(device, ttnn_function):
+    torch.manual_seed(0)
+    low, high = -0.5, 0.5
+    input_shape = (32, 32)
+    dtype = torch.float32
+    x_torch = (high - low) * torch.rand(input_shape, dtype=dtype) + low
+    y_torch = (high - low) * torch.rand(input_shape, dtype=dtype) + low
+    z_torch = torch.divide(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_div = ttnn.divide(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt_div)
+    # torch.set_printoptions(linewidth=200, threshold = 10000 , precision=15, sci_mode = False, edgeitems=17)
+    # print(tt_out)
+    # print(z_torch)
+
+    status = torch.allclose(z_torch, tt_out, atol=1e-6, rtol=1e-5, equal_nan=False)
+    assert status
+
+    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out)
+    print(status)  # pcc = 0.9999999999999986
+    assert status >= 0.99
+
+
+@skip_for_grayskull("Unsupported dtype for Grayskull")
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
         ttnn.div_no_nan,
     ],
 )
