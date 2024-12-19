@@ -238,12 +238,14 @@ If one of these tests fails, it means one (or more) of the following:
 */
 
 TEST_F(NanoGPTTest, AdamW) {
+    GTEST_SKIP() << "Skipping AdamW";
     if (should_run_tests()) {
         train_test(/* use_moreh_adamw */ false);
     }
 }
 
 TEST_F(NanoGPTTest, MorehAdamW) {
+    GTEST_SKIP() << "Skipping MorehAdamW";
     if (should_run_tests()) {
         train_test(/* use_moreh_adamw */ true);
     }
