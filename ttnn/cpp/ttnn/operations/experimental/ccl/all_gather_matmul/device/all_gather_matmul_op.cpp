@@ -219,7 +219,9 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                     ttnn::operations::matmul::get_fused_activation(activation),
                     user_run_batched,
                     transpose_a,
-                    transpose_b});
+                    transpose_b,
+                    /*output_tile=*/std::nullopt,
+                    /*global_cb=*/nullptr});
 
             return operation::run(
                 ttnn::experimental::AllGatherMatmul{/* All Gather Params */

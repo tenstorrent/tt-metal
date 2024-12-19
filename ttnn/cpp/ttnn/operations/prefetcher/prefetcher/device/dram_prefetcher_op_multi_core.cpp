@@ -34,9 +34,9 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& tensors,
     const Tensor& tensor_addrs,
     const uint32_t num_layers,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     std::vector<Tensor>& output_tensor) {
-    TT_FATAL(global_cb != std::nullopt, "Global circular buffer must be provided");
+    TT_FATAL(global_cb != nullptr, "Global circular buffer must be provided");
 
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb->cb_buffer();

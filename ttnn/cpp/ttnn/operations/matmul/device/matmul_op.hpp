@@ -53,7 +53,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     bool gather_in0,
     CoreRangeSet hop_cores,
     bool untilize_out,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers
     // std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb
 );
@@ -181,7 +181,7 @@ struct Matmul {
     const bool transpose_a = false;
     const bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
+    const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -201,6 +201,36 @@ struct Matmul {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "program_config",
+        "bcast_batch",
+        "output_mem_config",
+        "output_dtype",
+        "compute_kernel_config",
+        "untilize_out",
+        "user_core_coord",
+        "user_fused_activation",
+        "user_run_batched",
+        "transpose_a",
+        "transpose_b",
+        "output_tile",
+        "global_cb");
+    const auto attribute_values() const {
+        return std::forward_as_tuple(
+            this->program_config,
+            this->bcast_batch,
+            this->output_mem_config,
+            this->output_dtype,
+            this->compute_kernel_config,
+            this->untilize_out,
+            this->user_core_coord,
+            this->user_fused_activation,
+            this->user_run_batched,
+            this->transpose_a,
+            this->transpose_b,
+            this->output_tile,
+            *this->global_cb);
+    }
 };
 
 Matmul create_matmul_struct(

@@ -346,7 +346,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb)
+               const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb)
                 -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
@@ -431,7 +431,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb)
+               const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb)
                 -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
