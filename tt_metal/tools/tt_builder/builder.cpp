@@ -14,24 +14,26 @@ namespace fs = std::filesystem;
 using namespace std;
 
 namespace tt::tt_metal {
-tt_builder::tt_builder() : output_dir_("/tmp/tt-metal-cache/") {}
+BuilderTool::BuilderTool() : output_dir_("/tmp/tt-metal-cache/") {}
 
-tt_builder::~tt_builder() {}
+BuilderTool::~BuilderTool() {}
 
-void tt_builder::set_built_path(const std::string& new_built_path) {
+void BuilderTool::set_built_path(const std::string& new_built_path) {
     output_dir_ = new_built_path;
     output_dir_ /= "";
 }
 
-void tt_builder::build_firmware() {
-    std::filesystem::path fw_output_dir(output_dir_.string() + "firmware/");
-    fs::create_directories(fw_output_dir);
+void BuilderTool::build_firmware() {
     int device_id = 0;
     tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+
+    firmware_output_dir_ = output_dir_.string() + to_string(device->build_key()) + "/firmware/";
+    fs::create_directories(firmware_output_dir_);
+
     const string& gpp_tool = device->build_env().get_gpp_tool();
     JitBuildStateSet& firmware_build_states = device->firmware_build_states_;
 
-    string log_file = fw_output_dir.string() + "build_output.log";
+    string log_file = firmware_output_dir_.string() + "build_output.log";
     for (auto& build_state : firmware_build_states) {
         const string& target_name = build_state->get_target_name();
         const string& build_cflags = build_state->get_cflags();
@@ -44,7 +46,7 @@ void tt_builder::build_firmware() {
 
         // Compiling
         string cmd;
-        cmd = "cd " + fw_output_dir.string() + " && ";
+        cmd = "cd " + firmware_output_dir_.string() + " && ";
         cmd += gpp_tool;
         cmd += build_cflags;
         cmd += build_defines;
@@ -57,12 +59,12 @@ void tt_builder::build_firmware() {
         }
 
         // Linking
-        cmd = "cd " + fw_output_dir.string() + " && ";
+        cmd = "cd " + firmware_output_dir_.string() + " && ";
         cmd += gpp_tool;
         cmd += build_lflags;
         cmd += build_link_objs;
 
-        cmd += "-o " + fw_output_dir.string() + target_name + ".elf";
+        cmd += "-o " + firmware_output_dir_.string() + target_name + ".elf";
         if (!tt::utils::run_command(cmd, log_file, false)) {
             throw(runtime_error("Build failed at link"));
         }
@@ -71,5 +73,5 @@ void tt_builder::build_firmware() {
     tt_metal::CloseDevice(device);
 }
 
-void tt_builder::build_kernel() { throw(runtime_error("Kernel Build not implemented for builder")); }
+void BuilderTool::build_dispatch() { throw(runtime_error("Dispatch Build not implemented for builder")); }
 }  // namespace tt::tt_metal

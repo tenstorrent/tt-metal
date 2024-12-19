@@ -11,16 +11,16 @@ void print_usage(const char* exec_name) {
     cout << "Usage: " << exec_name << " [OPTION]" << endl;
     cout << "\t-h, --help           : Display this message." << endl;
     cout << "\t--build-firmware     : Build Firmware." << endl;
-    cout << "\t--build-kernel       : Build Kernel." << endl;
-    cout << "\t--build-all          : Build Firmware and Kernel." << endl;
+    cout << "\t--build-dispatch     : Build Dispatch." << endl;
+    cout << "\t--build-all          : Build Firmware and Dispatch." << endl;
     cout << "\t--set-output-path    : Set output path for binaries." << endl;
 }
 
 int main(int argc, char* argv[]) {
-    cout << "Running tt_builder " << endl;
+    tt::log_info("Running tt_builder ");
 
     try {
-        bool run_firmware_build = false, run_kernel_build = false, set_built_path = false;
+        bool run_firmware_build = false, run_dispatch_build = false, set_built_path = false;
         string output_path;
         for (int idx = 1; idx < argc; idx++) {
             string input(argv[idx]);
@@ -29,28 +29,26 @@ int main(int argc, char* argv[]) {
                 return 0;
             } else if (input.rfind("--build-firmware", 0) == 0) {
                 run_firmware_build = true;
-            } else if (input.rfind("--build-kernel", 0) == 0) {
-                run_kernel_build = true;
+            } else if (input.rfind("--build-dispatch", 0) == 0) {
+                run_dispatch_build = true;
             } else if (input.rfind("--build-all", 0) == 0) {
                 run_firmware_build = true;
-                run_kernel_build = true;
+                run_dispatch_build = true;
             } else if (input.rfind("--set-output-path=", 0) == 0) {
                 set_built_path = true;
                 output_path = input.substr(input.find("=") + 1);
             } else {
-                cout << "Error: unrecognized command line argument: " << input << endl;
                 print_usage(argv[0]);
                 throw(runtime_error("Unrecognized option"));
             }
         }
 
-        if (!run_firmware_build && !run_kernel_build) {
-            cout << "Error: No build selected to run " << endl;
+        if (!run_firmware_build && !run_dispatch_build) {
             print_usage(argv[0]);
-            throw(runtime_error("Unrecognized option"));
+            throw(runtime_error("No build selected to run"));
         }
 
-        tt::tt_metal::tt_builder builder;
+        tt::tt_metal::BuilderTool builder;
         if (set_built_path) {
             builder.set_built_path(output_path);
         }
@@ -58,14 +56,14 @@ int main(int argc, char* argv[]) {
         if (run_firmware_build) {
             builder.build_firmware();
         }
-        if (run_kernel_build) {
-            builder.build_kernel();
+        if (run_dispatch_build) {
+            builder.build_dispatch();
         }
     } catch (const exception& e) {
         // Capture the exception error message
-        log_error(tt::LogTest, "{}", e.what());
+        tt::log_error("{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
-        log_error(tt::LogTest, "System error message: {}", strerror(errno));
+        tt::log_error("System error message: {}", strerror(errno));
     }
     return 0;
 }
