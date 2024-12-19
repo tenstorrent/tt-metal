@@ -777,21 +777,26 @@ x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape
 | LM head slicing | Slices to last tile before Lm head matmul to extract the last token | Slicing not required |
 
 ### 3.3 Multi-Device
-There are two main approaches for scaling across multiple devices: data parallel and tensor parallel.
+
+Please note that this section refers to sharding schemes across devices and not on a multi-core level. For details about different matmul versions and sharding on a core level, please see the [matmul configuration section](#44-op-configs).
+
+There are two main approaches for scaling across multiple devices: `data parallel` and `tensor parallel`.
 
 In data parallel scaling there are _multiple independent_ instances of the model running in parallel so that multiple batches of users are processed at the same time. This mode is used to increase throughput.
 
-In tensor parallel scaling there is _one_ instance of the model executed on multiple devices, where a single operation is performed distributed and thus in parallel on multiple devices. This mode allows larger models, that would not fit on a single device, to run on multiple devices, and typically also reduces latency.
+In tensor parallel scaling there is _one_ instance of the model executed on multiple devices, where single operations are distributed across devices. This mode allows larger models, that would not typically fit on a single device, to run on multiple devices, and usually also reduces latency.
 
-There is also hybrid forms of those two modes where a cluster of devices runs multiple independent instances of the model, but each of those model instances uses multiple chips in a tensor parallel fashion.
+There are also hybrid forms of those two modes where a cluster of devices runs multiple independent instances of the model, but each of those model instances uses multiple chips in a tensor parallel fashion.
 
-In chapter [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md) there is a good introduction to using TTNN's key concepts for scaling to multiple devices. It shows how to use a single handle for a mesh of devices, and how a tensor can be sharded or replicated to that mesh of devices. The tensor handle is used analogously to single device tensors, with the only difference that all operations on that tensor are then executed in parallel on each device and operate on their respective local chunk of data. This tech report also shows how data parallel and a hybrid form of data and tensor parallelism can be used with TTNN.
+In the report [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md), there is a good introduction to using TTNN's key concepts for scaling to multiple devices. It shows how to use a single handle for a mesh of devices, and how a tensor can be sharded or replicated to that mesh of devices (tensor parallelism).
+The tensor handle is used analogously to single device tensors, with the only difference being that all operations on that tensor are then executed in parallel on each device and operate on their respective local chunk of data.
 
-Multiple devices can be connected with each other in different topologies. The most important ones for us are Ring, where all devices are connected in a ring shape with each other, and Line, where a (sub-) group of devices is connected in a line with each other. Line topology could be a 1D or 2D grid of devices, where each row and column is connected in a line.
+TT-Metal supports different multi-device topologies. The most important ones for us are `Ring` topology, where all devices are connected in a ring shape with each other, and `Line` topology, where a (sub-)group of devices is connected in a line with each other. `Line` topology can be a 1D or 2D grid of devices, where each row and column are connected in a line.
 
-Here is a summary and example code of the most important concepts for mapping a tensor to a mesh of devices in TTNN:
+Below is a summary and example code of the most important concepts for mapping a tensor to a mesh of devices in TTNN:
 
 *Figure: Example usage of mesh_device, ShardTensorToMesh and ReplicateTensorToMesh*
+
 ```py
 import ttnn
 
