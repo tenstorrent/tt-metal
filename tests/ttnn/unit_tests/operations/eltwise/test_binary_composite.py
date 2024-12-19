@@ -990,6 +990,7 @@ def test_nei_ttnn(input_shapes, scalar, device):
     assert comp_pass
 
 
+@pytest.mark.skip(reason="#16165: Test is broken if you run after individually.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
