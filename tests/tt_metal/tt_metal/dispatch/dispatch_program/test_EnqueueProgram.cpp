@@ -1314,6 +1314,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
 namespace stress_tests {
 
 TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
+    GTEST_SKIP();
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;

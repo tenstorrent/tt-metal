@@ -1831,9 +1831,9 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
 
 void Device::setup_tunnel_for_remote_devices() {
     chip_id_t mmio_device_id = this->id_;
-    constexpr NOC dispatch_d_noc_index = NOC::NOC_0;
-    constexpr NOC dispatch_s_noc_index = NOC::NOC_1; // Use NOC_1, since when dispatch_s and dispatch_d are on the same tensix, we want to distribute resources
-    static_assert(dispatch_d_noc_index != dispatch_s_noc_index, "Dispatch_s NOC must be different from Dispatch_d NOC");
+    NOC dispatch_d_noc_index = this->dispatcher_noc();
+    NOC dispatch_s_noc_index = this->dispatch_go_signal_noc();
+    TT_ASSERT(dispatch_d_noc_index != dispatch_s_noc_index, "Dispatch_s NOC must be different from Dispatch_d NOC");
     uint32_t num_tunnels = tt::Cluster::instance().get_mmio_device_tunnel_count(mmio_device_id);
     if (num_tunnels == 0) {
         //no remote device conected to this mmio device.
@@ -2219,12 +2219,11 @@ void Device::compile_command_queue_programs() {
     std::string prefetch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
     std::string dispatch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
 
-    // TODO: this->hw_command_queues_[cq_id]->noc_index is also hardcoded to NOC_0 elsewhere, should have one definition and remove assertion
-    constexpr NOC my_noc_index = NOC::NOC_0;
-    constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
-    constexpr NOC dispatch_s_noc_index = NOC::NOC_1;
-    static_assert(my_noc_index != dispatch_upstream_noc_index, "Dispatch NOC used to communicate with upstream must be different from NOC used for other transactions");
-    static_assert(my_noc_index != dispatch_s_noc_index, "Dispatch_s NOC must be different from Dispatch_d NOC");
+    NOC my_noc_index = this->dispatcher_noc();
+    NOC dispatch_upstream_noc_index = detail::GetOtherNOC(this->dispatcher_noc());
+    NOC dispatch_s_noc_index = this->dispatch_go_signal_noc();
+    TT_ASSERT(my_noc_index != dispatch_upstream_noc_index, "Dispatch NOC used to communicate with upstream must be different from NOC used for other transactions");
+    TT_ASSERT(my_noc_index != dispatch_s_noc_index, "Dispatch_s NOC must be different from Dispatch_d NOC");
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
         TT_ASSERT(this->hw_command_queues_[cq_id]->noc_index == my_noc_index, "Command Queue NOC index must match");
     }
@@ -2902,7 +2901,7 @@ void Device::init_command_queue_host() {
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, NOC::NOC_0);
+        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, this->dispatcher_noc());
         // Need to do this since CommandQueue constructor is private
         sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
     }
@@ -3717,8 +3716,17 @@ LaunchMessageRingBufferState& Device::get_worker_launch_message_buffer_state(Sub
     return this->active_sub_device_manager_->get_worker_launch_message_buffer_state(sub_device_id);
 }
 
+// Main source to get NOC idx for dispatch core
 NOC Device::dispatch_go_signal_noc() const {
     return this->dispatch_s_enabled() ? NOC::NOC_1 : NOC::NOC_0;
+}
+
+NOC Device::prefetcher_noc() const {
+    return NOC::NOC_0;
+}
+
+NOC Device::dispatcher_noc() const {
+    return NOC::NOC_0;
 }
 
 SubDeviceManagerId Device::get_next_sub_device_manager_id() {

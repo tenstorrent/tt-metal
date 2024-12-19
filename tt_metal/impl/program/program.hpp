@@ -12,6 +12,7 @@
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
+#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
 #include "dev_msgs.h"
 
 namespace tt {
@@ -151,6 +152,8 @@ class Program {
 
     void compile(Device * device, bool fd_bootloader_mode = false);
 
+    void lower(Device* device);
+
     void invalidate_circular_buffer_allocation();
 
     void allocate_circular_buffers(const Device *device);
@@ -174,7 +177,8 @@ class Program {
     void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
 
     const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
-
+    const ProgramTransferInfo &get_program_transfer_info() const noexcept;
+    std::shared_ptr<Buffer> get_kernels_buffer(Device* device) const noexcept;
    private:
     std::unique_ptr<detail::Program_> pimpl_;
 
@@ -210,8 +214,6 @@ class Program {
     friend EnqueueProgramCommand;
     friend detail::Internal_;
 
-    const ProgramTransferInfo &get_program_transfer_info() const noexcept;
-    std::shared_ptr<Buffer> get_kernels_buffer(Device* device) const noexcept;
     const std::vector<uint32_t> &get_program_config_sizes() const noexcept;
     std::unordered_map<uint64_t, ProgramCommandSequence> &get_cached_program_command_sequences() noexcept;
 };

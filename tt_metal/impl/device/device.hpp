@@ -374,6 +374,8 @@ class Device {
     bool dispatch_s_enabled() const;
     bool distributed_dispatcher() const;
     NOC dispatch_go_signal_noc() const;
+    NOC prefetcher_noc() const;
+    NOC dispatcher_noc() const;
     size_t get_device_kernel_defines_hash();
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const;

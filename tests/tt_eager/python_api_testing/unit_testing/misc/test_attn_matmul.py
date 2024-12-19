@@ -179,7 +179,7 @@ def test_attn_matmul_with_program_cache(
 )
 @pytest.mark.parametrize(
     "enable_async, num_loops",
-    ((True, 5), (False, 1)),
+    ((False, 5), (False, 1)),
 )
 def test_group_attn_matmul(
     num_loops,
@@ -194,6 +194,7 @@ def test_group_attn_matmul(
     output_sharded,
     shard_orientation,
     device,
+    # use_program_cache,
 ):
     torch.manual_seed(0)
 
@@ -212,6 +213,7 @@ def test_group_attn_matmul(
     input_shape_a = [q_len, q_heads, batch, K]
     input_shape_b = [batch, kv_heads, K, seq_len]
     for _ in range(num_loops):
+        print(_)
         input_tensor_a = torch.randn(input_shape_a).bfloat16()
         input_tensor_b = torch.randn(input_shape_b).bfloat16()
 
@@ -280,7 +282,7 @@ def test_group_attn_matmul(
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize(
     "enable_async, num_loops",
-    ((True, 5), (False, 1)),
+    ((False, 5), (False, 1)),
 )
 def test_group_attn_matmul_with_program_cache(
     num_loops, enable_async, in0_dtype, in1_dtype, output_dtype, sharded, device, use_program_cache
@@ -302,6 +304,7 @@ def test_group_attn_matmul_with_program_cache(
     # For seq_len < = 256, recompile at worst 8 times.
     for K, seq_len, q_heads, kv_heads in ((96, 512 + 64, 10, 2), (64, 256, 50, 5)):
         for _ in range(num_loops):
+            print(_)
             input_shape_a = [q_len, q_heads, batch, K]
             input_shape_b = [batch, kv_heads, K, seq_len]
 

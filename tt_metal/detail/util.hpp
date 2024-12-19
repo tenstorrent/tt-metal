@@ -50,4 +50,6 @@ inline NOC GetPreferredNOCForDRAMWrite(ARCH arch) {
     }
 }
 
+inline NOC GetOtherNOC(NOC noc) { return (noc == NOC::NOC_0) ? NOC::NOC_1 : NOC::NOC_0; }
+
 }  // namespace tt::tt_metal::detail
