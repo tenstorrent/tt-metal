@@ -67,9 +67,6 @@ def test_chunked_prefill_single_user(
     ensure_gc,
     is_ci_env,
 ):
-    if is_ci_env and optimizations == LlamaOptimizations.accuracy:
-        pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
-
     mesh_device.enable_async(True)
 
     dtype = ttnn.bfloat8_b
