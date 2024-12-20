@@ -736,6 +736,37 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
             Program &program = programs[i];
             log_info(tt::LogAlways, "Enqueue EDM program");
             device->push_work([&](){tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);}, true);
+
+            device->push_work([&](){
+                auto wait_initialized = [&](uint32_t addr) {
+                    auto wait_core = [&](CoreCoord const& core) {
+                        bool initialized = false;
+                        constexpr size_t max_attempts = 10000;
+                        size_t attempts = 0;
+                        while (!initialized) {
+                            auto host_buffer = tt::llrt::read_hex_vec_from_core(device->id(), core, addr, 4);
+                            initialized = host_buffer[0] == 0;
+                            attempts++;
+                            if (attempts > max_attempts) {
+                                log_error(tt::LogAlways, "Failed to initialize EDM fabric");
+                                break;
+                            }
+                        }
+                        log_info(tt::LogAlways,"Initialized EDM fabric");
+                    };
+                    for (auto const& builder : edm_fabric.edm_builders_backward_direction[device->id()]) {
+                        wait_core(CoreCoord(builder.my_noc_x, builder.my_noc_y));
+                    }
+                    for (auto const& builder : edm_fabric.edm_builders_forward_direction[device->id()]) {
+                        wait_core(CoreCoord(builder.my_noc_x, builder.my_noc_y));
+                    }
+                };
+
+                wait_initialized(FabricEriscDatamoverConfig::sender_channel_0_buffer_index_semaphore_address);
+                wait_initialized(FabricEriscDatamoverConfig::sender_channel_0_local_flow_control_semaphore_address);
+                wait_initialized(FabricEriscDatamoverConfig::sender_channel_0_connection_semaphore_address);
+
+            }, true);
         }
         log_info(tt::LogAlways, "DONE");
     };
