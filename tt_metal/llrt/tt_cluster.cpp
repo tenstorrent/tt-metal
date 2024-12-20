@@ -982,6 +982,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     std::vector<chip_id_t> non_mmio_devices;
     std::vector<chip_id_t> mmio_devices = target_mmio_devices;
     if (mmio_devices.size() == 0) {
+        mmio_devices.reserve(tt::Cluster::instance().number_of_pci_devices());
         for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
             mmio_devices.emplace_back(assoc_mmio_device);
         }
