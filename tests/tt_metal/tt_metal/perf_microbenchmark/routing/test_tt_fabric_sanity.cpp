@@ -577,15 +577,20 @@ typedef struct test_traffic {
             // address range for writing data: 0x30000 - 0x100000, allocating max 0x10000 range blocks per writer
             if (num_tx > 7) {
                 throw std::runtime_error("currently only max 7 producers per consumer for ASYNC_WR are supported");
-            }
-            // TODO: if only one tx -> set it to 0x30000
-            // TODO: for more than 1 tx, limit the size of test data
-            // allocate addresses in the range 0x30000 - 0x100000
-            std::vector<uint32_t> address_prefix = get_random_numbers_from_range(3, 9, num_tx);
-            for (auto j = 0; j < num_tx; j++) {
-                address = address_prefix[j] * 0x10000;
-                tx_to_rx_address_map[rx_to_tx_map[i][j]] = address;
-                rx_to_tx_address_map[i].push_back(address);
+            } else if (1 == num_tx) {
+                // TODO: remove hard-coding
+                // if only one tx set it to 0x30000 to allow more data writes
+                tx_to_rx_address_map[rx_to_tx_map[i][0]] = 0x30000;
+                rx_to_tx_address_map[i].push_back(0x30000);
+            } else {
+                // TODO: for more than 1 tx, limit the size of test data
+                // allocate addresses in the range 0x30000 - 0x100000
+                std::vector<uint32_t> address_prefix = get_random_numbers_from_range(3, 9, num_tx);
+                for (auto j = 0; j < num_tx; j++) {
+                    address = address_prefix[j] * 0x10000;
+                    tx_to_rx_address_map[rx_to_tx_map[i][j]] = address;
+                    rx_to_tx_address_map[i].push_back(address);
+                }
             }
         }
     }
