@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import torch
+import pytest
+import ttnn
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+    data_gen_with_range,
+    data_gen_with_range_batch_norm,
+    compare_pcc,
+)
+from math import pi
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 3, 32, 32])),
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([2, 3, 32, 32])),
+    ),
+)
+@pytest.mark.parametrize("training", [False, True])
+@pytest.mark.parametrize("weight", [True, False])
+@pytest.mark.parametrize("bias", [True, False])
+def test_batch_norm(input_shapes, training, weight, bias, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, 1, 10, device, False)
+    if not training:
+        mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 1, 10, device, False)
+        var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 10, 20, device, False)
+    else:
+        mean_data = None
+        mean_tensor = None
+        var_data = None
+        var_tensor = None
+    if weight:
+        weight_data, weight_tensor = data_gen_with_range_batch_norm(input_shapes, 1, 10, device, False)
+    else:
+        weight_data = None
+        weight_tensor = None
+    if bias:
+        bias_data, bias_tensor = data_gen_with_range_batch_norm(input_shapes, 1, 10, device, False)
+    else:
+        bias_data = None
+        bias_tensor = None
+
+    tt_output_tensor_on_device = ttnn.batch_norm(
+        input_tensor,
+        running_mean=mean_tensor,
+        running_var=var_tensor,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        training=True,
+    )
+
+    # comments will be removed befor merge
+
+    # ttnn.set_printoptions(profile="full")
+    # print("tt_output_tensor_on_device")
+    # print(tt_output_tensor_on_device)
+
+    # ttnn_result = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch() # Convert to Torch
+    # print(ttnn_result)
+
+    golden_function = ttnn.get_golden_function(ttnn.batch_norm)
+    golden_tensor = golden_function(
+        in_data, running_mean=mean_data, running_var=var_data, weight=weight_data, bias=bias_data, training=True
+    )
+    # print("golden_tensor")
+    # print(golden_tensor, golden_tensor.shape)
+
+    comp_pass = compare_pcc([tt_output_tensor_on_device], [golden_tensor])
+    assert comp_pass

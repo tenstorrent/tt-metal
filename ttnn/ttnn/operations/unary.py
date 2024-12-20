@@ -175,6 +175,37 @@ for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
 
 
+def _golden_function_batch_norm(
+    input_tensor,
+    *args,
+    eps=1e-05,
+    momentum=0.1,
+    running_mean=None,
+    running_var=None,
+    weight=None,
+    bias=None,
+    training=False,
+    **kwargs,
+):
+    import torch
+
+    output = torch.nn.functional.batch_norm(
+        input_tensor,
+        running_mean,
+        running_var,
+        weight,
+        bias,
+        training=training,
+        momentum=momentum,
+        eps=eps,
+    )
+
+    return output
+
+
+ttnn.attach_golden_function(ttnn.batch_norm, golden_function=_golden_function_batch_norm)
+
+
 def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
     import torch
 
