@@ -25,7 +25,7 @@ from loguru import logger
 from tests.scripts.common import run_process_and_get_result
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture()
 def force_gc():
     """Force garbage collection after every test."""
     yield  # Run the test
