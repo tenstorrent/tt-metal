@@ -25,7 +25,7 @@ MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeArgs {
             *original_shape = input_tensor.get_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_to_le_4D(input_tensor);
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
