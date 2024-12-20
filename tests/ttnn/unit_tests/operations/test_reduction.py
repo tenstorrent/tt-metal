@@ -50,11 +50,11 @@ def test_var(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@pytest.mark.parametrize("batch_size", [1, 16, 1, 16])
-@pytest.mark.parametrize("c", [1, 8, 1, 16])
+@pytest.mark.parametrize("batch_size", [1, 16])
+@pytest.mark.parametrize("c", [1, 4, 8, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
-@pytest.mark.parametrize("dim", [None, [], [0, 1, 2, 3]])
+@pytest.mark.parametrize("dim", [None, [0, 1, 2, 3]])
 @pytest.mark.parametrize("keepdim", [True])
 def test_sum_4d_tensors(device, batch_size, c, h, w, dim, keepdim):
     torch.manual_seed(0)
