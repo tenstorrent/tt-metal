@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include <simde/x86/avx2.h>
+
 #include "common/bfloat16.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"

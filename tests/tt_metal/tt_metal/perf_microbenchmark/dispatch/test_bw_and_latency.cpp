@@ -8,6 +8,8 @@
 #include <random>
 #include <string>
 
+#include <simde/x86/avx2.h>
+
 #include "core_coord.hpp"
 #include "logger.hpp"
 #include "tt_metal/host_api.hpp"
