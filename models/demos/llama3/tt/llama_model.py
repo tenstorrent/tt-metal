@@ -7,6 +7,7 @@ import math
 import ttnn
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 import ttnn
@@ -72,7 +73,7 @@ class TtTransformer(LightweightModule):
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
             )
-            for i in range(self.n_layers)
+            for i in tqdm(range(self.n_layers))
         ]
         self.norm = DistributedNorm(
             RMSNorm(
@@ -243,7 +244,7 @@ class TtTransformer(LightweightModule):
         )[0, 0, last_token_idx, :]
         return logits
 
-    def process_output_decode(self, tt_out, B):
+    def process_output_decode(self, tt_out, B, S=1):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor
         """
@@ -254,7 +255,7 @@ class TtTransformer(LightweightModule):
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()
-        tt_out = tt_out.view(B, 1, -1)
+        tt_out = tt_out.view(B, S, -1)
         return tt_out
 
     def ttnn_prefill_forward(
