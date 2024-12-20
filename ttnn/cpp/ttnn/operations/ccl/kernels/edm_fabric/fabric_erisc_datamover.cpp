@@ -836,7 +836,6 @@ void kernel_main() {
 
     if constexpr (persistent_mode) {
         // initialize the statically allocated "semaphores"
-
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 0;
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 0;
         *sender0_worker_semaphore_ptr = 0;
@@ -947,6 +946,14 @@ void kernel_main() {
         remote_receiver_channel,
         termination_signal_ptr);
 
+
+    if constexpr (persistent_mode) {
+        // we force these values to a non-zero value so that if we run the fabric back to back,
+        // and we can reliably probe from host that this kernel has initialized properly.
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 99;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 99;
+        *sender0_worker_semaphore_ptr = 99;
+    }
 
     DPRINT << "EDM DONE\n";
     WAYPOINT("DONE");
