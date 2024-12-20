@@ -25,10 +25,9 @@ from models.utility_functions import is_grayskull, skip_for_blackhole
         (1, 1, 32, 128 * 1024),
     ),
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
+    if is_grayskull():
+        pytest.skip("Skipping tests on Grayskull")
     device.enable_async(True)
     shape = [nb, nc, nh, nw]
 
@@ -54,8 +53,8 @@ def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
         use_multicore=True,
         sub_core_grids=ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7)),
             }
         ),
     )
