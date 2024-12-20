@@ -224,7 +224,6 @@ def run_test_create_min_width_shard(
             {ttnn.CoreRange(grid_start_coord, ttnn.CoreCoord(device_core_grid_size.x - 1, device_core_grid_size.y - 1))}
         )
     else:
-        breakpoint()
         sub_core_grids_bounds = sub_core_grids.bounding_box()
         if (
             sub_core_grids_bounds.start.x < 0
@@ -330,9 +329,14 @@ def test_create_min_width_shard(
     assert device.num_program_cache_entries() == 1, "Only one Op program cache should exist"
 
 
+@pytest.fixture()
+def set_dispatch_col(device_params):
+    device_params["dispatch_core_axis"] = ttnn.DispatchCoreAxis.COL
+    return device_params
+
+
 @skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("batch", (1, 8, 16))
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",
@@ -351,11 +355,12 @@ def test_create_min_width_shard(
     ),
 )
 def test_create_min_width_shard_subcoregrid(
+    set_dispatch_col,
+    device,
     batch,
     n_local_heads,
     n_local_kv_heads,
     head_dim,
-    device,
     overlap_coregrid,
     use_program_cache,
     sub_core_grids,

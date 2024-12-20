@@ -22,7 +22,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
         input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 ||
             input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
         "Unsupported data format");
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Only tile layout is supported for input tensor");
 
     // input
     const uint32_t num_users_supported = 32;
@@ -33,17 +33,19 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_shape[0] == 1, "Unsupported input shape");
     const auto QKV_memcfg = input_tensor.memory_config();
     if (input_tensor.is_sharded()) {
-        TT_FATAL(QKV_memcfg.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
+        TT_FATAL(QKV_memcfg.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "input tensor must be width sharded");
         TT_FATAL(
             input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1],
-            "Error");
-        TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
+            "Shard shape must be correct");
+        TT_FATAL(
+            input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+            "Shard orientation must be ROW_MAJOR");
 
         if (!this->overlap_qk_coregrid) {
-            // Validate that q, k, v shards does not overlap each other
+            // Validate if each shard is a multiple of head_dim and doesn't contain partial heads
             TT_FATAL(
                 this->head_dim % input_tensor.shard_spec().value().shape[1] == 0,
-                "We don't support overlapping q, k, v shards when overlap_qk_coregrid is false");
+                "We don't support partial heads in shards when q and k heads are not overlapping coregrid");
         }
     } else {
         TT_FATAL(this->overlap_qk_coregrid, "Overlap_qk_coregrid must be true for non-sharded input");
@@ -53,13 +55,13 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(
         this->output_mem_config.is_sharded() &&
             this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-        "Error");
+        "Output tensor must be height sharded");
 
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
 
     // Support maximum 32 heads for now
-    TT_FATAL(this->num_q_heads <= 32, "Error");
-    TT_FATAL(this->num_q_heads >= this->num_kv_heads, "Error");
+    TT_FATAL(this->num_q_heads <= 32, "only 32 q heads supported");
+    TT_FATAL(this->num_q_heads >= this->num_kv_heads, "num_q_heads must be greater than or equal to num_kv_heads");
 
     uint32_t num_cores = core_grid.x * core_grid.y;
     // 1 User Per Core Max and 32 users for now

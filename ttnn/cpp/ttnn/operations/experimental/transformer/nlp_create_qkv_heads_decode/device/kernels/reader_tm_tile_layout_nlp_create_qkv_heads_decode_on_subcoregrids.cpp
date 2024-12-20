@@ -30,15 +30,13 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + in_num_cores));
 
     // Q
-    uint32_t qkv_x = 0;
-    uint32_t qkv_y = 0;
-    uint32_t total_input_cores = in_num_cores;
-    uint32_t num_tiles_per_core = head_size_num_tiles * (num_q_heads + 2 * num_kv_heads) / total_input_cores;
+    uint32_t cur_core_idx = 0;
+    uint32_t num_tiles_per_core = head_size_num_tiles * (num_q_heads + 2 * num_kv_heads) / in_num_cores;
     uint32_t num_q_cores = num_tiles_per_core * num_q_heads * head_size_num_tiles;
     uint32_t num_kv_cores = num_tiles_per_core * num_kv_heads * head_size_num_tiles;
 
-    uint64_t qkv_read_addr =
-        get_noc_addr(in0_mcast_noc_x[qkv_x], in0_mcast_noc_y[qkv_y], q_start_addr) + in_tile_offset_by_batch;
+    uint64_t qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
+                             in_tile_offset_by_batch;
     uint32_t num_tiles_read_cur_core = 0;
     uint32_t q_write_addr = 0;
     constexpr uint32_t tile_size = head_size / head_size_num_tiles;
@@ -70,19 +68,18 @@ void kernel_main() {
                 num_tiles_read_cur_core++;
 
                 if (num_tiles_read_cur_core == num_tiles_per_core) {
-                    qkv_x++;
-                    qkv_y++;
-                    qkv_read_addr = get_noc_addr(in0_mcast_noc_x[qkv_x], in0_mcast_noc_y[qkv_y], q_start_addr) +
-                                    in_tile_offset_by_batch;
+                    cur_core_idx++;
+                    qkv_read_addr =
+                        get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
+                        in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }
             }
         }
     } else {
-        qkv_x += num_q_cores;
-        qkv_y += num_q_cores;
-        qkv_read_addr =
-            get_noc_addr(in0_mcast_noc_x[qkv_x], in0_mcast_noc_y[qkv_y], q_start_addr) + in_tile_offset_by_batch;
+        cur_core_idx += num_q_cores;
+        qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
+                        in_tile_offset_by_batch;
     }
 
     if constexpr (PROCESS_K == 1) {
@@ -113,19 +110,18 @@ void kernel_main() {
                 num_tiles_read_cur_core++;
 
                 if (num_tiles_read_cur_core == num_tiles_per_core) {
-                    qkv_x++;
-                    qkv_y++;
-                    qkv_read_addr = get_noc_addr(in0_mcast_noc_x[qkv_x], in0_mcast_noc_y[qkv_y], q_start_addr) +
-                                    in_tile_offset_by_batch;
+                    cur_core_idx++;
+                    qkv_read_addr =
+                        get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
+                        in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }
             }
         }
     } else {
-        qkv_x += num_kv_cores;
-        qkv_y += num_kv_cores;
-        qkv_read_addr =
-            get_noc_addr(in0_mcast_noc_x[qkv_x], in0_mcast_noc_y[qkv_y], q_start_addr) + in_tile_offset_by_batch;
+        cur_core_idx += num_kv_cores;
+        qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
+                        in_tile_offset_by_batch;
     }
 
     if constexpr (PROCESS_QV == 1) {
@@ -156,10 +152,10 @@ void kernel_main() {
                 num_tiles_read_cur_core++;
 
                 if (num_tiles_read_cur_core == num_tiles_per_core) {
-                    qkv_x++;
-                    qkv_y++;
-                    qkv_read_addr = get_noc_addr(in0_mcast_noc_x[qkv_x], in0_mcast_noc_y[qkv_y], q_start_addr) +
-                                    in_tile_offset_by_batch;
+                    cur_core_idx++;
+                    qkv_read_addr =
+                        get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
+                        in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }
             }
