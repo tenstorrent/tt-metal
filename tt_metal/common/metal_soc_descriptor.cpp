@@ -356,6 +356,12 @@ void metal_SocDescriptor::update_pcie_cores(const BoardType& board_type) {
     if (this->arch != tt::ARCH::BLACKHOLE) {
         return;
     }
+
+    // This isn't PCIe, it's DRAM.  But Metal doesn't need to know that.
+    // 9,11 is where I am sticking "sysmem" for now.
+    this->pcie_cores = {CoreCoord(9, 11)};
+
+#if NOPE
     switch (board_type) {
         case UNKNOWN: {  // Workaround for BHs running FW that does not return board type in the cluster yaml
             this->pcie_cores = {CoreCoord(11, 0)};
@@ -363,8 +369,10 @@ void metal_SocDescriptor::update_pcie_cores(const BoardType& board_type) {
         case P150A: {
             this->pcie_cores = {CoreCoord(2, 0)};
         } break;
+        // There is no PCIe core for X280... well, there is.  But not what this is after.
         default: TT_THROW("Need to update PCIe core assignment for new Blackhole type, file issue to abhullar");
     }
+#endif
 }
 
 // UMD initializes and owns tt_SocDescriptor
