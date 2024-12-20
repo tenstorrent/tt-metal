@@ -279,6 +279,9 @@ class EdmLineFabricOpInterface {
 
     void teardown_from_host(tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
+    static void launch_mesh_fabric(MeshDevice *mesh_device);
+    static void teardown_edm_fabric(MeshDevice *mesh_device);
+
     // Device ID -> EDM Builders
     std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
     std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_backward_direction;

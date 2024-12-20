@@ -20,7 +20,9 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
+#include <iterator>
 #include <vector>
+#include <algorithm>
 #include <ranges>
 namespace ttnn::ccl {
 
@@ -719,65 +721,98 @@ void EdmLineFabricOpInterface::teardown_from_host(tt::fabric::TerminationSignal 
 }
 
 void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
-    auto build = [](std::vector<Device*> const& line_view) {
-        std::vector<Program> programs(line_view.size());
-        std::vector<Program*> program_ptrs;
-        program_ptrs.reserve(programs.size());
-        std::transform(programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
-        EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true);
-        edm_fabric.build_kernels();
-        for (size_t i = 0; i < line_view.size(); i++) {
-            log_info(tt::LogAlways, "Compile EDM program");
-            Device *device = line_view[i];
-            device->push_work([&](){tt::tt_metal::detail::CompileProgram(line_view[i], programs[i]);}, false);
-        }
-        for (size_t i = 0; i < line_view.size(); i++) {
-            Device *device = line_view[i];
-            Program &program = programs[i];
-            log_info(tt::LogAlways, "Enqueue EDM program");
-            device->push_work([&](){tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);}, true);
+    // auto build = [](std::vector<Device*> const& line_view) {
+    //     std::vector<Program> programs(line_view.size());
+    //     std::vector<Program*> program_ptrs;
+    //     program_ptrs.reserve(programs.size());
+    //     std::transform(programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
+    //     EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true);
+    //     edm_fabric.build_kernels();
+    //     for (size_t i = 0; i < line_view.size(); i++) {
+    //         log_info(tt::LogAlways, "Compile EDM program");
+    //         Device *device = line_view[i];
+    //         device->push_work([&](){tt::tt_metal::detail::CompileProgram(line_view[i], programs[i]);}, false);
+    //     }
+    //     for (size_t i = 0; i < line_view.size(); i++) {
+    //         Device *device = line_view[i];
+    //         Program &program = programs[i];
+    //         log_info(tt::LogAlways, "Enqueue EDM program");
+    //         device->push_work([&](){tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);}, true);
 
-            device->push_work([&](){
-                auto wait_initialized = [&](uint32_t addr) {
-                    auto wait_core = [&](CoreCoord const& core) {
-                        bool initialized = false;
-                        constexpr size_t max_attempts = 10000;
-                        size_t attempts = 0;
-                        while (!initialized) {
-                            auto host_buffer = tt::llrt::read_hex_vec_from_core(device->id(), core, addr, 4);
-                            initialized = host_buffer[0] == 0;
-                            attempts++;
-                            if (attempts > max_attempts) {
-                                log_error(tt::LogAlways, "Failed to initialize EDM fabric");
-                                break;
-                            }
-                        }
-                        log_info(tt::LogAlways,"Initialized EDM fabric");
-                    };
-                    for (auto const& builder : edm_fabric.edm_builders_backward_direction[device->id()]) {
-                        wait_core(CoreCoord(builder.my_noc_x, builder.my_noc_y));
-                    }
-                    for (auto const& builder : edm_fabric.edm_builders_forward_direction[device->id()]) {
-                        wait_core(CoreCoord(builder.my_noc_x, builder.my_noc_y));
-                    }
-                };
+    //         device->push_work([&](){
+    //             auto wait_initialized = [&](uint32_t addr) {
+    //                 auto wait_core = [&](CoreCoord const& core) {
+    //                     bool initialized = false;
+    //                     constexpr size_t max_attempts = 10000;
+    //                     size_t attempts = 0;
+    //                     while (!initialized) {
+    //                         auto host_buffer = tt::llrt::read_hex_vec_from_core(device->id(), core, addr, 4);
+    //                         initialized = host_buffer[0] == 0;
+    //                         attempts++;
+    //                         if (attempts > max_attempts) {
+    //                             log_error(tt::LogAlways, "Failed to initialize EDM fabric");
+    //                             break;
+    //                         }
+    //                     }
+    //                     log_info(tt::LogAlways,"Initialized EDM fabric");
+    //                 };
+    //                 for (auto const& builder : edm_fabric.edm_builders_backward_direction[device->id()]) {
+    //                     wait_core(CoreCoord(builder.my_noc_x, builder.my_noc_y));
+    //                 }
+    //                 for (auto const& builder : edm_fabric.edm_builders_forward_direction[device->id()]) {
+    //                     wait_core(CoreCoord(builder.my_noc_x, builder.my_noc_y));
+    //                 }
+    //             };
 
-                wait_initialized(FabricEriscDatamoverConfig::sender_channel_0_buffer_index_semaphore_address);
-                wait_initialized(FabricEriscDatamoverConfig::sender_channel_0_local_flow_control_semaphore_address);
-                wait_initialized(FabricEriscDatamoverConfig::sender_channel_0_connection_semaphore_address);
+    //             wait_initialized(FabricEriscDatamoverConfig::sender_channel_0_buffer_index_semaphore_address);
+    //             wait_initialized(FabricEriscDatamoverConfig::sender_channel_0_local_flow_control_semaphore_address);
+    //             wait_initialized(FabricEriscDatamoverConfig::sender_channel_0_connection_semaphore_address);
 
-            }, true);
-        }
-        log_info(tt::LogAlways, "DONE");
-    };
+    //         }, true);
+    //     }
+    //     log_info(tt::LogAlways, "DONE");
+    // };
 
+    std::vector<EdmLineFabricOpInterface> row_fabric_lines;
+    row_fabric_lines.reserve(mesh_device->get_view()->get_row_views().size());
+    std::vector<EdmLineFabricOpInterface> col_fabric_lines;
+    col_fabric_lines.reserve(mesh_device->get_view()->get_column_views().size());
 
-    for (auto const &row_view : mesh_device->get_view()->get_row_views()) {
-        build(row_view);
+    size_t num_rows = mesh_device->get_view()->get_row_views().size();
+    size_t num_cols = mesh_device->get_view()->get_column_views().size();
+    std::vector<std::vector<Program>> programs(num_rows);
+    for (size_t r = 0; r < num_rows; r++) {
+        programs[r].resize(num_cols);
     }
-    // for (auto const &col_view : mesh_device->get_view()->get_column_views()) {
-    //     build(col_view);
-    // }
+
+    for (size_t i = 0; i < num_rows; i++) {
+        std::vector<Program*> program_ptrs;
+        program_ptrs.reserve(num_cols);
+        std::transform(programs[i].begin(), programs[i].end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
+        row_fabric_lines.push_back(EdmLineFabricOpInterface(mesh_device->get_view()->get_row_views()[i], program_ptrs, true));
+    }
+
+    for (size_t i = 0; i < num_cols; i++) {
+        std::vector<Program*> program_ptrs;
+        program_ptrs.reserve(num_rows);
+        for (size_t r = 0; r < num_rows; r++) {
+            program_ptrs.push_back(&programs[r][i]);
+        }
+        col_fabric_lines.push_back(EdmLineFabricOpInterface(mesh_device->get_view()->get_column_views()[i], program_ptrs, true));
+    }
+
+    std::for_each(row_fabric_lines.begin(), row_fabric_lines.end(), [](auto& line) { line.build_kernels(); });
+    std::for_each(col_fabric_lines.begin(), col_fabric_lines.end(), [](auto& line) { line.build_kernels(); });
+
+    for (size_t r = 0; r < num_rows; r++) {
+        for (size_t c = 0; c < num_cols; c++) {
+            log_info(tt::LogAlways, "Compile EDM program");
+            Device *device = mesh_device->get_device(r, c);
+            auto& program = programs.at(r).at(c);
+            device->push_work([&](){tt::tt_metal::detail::CompileProgram(device, program);}, false);
+            device->push_work([&](){tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);}, true);
+        }
+    }
 }
 
 void teardown_edm_fabric(distributed::MeshDevice* mesh_device) {
@@ -793,9 +828,9 @@ void teardown_edm_fabric(distributed::MeshDevice* mesh_device) {
     for (auto const &row_view : mesh_device->get_view()->get_row_views()) {
         teardown(row_view);
     }
-    // for (auto const &col_view : mesh_device->get_view()->get_column_views()) {
-    //     teardown(col_view);
-    // }
+    for (auto const &col_view : mesh_device->get_view()->get_column_views()) {
+        teardown(col_view);
+    }
 }
 
 
