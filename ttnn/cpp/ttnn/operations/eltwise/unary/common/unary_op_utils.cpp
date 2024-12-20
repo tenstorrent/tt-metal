@@ -366,7 +366,6 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 }
 
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
-    std::cout << "let us see what is the name we are getting here ................. " << std::endl;
     if (name == "relu") {
         return UnaryWithParam(UnaryOpType::RELU);
     } else if (name == "gelu") {
