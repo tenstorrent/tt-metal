@@ -1672,7 +1672,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                     uint32_t M = (program_config.fuse_batch ? input_tensor_a.get_tensor_spec().physical_shape().height()
                                                             : input_tensor_a.get_padded_shape()[-2]) /
                                  in0_tile_shape[0];
-                    uint32_t N = input_tensor_b.get_padded_shape()[-1] / in1_tile_shape[1];
+                    uint32_t N = input_tensor_b.get_tensor_spec().physical_shape().width() / in1_tile_shape[1];
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
 
@@ -1700,7 +1700,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                                          ProgramConfigType,
                                          MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                     uint32_t M = input_tensor_a.get_tensor_spec().physical_shape().height() / in0_tile_shape[0];
-                    uint32_t N = input_tensor_b.get_padded_shape()[-1] / in1_tile_shape[1];
+                    uint32_t N = input_tensor_b.get_tensor_spec().physical_shape().width() / in1_tile_shape[1];
 
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
