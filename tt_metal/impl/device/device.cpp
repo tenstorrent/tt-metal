@@ -3388,12 +3388,12 @@ allocator::Statistics Device::get_memory_allocation_statistics(const BufferType 
 
 uint32_t Device::get_allocator_alignment(const BufferType &buffer_type) const {
     const auto& allocator = this->get_initialized_allocator();
-    return (buffer_type == BufferType::DRAM) ? this->allocator_->config.dram_alignment : this->allocator_->config.l1_alignment;
+    return allocator::get_alignment(*allocator, buffer_type);
 }
 
-uint32_t Device::get_allocator_alignment(SubDeviceId sub_device_id, const BufferType &buffer_type) const {
+uint32_t Device::get_allocator_alignment(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return (buffer_type == BufferType::DRAM) ? this->allocator_->config.dram_alignment : this->allocator_->config.l1_alignment;
+    return allocator::get_alignment(*allocator, buffer_type);
 }
 
 size_t Device::get_l1_small_size() const {

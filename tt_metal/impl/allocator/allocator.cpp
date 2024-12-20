@@ -349,6 +349,18 @@ const std::vector<uint32_t>& bank_ids_from_logical_core(
     return allocator.logical_core_to_bank_ids.at(buffer_type).at(logical_core);
 }
 
+uint32_t get_alignment(const Allocator& alloator, const BufferType& buffer_type) {
+    switch (buffer_type) {
+        case BufferType::DRAM:
+        case BufferType::TRACE: return alloator.config.dram_alignment;
+        case BufferType::L1:
+        case BufferType::L1_SMALL: return alloator.config.l1_alignment;
+        default: {
+            TT_THROW("Allocator does not support buffer ");
+        }
+    }
+}
+
 Statistics get_statistics(const Allocator& allocator, const BufferType& buffer_type) {
     Statistics stats;
     switch (buffer_type) {

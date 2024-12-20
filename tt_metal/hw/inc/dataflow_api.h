@@ -1108,7 +1108,8 @@ struct InterleavedPow2AddrGen {
     const uint32_t bank_base_address;
     const uint32_t log_base_2_of_page_size;  // WARNING: This struct is used for optimized get_noc_addr in which case
                                              // you know that bank_unit_size is a power of 2
-    const uint32_t log_base_2_of_allocator_alignment = interleaved_addr_gen::get_log_base2_of_allocator_alignment<DRAM>();
+    static constexpr uint32_t log_base_2_of_allocator_alignment =
+        interleaved_addr_gen::get_log_base2_of_allocator_alignment<DRAM>();
     const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > log_base_2_of_allocator_alignment
                                                          ? this->log_base_2_of_page_size
                                                          : log_base_2_of_allocator_alignment;
@@ -1224,7 +1225,8 @@ template <bool DRAM>
 struct InterleavedPow2AddrGenFast {
     uint32_t bank_base_address;              // Base address for the whole tensor.
     const uint32_t log_base_2_of_page_size;  // Num bytes in bank unit.
-    const uint32_t log_base_2_of_allocator_alignment = interleaved_addr_gen::get_log_base2_of_allocator_alignment<DRAM>();
+    static constexpr uint32_t log_base_2_of_allocator_alignment =
+        interleaved_addr_gen::get_log_base2_of_allocator_alignment<DRAM>();
     const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > log_base_2_of_allocator_alignment
                                                          ? this->log_base_2_of_page_size
                                                          : log_base_2_of_allocator_alignment;
