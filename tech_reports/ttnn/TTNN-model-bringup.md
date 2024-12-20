@@ -114,9 +114,9 @@ The diagram below illustrates the corresponding Downsample1 module:
 
 
 ### 4.3 Trace and 2cq
-  - You may consider a naive TTNN implementation by taking the example of [YOLO-v4 basic demo](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/demo/demo.py). Then consider studying [the demo implementated using trace and 2 command quueues available in TTNN](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py). 
+  - You may consider a naive TTNN implementation by taking the example of [YOLO-v4 basic demo](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/demo/demo.py). Then consider studying [the demo implementated using trace and 2 command quueues available in TTNN](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py). You may refer to this test for [trace implementation for yolov4](https://github.com/tenstorrent/tt-metal/blob/efa1a5630cfd6e84adc3ebf5fbe2d18bd5e40de8/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py#L74) and to this test for the combination of [trace + 2cq implementation for yolov4](https://github.com/tenstorrent/tt-metal/blob/efa1a5630cfd6e84adc3ebf5fbe2d18bd5e40de8/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py#L133) 
 
-  - As you start on implementing trace + 2cq for your model, we recommend getting your model to work with trace only first. Then get it working with 2cq only. Finally, combine the two. Also, it is the recommended flow to have seprate pytests for each case. 
+  - As you start on implementing trace + 2cq for your model, we recommend getting your model to work with trace only first. Then get it working with 2cq only. And finally, combine the two. Also, it is the recommended flow to have seprate unit tests for each case. 
 
   - To understand trace technique for optimization refer to [Metal Trace Documentation](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#1-metal-trace) 
 
