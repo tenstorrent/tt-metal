@@ -292,12 +292,13 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
             op_init_and_name = {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x36f3u);", idst)};
             break;
-            break;
         case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
             op_init_and_name = {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x3dc5u);", idst)};
             break;
-            break;
         case UnaryOpType::ABS: op_init_and_name = {"abs_tile_init();", fmt::format("abs_tile({});", idst)}; break;
+        case UnaryOpType::ABS_INT32:
+            op_init_and_name = {"abs_tile_init();", fmt::format("abs_tile_int32({});", idst)};
+            break;
         case UnaryOpType::SIGN: op_init_and_name = {"sign_tile_init();", fmt::format("sign_tile({});", idst)}; break;
         case UnaryOpType::SQUARE:
             op_init_and_name = {"square_tile_init();", fmt::format("square_tile({});", idst)};
@@ -365,6 +366,7 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 }
 
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
+    std::cout << "let us see what is the name we are getting here ................. " << std::endl;
     if (name == "relu") {
         return UnaryWithParam(UnaryOpType::RELU);
     } else if (name == "gelu") {
@@ -393,6 +395,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::COS);
     } else if (name == "abs") {
         return UnaryWithParam(UnaryOpType::ABS);
+    } else if (name == "abs_int32") {
+        return UnaryWithParam(UnaryOpType::ABS_INT32);
     } else if (name == "sign") {
         return UnaryWithParam(UnaryOpType::SIGN);
     } else if (name == "square") {

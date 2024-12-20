@@ -221,6 +221,11 @@ ALWI void abs_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs<APPROX
 ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init<APPROX>())); }
 
 /**
+ * Please refer to documentation for any_init.
+ */
+ALWI void abs_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs_int32<APPROX>(idst))); }
+
+/**
  * Will store in the output of the compute core the signum of the tile.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only
