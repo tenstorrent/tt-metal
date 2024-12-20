@@ -842,6 +842,9 @@ ttnn::Tensor prepare_conv_weights(
         shard_orientation,
         !use_non_tile_height);
 
+    ParallelConfig output_parallel_config =
+        determine_output_parallel_config(parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
+
     bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt;
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
@@ -854,7 +857,7 @@ ttnn::Tensor prepare_conv_weights(
         opt_conv_op_block_config.act_block_w_ntiles,
         opt_conv_op_block_config.out_subblock_w_ntiles,
         parallel_config,
-        parallel_config,
+        output_parallel_config,
         device,
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,

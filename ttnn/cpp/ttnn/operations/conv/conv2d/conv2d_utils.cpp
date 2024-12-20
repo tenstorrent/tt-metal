@@ -160,7 +160,7 @@ ParallelConfig determine_parallel_config(
     return pconfig;
 }
 
-static ParallelConfig determine_output_parallel_config(
+ParallelConfig determine_output_parallel_config(
     const ParallelConfig& input_parallel_config,
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
