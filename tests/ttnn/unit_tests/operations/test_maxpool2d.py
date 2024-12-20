@@ -852,7 +852,7 @@ def test_pool_core_nondivis(
 @pytest.mark.parametrize("stride", ((2, 2),))
 @pytest.mark.parametrize("dilation", ((1, 1),))
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("ceil_mode", [True])
+@pytest.mark.parametrize("ceil_mode", [False, True])
 def test_run_max_pool_squeeze_net_model(
     act_shape,
     kernel_size,
