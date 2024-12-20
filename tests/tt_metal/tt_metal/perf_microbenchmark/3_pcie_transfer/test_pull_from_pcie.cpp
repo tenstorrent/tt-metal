@@ -196,20 +196,20 @@ int main(int argc, char** argv) {
         if (copy_mode >= 2 && copy_mode <= 7) {
             if (copy_mode == 2 || copy_mode == 3) {
                 TT_ASSERT(
-                    addr_align % sizeof(__m128) == 0,
+                    addr_align % sizeof(simde__m128) == 0,
                     "Address alignment must be a multiple of 16 when using nt_memcpy");
             } else if (copy_mode == 5 || copy_mode == 6) {
                 TT_ASSERT(
-                    addr_align % sizeof(__m256) == 0,
+                    addr_align % sizeof(simde__m256) == 0,
                     "Address alignment must be a multiple of 32 when using nt_memcpy");
             }
             if (copy_mode >= 2 && copy_mode <= 4) {
                 TT_ASSERT(
-                    transfer_size % (INNER_LOOP * sizeof(__m128)) == 0,
+                    transfer_size % (INNER_LOOP * sizeof(simde__m128)) == 0,
                     "Each copy to hugepage must be mod32==0 when using nt_memcpy");
             } else if (copy_mode >= 5 && copy_mode <= 7) {
                 TT_ASSERT(
-                    transfer_size % (INNER_LOOP * sizeof(__m256)) == 0,
+                    transfer_size % (INNER_LOOP * sizeof(simde__m256)) == 0,
                     "Each copy to hugepage must be mod64==0 when using nt_memcpy");
             }
         }
