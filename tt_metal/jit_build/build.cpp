@@ -53,7 +53,7 @@ std::string get_default_root_path() {
     std::string emptyString("");
     std::string user_name = parse_env<std::string>("USER", emptyString);
     if (user_name == emptyString) {
-        return "/tmp/metal-cache/";
+        return "/tmp/tt-metal-cache/";
     } else {
         return "/tmp/" + user_name + "-metal-cache/";
     }
@@ -63,8 +63,8 @@ void JitBuildEnv::init(
     uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     this->root_ = llrt::RunTimeOptions::get_instance().get_root_dir();
-    this->out_root_ = llrt::RunTimeOptions::get_instance().is_built_dir_specified()
-                          ? llrt::RunTimeOptions::get_instance().get_built_dir()
+    this->out_root_ = llrt::RunTimeOptions::get_instance().is_cache_dir_specified()
+                          ? llrt::RunTimeOptions::get_instance().get_cache_dir()
                           : get_default_root_path();
 
     this->arch_ = arch;
