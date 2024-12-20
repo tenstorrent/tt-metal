@@ -109,8 +109,6 @@ Tensor convert_float_vector_to_tt_tensor(
     if (data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Tile layout is required for BFLOAT8_B and BFLOAT4_B; got {}", layout);
 
-        auto result_cpu_spec = TensorSpec(
-            ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(Layout::TILE, tile), MemoryConfig{}));
         auto owned_buffer = create_owned_buffer_from_vector_of_floats(std::move(data), DataType::FLOAT32);
         auto float_tensor = Tensor(OwnedStorage{owned_buffer}, shape, DataType::FLOAT32, Layout::ROW_MAJOR, tile);
         auto tile_val = tile.value_or(Tile());
