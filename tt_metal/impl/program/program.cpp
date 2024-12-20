@@ -800,6 +800,7 @@ void detail::Program_::allocate_circular_buffers(const Device *device) {
             }
         }
         tt::tt_metal::GraphTracker::instance().track_allocate_cb(circular_buffer->core_ranges(), computed_addr, circular_buffer->size(), circular_buffer->globally_allocated());
+        std::cout << " Addr: " << computed_addr << std::endl;
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
     this->local_circular_buffer_allocation_needed_ = false;
@@ -1314,16 +1315,14 @@ void detail::Program_::finalize(Device *device) {
 
 void Program::lower(Device* device) {
     bool is_cached = this->is_cached();
+    uint64_t command_hash = device->build_key();
+    if (not hal.is_coordinate_virtualization_enabled()) {
+        // When coordinate virtualization is not enabled, explicitly encode the device
+        // id into the command hash, to always assert on programs being reused across devices.
+        command_hash = (command_hash << 32) | (device->id());
+    }
+    auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
     if (!is_cached) {
-        uint64_t command_hash = device->build_key();
-        if (not hal.is_coordinate_virtualization_enabled()) {
-            // When coordinate virtualization is not enabled, explicitly encode the device
-            // id into the command hash, to always assert on programs being reused across devices.
-            command_hash = (command_hash << 32) | (device->id());
-        }
-        auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
-        auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
-        TT_FATAL(cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
         auto sub_device_id = this->determine_sub_device_ids(device)[0];
         ProgramCommandSequence program_command_sequence;
         program_utils::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
@@ -1332,6 +1331,9 @@ void Program::lower(Device* device) {
         program_utils::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
         this->set_cached();
+    } else {
+        auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
+        TT_FATAL(cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
     }
 }
 

@@ -254,6 +254,7 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size >> 4);
         bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
         bool pass_intermediate = (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
+        std::cout << ((cb_addr) >> 4) << std::endl;
         EXPECT_TRUE(pass_intermediate);
 
         uint32_t out_index = out_cb * sizeof(uint32_t);
@@ -261,6 +262,7 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         bool size_match_out = cb_config_vector.at(out_index + 1) == (cb_size >> 4);
         bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
         bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
+        std::cout << addr_match_out << " " << size_match_out << " " << num_pages_match_out << std::endl;
         EXPECT_TRUE(pass_out);
     }
 }

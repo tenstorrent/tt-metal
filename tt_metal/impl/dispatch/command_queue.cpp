@@ -1374,6 +1374,7 @@ void EnqueueProgramCommand::update_device_commands(
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
         for (const std::shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
+            std::cout << "Update CB " << cb->address() << std::endl;
             const uint32_t cb_address = cb->address();
             const uint32_t cb_size = cb->size();
             for (const auto& buffer_index : cb->local_buffer_indices()) {
@@ -1630,63 +1631,36 @@ void EnqueueProgramCommand::process() {
 
     RecordProgramRun(program);
 
-    // Calculate all commands size and determine how many fetch q entries to use
-    // Preamble, some waits and stalls
-    // can be written directly to the issue queue
-    this->write_program_command_sequence(program.get_cached_program_command_sequences().begin().second());
-    if (!is_cached) {
-        // program.lower(this->device);
-        ProgramCommandSequence program_command_sequence;
-        this->assemble_preamble_commands(program_command_sequence, kernel_config_addrs);
-        this->assemble_stall_commands(program_command_sequence, true);
-        program_command_sequence.current_stall_seq_idx = UncachedStallSequenceIdx;
-        // Runtime Args Command Sequence
-        this->assemble_runtime_args_commands(program_command_sequence);
+    static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
+    static constexpr uint32_t tensix_l1_write_offset_offset =
+        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset1));
+    static constexpr uint32_t eth_l1_write_offset_offset =
+        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
 
-        // Record kernel groups in this program, only need to do it once.
-        for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-            CoreType core_type = hal.get_core_type(index);
-            RecordKernelGroups(program, core_type, program.get_kernel_groups(index));
-        }
-        this->assemble_device_commands(program_command_sequence, kernel_config_addrs);
-        // Stall first for simplicity, because we don't use `sync_count` in assemble_stall_commands.
-        this->write_program_command_sequence(
-            program_command_sequence, /*stall_first=*/true, /*stall_before_program=*/false);
-        this->assemble_stall_commands(program_command_sequence, false);
-        cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
-        program.set_cached();
+    auto& cached_program_command_sequence = cached_cmd_iter->second;
+    if (program.get_program_binary_status(device->id()) != ProgramBinaryStatus::Committed) {
+        cached_program_command_sequence.current_stall_seq_idx = UncachedStallSequenceIdx;
         program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
     } else {
-        static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
-        static constexpr uint32_t tensix_l1_write_offset_offset =
-            (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset1));
-        static constexpr uint32_t eth_l1_write_offset_offset =
-            (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
-
-        auto& cached_program_command_sequence = cached_cmd_iter->second;
-        if (program.get_program_binary_status(device->id()) != ProgramBinaryStatus::Committed) {
-            cached_program_command_sequence.current_stall_seq_idx = UncachedStallSequenceIdx;
-            program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
-        } else {
-            cached_program_command_sequence.current_stall_seq_idx = CachedStallSequenceIdx;
-        }
-        auto& curr_stall_seq_idx = cached_program_command_sequence.current_stall_seq_idx;
-        cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
-            wait_count_offset, &sync_count, sizeof(uint32_t));
-
-        cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
-            tensix_l1_write_offset_offset,
-            &kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
-            sizeof(uint32_t));
-        if (hal.get_programmable_core_type_count() >= 2) {
-            cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
-                eth_l1_write_offset_offset,
-                &kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)],
-                sizeof(uint32_t));
-        }
-        this->update_device_commands(cached_program_command_sequence, kernel_config_addrs);
-        this->write_program_command_sequence(cached_program_command_sequence, stall_first, stall_before_program);
+        cached_program_command_sequence.current_stall_seq_idx = CachedStallSequenceIdx;
     }
+    auto& curr_stall_seq_idx = cached_program_command_sequence.current_stall_seq_idx;
+    cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
+        wait_count_offset, &sync_count, sizeof(uint32_t));
+
+    cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
+        tensix_l1_write_offset_offset,
+        &kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
+        sizeof(uint32_t));
+    if (hal.get_programmable_core_type_count() >= 2) {
+        cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
+            eth_l1_write_offset_offset,
+            &kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)],
+            sizeof(uint32_t));
+    }
+    this->update_device_commands(cached_program_command_sequence, kernel_config_addrs);
+    this->write_program_command_sequence(cached_program_command_sequence, stall_first, stall_before_program);
+
 }
 
 EnqueueRecordEventCommand::EnqueueRecordEventCommand(
