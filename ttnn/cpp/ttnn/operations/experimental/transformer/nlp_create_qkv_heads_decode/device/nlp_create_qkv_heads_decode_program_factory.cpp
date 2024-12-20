@@ -479,19 +479,19 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    uint32_t head_tiles = head_dim / TILE_WIDTH;
-    uint32_t head_size = head_tiles * single_tile_size;
+    const uint32_t head_tiles = head_dim / TILE_WIDTH;
+    const uint32_t head_size = head_tiles * single_tile_size;
 
-    uint32_t element_size = input_tensor.element_size();
-    uint32_t sub_tile_line_bytes = 16 * element_size;
-    auto q_shard_spec = output[0].shard_spec().value();
-    auto q_cores = q_shard_spec.grid;
-    auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
-    auto in_shard_spec = input_tensor.shard_spec().value();
-    auto in_cores = in_shard_spec.grid;
-    auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
+    const uint32_t element_size = input_tensor.element_size();
+    const uint32_t sub_tile_line_bytes = 16 * element_size;
+    const auto q_shard_spec = output[0].shard_spec().value();
+    const auto q_cores = q_shard_spec.grid;
+    const auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
+    const auto in_shard_spec = input_tensor.shard_spec().value();
+    const auto in_cores = in_shard_spec.grid;
+    const auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
     uint32_t q_output_cb_index = CBIndex::c_16;
     tt_metal::CircularBufferConfig cb_q_output_config =
@@ -500,9 +500,9 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
             .set_globally_allocated_address(*output[0].buffer());
     auto cb_q_output = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
 
-    auto k_shard_spec = output[1].shard_spec().value();
-    auto k_cores = k_shard_spec.grid;
-    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
+    const auto k_shard_spec = output[1].shard_spec().value();
+    const auto k_cores = k_shard_spec.grid;
+    const auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
 
     uint32_t k_output_cb_index = CBIndex::c_17;
     tt_metal::CircularBufferConfig cb_k_output_config =
@@ -511,9 +511,9 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
             .set_globally_allocated_address(*output[1].buffer());
     auto cb_k_output = tt_metal::CreateCircularBuffer(program, k_cores, cb_k_output_config);
 
-    auto v_shard_spec = output[0].shard_spec().value();
-    auto v_cores = q_shard_spec.grid;
-    auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
+    const auto v_shard_spec = output[0].shard_spec().value();
+    const auto v_cores = q_shard_spec.grid;
+    const auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
     uint32_t v_output_cb_index = CBIndex::c_18;
     tt_metal::CircularBufferConfig cb_v_output_config =
@@ -525,15 +525,15 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     uint32_t q_base_addr = input_tensor.buffer()->address();
 
     // cores for q
-    uint32_t q_num_cores = q_cores.num_cores();  // number of cores of the output
+    const uint32_t q_num_cores = q_cores.num_cores();  // number of cores of the output
     const auto& q_cores_vector = corerange_to_cores(q_cores, q_num_cores, true);
 
     // cores for k
-    uint32_t k_num_cores = k_cores.num_cores();  // number of cores of the output
+    const uint32_t k_num_cores = k_cores.num_cores();  // number of cores of the output
     const auto& k_cores_vector = corerange_to_cores(k_cores, k_num_cores, true);
 
     // cores for input
-    uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
+    const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
     auto in_cores_vec = corerange_to_cores(in_cores, in_num_cores, true);
 
     std::vector<uint32_t> noc_x_coords, noc_y_coords;
