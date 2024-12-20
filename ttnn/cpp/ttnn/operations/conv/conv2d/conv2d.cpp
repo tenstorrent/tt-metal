@@ -158,6 +158,7 @@ Result conv2d(
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
             parallel_config,
+            output_parallel_config,
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
