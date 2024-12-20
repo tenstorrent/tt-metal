@@ -99,9 +99,6 @@ static ttnn::SmallVector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& 
 template <typename T, template <typename> typename BufferType>
 inline std::vector<T> convert_layout_row_major_to_tile(
     const Size& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
-    if (shape.width() * shape.height() == 0) {
-        return std::vector<T>();
-    }
     TT_FATAL(
         (shape.height() % tile.get_tile_shape()[0] == 0 && shape.width() % tile.get_tile_shape()[1] == 0),
         "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must "
@@ -214,7 +211,7 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 template <typename T>
 Tensor pad(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
+    const tt::tt_metal::LegacyShape& output_shape,
     const ttnn::SimpleShape& input_tensor_start,
     float pad_value);
 
