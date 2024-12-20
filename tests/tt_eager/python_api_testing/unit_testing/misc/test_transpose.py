@@ -1085,7 +1085,13 @@ def test_transpose_hw_sharded_tiled_n_cores(device, n, c, h, w):
 def test_transpose_hw_rm(shape, device):
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(2, 3)
-    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     tt_output = ttnn.transpose(tt_input, 2, 3)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
