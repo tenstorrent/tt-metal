@@ -95,9 +95,9 @@ def test_max_global(device, batch_size, h, w):
 @pytest.mark.parametrize(
     "input_shape_and_dim",
     [
-        ((2, 32, 64, 64), -4),
-        ((2, 32, 64, 64), -3),
-        ((2, 32, 64), -3),
+        ((32, 32, 32, 64), -4),
+        ((2, 32, 32, 64), -3),
+        ((32, 32, 64), -3),
     ],
 )
 @pytest.mark.parametrize("keepdim", [True, False])
