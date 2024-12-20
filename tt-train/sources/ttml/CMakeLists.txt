@@ -19,6 +19,7 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}"
         "$ENV{TT_METAL_HOME}/tt_metal"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
+        "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole/wormhole_b0_defines"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/"
