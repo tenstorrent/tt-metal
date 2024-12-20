@@ -20,6 +20,8 @@ struct BinaryNg {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
         tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 
     static Tensor invoke(
@@ -28,6 +30,8 @@ struct BinaryNg {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
         tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 
     static Tensor invoke(
@@ -37,6 +41,8 @@ struct BinaryNg {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
         tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 
     static Tensor invoke(
@@ -45,6 +51,8 @@ struct BinaryNg {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
         tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 };
 
@@ -122,4 +130,5 @@ constexpr auto logaddexp = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logaddexp2 = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::logaddexp2",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP2>>();
-}
+
+}  // namespace ttnn::experimental

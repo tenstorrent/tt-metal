@@ -16,6 +16,8 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
     return ttnn::prim::binary_ng(
         queue_id,
@@ -25,6 +27,8 @@ Tensor BinaryNg<binary_op_type>::invoke(
         output_dtype,
         memory_config,
         optional_output_tensor,
+        lhs_activations,
+        rhs_activations,
         post_activations);
 }
 
@@ -35,6 +39,8 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
     return invoke(
         DefaultQueueId,
@@ -43,6 +49,8 @@ Tensor BinaryNg<binary_op_type>::invoke(
         output_dtype,
         memory_config,
         optional_output_tensor,
+        lhs_activations,
+        rhs_activations,
         post_activations);
 }
 
@@ -54,6 +62,8 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
     return ttnn::prim::binary_ng(
         queue_id,
@@ -63,6 +73,8 @@ Tensor BinaryNg<binary_op_type>::invoke(
         output_dtype,
         memory_config,
         optional_output_tensor,
+        lhs_activations,
+        rhs_activations,
         post_activations);
 }
 
@@ -73,9 +85,19 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
     return invoke(
-        DefaultQueueId, input_tensor_a, scalar, output_dtype, memory_config, optional_output_tensor, post_activations);
+        DefaultQueueId,
+        input_tensor_a,
+        scalar,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
 }
 
 template struct BinaryNg<BinaryOpType::ADD>;

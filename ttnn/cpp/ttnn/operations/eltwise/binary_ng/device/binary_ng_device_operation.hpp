@@ -31,6 +31,8 @@ struct BinaryNgDeviceOperation {
 
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
+        ttnn::SmallVector<unary::UnaryOpType> lhs_activations;
+        ttnn::SmallVector<unary::UnaryOpType> rhs_activations;
         ttnn::SmallVector<unary::UnaryOpType> post_activations;
         std::optional<float> scalar;
         MemoryConfig memory_config;
@@ -88,6 +90,8 @@ struct BinaryNgDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations,
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations,
         tt::stl::Span<const unary::UnaryOpType> post_activations);
 
     // tensor-scalar invocation
@@ -98,6 +102,8 @@ struct BinaryNgDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations,
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations,
         tt::stl::Span<const unary::UnaryOpType> post_activations);
 };
 

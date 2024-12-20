@@ -28,6 +28,7 @@ std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZ
         if (i > 0) {
             os << ", ";
         }
+        using tt::stl::reflection::operator<<;
         os << vec[i];
     }
     os << "])";

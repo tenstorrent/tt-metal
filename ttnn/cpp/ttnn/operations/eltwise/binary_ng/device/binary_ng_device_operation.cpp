@@ -40,7 +40,14 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
 
 tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
-        binary_op_type, memory_config, get_dtype(), compute_kernel_config, subtile_broadcast_type);
+        binary_op_type,
+        lhs_activations,
+        rhs_activations,
+        post_activations,
+        memory_config,
+        get_dtype(),
+        compute_kernel_config,
+        subtile_broadcast_type);
 }
 
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
@@ -198,6 +205,8 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
     auto subtile_broadcast_type = get_subtile_broadcast_type(
         input_tensor_a_arg.get_logical_shape()[-2],
@@ -205,13 +214,12 @@ BinaryNgDeviceOperation::invoke(
         input_tensor_b_arg.get_logical_shape()[-2],
         input_tensor_b_arg.get_logical_shape()[-1]);
 
-    ttnn::SmallVector<ttnn::operations::unary::UnaryOpType> activations(
-        post_activations.begin(), post_activations.end());
-
     return {
         operation_attributes_t{
             binary_op_type,
-            activations,
+            {lhs_activations.begin(), lhs_activations.end()},
+            {rhs_activations.begin(), rhs_activations.end()},
+            {post_activations.begin(), post_activations.end()},
             std::nullopt,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             input_tensor_a_arg.get_dtype(),
@@ -229,13 +237,15 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const unary::UnaryOpType> rhs_activations,
     tt::stl::Span<const unary::UnaryOpType> post_activations) {
-    ttnn::SmallVector<unary::UnaryOpType> activations(post_activations.begin(), post_activations.end());
-
     return {
         operation_attributes_t{
             binary_op_type,
-            activations,
+            {lhs_activations.begin(), lhs_activations.end()},
+            {rhs_activations.begin(), rhs_activations.end()},
+            {post_activations.begin(), post_activations.end()},
             scalar,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             input_tensor_a_arg.get_dtype(),
