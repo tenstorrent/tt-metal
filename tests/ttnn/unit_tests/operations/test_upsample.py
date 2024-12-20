@@ -132,11 +132,6 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     batch_size, num_channels, height, width = input_shape
     torch.manual_seed(0)
     input = torch.rand(input_shape, dtype=torch.bfloat16)
-    # for i in range(input_shape[0]):
-    #     for j in range(input_shape[1]):
-    #         for k in range(input_shape[2]):
-    #             for l in range(input_shape[3]):
-    #                 input[i, j, k, l] = (k * width + l + 1)
 
     ## golden reference using torch
     scale_factor = (scale_h, scale_w)

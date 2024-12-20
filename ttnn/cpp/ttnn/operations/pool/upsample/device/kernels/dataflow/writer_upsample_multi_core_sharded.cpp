@@ -3,32 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-
 #include "dataflow_api.h"
-#define ENABLE_DEBUG_PRINT 0
-
-#if ENABLE_DEBUG_PRINT == 1
-#include "debug/dprint.h"
-
-inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < pagelen; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
-#endif
 
 void kernel_main() {
     uint32_t stick_nbytes = get_arg_val<uint32_t>(0);
     uint32_t in_nsticks_per_core = get_arg_val<uint32_t>(1);
     uint32_t scale_h = get_arg_val<uint32_t>(2);
     uint32_t scale_w = get_arg_val<uint32_t>(3);
-    uint32_t in_w = get_arg_val<uint32_t>(4);
-    uint32_t out_w = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(1);
@@ -36,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(3);
 
     uint32_t reader_nsticks_per_core = (in_nsticks_per_core + is_reader) / 2;
-    uint32_t writer_nsticks_per_core = in_nsticks_per_core / 2;
+    uint32_t out_nsticks_per_core = reader_nsticks_per_core * scale_h * scale_w;
     uint32_t image_row_begin = is_reader ? 0 : reader_nsticks_per_core;
     uint32_t image_row_end = is_reader ? reader_nsticks_per_core : in_nsticks_per_core;
     uint32_t l1_read_addr = get_read_ptr(in_cb_id);
@@ -46,10 +27,12 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
 
     uint32_t reader_idx = 0;
-    if (!is_reader) {
-        reader_idx = 4 * (scale_h * image_row_begin);
+    if constexpr (!is_reader) {
+        /* For each input stick there are 4 entries in config cb {core_coords.x, core_coords.y, stick_offset(in
+         * input_cb), 0(padding)} so multiply input image_row_begin with (4 * scale_h) */
+        reader_idx = (4 * scale_h) * image_row_begin;
     }
-    cb_reserve_back(out_cb_id, out_w);
+    cb_reserve_back(out_cb_id, out_nsticks_per_core);
 
     for (uint32_t row_begin = image_row_begin; row_begin < image_row_end; ++row_begin) {
         for (uint32_t sh = 0; sh < scale_h; sh++) {
@@ -67,5 +50,5 @@ void kernel_main() {
     }
 
     noc_async_read_barrier();
-    cb_push_back(out_cb_id, out_w);
+    cb_push_back(out_cb_id, out_nsticks_per_core);
 }

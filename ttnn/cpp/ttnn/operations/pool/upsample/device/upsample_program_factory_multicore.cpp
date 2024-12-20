@@ -85,7 +85,6 @@ static Tensor create_config_tensor(
     CoreCoord core_coords;
     if (is_height_sharded) {
         for (size_t j = 0; j < logical_core_to_stick_map.size(); j += logical_core_to_stick_map_entry_size) {
-            CoreCoord core_coords;
             if (is_col_major) {
                 core_coords = device->worker_core_from_logical_core(
                     CoreCoord(logical_core_to_stick_map[j], logical_core_to_stick_map[j + 1]));
@@ -109,7 +108,15 @@ static Tensor create_config_tensor(
             }
         }
     }
-    uint32_t elems_per_core = 4 * scale_factor_h * input_nsticks_per_core;
+    /* Each entry in config_vector contains 4 elements:
+     * {core_coords.x, core_coords.y, stick_offset(in input_cb), 0(padding)}
+     * - core_coords.x: X coordinate of the core
+     * - core_coords.y: Y coordinate of the core
+     * - stick_offset: Offset within the input circular buffer
+     * - padding: Always set to 0 for alignment purposes
+     */
+    const uint32_t config_buffer_entry_size = 4;
+    uint32_t elems_per_core = config_buffer_entry_size * scale_factor_h * input_nsticks_per_core;
     Shape config_shape({config_vector.size() / elems_per_core, elems_per_core});
     auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
     return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
@@ -150,7 +157,6 @@ operation::ProgramWithCallbacks upsample_multi_core(
         ncores);
 
     uint32_t in_nsticks_per_core = shard_spec.shape[0];
-    uint32_t out_nsticks_per_core = in_nsticks_per_core * scale_factor_h * scale_factor_w;
 
     if (input.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         TT_THROW("Unsupported sharding layout");
@@ -280,9 +286,6 @@ operation::ProgramWithCallbacks upsample_multi_core(
     writer_rt_args[1] = input_nsticks_per_core;
     writer_rt_args[2] = scale_factor_h;
     writer_rt_args[3] = scale_factor_w;
-    writer_rt_args[4] = input_nsticks_per_core;
-    writer_rt_args[5] = output_nsticks_per_core / 2;  // half of the outputs are processed by each core
-    writer_rt_args[6] = 0;                            // set for each core below
 
     uint32_t start_input_stick_id = 0;
     if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
