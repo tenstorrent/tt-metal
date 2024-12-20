@@ -40,7 +40,7 @@ autograd::TensorPtr layernorm(
         mean,
         rstd,
         /* memory_config */ std::nullopt,
-        /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+        /* compute_kernel_config */ std::nullopt);
 
     auto out = autograd::create_tensor();
     out->set_value(out_tensors[0].value());
@@ -63,7 +63,7 @@ autograd::TensorPtr layernorm(
             gamma_grad,
             beta_grad,
             /* memory_config */ std::nullopt,
-            /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+            /* compute_kernel_config */ std::nullopt);
 
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());

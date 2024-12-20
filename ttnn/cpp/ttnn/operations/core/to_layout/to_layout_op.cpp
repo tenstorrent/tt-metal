@@ -23,6 +23,20 @@ namespace core {
 
 namespace detail {
 
+inline bool validate_nd_support(const ttnn::Tensor& tensor_arg, const ttnn::Layout layout) {
+    const auto initial_shape = tensor_arg.get_shape();
+    if (initial_shape.rank() > 4 && tensor_arg.get_layout() != layout) {
+        for (int i = 0; i < initial_shape.rank() - 4; i++) {
+            TT_FATAL(
+                initial_shape[i] == 1,
+                "For ND tensors, shape dimensions greater than 4 should be 1, shape at index{} is {}",
+                i,
+                initial_shape[i]);
+        }
+    }
+    return true;
+}
+
 // Issue #8617: Limitations on tensor width for multicore device tilize
 inline bool use_multicore_device_tilize(
     const Tensor& input, const std::optional<tt::tt_metal::DataType>& output_dtype) {
@@ -73,8 +87,10 @@ Tensor to_layout_impl_on_device(
 
     if (!requires_padding_change(tensor_arg, layout)) {
         if (layout == ttnn::ROW_MAJOR_LAYOUT) {
+            validate_nd_support(tensor_arg, layout);
             return ttnn::untilize(tensor_arg, output_memory_config, use_multicore_untilize);
         }
+        validate_nd_support(tensor_arg, layout);
         return ttnn::tilize(tensor_arg, output_memory_config, dtype, use_multicore_tilize);
     }
 
@@ -89,7 +105,7 @@ Tensor to_layout_impl_on_device(
         for (auto index = 0; index < tensor_shape.rank(); ++index) {
             output_tensor_end.push_back(tensor_shape[index] - 1);
         }
-
+        validate_nd_support(tensor_arg, layout);
         auto tensor =
             ttnn::untilize_with_unpadding(tensor_arg, output_tensor_end, output_memory_config, use_multicore_untilize);
         return ttnn::reshape(tensor, tensor_shape);
@@ -111,6 +127,7 @@ Tensor to_layout_impl_on_device(
             pad[i] = {output_padding[i].front, output_padding[i].back};
         }
         auto tensor = ttnn::pad(0, tensor_arg, tt::stl::Span(pad), 0, true, std::nullopt);
+        validate_nd_support(tensor_arg, layout);
         return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
     }
 
@@ -120,7 +137,7 @@ Tensor to_layout_impl_on_device(
     } else {
         pad_value_variant = (uint32_t)0;
     }
-
+    validate_nd_support(tensor_arg, layout);
     auto tensor = ttnn::tilize_with_val_padding(
         tensor_arg, result_spec.padded_shape(), pad_value_variant, output_memory_config, dtype, use_multicore_tilize);
     return tensor.reshape(tensor_arg.logical_shape());
