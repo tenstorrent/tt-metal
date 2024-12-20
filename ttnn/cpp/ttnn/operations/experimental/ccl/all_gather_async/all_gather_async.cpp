@@ -15,8 +15,16 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    bool enable_persistent_fabric_mode,
+    bool create_semaphore_handles) {
     return ttnn::operations::experimental::ccl::all_gather_async(
-        input_tensor, dim, num_links, memory_config, topology, subdevice_id, enable_persistent_fabric_mode);
+        input_tensor,
+        dim,
+        num_links,
+        memory_config,
+        topology,
+        subdevice_id,
+        enable_persistent_fabric_mode,
+        create_semaphore_handles);
 }
 }  // namespace ttnn::operations::experimental::ccl
