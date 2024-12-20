@@ -33,6 +33,14 @@ parameters = {
 }
 
 
+def mesh_device_fixture():
+    device = ttnn.open_device(device_id=0)
+    assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
+    yield (device, "Wormhole_B0")
+    ttnn.close_device(device)
+    del device
+
+
 # Invalidate vector is called during the generation phase where each vector will be passed in.
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
