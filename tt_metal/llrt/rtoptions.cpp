@@ -31,7 +31,7 @@ const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "
 
 static const char* TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
 static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
-static const char* TT_METAL_BUILT_ENV_VAR = "TT_METAL_BUILT";
+static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
@@ -40,10 +40,10 @@ RunTimeOptions::RunTimeOptions() {
         this->root_dir = std::string(root_dir_str) + "/";
     }
 
-    const char* built_dir_str = std::getenv(TT_METAL_BUILT_ENV_VAR);
-    if (built_dir_str != nullptr) {
-        this->is_built_dir_env_var_set = true;
-        this->built_dir = std::string(built_dir_str) + "/";
+    const char* cache_dir_str = std::getenv(TT_METAL_CACHE_ENV_VAR);
+    if (cache_dir_str != nullptr) {
+        this->is_cache_dir_env_var_set = true;
+        this->cache_dir_ = std::string(cache_dir_str) + "/";
     }
 
     const char* kernel_dir_str = std::getenv(TT_METAL_KERNEL_PATH_ENV_VAR);
@@ -145,11 +145,11 @@ const std::string& RunTimeOptions::get_root_dir() {
     return root_dir;
 }
 
-const std::string& RunTimeOptions::get_built_dir() {
-    if (!this->is_built_dir_specified()) {
-        TT_THROW("Env var {} is not set.", TT_METAL_BUILT_ENV_VAR);
+const std::string& RunTimeOptions::get_cache_dir() {
+    if (!this->is_cache_dir_specified()) {
+        TT_THROW("Env var {} is not set.", TT_METAL_CACHE_ENV_VAR);
     }
-    return built_dir;
+    return this->cache_dir_;
 }
 
 const std::string& RunTimeOptions::get_kernel_dir() const {
