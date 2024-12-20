@@ -51,6 +51,8 @@ namespace tt::tt_metal {
  * @see PCIDevice::enumerate_devices_info
  */
 inline tt::ARCH get_platform_architecture() {
+    return tt::ARCH::BLACKHOLE;  // LOL
+#if NOPE
     auto arch = tt::ARCH::Invalid;
     if (std::getenv("TT_METAL_SIMULATOR_EN")) {
         auto arch_env = std::getenv("ARCH_NAME");
@@ -76,6 +78,7 @@ inline tt::ARCH get_platform_architecture() {
     }
 
     return arch;
+#endif
 }
 
 }  // namespace tt::tt_metal
