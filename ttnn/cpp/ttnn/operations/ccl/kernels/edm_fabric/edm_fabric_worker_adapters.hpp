@@ -167,6 +167,9 @@ struct WorkerToFabricEdmSender {
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         noc_inline_dw_write(remote_buffer_index_addr, *this->buffer_index_ptr);
 
+        // Need to wait for the ack from edm
+        wait_for_empty_write_slot();
+
         noc_async_write_barrier();
     }
 
@@ -203,7 +206,7 @@ private:
         uint64_t buffer_address = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr) +
                                   (*this->buffer_index_ptr * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
 
-        // DPRINT << "SND PKT TO @ " << (uint64_t)buffer_address << "\n";
+        // skip past the first part of the buffer which will be occupied by the packet header
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address + sizeof(tt::fabric::PacketHeader));
     }
 
@@ -216,7 +219,6 @@ private:
         ASSERT(size_bytes <= this->buffer_size_bytes);
 
         DPRINT << "SND PKT TO @ " << (uint64_t)buffer_address << "\n";
-        DPRINT << "\t1st 8B: " << (uint64_t) * reinterpret_cast<volatile uint64_t*>(source_address) << "\n";
         ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader*>(
             reinterpret_cast<volatile tt::fabric::PacketHeader*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
