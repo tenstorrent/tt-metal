@@ -14,7 +14,7 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_multi_core(
     Tensor& output,
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
-    std::optional<CoreRangeSet> sub_core_grids);
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
 tt::tt_metal::operation::ProgramWithCallbacks untilize_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en);

@@ -49,7 +49,7 @@ void bind_untilize(py::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                bool use_multicore,
                bool use_pack_untilize,
-               const std::optional<CoreRangeSet>& sub_core_grids,
+               const std::optional<CoreRangeSet>&& sub_core_grids,
                uint8_t queue_id) {
                 return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
             },

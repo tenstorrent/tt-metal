@@ -12,6 +12,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -104,7 +105,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_ct_args = {(uint32_t)src0_is_dram};
 
-    auto unary_reader_kernel_id = CreateKernel(
+    auto reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
@@ -119,7 +120,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
         (uint32_t)log2_stick_size,
     };
 
-    auto unary_writer_kernel_id = CreateKernel(
+    auto writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_interleaved_parallel_columns.cpp",
@@ -174,15 +175,15 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
             std::uint32_t{0},                    // start stick id = 0, since parallelizing on height
             offset_within_stick};
 
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
         cores_with_rtargs.push_back(core);
         tile_start_id += ntiles_per_core;
         offset_within_stick += ntiles_per_core * TILE_WIDTH * output.element_size();
     }
 
-    auto override_runtime_arguments_callback = [reader_kernel_id = unary_reader_kernel_id,
-                                                writer_kernel_id = unary_writer_kernel_id,
+    auto override_runtime_arguments_callback = [reader_kernel_id = reader_kernel_id,
+                                                writer_kernel_id = writer_kernel_id,
                                                 cb_src0 = cb_src0,
                                                 cb_output = cb_output,
                                                 cores_with_rtargs](
@@ -449,7 +450,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     Tensor& output,
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
-    std::optional<CoreRangeSet> sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
     bool src_sharded = a.memory_config().is_sharded();
