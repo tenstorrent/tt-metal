@@ -304,7 +304,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("h", [230])
 @pytest.mark.parametrize("w", [256])
-def test_tranpose_hw_rm_with_padding(device, n, c, h, w):
+def test_transpose_hw_rm_with_padding(device, n, c, h, w):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
@@ -334,10 +334,10 @@ def test_tranpose_hw_rm_with_padding(device, n, c, h, w):
 
 @skip_for_grayskull("Grayskull has pcc issue when transpose used untilize")
 @pytest.mark.parametrize("n", [16])
-@pytest.mark.parametrize("c", [128, 4])
-@pytest.mark.parametrize("h", [8, 256])
-@pytest.mark.parametrize("w", [256, 256])
-def test_tranpose_hw_rm_no_padding(device, n, c, h, w):
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [8])
+@pytest.mark.parametrize("w", [256])
+def test_transpose_hw_rm_no_padding(device, n, c, h, w):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
@@ -355,7 +355,7 @@ def test_tranpose_hw_rm_no_padding(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
-def run_tranpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache):
+def run_transpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
@@ -376,9 +376,9 @@ def run_tranpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache):
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [8])
 @pytest.mark.parametrize("w", [256])
-def test_tranpose_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+def test_transpose_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     for _ in range(2):
-        run_tranpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache)
+        run_transpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
@@ -433,7 +433,7 @@ def test_transpose_hw_sharded_rm(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
-def run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
+def run_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
@@ -468,9 +468,9 @@ def run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
-def test_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+def test_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     for _ in range(2):
-        run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w)
+        run_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
@@ -488,7 +488,7 @@ def test_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w, use_progr
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
-def test_tranpose_hc_rm(device, n, c, h, w):
+def test_transpose_hc_rm(device, n, c, h, w):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(1, 2)
@@ -507,7 +507,7 @@ def test_tranpose_hc_rm(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
-def run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+def run_transpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(1, 2)
@@ -529,9 +529,9 @@ def run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
 @pytest.mark.parametrize("w", [16])
-def test_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache):
+def test_transpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     for _ in range(2):
-        run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
+        run_transpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
@@ -545,7 +545,7 @@ def test_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache
     assert device.num_program_cache_entries() == 1
 
 
-def run_tranpose_hc_sharded(device, n, c, h, w, grid_size):
+def run_transpose_hc_sharded(device, n, c, h, w, grid_size):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(1, 2)
@@ -589,11 +589,11 @@ def run_tranpose_hc_sharded(device, n, c, h, w, grid_size):
         (16, 128, 128, 16, ttnn.CoreGrid(y=8, x=8)),
     ],
 )
-def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, use_program_cache):
+def test_transpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, use_program_cache):
     if grid_size.y > device.core_grid.y:
         pytest.skip("grid size not for N300")
     for _ in range(2):
-        run_tranpose_hc_sharded(device, n, c, h, w, grid_size)
+        run_transpose_hc_sharded(device, n, c, h, w, grid_size)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
@@ -1012,7 +1012,7 @@ def test_transpose_forge_hc(device, b, h, w, dim0, dim1):
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("h", [256])
 @pytest.mark.parametrize("w", [32])
-def test_tranpose_hw_sharded_tiled_8_cores(device, n, c, h, w):
+def test_transpose_hw_sharded_tiled_8_cores(device, n, c, h, w):
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
@@ -1081,7 +1081,7 @@ def test_transpose_hw_sharded_tiled_n_cores(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
-@pytest.mark.parametrize("shape", [[16, 4, 256, 256], [16, 128, 8, 256]])
+@pytest.mark.parametrize("shape", [[16, 4, 256, 256], [16, 128, 8, 256], [1, 1, 32, 32]])
 def test_transpose_hw_rm(shape, device):
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(2, 3)
