@@ -164,15 +164,16 @@ class LlamaGenerator:
     def decode_forward_text(
         self,
         tokens,
-        current_pos,
+        start_pos,
         page_table=None,
+        kv_cache=None,
     ):
         """
         Performs text decode step.
         Returns logits
         """
         tt_tokens, tt_current_pos, tt_rot_mats, tt_page_table = self.model.prepare_inputs_decode(
-            tokens, current_pos, page_table
+            tokens, start_pos, page_table
         )
 
         tt_logits = self.model.ttnn_decode_forward(
@@ -180,9 +181,10 @@ class LlamaGenerator:
             tt_current_pos,
             rot_mats=tt_rot_mats,
             page_table=tt_page_table,
+            kv_cache=kv_cache,
         )
 
-        logits = self.model.process_output_decode(tt_logits)
+        logits = self.model.process_output_decode(tt_logits, B=tokens.shape[0])
         return logits
 
     def capture_trace_text(
@@ -229,7 +231,7 @@ class LlamaGenerator:
 
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
-        logits = self.model.process_output_decode(tt_out_trace)
+        logits = self.model.process_output_decode(tt_out_trace, B=tokens.shape[0])
 
         return logits
 
