@@ -100,6 +100,12 @@ struct ProgramConfig {
 };
 
 inline namespace v0 {
+// Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
+enum class ProgramBinaryStatus : uint8_t {
+    NotSent = 0, // Binaries have not been written
+    InFlight = 1, // Fast Dispatch Commands to write the binaries to DRAM has been issued
+    Committed = 2, // Binaries have been commited to DRAM
+};
 
 class Program {
    public:
@@ -151,7 +157,10 @@ class Program {
 
     bool is_finalized() const;
     bool is_cached() const;
+    ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
     void set_cached();
+    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
+    void allocate_kernel_bin_buf_on_device(Device* device);
     void finalize(Device *device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
@@ -202,7 +211,7 @@ class Program {
     friend detail::Internal_;
 
     const ProgramTransferInfo &get_program_transfer_info() const noexcept;
-    const std::shared_ptr<Buffer> &get_kernels_buffer() const noexcept;
+    std::shared_ptr<Buffer> get_kernels_buffer(Device* device) const noexcept;
     const std::vector<uint32_t> &get_program_config_sizes() const noexcept;
     std::unordered_map<uint64_t, ProgramCommandSequence> &get_cached_program_command_sequences() noexcept;
 };

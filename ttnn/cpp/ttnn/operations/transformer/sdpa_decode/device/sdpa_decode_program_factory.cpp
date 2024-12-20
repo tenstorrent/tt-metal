@@ -363,8 +363,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         page_table_stick_size = page_table_buffer->aligned_page_size();
 
         // cb page_table
-        auto c_in9_config = CircularBufferConfig(page_table_tile_size, {{CBIndex::c_9, page_table_df}})
-                                .set_page_size(CBIndex::c_9, page_table_tile_size);
+        auto c_in9_config = CircularBufferConfig(page_table_stick_size, {{CBIndex::c_9, page_table_df}})
+                                .set_page_size(CBIndex::c_9, page_table_stick_size);
         auto cb_in9_id = CreateCircularBuffer(program, core_grid, c_in9_config);
     }
 

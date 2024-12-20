@@ -97,5 +97,6 @@ target_link_libraries(
         HAL::grayskull
         HAL::wormhole
         HAL::blackhole
+        Tracy::TracyClient
 )
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)

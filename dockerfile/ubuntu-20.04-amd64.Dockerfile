@@ -1,5 +1,5 @@
 # TT-METAL UBUNTU 20.04 AMD64 DOCKERFILE
-FROM ubuntu:20.04
+FROM public.ecr.aws/ubuntu/ubuntu:20.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ENV DOXYGEN_VERSION=1.9.6

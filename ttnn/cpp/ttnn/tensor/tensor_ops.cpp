@@ -424,12 +424,12 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
                         if (new_shape[-1] == 0 || shard_shape[1] == 0) {
                             mul_div = 0;
                         } else {
-                            mul_div = new_shape[-1] > shard_shape[1] ?
-                                        (new_shape[-1] / shard_shape[1]) :
-                                        (shard_shape[1] / new_shape[-1]);
+                            mul_div = new_shape[-1] > shard_shape[1] ? (new_shape[-1] / shard_shape[1])
+                                                                     : (shard_shape[1] / new_shape[-1]);
                         }
 
-                        shard_spec.shape[0] = new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
+                        shard_spec.shape[0] =
+                            new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
                         shard_spec.shape[1] = new_shape[-1];
 
                         shard_spec_buffer.page_shape = {1, new_shape[-1]};

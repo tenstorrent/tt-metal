@@ -7,7 +7,8 @@ training_config:
   max_steps: 5000
   learning_rate: 0.0003
   weight_decay: 0.01
-
+  use_moreh_adamw: true
+  use_kahan_summation: false
   transformer_config:
     num_heads: 6
     embedding_dim: 384

@@ -177,10 +177,15 @@ struct Matmul {
 
     void validate(
         const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
+    operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
@@ -191,7 +196,10 @@ struct Matmul {
 };
 
 Matmul create_matmul_struct(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const struct Matmul& parameters);
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const struct Matmul& parameters,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
@@ -221,7 +229,8 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    const uint8_t queue_id = 0);
+    const uint8_t queue_id = 0,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace matmul
 

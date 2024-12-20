@@ -86,11 +86,14 @@ void MorehGetItemOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehGetItemOperation::shape_return_value_t MorehGetItemOperation::compute_output_shapes(
+MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output.has_value()) {
+        return {tensor_args.output->get_tensor_spec()};
+    }
+
     const auto& input_tensor = tensor_args.input;
     const auto index_dims = operation_attributes.index_dims;
-    auto input_layout = input_tensor.get_layout();
     const auto& index_tensors = tensor_args.index_tensors;
     auto input_shape = input_tensor.get_shape();
     auto output_shape = input_shape;
@@ -170,8 +173,14 @@ MorehGetItemOperation::shape_return_value_t MorehGetItemOperation::compute_outpu
 
         output_shape = Shape(output_size_vec);
     }
-    return {output_shape};
-};
+    return TensorSpec(
+        output_shape.logical_shape(),
+        TensorLayout::fromLegacyPaddedShape(
+            tensor_args.input.get_dtype(),
+            PageConfig(tensor_args.input.get_layout()),
+            operation_attributes.memory_config,
+            output_shape));
+}
 
 MorehGetItemOperation::tensor_return_value_t MorehGetItemOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -180,14 +189,8 @@ MorehGetItemOperation::tensor_return_value_t MorehGetItemOperation::create_outpu
         return {tensor_args.output.value()};
     }
     log_debug(tt::LogOp, "{}:{} create output tensor", __func__, __LINE__);
-    const auto& output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    return create_device_tensor(
-        output_shape,
-        tensor_args.input.get_dtype(),
-        tensor_args.input.get_layout(),
-        tensor_args.input.device(),
-        operation_attributes.memory_config);
-};
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
+}
 
 std::tuple<MorehGetItemOperation::operation_attributes_t, MorehGetItemOperation::tensor_args_t>
 MorehGetItemOperation::invoke(

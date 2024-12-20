@@ -44,12 +44,16 @@ void MorehAbsPowOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
-MorehAbsPowOperation::shape_return_value_t MorehAbsPowOperation::compute_output_shapes(
+MorehAbsPowOperation::spec_return_value_t MorehAbsPowOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output->get_tensor_spec();
+    }
     const auto& input = tensor_args.input;
-    const auto& input_shape = input.get_shape();
-    return input_shape;
-};
+    return TensorSpec(
+        input.get_logical_shape(),
+        TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), operation_attributes.memory_config));
+}
 
 MorehAbsPowOperation::tensor_return_value_t MorehAbsPowOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -59,12 +63,7 @@ MorehAbsPowOperation::tensor_return_value_t MorehAbsPowOperation::create_output_
     }
 
     log_debug(tt::LogOp, "{}:{} create output tensor", __func__, __LINE__);
-    return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        tensor_args.input.get_dtype(),
-        tensor_args.input.get_layout(),
-        tensor_args.input.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 };
 
 std::tuple<MorehAbsPowOperation::operation_attributes_t, MorehAbsPowOperation::tensor_args_t>
