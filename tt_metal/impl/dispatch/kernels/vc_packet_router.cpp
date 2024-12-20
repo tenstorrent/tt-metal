@@ -203,8 +203,65 @@ constexpr uint8_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(35) >> 24) & 0xFF
     };
 
+constexpr uint32_t vc_packet_router_input_ptr_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(36),
+        get_compile_time_arg_val(37),
+        get_compile_time_arg_val(38),
+        get_compile_time_arg_val(39),
+    };
+
+constexpr uint32_t vc_packet_router_input_remote_ptr_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(40),
+        get_compile_time_arg_val(41),
+        get_compile_time_arg_val(42),
+        get_compile_time_arg_val(43),
+    };
+
+constexpr uint32_t vc_packet_router_output_ptr_buffers[MAX_SWITCH_FAN_OUT] =
+    {
+        get_compile_time_arg_val(44),
+        get_compile_time_arg_val(45),
+        get_compile_time_arg_val(46),
+        get_compile_time_arg_val(47),
+    };
+
+constexpr uint32_t vc_packet_router_output_remote_ptr_buffers[MAX_SWITCH_FAN_OUT] =
+    {
+        get_compile_time_arg_val(48),
+        get_compile_time_arg_val(49),
+        get_compile_time_arg_val(50),
+        get_compile_time_arg_val(51),
+    };
+
+static_assert(vc_packet_router_input_ptr_buffers[0] != 0, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 1 ? vc_packet_router_input_ptr_buffers[1] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 2 ? vc_packet_router_input_ptr_buffers[2] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 3 ? vc_packet_router_input_ptr_buffers[3] != 0 : true, "local ptr buffers may not be at L1[0]");
+
+static_assert(vc_packet_router_output_ptr_buffers[0] != 0, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 1 ? vc_packet_router_output_ptr_buffers[1] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 2 ? vc_packet_router_output_ptr_buffers[2] != 0 : true, "local ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 3 ? vc_packet_router_output_ptr_buffers[3] != 0 : true, "local ptr buffers may not be at L1[0]");
+
+static_assert(input_packetize[0] || vc_packet_router_input_remote_ptr_buffers[0] != 0, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 1 ? (input_packetize[1] || vc_packet_router_input_remote_ptr_buffers[1] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 2 ? (input_packetize[2] || vc_packet_router_input_remote_ptr_buffers[2] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 3 ? (input_packetize[3] || vc_packet_router_input_remote_ptr_buffers[3] != 0) : true, "remote ptr buffers may not be at L1[0]");
+
+static_assert(output_depacketize[0] || vc_packet_router_output_remote_ptr_buffers[0] != 0, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 1 ? (output_depacketize[1] || vc_packet_router_output_remote_ptr_buffers[1] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 2 ? (output_depacketize[2] || vc_packet_router_output_remote_ptr_buffers[2] != 0) : true, "remote ptr buffers may not be at L1[0]");
+static_assert(router_lanes > 3 ? (output_depacketize[3] || vc_packet_router_output_remote_ptr_buffers[3] != 0) : true, "remote ptr buffers may not be at L1[0]");
+
 packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
+using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
+using input_queue_cb_mode_sequence = CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;
+
 packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
+using output_queue_network_sequence = NetworkTypeSequence<remote_tx_network_type[0], remote_tx_network_type[1], remote_tx_network_type[2], remote_tx_network_type[3]>;
+using output_queue_cb_mode_sequence = CBModeTypeSequence<output_depacketize[0], output_depacketize[1], output_depacketize[2], output_depacketize[3]>;
 
 void kernel_main() {
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
@@ -212,28 +269,30 @@ void kernel_main() {
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX+1, 0xbb000000 | router_lanes);
 
     for (uint32_t i = 0; i < router_lanes; i++) {
-        input_queues[i].init(i, rx_queue_start_addr_words + i*rx_queue_size_words, rx_queue_size_words,
-                        remote_rx_x[i], remote_rx_y[i], remote_rx_queue_id[i], remote_rx_network_type[i],
+        input_queues[i].init(i, rx_queue_start_addr_words + i*rx_queue_size_words, rx_queue_size_words, vc_packet_router_input_ptr_buffers[i],
+                        remote_rx_x[i], remote_rx_y[i], remote_rx_queue_id[i], vc_packet_router_input_remote_ptr_buffers[i], remote_rx_network_type[i],
                         input_packetize[i], input_packetize_log_page_size[i],
                         input_packetize_local_sem[i], input_packetize_upstream_sem[i],
                         input_packetize_src_endpoint[i], input_packetize_dest_endpoint[i]);
 
-        output_queues[i].init(i + router_lanes, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
-                              remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
+        output_queues[i].init(i + router_lanes, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i], vc_packet_router_output_ptr_buffers[i],
+                              remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], vc_packet_router_output_remote_ptr_buffers[i], remote_tx_network_type[i],
                               &input_queues[i], 1,
                               output_depacketize[i], output_depacketize_log_page_size[i],
                               output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
                               output_depacketize_remove_header[i]);
     }
 
-    if (!wait_all_src_dest_ready(input_queues, router_lanes, output_queues, router_lanes, timeout_cycles)) {
+    if (!wait_all_input_output_ready<input_queue_network_sequence,
+                                     input_queue_cb_mode_sequence,
+                                     output_queue_network_sequence,
+                                     output_queue_cb_mode_sequence>(input_queues, output_queues, timeout_cycles)) {
         write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
 
-    uint32_t curr_input = 0;
     bool timeout = false;
     bool all_outputs_finished = false;
     uint64_t data_words_sent = 0;
@@ -243,7 +302,6 @@ void kernel_main() {
     uint32_t heartbeat = 0;
     while (!all_outputs_finished && !timeout) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-        iter++;
         if (timeout_cycles > 0) {
             uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
             if (cycles_since_progress > timeout_cycles) {
@@ -251,46 +309,51 @@ void kernel_main() {
                 break;
             }
         }
-        if (input_queues[curr_input].get_curr_packet_valid()) {
-            bool full_packet_sent;
-            uint32_t words_sent = output_queues[curr_input].forward_data_from_input(0, full_packet_sent, input_queues[curr_input].get_end_of_cmd());
-            data_words_sent += words_sent;
-            if ((words_sent > 0) && (timeout_cycles > 0)) {
-                progress_timestamp = get_timestamp_32b();
+
+        // Loop through router lanes
+        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto, auto, auto sequence_i>(auto) -> bool {
+            iter++;
+            if (input_queues[sequence_i].template get_curr_packet_valid<input_packetize[sequence_i]>()) {
+                bool full_packet_sent;
+                const auto words_sent = output_queues[sequence_i].template forward_data_from_input<remote_tx_network_type[sequence_i], output_depacketize[sequence_i], remote_rx_network_type[sequence_i], input_packetize[sequence_i]>(0, full_packet_sent, input_queues[sequence_i].get_end_of_cmd());
+                data_words_sent += words_sent;
+                if ((words_sent > 0) && (timeout_cycles > 0)) {
+                    progress_timestamp = get_timestamp_32b();
+                }
             }
-        }
 
-        output_queues[curr_input].prev_words_in_flight_check_flush();
+            // Flush for all inputs of this output queue (only 1 input)
+            output_queues[sequence_i].template prev_words_in_flight_check_flush<output_depacketize[sequence_i], NetworkTypeSequence<remote_rx_network_type[sequence_i]>, CBModeTypeSequence<input_packetize[sequence_i]>>();
 
-        if ((iter & 0xFF) == 0) {
-            all_outputs_finished = true;
-            for (uint32_t i = 0; i < router_lanes; i++) {
-                all_outputs_finished &= output_queues[i].is_remote_finished();
+
+            if ((iter & 0xFF) == 0) {
+                all_outputs_finished = true;
+                for (uint32_t i = 0; i < router_lanes; i++) {
+                    all_outputs_finished &= output_queues[i].is_remote_finished();
+                }
             }
-        }
 
-        curr_input++;
-        if (curr_input == router_lanes) {
-            curr_input = 0;
-        }
+            return true;
+        });
     }
 
     if (!timeout) {
         write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
-        for (uint32_t i = 0; i < router_lanes; i++) {
-            if (!output_queues[i].output_barrier(timeout_cycles)) {
+        process_queues<output_queue_network_sequence, output_queue_cb_mode_sequence>([&]<auto network_type, auto cb_mode, auto sequence_i>(auto) -> bool {
+            if (!output_queues[sequence_i].template output_barrier<cb_mode, input_queue_network_sequence, input_queue_cb_mode_sequence>(timeout_cycles)) {
                 timeout = true;
-                break;
             }
-        }
+            return true;
+        });
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     if (!timeout) {
         write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
-        for (uint32_t i = 0; i < router_lanes; i++) {
-            input_queues[i].send_remote_finished_notification();
-        }
+        process_queues<input_queue_network_sequence, input_queue_cb_mode_sequence>([&]<auto network_type, auto cb_mode, auto sequence_i>(auto) -> bool {
+            input_queues[sequence_i].template send_remote_finished_notification<network_type, cb_mode>();
+            return true;
+        });
     }
 
     set_64b_result(kernel_status, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
