@@ -188,6 +188,12 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
 // Converts convolution weights to grouped layout with padded zeros
 Tensor convert_conv_weight_tensor_to_grouped_layout(const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
+sliding_window::ParallelConfig determine_output_parallel_config(
+    const sliding_window::ParallelConfig& input_parallel_config,
+    const CoreCoord& compute_grid_size,
+    uint32_t out_channels,
+    bool is_mm_conv);
+
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 
 } // namespace operations::conv
