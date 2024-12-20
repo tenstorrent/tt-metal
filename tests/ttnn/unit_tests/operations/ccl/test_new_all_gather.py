@@ -126,6 +126,10 @@ def run_all_gather_impl(
     input_shard_shape=None,
     shard_grid=None,
     tensor_mem_layout=None,
+    use_cluster_axis_api=False,
+    cluster_axis=None,
+    create_persistent_fabric=True,
+    teardown_persistent_fabric=True
 ):
     enable_persistent_fabric = True
     if num_iters < 1:
@@ -207,9 +211,10 @@ def run_all_gather_impl(
         ]
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
-    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-        mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
-    )
+    if create_persistent_fabric:
+        mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+        )
 
     if trace_mode:
         tt_out_tensor = run_with_trace(
@@ -224,22 +229,36 @@ def run_all_gather_impl(
         )
     else:
         for i in range(num_iters):
-            tt_out_tensor = ttnn.experimental.all_gather_async(
-                input_tensor_mesh,
-                dim,
-                num_links=num_links,
-                memory_config=output_mem_config,
-                topology=all_gather_topology,
-                subdevice_id=worker_sub_device_id,
-                enable_persistent_fabric_mode=enable_persistent_fabric,
-            )
+            if use_cluster_axis_api:
+                tt_out_tensor = ttnn.experimental.all_gather_async(
+                    input_tensor_mesh,
+                    dim,
+                    cluster_axis=cluster_axis,
+                    mesh_device=mesh_device,
+                    memory_config=output_mem_config,
+                    topology=all_gather_topology,
+                    subdevice_id=worker_sub_device_id,
+                    enable_persistent_fabric_mode=enable_persistent_fabric,
+                    num_preferred_links=num_links,
+                    create_semaphore_handles=True)
+                
+            else:
+                tt_out_tensor = ttnn.experimental.all_gather_async(
+                    input_tensor_mesh,
+                    dim,
+                    num_links=num_links,
+                    memory_config=output_mem_config,
+                    topology=all_gather_topology,
+                    subdevice_id=worker_sub_device_id,
+                    enable_persistent_fabric_mode=enable_persistent_fabric,
+                )
 
             logger.info(f"Waiting for op {i}")
             for d in mesh_device.get_devices():
                 ttnn.synchronize_device(d, sub_device_ids=[ttnn.SubDeviceId(0)])
             logger.info(f"Done iteration {i}")
 
-    if enable_persistent_fabric:
+    if enable_persistent_fabric and teardown_persistent_fabric:
         ttnn.teardown_edm_fabric(mesh_device)
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
@@ -407,4 +426,95 @@ def test_all_gather_sharded(
         input_shard_shape=input_shard_shape,
         shard_grid=shard_grid,
         tensor_mem_layout=tensor_mem_layout,
+    )
+
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "row_num_devices, row_num_links, row_output_shape, row_gather_dim, row_layout",
+    [
+        (4, 1, [1, 1, 64, 1024], 3, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "col_num_devices, col_num_links, col_output_shape, col_gather_dim, col_layout",
+    [
+        (8, 1, [1, 1, 64, 1024], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("num_iters", [1])
+@pytest.mark.parametrize("enable_async", [False])
+def test_back_to_back_row_and_col_all_gathers_on_galaxy_mesh_fabric(
+    tg_mesh_device,
+    num_devices,
+    row_num_devices, row_num_links, row_output_shape, row_gather_dim, row_tensor_mem_layout,
+    col_num_devices, col_num_links, col_output_shape, col_gather_dim, col_tensor_mem_layout,
+    input_dtype,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    input_shard_shape,
+    shard_grid,
+    tensor_mem_layout,
+):
+
+    run_all_gather_impl(
+        tg_mesh_device,
+        row_num_devices,
+        row_output_shape,
+        row_gather_dim,
+        row_num_links,
+        input_dtype,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_topology=ttnn.Topology.Linear,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        rand_tensor=True,
+        input_shard_shape=input_shard_shape,
+        shard_grid=shard_grid,
+        tensor_mem_layout=row_tensor_mem_layout,
+        use_cluster_axis_api=True,
+        cluster_axis=1,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=False
+    )
+
+    run_all_gather_impl(
+        tg_mesh_device,
+        col_num_devices,
+        col_output_shape,
+        col_gather_dim,
+        col_num_links,
+        input_dtype,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_topology=ttnn.Topology.Linear,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        rand_tensor=True,
+        input_shard_shape=input_shard_shape,
+        shard_grid=shard_grid,
+        tensor_mem_layout=col_tensor_mem_layout,
+        use_cluster_axis_api=True,
+        cluster_axis=0,
+        create_persistent_fabric=False,
+        teardown_persistent_fabric=True
     )
