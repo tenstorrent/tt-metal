@@ -32,17 +32,15 @@ from tests.ttnn.utils_for_testing import assert_equal
     ],
 )
 def test_full_like_int(device, input_shape, fill_value, layout):
-    torch_input_tensor = torch.randint(0, 100, (input_shape), dtype=torch.int32)
-    torch_output_tensor = torch.full_like(torch_input_tensor, fill_value)
+    torch_input = torch.randint(0, 100, (input_shape), dtype=torch.int32)
+    torch_output = torch.full_like(torch_input, fill_value, dtype=torch.int32)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    output_tensor = ttnn.moreh_full_like(input_tensor, fill_value)
-    assert ttnn.is_tensor_storage_on_device(output_tensor)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
+    tt_input = ttnn.from_torch(torch_input, layout=layout, device=device)
+    tt_output = ttnn.moreh_full_like(tt_input, fill_value)
+    assert ttnn.is_tensor_storage_on_device(tt_output)
+    tt_output_cpu = ttnn.to_torch(tt_output)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert torch.equal(torch_output, tt_output_cpu)
 
 
 @pytest.mark.parametrize(
@@ -55,7 +53,13 @@ def test_full_like_int(device, input_shape, fill_value, layout):
 )
 @pytest.mark.parametrize(
     "fill_value",
-    [0.15, -1.2],
+    [
+        3.14,
+        2.00781250,  # mantissa: 0000 0001, bf16 round down test
+        2.00830080,  # mantissa: 0000 0001 0001, bf16 round up test
+        2.02343750,  # mantissa: 0000 0011, bf16 round up test
+        -3.9921875,  # test mantissa overflow. answer should be 4
+    ],
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -71,17 +75,15 @@ def test_full_like_int(device, input_shape, fill_value, layout):
     ],
 )
 def test_full_like_float(device, input_shape, fill_value, dtype, layout):
-    torch_input_tensor = torch.rand((input_shape), dtype=dtype)
-    torch_output_tensor = torch.full_like(torch_input_tensor, fill_value)
+    torch_input = torch.rand((input_shape), dtype=dtype)
+    torch_output = torch.full_like(torch_input, fill_value, dtype=dtype)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    output_tensor = ttnn.moreh_full_like(input_tensor, fill_value)
-    assert ttnn.is_tensor_storage_on_device(output_tensor)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
+    tt_input = ttnn.from_torch(torch_input, layout=layout, device=device)
+    tt_output = ttnn.moreh_full_like(tt_input, fill_value)
+    assert ttnn.is_tensor_storage_on_device(tt_output)
+    tt_output_cpu = ttnn.to_torch(tt_output)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert torch.equal(torch_output, tt_output_cpu)
 
 
 @pytest.mark.parametrize(
@@ -102,15 +104,13 @@ def test_full_like_float(device, input_shape, fill_value, dtype, layout):
 )
 def test_full_like_callback(device, input_shape, fill_value, layout, use_program_cache):
     for i in range(2):
-        torch_input_tensor = torch.randint(0, 100, (input_shape), dtype=torch.int32)
-        torch_output_tensor = torch.full_like(torch_input_tensor, fill_value)
+        torch_input = torch.randint(0, 100, (input_shape), dtype=torch.int32)
+        torch_output = torch.full_like(torch_input, fill_value)
 
-        input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
-        input_tensor = ttnn.to_device(input_tensor, device)
-        output_tensor = ttnn.moreh_full_like(input_tensor, fill_value)
-        assert ttnn.is_tensor_storage_on_device(output_tensor)
-        output_tensor = ttnn.from_device(output_tensor)
-        output_tensor = ttnn.to_torch(output_tensor)
+        tt_input = ttnn.from_torch(torch_input, layout=layout, device=device)
+        tt_output = ttnn.moreh_full_like(tt_input, fill_value)
+        assert ttnn.is_tensor_storage_on_device(tt_output)
+        tt_output_cpu = ttnn.to_torch(tt_output)
         if i == 0:
             num_program_cache_entries = device.num_program_cache_entries()
             assert num_program_cache_entries > 0
@@ -119,4 +119,4 @@ def test_full_like_callback(device, input_shape, fill_value, layout, use_program
         torch_dummy = torch.randn([32, 32])
         tt_dummy = ttnn.from_torch(torch_dummy, device=device)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert torch.equal(torch_output, tt_output_cpu)

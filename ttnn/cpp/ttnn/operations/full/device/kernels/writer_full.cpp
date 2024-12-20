@@ -13,8 +13,8 @@ typedef union {
 constexpr uint32_t onetile = 1;
 
 void kernel_main() {
-    uint32_t fill_value = get_arg_val<uint32_t>(0);
-    uint32_t output_addr = get_arg_val<uint32_t>(1);
+    uint32_t output_addr = get_arg_val<uint32_t>(0);
+    uint32_t fill_value = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
     uint32_t start_id = get_arg_val<uint32_t>(3);
 
