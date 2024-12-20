@@ -30,7 +30,7 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
 #include "tt_metal/include/tt_metal/program.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 
 #include "tt_metal/graph/graph_tracking.hpp"
 

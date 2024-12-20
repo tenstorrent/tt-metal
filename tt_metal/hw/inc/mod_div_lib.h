@@ -39,6 +39,13 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_56(uint32_t n) {
     return (((uint64_t)n * 0x24924925) >> 32) >> 3;
 }
 
+inline __attribute__((always_inline)) uint32_t fast_udiv_63(uint32_t n) {
+    // Uses embedding style magic number
+    // * fixed point 1/63 then shifting.
+    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
+    return (((uint64_t)n * 0x82082083) >> 32) >> 5;
+}
+
 inline __attribute__((always_inline)) uint32_t fast_udiv_70(uint32_t n) {
     // Uses embedding style magic number
     // * fixed point 1/70 then shifting.

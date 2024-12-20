@@ -18,7 +18,7 @@ void kernel_main() {
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(1);
 
-    uint32_t src_cb_base_addr = get_write_ptr(src_cb_id);  // TODO change to read
+    uint32_t src_cb_base_addr = get_read_ptr(src_cb_id);
     uint32_t dst_cb_base_addr = get_write_ptr(dst_cb_id);
 
     // Copy from top of src cb to top of dst cb (backwards)

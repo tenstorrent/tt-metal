@@ -53,23 +53,24 @@ void MorehCumsumDeviceOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehCumsumDeviceOperation::shape_return_value_t MorehCumsumDeviceOperation::compute_output_shapes(
+MorehCumsumDeviceOperation::spec_return_value_t MorehCumsumDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output->get_tensor_spec();
+    }
+
     const auto& input = tensor_args.input;
-    auto output_shape = input.get_shape();
-    return output_shape;
+    return TensorSpec(
+        input.get_logical_shape(), TensorLayout(input.dtype(), PageConfig(input.layout()), MemoryConfig{}));
 }
 
 MorehCumsumDeviceOperation::tensor_return_value_t MorehCumsumDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input;
-    const auto& output = tensor_args.output;
-    if (output.has_value()) {
-        return output.value();
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output.value();
     }
 
-    auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    return create_device_tensor(output_shape, input.dtype(), input.layout(), input.device());
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
 std::tuple<MorehCumsumDeviceOperation::operation_attributes_t, MorehCumsumDeviceOperation::tensor_args_t>

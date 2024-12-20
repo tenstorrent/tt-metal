@@ -97,7 +97,7 @@ autograd::TensorPtr nll_loss(
             /* divisor_tensor */ divisor,
             /* ignore_index */ -100,
             /* memory_config */ std::nullopt,
-            /* compute_kernel_config */ std::nullopt);
+            /* compute_kernel_config */ core::ComputeKernelConfig::precise());
         grad = ttnn::reshape(grad, prediction->get_value().shape());
         prediction->add_grad(grad);
     };

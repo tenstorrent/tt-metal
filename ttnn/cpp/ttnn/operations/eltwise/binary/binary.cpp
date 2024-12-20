@@ -478,5 +478,7 @@ template struct BinaryOperationSfpu<BinaryOpType::POWER>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_AND>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_XOR>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_OR>;
+template struct BinaryOperationSfpu<BinaryOpType::LEFT_SHIFT>;
+template struct BinaryOperationSfpu<BinaryOpType::RIGHT_SHIFT>;
 
 }  // namespace ttnn::operations::binary
