@@ -37,6 +37,7 @@ def conv_transpose2d(
     conv_config: Conv2dConfig = None,  # config overrides by user
     compute_config=None,  # compute config overrides by user
     groups: int = 1,
+    mirror_kernel=True,
     return_output_dim=False,
     return_weights_and_bias=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
@@ -64,6 +65,7 @@ def conv_transpose2d(
         conv_config=conv_config,
         compute_config=compute_config,
         groups=groups,
+        mirror_kernel=mirror_kernel,
     )
 
     if return_output_dim and return_weights_and_bias:
