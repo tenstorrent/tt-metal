@@ -271,7 +271,7 @@ struct registered_operation_t {
                 const OptionalConstTensors& optional_input_tensors,
                 const OptionalTensors& optional_output_tensors) mutable {
                 auto execute_on_worker_thread_args = detail::map_launch_op_args_to_execute_on_worker_thread_args(
-                    input_tensors, optional_input_tensors, optional_output_tensors, std::forward<args_t>(args)...);
+                    input_tensors, optional_input_tensors, optional_output_tensors, args...);
                 return std::apply(
                     [](auto&&... args) {
                         return detail::map_execute_on_worker_thread_return_to_launch_op_return<operation_t>(
