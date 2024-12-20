@@ -34,7 +34,8 @@ static Tensor reduce_impl(
         } else {
             dim = std::get<ttnn::SmallVector<int>>(dim_arg.value());
         }
-    } else {
+    }
+    if (dim.empty()) {
         dim = ttnn::SmallVector<int>(rank);
         for (int i = 0; i < rank; i++) {
             dim[i] = i;
@@ -68,25 +69,68 @@ static Tensor reduce_impl(
         }
     }
 
+    auto transpose_and_compute_reduction = [&](const Tensor& input_tensor_arg,
+                                               const int dim1,
+                                               const int dim2,
+                                               const std::variant<int, ttnn::SmallVector<int>>& reduce_dim) -> Tensor {
+        Tensor output = ttnn::transpose(input_tensor_arg, dim1, dim2, memory_config);
+        output = reduce_impl<reduce_type>(
+            output, reduce_dim, /*keepdim=*/true, memory_config, compute_kernel_config, scalar, /*reshape=*/true);
+        output = ttnn::transpose(output, dim1, dim2, memory_config);
+        if (reshape) {
+            output = ttnn::reshape(output, ttnn::Shape{output_shape});
+        }
+        return output;
+    };
+
+    std::variant<int, ttnn::SmallVector<int>> reduce_dim;
     if (dim.size() == 1 && (rank == 3 || rank == 4)) {
         if (dim[0] == 1 && rank == 4) {
-            Tensor output = ttnn::transpose(input_tensor_arg, 1, -2, memory_config);
-            output = reduce_impl<reduce_type>(
-                output, 2, /*keepdim=*/true, memory_config, compute_kernel_config, scalar, /*reshape=*/true);
-            output = ttnn::transpose(output, 1, -2, memory_config);
-            if (reshape) {
-                output = ttnn::reshape(output, ttnn::Shape{output_shape});
-            }
-            return output;
+            reduce_dim = 2;
+            return transpose_and_compute_reduction(input_tensor_arg, 1, -2, reduce_dim);
         } else if (dim[0] == 0) {
-            Tensor output = ttnn::transpose(input_tensor_arg, 0, -2, memory_config);
-            output = reduce_impl<reduce_type>(
-                output, -2, /*keepdim=*/true, memory_config, compute_kernel_config, scalar, /*reshape=*/true);
-            output = ttnn::transpose(output, 0, -2, memory_config);
-            if (reshape) {
-                output = ttnn::reshape(output, ttnn::Shape{output_shape});
+            reduce_dim = -2;
+            return transpose_and_compute_reduction(input_tensor_arg, 0, -2, reduce_dim);
+        }
+    }
+
+    if (dim.size() == 2 && (rank == 3 || rank == 4)) {
+        if (rank == 3) {
+            if (dim[0] == 0) {
+                auto transpose_to_idx = (dim[1] == 1 ? -1 : -2);
+                reduce_dim = ttnn::SmallVector<int>({transpose_to_idx, dim[1]});
+                return transpose_and_compute_reduction(input_tensor_arg, 0, transpose_to_idx, reduce_dim);
             }
-            return output;
+        } else if (rank == 4) {
+            if (dim[0] == 0) {
+                if (dim[1] == 1) {
+                    Tensor output = ttnn::transpose(input_tensor_arg, 0, -2, memory_config);
+                    output = ttnn::transpose(output, 1, -1, memory_config);
+                    reduce_dim = ttnn::SmallVector<int>({-2, -1});
+                    output = reduce_impl<reduce_type>(
+                        output,
+                        reduce_dim,
+                        /*keepdim=*/true,
+                        memory_config,
+                        compute_kernel_config,
+                        scalar,
+                        /*reshape=*/true);
+                    output = ttnn::transpose(output, 0, -2, memory_config);
+                    output = ttnn::transpose(output, 1, -1, memory_config);
+                    if (reshape) {
+                        output = ttnn::reshape(output, ttnn::Shape{output_shape});
+                    }
+                    return output;
+                } else {
+                    auto transpose_to_idx = (dim[1] == 2 ? -1 : -2);
+                    reduce_dim = ttnn::SmallVector<int>({transpose_to_idx, dim[1]});
+                    return transpose_and_compute_reduction(input_tensor_arg, 0, transpose_to_idx, reduce_dim);
+                }
+            } else if (dim[0] == 1) {
+                auto transpose_to_idx = (dim[1] == 2 ? -1 : -2);
+                reduce_dim = ttnn::SmallVector<int>({transpose_to_idx, dim[1]});
+                return transpose_and_compute_reduction(input_tensor_arg, 1, transpose_to_idx, reduce_dim);
+            }
         }
     }
 
