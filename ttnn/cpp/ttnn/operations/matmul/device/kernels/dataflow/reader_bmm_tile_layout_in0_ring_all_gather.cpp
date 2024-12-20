@@ -31,17 +31,14 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
     uint64_t remote_signal_semaphore_addr = get_noc_addr(next_core_noc_x, next_core_noc_y, signal_semaphore_addr, noc);
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in2 = 2;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;
     constexpr uint32_t shard_size_bytes = shard_size_in_tiles * in0_single_tile_size_bytes;
 
-    // Push the local shard
-    // cb_reserve_back(cb_id_in0, batch * shard_size_in_tiles);
-    // cb_push_back(cb_id_in0, batch * shard_size_in_tiles);
-
+    // Reserving/pushing the local shard is done in compute
     cb_reserve_back(cb_id_in2, batch * (ring_size - 1) * shard_size_in_tiles);
 
     uint32_t local_shard_read_addr = get_read_ptr(cb_id_in0);

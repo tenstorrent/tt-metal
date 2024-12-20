@@ -1502,9 +1502,6 @@ void Matmul::validate(
                     TT_FATAL(
                         this->output_mem_config.shard_spec.has_value(),
                         "Output shard spec must be provided when using gather_in0.");
-                    // TT_FATAL(
-                    //     input_tensor_a.shard_spec().value().grid == this->output_mem_config.shard_spec.value().grid,
-                    //     "Output tensor must be sharded on the same cores as the input when using gather_in0.");
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
                 }

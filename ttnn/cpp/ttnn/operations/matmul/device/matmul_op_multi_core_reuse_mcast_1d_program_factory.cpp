@@ -1771,8 +1771,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
     uint32_t in1_shard_width_in_tiles =
         in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
-    std::cout << "in1_shard_height_in_tiles " << in1_shard_height_in_tiles << std::endl;
-    std::cout << "in1_shard_width_in_tiles " << in1_shard_width_in_tiles << std::endl;
     uint32_t in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -1797,8 +1795,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
     uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
-
-    std::cout << "in1_block_num_tiles " << in1_block_num_tiles << std::endl;
 
     /* Compile time args */
     std::vector<uint32_t> in0_sender_compile_time_args = {
@@ -1913,14 +1909,14 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     CBHandle cb_src1;
     if (use_global_cb) {
-        uint32_t sync_cb_index = tt::CBIndex::c_5;
+        uint32_t sync_cb_index = tt::CBIndex::c_3;
         uint32_t sync_cb_size_bytes = 16;
         tt_metal::CircularBufferConfig sync_cb_config =
             tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
                 .set_page_size(sync_cb_index, sync_cb_size_bytes);
         auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
 
-        uint32_t sync_cb2_index = tt::CBIndex::c_6;
+        uint32_t sync_cb2_index = tt::CBIndex::c_4;
         uint32_t sync_cb2_size_bytes = 16;
         tt_metal::CircularBufferConfig sync_cb2_config =
             tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
@@ -1931,7 +1927,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         uint32_t remote_cb_index = tt::CBIndex::c_31;
         tt_metal::CircularBufferConfig remote_cb_config =
             tt_metal::CircularBufferConfig((global_cb->size() / in1_block_size_bytes) * in1_block_size_bytes);
-        std::cout << "in1_CB_size " << (global_cb->size() / in1_single_tile_size) * in1_single_tile_size << std::endl;
         remote_cb_config.remote_index(remote_cb_index)
             .set_page_size(in1_block_size_bytes)
             .set_data_format(in1_data_format);
@@ -1953,8 +1948,8 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .set_tile_dims(src2_cb_index, in0_tile);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, ring_cores, src2_cb_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_7;  // output operands start at index 16
-    uint32_t interm0_cb_index = tt::CBIndex::c_8;
+    uint32_t output_cb_index = tt::CBIndex::c_5;  // output operands start at index 16
+    uint32_t interm0_cb_index = tt::CBIndex::c_6;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config =
@@ -2037,6 +2032,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_compute_args);
     }
 
+    // Runtime args for hop cores
     for (uint32_t i = 0; i < num_hop_cores; ++i) {
         bool end_of_hop = i == num_hop_cores - 1;
 

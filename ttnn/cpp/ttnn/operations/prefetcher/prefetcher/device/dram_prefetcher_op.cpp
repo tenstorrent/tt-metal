@@ -46,49 +46,18 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
             "Global circular buffer must have same number of receivers for each sender core");
     }
 }
-
-/*
-TODO fixes for multiple output tensors
-- ✅ refactor compute_output_shapes to return a vector of shapes (each shape is same as each input tensor)
-- refactor create_output_tensors to create a vector of output tensors (for-loop over all input shapes
-- ✅ Fix pybind to output list of output tensors
-
-How to handle writing to output cb? (since now there are multiple output tensors)
-- If create_device_tensor results in contiguous tensor allocation, then create a CB that is sizes for ALL output
-tensors, and then align it to the base of the first tensor
-- If not -- multiple CBs, one for each output tensor?
-*/
+// TODO: Remove output tensor entirely (if possible)
 std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    // Output shape is the same as the input shape, but the height is multiplied by the number of input tensors
-    auto input_shape = input_tensors.at(0).get_legacy_shape();
-    return {
-        ttnn::SimpleShape{32, 32 * input_tensors.size()},
-        ttnn::SimpleShape{input_shape[0] * input_tensors.size(), input_shape[1]},
-        ttnn::SimpleShape{input_shape[0] * input_tensors.size(), input_shape[1]}};
+    return {ttnn::SimpleShape{32, 32}};
 }
 std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-    auto input_tensor = input_tensors.at(0);
-    auto tensor_layout = TensorLayout(
-        input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), this->reader_output_mem_config);
-    auto tensor_spec = TensorSpec(output_shape, tensor_layout);
-    ShardedBufferConfig output_buffer_config = {
-        input_tensor.device(),
-        tensor_spec.compute_packed_buffer_size_bytes(),
-        tensor_spec.compute_page_size_bytes(),
-        this->reader_output_mem_config.buffer_type,
-        this->reader_output_mem_config.memory_layout,
-        *(tensor_spec.compute_shard_spec_buffer()),
-    };
-    std::shared_ptr<Buffer> output_buffer = CreateBuffer(output_buffer_config, global_cb->buffer_address());
-    DeviceStorage device_storage = DeviceStorage{output_buffer};
-    auto output_tensor = Tensor(device_storage, tensor_spec);
+    auto output_tensor = create_device_tensor(
+        {32, 32}, input_tensors[0].dtype(), input_tensors[0].layout(), input_tensors[0].device(), MemoryConfig{});
     return {output_tensor};
 }
 operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    return dram_prefetcher_multi_core(
-        input_tensors, this->tensor_addrs, this->num_layers, this->global_cb, output_tensors);
+    return dram_prefetcher_multi_core(input_tensors, this->tensor_addrs, this->num_layers, this->global_cb);
 }
 
 }  // namespace ttnn::operations::dram_prefetcher
