@@ -25,7 +25,6 @@ def test_plus_one(device, w):
 
 
 @pytest.mark.parametrize("w", [1, 4, 8, 32])
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_plus_one_subdevice(device, w):
     device.enable_async(True)
     torch_input_tensor = torch.randint(32000, (w,))
