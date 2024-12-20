@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import gc
 import torch
 import random
 import os
@@ -22,6 +23,13 @@ from datetime import datetime
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
+
+
+@pytest.fixture()
+def force_gc():
+    """Force garbage collection after every test."""
+    yield  # Run the test
+    gc.collect()  # Trigger garbage collection after the test completes
 
 
 @pytest.fixture(scope="function")
