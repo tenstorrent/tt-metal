@@ -1374,7 +1374,6 @@ void EnqueueProgramCommand::update_device_commands(
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
         for (const std::shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
-            std::cout << "Update CB " << cb->address() << std::endl;
             const uint32_t cb_address = cb->address();
             const uint32_t cb_size = cb->size();
             for (const auto& buffer_index : cb->local_buffer_indices()) {
