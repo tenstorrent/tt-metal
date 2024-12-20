@@ -430,7 +430,7 @@ class dispatch_core_manager {
     }
 
     void log_dispatch_assignment(std::string name, tt_cxy_pair &cxy, chip_id_t device_id, uint16_t channel, uint8_t cq_id, bool force_ethernet = false) {
-        log_warning(
+        log_debug(
             tt::LogMetal,
             "Allocated {} Core: {}({}) for Device {} Channel {} CQ ID {}",
             name,

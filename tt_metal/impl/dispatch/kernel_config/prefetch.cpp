@@ -371,7 +371,6 @@ void PrefetchKernel::CreateKernel() {
 void PrefetchKernel::ConfigureCore() {
     // Only H-type prefetchers need L1 configuration
     if (static_config_.is_h_variant.value()) {
-        tt::log_warning("Configure Prefetch H (device {} core {})", device_->id(), logical_core_.str());
         // Initialize the FetchQ
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
         auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());

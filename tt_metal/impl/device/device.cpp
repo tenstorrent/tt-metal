@@ -1041,7 +1041,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
                 bool is_tunnel_start = tunneler_settings.tunnel_stop == 0;
                 auto &compile_args = tunneler_settings.compile_args;
-                        uint32_t fwd_vc_count = tunneler_settings.vc_count - 1;
+                uint32_t fwd_vc_count = tunneler_settings.vc_count - 1;
                 uint32_t return_vc = fwd_vc_count;
                 compile_args.resize(48);
                 compile_args[0] = 0xDACADACA; // 0: endpoint_id_start_index
@@ -2566,7 +2566,7 @@ void Device::compile_command_queue_programs() {
                 CoreCoord{0, 0},
                 CoreCoord{0, 0},
                 std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                my_noc_index,  // Only one Remote Tunneler - use NOC for CQ 0
+                my_noc_index, // Only one Remote Tunneler - use NOC for CQ 0
                 my_noc_index,
                 my_noc_index,
                 true
@@ -2589,7 +2589,7 @@ void Device::compile_command_queue_programs() {
                     CoreCoord{0, 0},
                     CoreCoord{0, 0},
                     std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                    my_noc_index,// Only one Demux - use NOC for CQ 0
+                    my_noc_index, // Only one Demux - use NOC for CQ 0
                     my_noc_index,
                     my_noc_index
                 );
@@ -2825,13 +2825,6 @@ void Device::configure_command_queue_programs_new() {
                 pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
                 pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
 
-                log_warning(
-                    "Sysmem: Addr={:#08x} - {:#08x} {:#08x} {:#08x} {:#08x}",
-                    get_absolute_cq_offset(channel, cq_id, cq_size),
-                    pointers[host_issue_q_rd_ptr / sizeof(uint32_t)],
-                    pointers[host_issue_q_wr_ptr / sizeof(uint32_t)],
-                    pointers[host_completion_q_wr_ptr / sizeof(uint32_t)],
-                    pointers[host_completion_q_rd_ptr / sizeof(uint32_t)]);
                 tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), get_absolute_cq_offset(channel, cq_id, cq_size), mmio_device_id, get_umd_channel(channel));
             }
         }
@@ -2887,13 +2880,6 @@ void Device::configure_command_queue_programs() {
         pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
         pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
 
-        log_warning(
-            "Sysmem: Addr={:#08x} - {:#08x} {:#08x} {:#08x} {:#08x}",
-            get_absolute_cq_offset(channel, cq_id, cq_size),
-            pointers[host_issue_q_rd_ptr / sizeof(uint32_t)],
-            pointers[host_issue_q_wr_ptr / sizeof(uint32_t)],
-            pointers[host_completion_q_wr_ptr / sizeof(uint32_t)],
-            pointers[host_completion_q_rd_ptr / sizeof(uint32_t)]);
         tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), get_absolute_cq_offset(channel, cq_id, cq_size), mmio_device_id, get_umd_channel(channel));
     }
 
@@ -2925,13 +2911,11 @@ void Device::configure_command_queue_programs() {
         uint32_t completion_q0_last_event_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
         uint32_t completion_q1_last_event_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
         std::vector<uint32_t> prefetch_q_pcie_rd_ptr_addr_data = {get_absolute_cq_offset(channel, cq_id, cq_size) + cq_start};
-        log_warning("Configure Prefetch H (device {} core {})", mmio_device->id(), prefetch_location.str());
         detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_rd_ptr, prefetch_q_rd_ptr_addr_data, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_pcie_rd_ptr, prefetch_q_pcie_rd_ptr_addr_data, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_base, prefetch_q, dispatch_core_type);
         if (not this->is_mmio_capable()) {
             // Initialize event counters to 0 on dispatch_d on r-chip
-            log_warning("Configure Dispatch D Counters (device {} core {})", this->id(), remote_dispatcher_location.str());
             detail::WriteToDeviceL1(this, remote_dispatcher_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
             detail::WriteToDeviceL1(this, remote_dispatcher_location, completion_q1_last_event_ptr, zero, dispatch_core_type);
         }
@@ -2940,7 +2924,6 @@ void Device::configure_command_queue_programs() {
         uint32_t completion_queue_start_addr = cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
         uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
         std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
-        log_warning("Configure CQ Writer (device {} core {})", mmio_device->id(), completion_q_writer_location.str());
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_rd_ptr, completion_queue_wr_ptr, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_wr_ptr, completion_queue_wr_ptr, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
@@ -2948,15 +2931,6 @@ void Device::configure_command_queue_programs() {
 
         // Initialize address where workers signal completion to dispatch core(s).
         // TODO: Should only initialize dispatch_s_sync_sem if this->dispatch_s_enabled()?
-        if (this->distributed_dispatcher()) {
-            tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
-            log_warning("Configure Dispatch S (device {} core {})", this->id(), dispatch_s_location.str());
-        }
-        log_warning("Configure Dispatch (device {} core {})", mmio_device->id(), dispatch_location.str());
-        if (device_id != mmio_device_id) {
-            tt_cxy_pair dispatch_d_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
-            log_warning("Configure Dispatch (device {} core {})", this->id(), dispatch_d_location.str());
-        }
         for (uint32_t i = 0; i < dispatch_message_entries; i++) {
             uint32_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
@@ -3019,19 +2993,15 @@ void Device::init_command_queue_device() {
     if (llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
         detail::EnablePersistentKernelCache();
         if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
-            log_warning("Running new FD init");
             this->compile_command_queue_programs_new();
         } else {
-            log_warning("Running old FD init");
             this->compile_command_queue_programs();
         }
         detail::DisablePersistentKernelCache();
     } else {
         if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
-            log_warning("Running new FD init");
             this->compile_command_queue_programs_new();
         } else {
-            log_warning("Running old FD init");
             this->compile_command_queue_programs();
         }
     }

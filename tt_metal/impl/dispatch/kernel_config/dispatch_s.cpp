@@ -112,7 +112,6 @@ void DispatchSKernel::ConfigureCore() {
         return;
     }
     // Just need to clear the dispatch message
-    tt::log_warning("Configure Dispatch S (device {} core {})", device_->id(), logical_core_.str());
     std::vector<uint32_t> zero = {0x0};
     auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
     uint32_t dispatch_s_sync_sem_base_addr =
