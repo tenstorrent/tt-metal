@@ -451,7 +451,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
                 // Need a mapping from templated device id (1-8) to actual device id (from the tunnel)
                 std::vector<chip_id_t> template_id_to_device_id;
                 template_id_to_device_id.push_back(mmio_device_id);
-                for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+                for (const auto& tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
                     TT_ASSERT(tunnel.size() == 5, "Galaxy expected 4-deep tunnels.");
                     for (auto remote_device_id : tunnel) {
                         if (remote_device_id != mmio_device_id) {
