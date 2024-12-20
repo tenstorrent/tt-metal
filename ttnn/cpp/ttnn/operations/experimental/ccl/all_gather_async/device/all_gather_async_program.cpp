@@ -182,10 +182,11 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device);
 
     // L1 Scratch CB Creation
-    uint32_t num_pages_per_packet = 4;                 // we assume 4 page per packet for now
+    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
+    uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
+    uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
-    uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size() + sizeof(tt::fabric::PacketHeader);
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
