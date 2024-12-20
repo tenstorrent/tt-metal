@@ -28,6 +28,7 @@ class TtTransformer(LightweightModule):
         state_dict,
         weight_cache_path,
         paged_attention_config=None,
+        use_paged_kv_cache=False,
     ):
         super().__init__()
         self.args = args
@@ -69,6 +70,7 @@ class TtTransformer(LightweightModule):
                 layer_num=i,
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
+                use_paged_kv_cache=use_paged_kv_cache,
             )
             for i in range(self.n_layers)
         ]
@@ -170,7 +172,7 @@ class TtTransformer(LightweightModule):
         Inputs are torch tensors or python types. Outputs are ttnn tensors on host.
         NOTE: Tokens and current_pos are padded to batch
         """
-        B = tokens.shape[-1]
+        B = tokens.shape[0]
         assert current_pos.shape[0] == B, "Batch size mismatch"
         assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
 
@@ -178,11 +180,12 @@ class TtTransformer(LightweightModule):
         mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.args.cluster_shape)
 
         tokens = ttnn.from_torch(
-            tokens,
+            tokens.view(-1),
             device=None,
             dtype=ttnn.uint32,
             mesh_mapper=mesh_mapper,
         )
+        tokens = ttnn.unsqueeze_to_4D(tokens)
 
         rot_current_pos = torch.maximum(
             current_pos, torch.tensor(0, dtype=torch.int64)
@@ -240,17 +243,19 @@ class TtTransformer(LightweightModule):
         )[0, 0, last_token_idx, :]
         return logits
 
-    def process_output_decode(self, tt_out):
+    def process_output_decode(self, tt_out, B):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor
         """
         if self.args.num_devices > 1:
             tt_out = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-        tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
+        tt_out = ttnn.untilize(tt_out, use_multicore=True)
         if self.args.num_devices > 1:
-            return ttnn.to_torch(ttnn.get_device_tensors(tt_out_rm)[0]).float()
+            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
-            return ttnn.to_torch(tt_out_rm).float()
+            tt_out = ttnn.to_torch(tt_out).float()
+        tt_out = tt_out.view(B, 1, -1)
+        return tt_out
 
     def ttnn_prefill_forward(
         self,
@@ -280,7 +285,14 @@ class TtTransformer(LightweightModule):
             kv_cache=kv_cache,
         )
 
-    def ttnn_decode_forward(self, x, current_pos, rot_mats, page_table=None, kv_cache=None):
+    def ttnn_decode_forward(
+        self,
+        x,
+        current_pos,
+        rot_mats,
+        page_table=None,
+        kv_cache=None,
+    ):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
