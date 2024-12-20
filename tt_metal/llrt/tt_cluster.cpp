@@ -121,6 +121,12 @@ BoardType Cluster::get_board_type(chip_id_t chip_id) const {
 }
 
 void Cluster::generate_cluster_descriptor() {
+
+    this->cluster_desc_ = tt_ClusterDescriptor::create();
+    std::set<chip_id_t> &device_ids = this->devices_grouped_by_assoc_mmio_device_[0];
+    device_ids.insert(0);
+    this->device_to_mmio_device_[0] = 0;
+#if NOPE
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {
         // Passing simulator reported physical devices as logical devices.
@@ -168,6 +174,7 @@ void Cluster::generate_cluster_descriptor() {
             this->cluster_desc_->get_all_chips().size(),
             total_num_hugepages);
     }
+#endif
 }
 
 void Cluster::initialize_device_drivers() {
