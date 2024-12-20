@@ -311,7 +311,7 @@ class TtTransformer(LightweightModule):
         if mode == "decode" and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
             x = layer(
                 x,
                 current_pos,
@@ -321,7 +321,7 @@ class TtTransformer(LightweightModule):
                 page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache,
+                kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
 
         if mode == "prefill" and get_last_token == -1:
