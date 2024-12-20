@@ -27,9 +27,9 @@ random.seed(0)
 
 
 parameters = {
-    "nightly": {
+    "int32_abs": {
         "input_shape": [[15, 15]],
-        "input_a_dtype": [ttnn.float32],  # [ttnn.int32]
+        "input_a_dtype": [ttnn.int32],  # , ttnn.float32],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -88,5 +88,9 @@ def run(
     result = ttnn.abs(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
+
+    print(torch_input_tensor_a)
+    print(torch_output_tensor)
+    print(output_tensor)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
