@@ -100,7 +100,12 @@ void py_module(py::module& module) {
             "get_device",
             py::overload_cast<size_t, size_t>(&MeshDevice::get_device, py::const_),
             py::return_value_policy::reference)
-        .def("get_devices", &MeshDevice::get_devices, py::return_value_policy::reference, R"doc(
+        .def(
+            "get_devices",
+            &MeshDevice::get_devices,
+            py::return_value_policy::reference,
+            py::arg("type") = py::none(),
+            R"doc(
             Get the devices in the device mesh.
 
             Returns:
@@ -199,7 +204,7 @@ void py_module(py::module& module) {
         .def(
             "create_sub_device_manager_with_fabric",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.create_sub_device_manager(sub_devices, local_l1_size);
+                return self.create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
             },
             py::arg("sub_devices"),
             py::arg("local_l1_size"),

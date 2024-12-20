@@ -4,7 +4,7 @@
 
 #include "common/utils.hpp"
 #include <mutex>
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "llrt/rtoptions.hpp"
 
 #include <filesystem>

@@ -4,56 +4,16 @@
 
 #pragma once
 #include <core/ttnn_all_includes.hpp>
-#include <core/xtensor_all_includes.hpp>
 #include <unordered_map>
 
 #include "core/xtensor_utils.hpp"
+#include "ttnn/tensor/xtensor/partition.hpp"
 
 namespace ttml::core {
+
 template <typename T>
 std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& tensor, int num_chunks, int dim) {
-    if (num_chunks <= 0) {
-        throw std::invalid_argument("num_chunks must be > 0");
-    }
-    if (dim < 0 || static_cast<std::size_t>(dim) >= tensor.dimension()) {
-        throw std::invalid_argument("invalid dimension index");
-    }
-
-    int size_along_dim = static_cast<int>(tensor.shape()[dim]);
-    if (num_chunks > size_along_dim) {
-        throw std::invalid_argument("num_chunks cannot exceed the size of the tensor along the given dimension.");
-    }
-
-    if (num_chunks == 1) {
-        return {tensor};
-    }
-
-    int chunk_size = (size_along_dim + num_chunks - 1) / num_chunks;
-    int remaining_size = size_along_dim;
-
-    std::vector<xt::xarray<T>> chunks;
-    chunks.reserve(static_cast<std::size_t>(num_chunks));
-
-    int start = 0;
-    int end = 0;
-    for (int i = 0; i < num_chunks && end < size_along_dim; ++i) {
-        int current_chunk_size = std::min(chunk_size, remaining_size);
-        remaining_size -= current_chunk_size;
-        end = start + current_chunk_size;
-
-        // Build indices for slicing
-        xt::xstrided_slice_vector indices(tensor.dimension(), xt::all());
-        indices[dim] = xt::range(start, end);
-
-        auto chunk_view = xt::strided_view(tensor, indices);
-
-        // Construct xarray from the view
-        // This forces a copy of that slice into a new xarray
-        chunks.push_back(xt::xarray<T>(chunk_view));
-        start = end;
-    }
-
-    return chunks;
+    return ttnn::experimental::xtensor::chunk(tensor, num_chunks, dim);
 }
 
 template <class Derived, typename T>
@@ -212,11 +172,11 @@ public:
             auto row_end = row_start + cols;
             std::vector<xt::xarray<T>> row_tensors(row_start, row_end);
 
-            auto concatenated_row = core::concatenate(row_tensors, col_dim);
+            auto concatenated_row = core::concat(row_tensors, col_dim);
             row_concatenated.push_back(std::move(concatenated_row));
         }
 
-        auto result = core::concatenate(row_concatenated, row_dim);
+        auto result = core::concat(row_concatenated, row_dim);
         return {result};
     }
 
@@ -256,7 +216,7 @@ public:
     }
 
     std::vector<xt::xarray<T>> compose_impl(const std::vector<xt::xarray<T>>& tensors) const {
-        return {core::concatenate(tensors, m_concat_dim)};
+        return {core::concat(tensors, m_concat_dim)};
     }
 
 private:

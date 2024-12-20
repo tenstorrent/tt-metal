@@ -15,7 +15,7 @@ enum class TransposeOpParallelizationStrategy { MULTI_CORE_WH, MULTI_CORE_HC, MU
 
 struct Transpose {
     const TransposeOpDim dim;
-    const MemoryConfig output_mem_config;
+    const tt::tt_metal::MemoryConfig output_mem_config;
     const std::optional<float> pad_value;
 
     void validate(const std::vector<Tensor>& input_tensors) const;

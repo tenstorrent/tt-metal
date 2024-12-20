@@ -18,6 +18,18 @@ namespace ttnn {
 
 namespace operations::conv {
 namespace conv2d {
+
+template <typename T>
+ttnn::Tensor conv_bias_layout_convert(
+    const ttnn::Tensor& bias_tensor,
+    DataType bias_dtype,
+    uint32_t weight_block_h_ntiles,
+    uint32_t weight_block_w_ntiles,
+    const sliding_window::ParallelConfig& parallel_config,
+    T * device,
+    uint32_t out_channels,
+    bool is_non_tile_mul_width);
+
 template <typename T>
 ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
@@ -72,6 +84,12 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t input_width,
     const bool parameters_on_device=true,
     bool is_non_tile_mul_width=false);
+
+template <typename T>
+bool check_non_tile_mul_width(
+    T* device,
+    const Conv2dConfig& conv_config,
+    const uint32_t in_channels);
 
 } // namespace conv2d
 } // namespace operations::conv

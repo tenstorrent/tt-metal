@@ -4,7 +4,7 @@
 
 #include "moreh_helper_functions.hpp"
 
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <utility>
 
 #include "common/constants.hpp"

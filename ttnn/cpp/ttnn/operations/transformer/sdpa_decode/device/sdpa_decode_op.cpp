@@ -260,7 +260,9 @@ operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
         this->is_causal,
         has_attn_mask,
         has_cur_pos,
-        input_tensors);
+        input_tensors,
+        // Hash on page_table_tensor to properly size page table CB
+        optional_input_tensors.at(1));
 }
 
 }  // namespace ttnn::operations::transformer

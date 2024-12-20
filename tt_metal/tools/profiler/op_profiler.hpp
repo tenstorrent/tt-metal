@@ -11,13 +11,13 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <nlohmann/json.hpp>
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/TracyC.h"
+#include "tracy/Tracy.hpp"
+#include "tracy/TracyC.h"
 
 using json = nlohmann::json;
 

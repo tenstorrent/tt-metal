@@ -94,6 +94,7 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, m
         )
 
 
+@pytest.mark.skip("#16066: Undefined behaviour. It will fail on some runs and pass on others since it's stochastic.")
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",

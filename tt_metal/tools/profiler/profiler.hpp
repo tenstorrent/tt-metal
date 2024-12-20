@@ -15,8 +15,8 @@
 #include "llrt/llrt.hpp"
 #include "tools/profiler/profiler_state.hpp"
 #include "tools/profiler/common.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/TracyTTDevice.hpp"
-#include "tt_metal/third_party/tracy/public/common/TracyTTDeviceData.hpp"
+#include "tracy/TracyTTDevice.hpp"
+#include "common/TracyTTDeviceData.hpp"
 
 using std::chrono::duration;
 using std::chrono::duration_cast;

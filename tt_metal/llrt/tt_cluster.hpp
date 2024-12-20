@@ -297,8 +297,6 @@ class Cluster {
     // Mapping of each devices' ethernet routing mode
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
-    tt_device_l1_address_params l1_address_params;
-
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 };
 

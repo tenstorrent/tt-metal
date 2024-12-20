@@ -160,15 +160,6 @@ Tensor tensor_cpu(
     return host_tensor;
 }
 
-Tensor tensor_cpu_sharded(const Tensor& input_tensor) {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::cpu_sharded", input_tensor);
-    auto output = tensor_impl::to_host_sharded_wrapper(input_tensor);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
-}
-
 Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, Device* worker) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_layout, worker);
@@ -215,6 +206,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::
             host_storage != nullptr) {
             distributed_config = host_storage->strategy;
         }
+
         Tensor tensor_modified_layout = Tensor(workers.size(), distributed_config);
         for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
             auto& worker = workers[worker_index];
@@ -432,12 +424,12 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
                         if (new_shape[-1] == 0 || shard_shape[1] == 0) {
                             mul_div = 0;
                         } else {
-                            mul_div = new_shape[-1] > shard_shape[1] ?
-                                        (new_shape[-1] / shard_shape[1]) :
-                                        (shard_shape[1] / new_shape[-1]);
+                            mul_div = new_shape[-1] > shard_shape[1] ? (new_shape[-1] / shard_shape[1])
+                                                                     : (shard_shape[1] / new_shape[-1]);
                         }
 
-                        shard_spec.shape[0] = new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
+                        shard_spec.shape[0] =
+                            new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
                         shard_spec.shape[1] = new_shape[-1];
 
                         shard_spec_buffer.page_shape = {1, new_shape[-1]};

@@ -189,22 +189,14 @@ def test_llama_multimodal_demo_text(
                 position_id = prefill_lens + gen_idx
                 next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                if enable_trace:
-                    logits = generator.easy_trace(
-                        position_id,
-                        next_token_tensor,
-                        batch_xattn_masks,
-                        batch_text_masks,
-                        xattn_caches,
-                    )
-                else:
-                    logits = generator.decode_forward(
-                        position_id,
-                        next_token_tensor,
-                        batch_xattn_masks,
-                        batch_text_masks,
-                        xattn_caches,
-                    )
+                logits = generator.decode_forward(
+                    position_id,
+                    next_token_tensor,
+                    batch_xattn_masks,
+                    batch_text_masks,
+                    xattn_caches,
+                    enable_trace=enable_trace,
+                )
 
                 next_tokens, next_texts = sampler(logits)
                 # Update next token

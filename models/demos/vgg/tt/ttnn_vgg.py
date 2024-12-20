@@ -114,6 +114,7 @@ def ttnn_vgg16(
             tt_weight = parameters.features[conv_feature_ids[iter_conv_id]].weight
             tt_weight = ttnn.to_layout(ttnn.from_device(tt_weight), layout=ttnn.ROW_MAJOR_LAYOUT)
             tt_bias = parameters.features[conv_feature_ids[iter_conv_id]].bias
+            tt_bias = ttnn.to_layout(ttnn.from_device(tt_bias), layout=ttnn.ROW_MAJOR_LAYOUT)
             # Call ttnn.conv
             conv_op_cache = {}
             [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
@@ -242,6 +243,7 @@ def ttnn_vgg11(
             tt_weight = parameters.features[conv_feature_ids_2[iter_conv_id]].weight
             tt_weight = ttnn.to_layout(ttnn.from_device(tt_weight), layout=ttnn.ROW_MAJOR_LAYOUT)
             tt_bias = parameters.features[conv_feature_ids_2[iter_conv_id]].bias
+            tt_bias = ttnn.to_layout(ttnn.from_device(tt_bias), layout=ttnn.ROW_MAJOR_LAYOUT)
 
             # Call ttnn.conv
             conv_op_cache = {}

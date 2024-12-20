@@ -79,8 +79,8 @@ inline auto create_async_output_tensors(
         Tensors output_tensors;
         output_tensors.reserve(std::tuple_size_v<execute_on_worker_thread_return_t>);
         for (auto index = 0; index < std::tuple_size_v<execute_on_worker_thread_return_t>; index++) {
-            output_tensors.emplace_back(
-                Tensor(operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
+            output_tensors.emplace_back(Tensor(
+                tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
         }
         return output_tensors;
     } else {
@@ -265,7 +265,7 @@ struct registered_operation_t {
             detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(std::forward<args_t>(args)...);
 
         bool enable_autoformat = false;
-        operation::launch_op(
+        tt::tt_metal::operation::launch_op(
             [args...](
                 const Tensors& input_tensors,
                 const OptionalConstTensors& optional_input_tensors,
@@ -311,7 +311,7 @@ struct registered_operation_t {
     template <typename... args_t>
     auto operator()(args_t&&... args) const {
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
+        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
         auto output = invoke(std::forward<args_t>(args)...);
 
         // Should every output tensor be tracked?
@@ -321,7 +321,7 @@ struct registered_operation_t {
         }
         */
 
-        GraphTracker::instance().track_function_end(output);
+        tt::tt_metal::GraphTracker::instance().track_function_end(output);
         tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }

@@ -208,8 +208,6 @@ void configure_static_tlbs(
             device_driver.configure_tlb(mmio_device_id, dram_core, tlb_index, dram_addr, TLB_DATA::Posted);
         }
     }
-
-    device_driver.setup_core_to_tlb_map(mmio_device_id, get_static_tlb_index);
 }
 
 }  // namespace ll_api

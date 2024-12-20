@@ -24,6 +24,8 @@ jobs:
   build-docker-image:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
+    with:
+      os: "ubuntu-22.04-amd64"
   build-artifact:
     needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml

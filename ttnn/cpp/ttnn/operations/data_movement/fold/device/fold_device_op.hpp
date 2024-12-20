@@ -29,8 +29,8 @@ struct Fold {
 
     struct SingleCore {
         struct shared_variables_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -48,7 +48,7 @@ struct Fold {
 
     struct MultiCore {
         struct shared_variables_t {
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             uint32_t stride_h;
             uint32_t stride_w;
             uint32_t cb_src0;

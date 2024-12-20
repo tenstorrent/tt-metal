@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_composite_op.hpp"
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -898,6 +898,86 @@ Tensor ExecuteBitwiseXor::invoke(
         input_b,
         memory_config,
         std::move(optional_output_tensor));
+}
+
+// Bitwise Left Shift
+Tensor ExecuteBitwiseLeftShift::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::LEFT_SHIFT>::invoke(
+        queue_id, input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseLeftShift::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ExecuteBitwiseLeftShift::invoke(
+        ttnn::DefaultQueueId, input_tensor_a, input_tensor_b, memory_config, optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseLeftShift::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ttnn::operations::unary::
+        ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::LEFT_SHIFT, int32_t>::invoke(
+            queue_id, input_tensor_a, input_b, memory_config, optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseLeftShift::invoke(
+    const Tensor& input_tensor_a,
+    const int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ExecuteBitwiseLeftShift::invoke(
+        ttnn::DefaultQueueId, input_tensor_a, input_b, memory_config, std::move(optional_output_tensor));
+}
+
+// Bitwise Right Shift
+Tensor ExecuteBitwiseRightShift::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::RIGHT_SHIFT>::invoke(
+        queue_id, input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseRightShift::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ExecuteBitwiseRightShift::invoke(
+        ttnn::DefaultQueueId, input_tensor_a, input_tensor_b, memory_config, optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseRightShift::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ttnn::operations::unary::
+        ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::RIGHT_SHIFT, int32_t>::invoke(
+            queue_id, input_tensor_a, input_b, memory_config, optional_output_tensor);
+}
+
+Tensor ExecuteBitwiseRightShift::invoke(
+    const Tensor& input_tensor_a,
+    const int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ExecuteBitwiseRightShift::invoke(
+        ttnn::DefaultQueueId, input_tensor_a, input_b, memory_config, std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::binary

@@ -29,7 +29,8 @@
 
 namespace ttnn::operations::data_movement::rm_reshape{
 
-operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& input, const Tensor& output) {
+tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
+    const Tensor& input, const Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     //get datum size
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -145,7 +146,7 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
     }
     auto override_runtime_args_callback = [reader_kernel_id, compute_with_storage_grid_size](
                                               const void* operation,
-                                              const Program& program,
+                                              const tt::tt_metal::Program& program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
@@ -209,7 +210,7 @@ operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(const Tensor& in
     return {.program = std::move(program)};
 }
 
-operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const Tensor& output) {
+tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const Tensor& output) {
     return rm_reshape_preparer_single_risk(input, output);
 }
 

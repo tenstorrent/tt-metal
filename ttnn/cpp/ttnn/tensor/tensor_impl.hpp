@@ -177,7 +177,7 @@ inline void read_data_from_device_buffer(
 
 template <typename T>
 inline void read_data_from_device_buffer(DeviceBuffer device_buffer, std::vector<T>& host_buffer) {
-    ::detail::ReadFromBuffer(device_buffer, host_buffer);
+    ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
 }
 
 // ======================================================================================
@@ -190,9 +190,6 @@ Tensor to_host(
     bool blocking = true,
     uint8_t cq_id = ttnn::DefaultQueueId,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
-template <typename T>
-Tensor to_host_sharded(const Tensor& tensor);
 
 template <typename T>
 Tensor to_device(

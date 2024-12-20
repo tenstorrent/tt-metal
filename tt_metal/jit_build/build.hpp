@@ -14,7 +14,7 @@
 #include "jit_build/data_format.hpp"
 #include "jit_build/settings.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "tt_metal/tt_stl/aligned_allocator.hpp"
 #include "llrt/rtoptions.hpp"
 

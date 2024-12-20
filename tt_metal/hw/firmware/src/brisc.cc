@@ -406,7 +406,8 @@ int main() {
                     NOC_UNICAST_WRITE_VC,
                     1,
                     31 /*wrap*/,
-                    false /*linked*/);
+                    false /*linked*/,
+                    true /*posted*/);
             }
         }
 
@@ -529,7 +530,8 @@ int main() {
                     NOC_UNICAST_WRITE_VC,
                     1,
                     31 /*wrap*/,
-                    false /*linked*/);
+                    false /*linked*/,
+                    true /*posted*/);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }

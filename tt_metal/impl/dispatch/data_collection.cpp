@@ -7,7 +7,7 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/common/core_coord.hpp"
 
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

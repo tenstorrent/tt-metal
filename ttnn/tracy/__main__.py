@@ -10,7 +10,7 @@ from tracy import *
 def main():
     from optparse import OptionParser
 
-    usage = "python -m tracy [-m module | scriptfile] [arg] ..."
+    usage = "python3 -m tracy [-m module | scriptfile] [arg] ..."
     parser = OptionParser(usage=usage)
     parser.allow_interspersed_args = False
     parser.add_option("-m", dest="module", action="store_true", help="Profile a library module.", default=False)
@@ -146,7 +146,7 @@ def main():
             originalArgs.remove("-r")
             osCmd = " ".join(originalArgs[1:])
 
-            testCommand = f"python -m tracy {osCmd}"
+            testCommand = f"python3 -m tracy {osCmd}"
 
             envVars = dict(os.environ)
             # No Dispatch cores for op_report

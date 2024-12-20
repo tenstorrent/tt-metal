@@ -15,7 +15,7 @@ run_ttnn_sweeps() {
   export PYTHONPATH=$TT_METAL_HOME
   source python_env/bin/activate
 
-  python tests/ttnn/sweep_tests/run_sweeps.py
+  python3 tests/ttnn/sweep_tests/run_sweeps.py
 }
 
 run_ttnn_sweeps

@@ -48,7 +48,7 @@ to extract meaningful features and patterns.
 
 ### `conv2d`
 
-Applies a 2D convolution over `input_tensor`, a 4D tensor with dimensions ordered as `(batch_size, input_height, input_width, in_channels)` using provided weights, with dimensions `(out_channels, in_channels, kernel_height, kernel_width)`, and optional `bias`, with dimensions `(1, 1, 1, out_channels)`, and generates `output_tensor` with dimensions ordered as `(batch_size, output_height, output_width, out_channels)`.
+Applies a 2D convolution over `input_tensor`, a 4D tensor with dimensions ordered as `(batch_size, input_height, input_width, in_channels)` using provided weights, with dimensions `(out_channels, in_channels, kernel_height, kernel_width)`, and optional `bias`, with dimensions `(1, 1, 1, out_channels)`, and generates `output_tensor` with first three dimensions flattened and ordered as `(1, 1, batch_size * output_height * output_width, out_channels)`. A simple `reshape` can be used to obtain the unflattened tensor.
 
 #### Python API
 
@@ -178,7 +178,7 @@ Once the inputs are prepared, we can call the `conv2d` operation as shown in the
         weights_dtype=ttnn.bfloat16
     )
 
-    ttnn_output_tensor_on_device = ttnn.conv2d(
+    [ttnn_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
         input_tensor=ttnn_input_tensor,
         weight_tensor=ttnn_weight_tensor,
         in_channels=in_channels,
@@ -193,10 +193,13 @@ Once the inputs are prepared, we can call the `conv2d` operation as shown in the
         input_height=input_height,
         input_width=input_width,
         conv_config=conv_config,
+        return_output_dim=True,
     )
 ```
 
-To get higher performance it is advisable to use the following optional arguments:
+Note that the `conv2d` supports controling the return of output dimensions, through argument `return_output_dim`, and for processed weights and bias tensors, through argument `return_weights_and_bias`.
+
+To achieve higher performance it is advisable to use the following optional arguments:
 
 * `deallocate_activation = True` If the input tensor is no longer needed after the conv2d operation, this option will free up the input buffer and have more memory available for the operation.
 * `reallocate_halo_output = True` The `conv2d` operation executes a _haloing_ step before computing the convolutions to optimize memory accesses. This option will reallocate the output of this step in order to reduce memory fragmentation to avoid memory fitting issues.

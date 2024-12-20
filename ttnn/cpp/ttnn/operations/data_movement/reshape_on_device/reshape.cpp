@@ -74,7 +74,7 @@ ttnn::Tensor ReshapeOperation::invoke(
         return detail::manual_insertion(
             (tt::tt_metal::Tensor)input_tensor, output_shape, input_tensor.device(), output_mem_config);
     }
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     return operation::run(ReshapeDeviceOperation{output_shape, output_mem_config}, {input_tensor}).at(0);
 }
 
