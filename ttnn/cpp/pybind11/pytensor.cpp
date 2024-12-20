@@ -442,7 +442,13 @@ Tensor convert_python_tensors_to_tt_tensors(
     std::vector<Tensor> tt_shards;
     for (const auto& shard : tensor_shards) {
         tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(
-            shard, data_type, Layout::ROW_MAJOR, tile, MemoryConfig{}, nullptr, true));
+            shard,
+            data_type,
+            /*optional_layout=*/std::nullopt,
+            tile,
+            MemoryConfig{},
+            /*device=*/nullptr,
+            /*force_disable_borrow=*/true));
     }
     std::vector<OwnedBuffer> host_owned_buffers;
     std::vector<ttnn::Shape> host_owned_shapes;
@@ -931,7 +937,7 @@ void pytensor_module(py::module& m_tensor) {
                     return detail::convert_python_tensors_to_tt_tensors(tensor, data_type, tile, strategy);
                 }
                 return detail::convert_python_tensor_to_tt_tensor(
-                    tensor, data_type, std::nullopt, tile, MemoryConfig{}, nullptr);
+                    tensor, data_type, /*optional_layout=*/std::nullopt, tile, MemoryConfig{}, /*device=*/nullptr);
             }),
             py::arg("tensor"),
             py::arg("data_type") = std::nullopt,
