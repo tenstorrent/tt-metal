@@ -1050,7 +1050,378 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
     }
 }
 
-template <uint32_t num_shard_grids, uint32_t pages_per_shard, uint32_t start_x_0, uint32_t start_y_0, uint32_t width_0, uint32_t height_0, uint32_t start_x_1 = 0 , uint32_t start_y_1 = 0 , uint32_t width_1 = 0 , uint32_t height_1 = 0,
+template <bool transposed, uint32_t start_x, uint32_t start_y, uint32_t width, uint32_t height>
+FORCE_INLINE std::pair<uint32_t, uint32_t> resolve_within_grid(uint32_t linear_core_id) {
+    uint32_t outer_offset = linear_core_id / width;  // Unavoidable division to get the offset
+    uint32_t inner_offset = linear_core_id - linear_core_id * width;
+    if constexpr (transposed) {
+        std::pair<uint32_t, uint32_t> coordinates(outer_offset + start_x, inner_offset + start_y);
+        return coordinates;
+    } else {
+        std::pair<uint32_t, uint32_t> coordinates(inner_offset + start_x, outer_offset + start_y);
+        return coordinates;
+    }
+}
+
+template <
+    bool transposed,
+    uint32_t num_shard_grids,
+    uint32_t start_x_0 = 0,
+    uint32_t start_y_0 = 0,
+    uint32_t width_0 = 0,
+    uint32_t height_0 = 0,
+    uint32_t grid0_vol = 0,
+    uint32_t start_x_1 = 0,
+    uint32_t start_y_1 = 0,
+    uint32_t width_1 = 0,
+    uint32_t height_1 = 0,
+    uint32_t grid1_vol = 0,
+    uint32_t start_x_2 = 0,
+    uint32_t start_y_2 = 0,
+    uint32_t width_2 = 0,
+    uint32_t height_2 = 0,
+    uint32_t grid2_vol = 0,
+    uint32_t start_x_3 = 0,
+    uint32_t start_y_3 = 0,
+    uint32_t width_3 = 0,
+    uint32_t height_3 = 0,
+    uint32_t grid3_vol = 0,
+    uint32_t start_x_4 = 0,
+    uint32_t start_y_4 = 0,
+    uint32_t width_4 = 0,
+    uint32_t height_4 = 0,
+    uint32_t grid4_vol = 0,
+    uint32_t start_x_5 = 0,
+    uint32_t start_y_5 = 0,
+    uint32_t width_5 = 0,
+    uint32_t height_5 = 0,
+    uint32_t grid5_vol = 0,
+    uint32_t start_x_6 = 0,
+    uint32_t start_y_6 = 0,
+    uint32_t width_6 = 0,
+    uint32_t height_6 = 0,
+    uint32_t grid6_vol = 0,
+    uint32_t start_x_7 = 0,
+    uint32_t start_y_7 = 0,
+    uint32_t width_7 = 0,
+    uint32_t height_7 = 0,
+    uint32_t grid7_vol = 0>
+FORCE_INLINE std::pair<uint32_t, uint32_t> resolve_core_grid(uint32_t linear_core_id) {
+    if constexpr (num_shard_grids == 1) {
+        return resolve_within_grid<transposed, start_x_0, start_y_0, width_0, height_0>(linear_core_id);
+    } else {
+        constexpr uint32_t halfway_volume = grid0_vol + ((num_shard_grids > 3) ? grid1_vol : 0) +
+                                            ((num_shard_grids > 5) ? grid2_vol : 0) +
+                                            ((num_shard_grids > 7) ? grid3_vol : 0);
+        if constexpr (num_shard_grids == 8) {
+            // 8 grids, halfway covers grids 0-3
+            if (linear_core_id >= halfway_volume) {
+                return resolve_core_grid<
+                    transposed,
+                    num_shard_grids - 4,
+                    start_x_4,
+                    start_y_4,
+                    width_4,
+                    height_4,
+                    grid4_vol,
+                    start_x_5,
+                    start_y_5,
+                    width_5,
+                    height_5,
+                    grid5_vol,
+                    start_x_6,
+                    start_y_6,
+                    width_6,
+                    height_6,
+                    grid6_vol,
+                    start_x_7,
+                    start_y_7,
+                    width_7,
+                    height_7,
+                    grid7_vol>(linear_core_id - halfway_volume);
+            } else {
+                return resolve_core_grid<
+                    transposed,
+                    4,
+                    start_x_0,
+                    start_y_0,
+                    width_0,
+                    height_0,
+                    grid0_vol,
+                    start_x_1,
+                    start_y_1,
+                    width_1,
+                    height_1,
+                    grid1_vol,
+                    start_x_2,
+                    start_y_2,
+                    width_2,
+                    height_2,
+                    grid2_vol,
+                    start_x_3,
+                    start_y_3,
+                    width_3,
+                    height_3,
+                    grid3_vol>(linear_core_id);
+            }
+        } else if constexpr (num_shard_grids > 5) {
+            // 6 or 7 grids, halfway covers grids 0-2
+            if (linear_core_id >= halfway_volume) {
+                return resolve_core_grid<
+                    transposed,
+                    num_shard_grids - 3,
+                    start_x_3,
+                    start_y_3,
+                    width_3,
+                    height_3,
+                    grid3_vol,
+                    start_x_4,
+                    start_y_4,
+                    width_4,
+                    height_4,
+                    grid4_vol,
+                    start_x_5,
+                    start_y_5,
+                    width_5,
+                    height_5,
+                    grid5_vol,
+                    start_x_6,
+                    start_y_6,
+                    width_6,
+                    height_6,
+                    grid6_vol>(linear_core_id - halfway_volume);
+            } else {
+                return resolve_core_grid<
+                    transposed,
+                    3,
+                    start_x_0,
+                    start_y_0,
+                    width_0,
+                    height_0,
+                    grid0_vol,
+                    start_x_1,
+                    start_y_1,
+                    width_1,
+                    height_1,
+                    grid1_vol,
+                    start_x_2,
+                    start_y_2,
+                    width_2,
+                    height_2,
+                    grid2_vol>(linear_core_id);
+            }
+        } else if constexpr (num_shard_grids > 3) {
+            // 4 or 5 grids halfway covers grids 0-1
+            if (linear_core_id >= halfway_volume) {
+                return resolve_core_grid<
+                    transposed,
+                    num_shard_grids - 2,
+                    start_x_2,
+                    start_y_2,
+                    width_2,
+                    height_2,
+                    grid2_vol,
+                    start_x_3,
+                    start_y_3,
+                    width_3,
+                    height_3,
+                    grid3_vol,
+                    start_x_4,
+                    start_y_4,
+                    width_4,
+                    height_4,
+                    grid4_vol>(linear_core_id - halfway_volume);
+            } else {
+                return resolve_core_grid<
+                    transposed,
+                    2,
+                    start_x_0,
+                    start_y_0,
+                    width_0,
+                    height_0,
+                    grid0_vol,
+                    start_x_1,
+                    start_y_1,
+                    width_1,
+                    height_1,
+                    grid1_vol>(linear_core_id);
+            }
+        } else {
+            // 2 or 3 grids halfway covers grid 0
+            if (linear_core_id >= halfway_volume) {
+                return resolve_core_grid<
+                    transposed,
+                    num_shard_grids - 1,
+                    start_x_1,
+                    start_y_1,
+                    width_1,
+                    height_1,
+                    grid1_vol,
+                    start_x_2,
+                    start_y_2,
+                    width_2,
+                    height_1,
+                    grid1_vol>(linear_core_id - halfway_volume);
+            } else {
+                return resolve_within_grid<transposed, start_x_0, start_y_0, width_0, height_0>(linear_core_id);
+            }
+        }
+    }
+}
+
+template <uint32_t page_size, uint32_t pages_per_shard_x>
+std::pair<uint32_t, uint32_t> get_width_sharded_coordinates(uint32_t page_num) {
+    // Returns core index followed by the page number
+    std::pair<uint32_t, uint32_t> coordinates(0, 0);
+    return coordinates;
+}
+
+template <uint32_t page_size, uint32_t pages_per_shard_x>
+std::pair<uint32_t, uint32_t> get_height_sharded_coordinates(uint32_t page_num) {
+    // Returns core index followed by the page number
+    std::pair<uint32_t, uint32_t> coordinates(0, 0);
+    return coordinates;
+}
+
+template <uint32_t page_size, uint32_t pages_per_shard_x, uint32_t pages_per_shard_y>
+std::pair<uint32_t, uint32_t> get_block_sharded_coordinates(uint32_t page_num) {
+    // Returns core index followed by the page number
+    std::pair<uint32_t, uint32_t> coordinates(0, 0);
+    return coordinates;
+}
+
+template <
+    bool transposed,
+    uint32_t shard_type,
+    uint32_t num_shard_grids,
+    uint32_t page_size,
+    uint32_t pages_per_shard_x,
+    uint32_t pages_per_shard_y,
+    uint32_t start_x_0 = 0,
+    uint32_t start_y_0 = 0,
+    uint32_t width_0 = 0,
+    uint32_t height_0 = 0,
+    uint32_t start_x_1 = 0,
+    uint32_t start_y_1 = 0,
+    uint32_t width_1 = 0,
+    uint32_t height_1 = 0,
+    uint32_t start_x_2 = 0,
+    uint32_t start_y_2 = 0,
+    uint32_t width_2 = 0,
+    uint32_t height_2 = 0,
+    uint32_t start_x_3 = 0,
+    uint32_t start_y_3 = 0,
+    uint32_t width_3 = 0,
+    uint32_t height_3 = 0,
+    uint32_t start_x_4 = 0,
+    uint32_t start_y_4 = 0,
+    uint32_t width_4 = 0,
+    uint32_t height_4 = 0,
+    uint32_t start_x_5 = 0,
+    uint32_t start_y_5 = 0,
+    uint32_t width_5 = 0,
+    uint32_t height_5 = 0,
+    uint32_t start_x_6 = 0,
+    uint32_t start_y_6 = 0,
+    uint32_t width_6 = 0,
+    uint32_t height_6 = 0,
+    uint32_t start_x_7 = 0,
+    uint32_t start_y_7 = 0,
+    uint32_t width_7 = 0,
+    uint32_t height_7 = 0>
+struct ShardedAddrGen {
+    uint32_t bank_base_address;
+    constexpr static uint32_t grid0_vol = width_0 * height_0;
+    constexpr static uint32_t grid1_vol = width_1 * height_1;
+    constexpr static uint32_t grid2_vol = width_2 * height_2;
+    constexpr static uint32_t grid3_vol = width_3 * height_3;
+    constexpr static uint32_t grid4_vol = width_4 * height_4;
+    constexpr static uint32_t grid5_vol = width_5 * height_5;
+    constexpr static uint32_t grid6_vol = width_6 * height_6;
+    constexpr static uint32_t grid7_vol = width_7 * height_7;
+    constexpr static uint32_t num_cores =
+        grid0_vol + ((num_shard_grids > 1) ? grid1_vol : 0) + ((num_shard_grids > 2) ? grid2_vol : 0) +
+        ((num_shard_grids > 3) ? grid3_vol : 0) + ((num_shard_grids > 4) ? grid4_vol : 0) +
+        ((num_shard_grids > 5) ? grid5_vol : 0) + ((num_shard_grids > 6) ? grid6_vol : 0) +
+        ((num_shard_grids > 7) ? grid7_vol : 0);
+
+    FORCE_INLINE
+    std::uint64_t get_addr(
+        const uint32_t nocx,
+        const uint32_t nocy,
+        const uint32_t core_page,
+        const uint32_t offset,
+        const uint32_t noc = noc_index) {
+        const uint32_t address = bank_base_address + (core_page * page_size) + offset;
+        return get_noc_addr(nocx, nocy, address, noc);
+    }
+
+    FORCE_INLINE
+    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        // Resolve linear core id and the page num within that core
+        std::pair<uint32_t, uint32_t> sharding_coordinates;
+        if constexpr (shard_type == 0) {
+            sharding_coordinates = get_width_sharded_coordinates<page_size, pages_per_shard_x>(id);
+        } else if constexpr (shard_type == 1) {
+            sharding_coordinates = get_height_sharded_coordinates<page_size, pages_per_shard_y>(id);
+        } else {
+            sharding_coordinates = get_block_sharded_coordinates<page_size, pages_per_shard_x, pages_per_shard_y>(id);
+        }
+        uint32_t linear_core_id = 0;
+        uint32_t page_num = 0;
+        std::pair<uint32_t, uint32_t> core_index = resolve_core_grid<
+            transposed,
+            num_shard_grids,
+            start_x_0,
+            start_y_0,
+            width_0,
+            height_0,
+            grid0_vol,
+            start_x_1,
+            start_y_1,
+            width_1,
+            height_1,
+            grid1_vol,
+            start_x_2,
+            start_y_2,
+            width_2,
+            height_2,
+            grid2_vol,
+            start_x_3,
+            start_y_3,
+            width_3,
+            height_3,
+            grid3_vol,
+            start_x_4,
+            start_y_4,
+            width_4,
+            height_4,
+            grid4_vol,
+            start_x_5,
+            start_y_5,
+            width_5,
+            height_5,
+            grid5_vol,
+            start_x_6,
+            start_y_6,
+            width_6,
+            height_6,
+            grid6_vol,
+            start_x_7,
+            start_y_7,
+            width_7,
+            height_7,
+            grid7_vol>(sharding_coordinates.first);
+        // return get_addr
+        return get_addr(core_index.first, core_index.second, sharding_coordinates.second, offset, noc);
+    }
+
+    FORCE_INLINE
+    void noc_async_read_page(
+        const uint32_t id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        noc_async_read(this->get_noc_addr(id, offset), dest_addr, page_size, noc);
+    }
+};
 
 template <bool DRAM>
 struct InterleavedAddrGen {
@@ -1319,64 +1690,17 @@ struct InterleavedPow2AddrGenFast {
     }
 };
 
-template <bool DRAM>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedAddrGen<DRAM>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
+template <typename T>
+FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const T& s, uint32_t offset = 0, uint8_t noc = noc_index) {
     /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size can be arbitrary size. Use
-        get_noc_addr(const uint32_t id, InterleavedPow2AddrGen s) for optimized algorithm in which stick size
-        is a power of 2.
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedAddrGen: Check struct for attribute definitions.
+        API for getting the noc address when we are reading using a swizzled layout.
     */
     return s.get_noc_addr(id, offset, noc);
 }
 
-template <bool DRAM>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedPow2AddrGen<DRAM>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
-    /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size is a power of 2. For arbitrary bank
-        unit size, use get_noc_addr(const uint32_t id, const InterleavedOffset s)
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedPow2AddrGen: Check struct for attribute definitions.
-    */
-
-    return s.get_noc_addr(id, offset, noc);
-}
-
-template <bool DRAM, uint32_t tile_hw>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
-    /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size can be arbitrary size. Use
-        get_noc_addr(const uint32_t id, InterleavedPow2AddrGen s) for optimized algorithm in which stick size
-        is a power of 2.
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedAddrGen: Check struct for attribute definitions.
-    */
-    return s.get_noc_addr(id, offset, noc);
-}
-
-template <bool DRAM>
+template <typename T>
 FORCE_INLINE void noc_async_read_page(
-    const uint32_t id,
-    const InterleavedAddrGen<DRAM>& s,
-    std::uint32_t dst_local_l1_addr,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
+    const uint32_t id, const T& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
