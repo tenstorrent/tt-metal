@@ -24,7 +24,8 @@ struct ExecuteReduceScatter {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         const std::optional<size_t> num_links = std::nullopt,
-        std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt);
+        std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt,
+        bool create_semaphore_handles = true);
 };
 
 }  // namespace ccl

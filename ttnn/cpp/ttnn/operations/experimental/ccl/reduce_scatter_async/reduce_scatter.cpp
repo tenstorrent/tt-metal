@@ -15,10 +15,18 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
-    std::optional<SubDeviceId> worker_subdevice_id_opt) {
+    std::optional<SubDeviceId> worker_subdevice_id_opt,
+    bool create_semaphore_handles) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     return ttnn::operations::experimental::ccl::reduce_scatter(
-        input_tensor, dim, math_op, out_memory_config, topology, num_preferred_links, worker_subdevice_id_opt);
+        input_tensor,
+        dim,
+        math_op,
+        out_memory_config,
+        topology,
+        num_preferred_links,
+        worker_subdevice_id_opt,
+        create_semaphore_handles);
 }
 
 }  // namespace ttnn::operations::ccl
