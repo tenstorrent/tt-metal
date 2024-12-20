@@ -48,27 +48,27 @@ void* align(void* ptr, std::size_t max_alignment) {
 
 template <bool stream_load, bool aligned_load>
 void nt_memcpy_128b(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
-    size_t num_lines = n / (INNER_LOOP * sizeof(__m128i));
-    constexpr size_t inner_blk_size = INNER_LOOP * sizeof(__m128i);
+    size_t num_lines = n / (INNER_LOOP * sizeof(simde__m128i));
+    constexpr size_t inner_blk_size = INNER_LOOP * sizeof(simde__m128i);
     size_t i;
     for (i = 0; i < num_lines; i++) {
         size_t j;
         for (j = 0; j < INNER_LOOP; j++) {
-            __m128i blk;
+            simde__m128i blk;
             if constexpr (stream_load) {
-                blk = _mm_stream_load_si128((__m128i*)src);
+                blk = simde_mm_stream_load_si128((simde__m128i*)src);
             } else {
                 if constexpr (aligned_load) {
-                    blk = _mm_load_si128((__m128i*)src);
+                    blk = _mm_load_si128((simde__m128i*)src);
                 } else {
-                    blk = _mm_loadu_si128((__m128i*)src);
+                    blk = _mm_loadu_si128((simde__m128i*)src);
                 }
             }
             /* non-temporal store */
-            _mm_stream_si128((__m128i*)dst, blk);
+            simde_mm_stream_si128((simde__m128i*)dst, blk);
 
-            src += sizeof(__m128i);
-            dst += sizeof(__m128i);
+            src += sizeof(simde__m128i);
+            dst += sizeof(simde__m128i);
         }
         n -= inner_blk_size;
     }
@@ -80,28 +80,28 @@ void nt_memcpy_128b(uint8_t* __restrict dst, const uint8_t* __restrict src, size
 
 template <bool stream_load, bool aligned_load>
 void nt_memcpy_256b(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
-    size_t num_lines = n / (INNER_LOOP * sizeof(__m256i));
-    constexpr size_t inner_blk_size = INNER_LOOP * sizeof(__m256i);
+    size_t num_lines = n / (INNER_LOOP * sizeof(simde__m256i));
+    constexpr size_t inner_blk_size = INNER_LOOP * sizeof(simde__m256i);
     size_t i;
     for (i = 0; i < num_lines; i++) {
         size_t j;
         for (j = 0; j < INNER_LOOP; j++) {
-            __m256i blk;
+            simde__m256i blk;
             if constexpr (stream_load) {
                 static_assert(aligned_load);
-                blk = _mm256_stream_load_si256((__m256i*)src);
+                blk = simde_mm256_stream_load_si256((simde__m256i*)src);
             } else {
                 if constexpr (aligned_load) {
-                    blk = _mm256_load_si256((__m256i*)src);
+                    blk = simde_mm256_load_si256((simde__m256i*)src);
                 } else {
-                    blk = _mm256_loadu_si256((__m256i*)src);
+                    blk = simde_mm256_loadu_si256((simde__m256i*)src);
                 }
             }
             /* non-temporal store */
-            _mm256_stream_si256((__m256i*)dst, blk);
+            simde_mm256_stream_si256((simde__m256i*)dst, blk);
 
-            src += sizeof(__m256i);
-            dst += sizeof(__m256i);
+            src += sizeof(simde__m256i);
+            dst += sizeof(simde__m256i);
         }
         n -= inner_blk_size;
     }
@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
     bool simulate_write_ptr_update = false;
     uint32_t write_ptr_readback_interval = 0;
     uint32_t copy_mode = 0;
-    constexpr uint32_t memcpy_alignment = sizeof(__m256i);
+    constexpr uint32_t memcpy_alignment = sizeof(simde__m256i);
     std::size_t addr_align = memcpy_alignment;
 
     try {

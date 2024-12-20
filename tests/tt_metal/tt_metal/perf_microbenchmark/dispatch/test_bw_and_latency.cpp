@@ -157,12 +157,12 @@ void nt_memcpy(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n)
     size_t i;
     for (i = 0; i < num_lines; i++) {
         size_t j;
-        for (j = 0; j < CACHE_LINE_SIZE / sizeof(__m128i); j++) {
-            __m128i blk = _mm_loadu_si128((const __m128i*)src);
+        for (j = 0; j < CACHE_LINE_SIZE / sizeof(simde__m128i); j++) {
+            simde__m128i blk = simde_mm_loadu_si128((const simde__m128i*)src);
             /* non-temporal store */
-            _mm_stream_si128((__m128i*)dst, blk);
-            src += sizeof(__m128i);
-            dst += sizeof(__m128i);
+            simde_mm_stream_si128((simde__m128i*)dst, blk);
+            src += sizeof(simde__m128i);
+            dst += sizeof(simde__m128i);
         }
         n -= CACHE_LINE_SIZE;
     }
