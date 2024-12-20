@@ -16,7 +16,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks plusone_single_core(
-    const Tensor& input, const std::optional<CoreRangeSet> sub_core_grids) {
+    const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());

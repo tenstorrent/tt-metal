@@ -17,7 +17,7 @@ ttnn::Tensor ArgMaxOperation::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor,
     const std::optional<int> dim,
-    const std::optional<CoreRangeSet> sub_core_grids,
+    const std::optional<CoreRangeSet>& sub_core_grids,
     const bool use_muticore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
@@ -38,7 +38,7 @@ ttnn::Tensor ArgMaxOperation::invoke(
 ttnn::Tensor ArgMaxOperation::invoke(
     const Tensor& input_tensor,
     const std::optional<int> dim,
-    const std::optional<CoreRangeSet> sub_core_grids,
+    const std::optional<CoreRangeSet>& sub_core_grids,
     const bool use_muticore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {

@@ -14,6 +14,6 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const Tensor& input,
     const Tensor& output,
     const std::optional<uint32_t> dim,
-    const std::optional<CoreRangeSet> sub_core_grids);
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::operations::reduction::detail
