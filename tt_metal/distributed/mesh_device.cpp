@@ -103,7 +103,7 @@ MeshShape SystemMesh::Impl::get_system_mesh_shape(size_t system_num_devices) {
         {1, MeshShape{1, 1}},   // single-device
         {2, MeshShape{1, 2}},   // N300
         {8, MeshShape{2, 4}},   // T3000; as ring to match existing tests
-        {32, MeshShape{8, 4}},  // TG
+        {32, MeshShape{8, 4}},  // TG, QG
         {64, MeshShape{8, 8}},  // TGG
     };
     TT_FATAL(
@@ -115,11 +115,18 @@ MeshShape SystemMesh::Impl::get_system_mesh_shape(size_t system_num_devices) {
 
 std::unordered_map<LogicalCoordinate, PhysicalCoordinate> SystemMesh::Impl::get_system_mesh_translation_map(
     size_t system_num_devices) {
+    // TG has 32 non-mmio user devices and 4 mmio devices not exposed to the user
+    // QG has 32 mmio user devices
+    // Once TG is fully deprecated, can remove TG code path
+    std::string galaxy_mesh_descriptor = "TG.json";
+    if (tt::Cluster::instance().number_of_pci_devices() == system_num_devices) {
+        galaxy_mesh_descriptor = "QG.json";
+    }
     const std::unordered_map<size_t, std::string> system_mesh_translation_map = {
         {1, "device.json"},
         {2, "N300.json"},
         {8, "T3000.json"},
-        {32, "TG.json"},
+        {32, galaxy_mesh_descriptor},
         {64, "TGG.json"},
     };
     TT_FATAL(
