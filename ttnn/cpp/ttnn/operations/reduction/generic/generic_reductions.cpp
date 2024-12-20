@@ -99,7 +99,7 @@ static Tensor reduce_impl(
     auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_arg);
 
     Tensor output_tensor;
-    if (!dim_arg.has_value()) {
+    if (!dim_arg.has_value() || dim.size() == rank) {
         if constexpr (
             reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
             output_tensor = input_tensor;
