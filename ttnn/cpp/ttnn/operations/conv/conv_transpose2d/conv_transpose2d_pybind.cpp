@@ -63,6 +63,8 @@ void py_bind_conv_transpose2d(py::module& module) {
             bias_tensor    (ttnn.Tensor, optional): the bias tensor. Defaults to `None`.
             conv_config    (ttnn.Conv2dConfig, optional): the configuration for the convolution operation. Defaults to `None`.
             compute_config (ttnn.DeviceComputeKernelConfig, optional): the configuration for the compute kernel. Defaults to `None`.
+            memory_config  (ttnn.MemoryConfig, optional): the memory configuration of the output.
+            mirror_kernel  (bool): Set to true if the op should mirror the kernels along the height & width axes.
             queue_id       (int): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
