@@ -229,7 +229,7 @@ struct Matmul {
             this->transpose_a,
             this->transpose_b,
             this->output_tile,
-            *this->global_cb);
+            this->global_cb.get());
     }
 };
 

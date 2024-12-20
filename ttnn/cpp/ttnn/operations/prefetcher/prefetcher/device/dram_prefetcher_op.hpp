@@ -41,7 +41,7 @@ struct DramPrefetcher {
     const auto attribute_values() const {
         return std::forward_as_tuple(
             this->tensor_addrs,
-            *this->global_cb,
+            this->global_cb.get(),
             this->num_layers,
             this->reader_output_mem_config,
             this->writer_output_mem_config);
