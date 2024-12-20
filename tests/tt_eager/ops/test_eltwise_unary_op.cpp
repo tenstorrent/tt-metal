@@ -57,7 +57,7 @@ Tensor host_function(const Tensor& input_tensor) {
 }
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
-bool run_test(Device* device, const tt::tt_metal::LegacyShape& shape, float low, float high, Args... args) {
+bool run_test(IDevice* device, const tt::tt_metal::LegacyShape& shape, float low, float high, Args... args) {
     auto input_tensor = ttnn::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     using ttnn::operations::unary::UnaryOpType;

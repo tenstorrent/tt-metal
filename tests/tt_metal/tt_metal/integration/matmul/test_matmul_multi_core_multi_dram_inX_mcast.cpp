@@ -22,7 +22,7 @@ namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast
 std::
     tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, uint32_t, uint32_t>
     create_program(
-        tt_metal::Device* device,
+        tt_metal::IDevice* device,
         int start_core_x,
         int start_core_y,
         int num_cores_r,
@@ -168,7 +168,7 @@ std::
 
 bool write_runtime_args_to_device(
     int in1_or_in0,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     int start_core_x,
     int start_core_y,
@@ -290,7 +290,7 @@ bool write_runtime_args_to_device(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device* device, int in1_or_in0) {
+bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::IDevice* device, int in1_or_in0) {
     bool pass = true;
     int start_core_x = 0;
     int start_core_y = 0;

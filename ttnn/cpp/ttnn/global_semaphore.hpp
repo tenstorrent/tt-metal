@@ -17,7 +17,7 @@ struct MultiDeviceGlobalSemaphore {
 
 // Single Device APIs
 std::shared_ptr<GlobalSemaphore> create_global_semaphore(
-    Device* device,
+    IDevice* device,
     const CoreRangeSet& cores,
     uint32_t initial_value,
     BufferType buffer_type = BufferType::L1,

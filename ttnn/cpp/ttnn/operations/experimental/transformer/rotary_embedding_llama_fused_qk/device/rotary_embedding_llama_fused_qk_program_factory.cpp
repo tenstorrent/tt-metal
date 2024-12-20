@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
 
     const uint32_t head_dim_t = q_shard_spec->shape[1] / constants::TILE_WIDTH;
 
-    tt_metal::Device* device = q_input.device();
+    tt_metal::IDevice* device = q_input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);

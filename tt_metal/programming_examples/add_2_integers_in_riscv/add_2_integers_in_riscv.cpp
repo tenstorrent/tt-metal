@@ -10,7 +10,7 @@ using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     /* Silicon accelerator setup */
-    Device* device = CreateDevice(0);
+    IDevice* device = CreateDevice(0);
 
     /* Setup program to execute along with its buffers and kernels to use */
     CommandQueue& cq = device->command_queue();

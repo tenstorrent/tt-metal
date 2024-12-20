@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 int main(int argc, char** argv) {
     // get program/device
     int device_id = 0;
-    Device* device = CreateDevice(device_id);
+    IDevice* device = CreateDevice(device_id);
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
 

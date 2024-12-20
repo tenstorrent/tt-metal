@@ -43,7 +43,7 @@ struct QueryResponse {
  *         - On failure: ExecutionStatus::Error, zeroed resource usage, and an error message.
  */
 template <typename Op, typename... Args>
-auto query_op_constraints(Op op, Device* device, Args&&... args) {
+auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
     uint32_t num_of_active_graph_captures = 0;
     try {
         // outer graph capture is to avoid dispatching/allocating dummy input tensors

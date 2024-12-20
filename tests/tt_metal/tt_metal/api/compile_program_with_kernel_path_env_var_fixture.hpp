@@ -55,7 +55,7 @@ protected:
         }
     }
 
-    Device* device_;
+    IDevice* device_;
     Program program_;
 
 private:

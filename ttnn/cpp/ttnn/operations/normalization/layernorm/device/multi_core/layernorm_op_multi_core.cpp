@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device* device = a.device();
+    IDevice* device = a.device();
     auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -481,7 +481,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());

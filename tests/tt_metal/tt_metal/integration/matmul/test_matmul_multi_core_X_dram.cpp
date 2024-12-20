@@ -26,7 +26,7 @@ struct MatmulConfig {
 };
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const MatmulConfig& cfg,
     int num_cores_r,
     int num_cores_c,
@@ -143,7 +143,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
     return {std::move(program), mm_reader_kernel, unary_writer_kernel};
 }
 
-bool matmul_multi_core_single_dram(tt_metal::Device* device) {
+bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
     bool pass = true;
     CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     int num_cores_r = compute_with_storage_grid_size.y;
@@ -317,7 +317,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device* device) {
 }
 
 bool assign_runtime_args_to_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     int num_cores_r,
     int num_cores_c,
@@ -410,7 +410,7 @@ bool assign_runtime_args_to_program(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::Device* device) {
+bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::IDevice* device) {
     bool pass = true;
     int num_cores_r = device->compute_with_storage_grid_size().y;
     int num_cores_c = device->compute_with_storage_grid_size().x;

@@ -20,7 +20,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     auto memory_config = operation_attributes.memory_config;
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    tt::tt_metal::Device* device{input.device()};
+    tt::tt_metal::IDevice* device{input.device()};
     tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
 
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};

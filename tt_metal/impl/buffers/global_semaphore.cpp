@@ -20,7 +20,7 @@
 namespace tt::tt_metal {
 
 GlobalSemaphore::GlobalSemaphore(
-    Device* device,
+    IDevice* device,
     const CoreRangeSet& cores,
     uint32_t initial_value,
     BufferType buffer_type,
@@ -31,7 +31,7 @@ GlobalSemaphore::GlobalSemaphore(
 }
 
 GlobalSemaphore::GlobalSemaphore(
-    Device* device,
+    IDevice* device,
     CoreRangeSet&& cores,
     uint32_t initial_value,
     BufferType buffer_type,
@@ -65,7 +65,7 @@ void GlobalSemaphore::setup_buffer(
 }
 
 std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
-    Device* device,
+    IDevice* device,
     const CoreRangeSet& cores,
     uint32_t initial_value,
     BufferType buffer_type,
@@ -73,7 +73,7 @@ std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
     return std::make_shared<GlobalSemaphore>(device, cores, initial_value, buffer_type, sub_device_ids, Private());
 }
 std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
-    Device* device,
+    IDevice* device,
     CoreRangeSet&& cores,
     uint32_t initial_value,
     BufferType buffer_type,
@@ -82,7 +82,7 @@ std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
         device, std::move(cores), initial_value, buffer_type, sub_device_ids, Private());
 }
 
-Device* GlobalSemaphore::device() const { return device_; }
+IDevice* GlobalSemaphore::device() const { return device_; }
 
 DeviceAddr GlobalSemaphore::address() const { return buffer_->address(); }
 

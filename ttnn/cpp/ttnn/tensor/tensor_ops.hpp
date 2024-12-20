@@ -14,7 +14,7 @@ class MeshDevice;
 
 inline namespace v0 {
 class CommandQueue;
-class Device;
+class IDevice;
 }  // namespace v0
 }  // namespace tt::tt_metal
 
@@ -22,19 +22,19 @@ namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to(
     const Tensor& input_tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& mem_config,
     uint8_t cq_id,
     const std::vector<SubDeviceId>& sub_device_ids);
 
 Tensor tensor_to(
     const Tensor& input_tensor,
-    const std::vector<Device*>& workers,
+    const std::vector<IDevice*>& workers,
     const MemoryConfig& mem_config,
     uint8_t cq_id,
     const std::vector<SubDeviceId>& sub_device_ids);
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, Device* worker);
+Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, IDevice* worker);
 
 Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device);
 

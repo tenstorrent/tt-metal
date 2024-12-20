@@ -27,7 +27,7 @@ TEST_P(BufferTestFixture, BufferTest) {
     auto params = std::get<0>(param_combination);
     auto run_mode = std::get<1>(param_combination);
 
-    tt::tt_metal::Device* device = &(this->getDevice());
+    tt::tt_metal::IDevice* device = &(this->getDevice());
     {
         ttnn::graph::GraphProcessor::begin_graph_capture(run_mode);
         {

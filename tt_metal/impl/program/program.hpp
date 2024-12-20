@@ -24,7 +24,7 @@ inline namespace v0 {
 class Buffer;
 class Kernel;
 class CircularBuffer;
-class Device;
+class IDevice;
 class Program;
 class CircularBufferConfig;
 
@@ -48,7 +48,7 @@ class JitBuildOptions;
 namespace detail{
     class Program_;
 
-    void ValidateCircularBufferRegion(const Program &program, const Device *device);
+    void ValidateCircularBufferRegion(const Program &program, const IDevice *device);
     KernelHandle AddKernel (Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
@@ -145,35 +145,35 @@ class Program {
 
     size_t num_semaphores ( const CoreCoord & core, CoreType core_type ) const;
     size_t num_semaphores () const;
-    void init_semaphores ( const Device & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
+    void init_semaphores ( const IDevice & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
-    void compile(Device * device, bool fd_bootloader_mode = false);
+    void compile(IDevice * device, bool fd_bootloader_mode = false);
 
     void invalidate_circular_buffer_allocation();
 
-    void allocate_circular_buffers(const Device *device);
+    void allocate_circular_buffers(const IDevice *device);
 
     bool is_finalized() const;
     bool is_cached() const;
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
     void set_cached();
     void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
-    void allocate_kernel_bin_buf_on_device(Device* device);
-    void finalize(Device *device);
+    void allocate_kernel_bin_buf_on_device(IDevice* device);
+    void finalize(IDevice *device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
 
     // debug/test
-    uint32_t get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type);
-    uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type);
-    uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
-    uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_sem_base_addr(IDevice *device, CoreCoord logical_core, CoreType core_type);
+    uint32_t get_cb_base_addr(IDevice *device, CoreCoord logical_core, CoreType core_type);
+    uint32_t get_sem_size(IDevice *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_cb_size(IDevice *device, CoreCoord logical_core, CoreType core_type) const;
     void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
 
-    const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
+    const std::vector<SubDeviceId> &determine_sub_device_ids(const IDevice *device);
 
    private:
     std::unique_ptr<detail::Program_> pimpl_;
@@ -185,7 +185,7 @@ class Program {
         const CircularBufferConfig& config,
         const v1::experimental::GlobalCircularBuffer& global_circular_buffer);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
-    friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
+    friend void detail::ValidateCircularBufferRegion(const Program &program, const IDevice *device);
 
     friend KernelHandle detail::AddKernel(Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
@@ -211,7 +211,7 @@ class Program {
     friend detail::Internal_;
 
     const ProgramTransferInfo &get_program_transfer_info() const noexcept;
-    std::shared_ptr<Buffer> get_kernels_buffer(Device* device) const noexcept;
+    std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
     const std::vector<uint32_t> &get_program_config_sizes() const noexcept;
     std::unordered_map<uint64_t, ProgramCommandSequence> &get_cached_program_command_sequences() noexcept;
 };

@@ -15,7 +15,7 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
     const auto& kv_input_tensor = input_tensors.at(1);
 
     TT_FATAL(
-        q_input_tensor.storage_type() == StorageType::DEVICE && kv_input_tensor.storage_type() == StorageType::DEVICE,
+        q_input_tensor.storage_type() == StorageType::IDevice && kv_input_tensor.storage_type() == StorageType::DEVICE,
         "Operands to TM need to be on device!");
     TT_FATAL(
         q_input_tensor.buffer() != nullptr && kv_input_tensor.buffer() != nullptr,

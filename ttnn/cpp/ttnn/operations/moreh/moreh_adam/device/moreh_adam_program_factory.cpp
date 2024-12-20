@@ -45,7 +45,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Device* device = param_in.device();
+    tt::tt_metal::IDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 

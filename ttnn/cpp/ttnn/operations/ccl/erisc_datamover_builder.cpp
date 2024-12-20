@@ -181,7 +181,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 }
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
-    Device* device,
+    IDevice* device,
     Program& program,
     CoreCoord const& ethernet_core,
     chip_id_t local_chip_id,
@@ -264,7 +264,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
 
 
 
-EdmLineFabricOpInterface::EdmLineFabricOpInterface (std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, std::optional<size_t> desired_num_links) :
+EdmLineFabricOpInterface::EdmLineFabricOpInterface (std::vector<IDevice*> const& device_sequence, std::vector<Program*> const& program_sequence, std::optional<size_t> desired_num_links) :
     device_sequence(device_sequence),
     programs(program_sequence) {
     static constexpr std::size_t edm_buffer_size = 4096 + sizeof(tt::fabric::PacketHeader);
@@ -330,7 +330,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface (std::vector<Device*> const& 
 }
 
 
-SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(Device* device, Direction direction) {
+SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(IDevice* device, Direction direction) {
     TT_ASSERT((direction == FORWARD) ? edm_builders_forward_direction.find(device->id()) != edm_builders_forward_direction.end()
                                      : edm_builders_backward_direction.find(device->id()) != edm_builders_backward_direction.end());
     auto& edm_builders = (direction == FORWARD) ? edm_builders_forward_direction.at(device->id())
@@ -345,7 +345,7 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(Device
 }
 
 void EdmLineFabricOpInterface::build_kernels() const {
-    auto generate_kernels_in_direction = [this](Device *device, Program *program, Direction direction) {
+    auto generate_kernels_in_direction = [this](IDevice *device, Program *program, Direction direction) {
         auto &edm_builders = direction == FORWARD ? edm_builders_forward_direction : edm_builders_backward_direction;
         if (edm_builders.find(device->id()) != edm_builders.end()) {
             for (auto& edm_builder : edm_builders.at(device->id())) {
@@ -362,7 +362,7 @@ void EdmLineFabricOpInterface::build_kernels() const {
     TT_ASSERT(device_sequence.size() == programs.size());
     for (size_t i = 0; i < device_sequence.size(); i++) {
         Program* program = programs[i];
-        Device* device = device_sequence[i];
+        IDevice* device = device_sequence[i];
         generate_kernels_in_direction(device, program, Direction::FORWARD);
         generate_kernels_in_direction(device, program, Direction::BACKWARD);
     }

@@ -145,7 +145,8 @@ inline std::vector<T> convert_layout_tile_to_row_major(
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout);
+void validate_on_device_dtype_and_layout(
+    IDevice* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout);
 void validate_sharded_buffer_allocation(
     const ttnn::SimpleShape& shape,
     Layout layout,
@@ -163,7 +164,7 @@ void validate_sharded_buffer_allocation(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-DeviceBuffer allocate_buffer_on_device(Device* device, const TensorSpec& tensor_spec);
+DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
 
 template <typename T>
 inline void read_data_from_device_buffer(
@@ -194,7 +195,7 @@ Tensor to_host(
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
     uint8_t cq_id = ttnn::DefaultQueueId,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});

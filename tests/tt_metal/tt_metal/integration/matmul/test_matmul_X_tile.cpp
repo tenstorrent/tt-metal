@@ -83,7 +83,7 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 
 void matmul_tile(
     DispatchFixture* fixture,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const MatmulTileConfig& cfg,
     vector<uint32_t> activations,
     vector<uint32_t> weights,

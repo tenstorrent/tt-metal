@@ -28,7 +28,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);

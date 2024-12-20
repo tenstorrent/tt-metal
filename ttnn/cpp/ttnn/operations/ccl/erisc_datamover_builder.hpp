@@ -107,7 +107,7 @@ class FabricEriscDatamoverBuilder {
         FabricEriscDatamoverConfig const& config);
 
     static FabricEriscDatamoverBuilder build(
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         CoreCoord const& ethernet_core,
         chip_id_t local_chip_id,
@@ -197,19 +197,19 @@ struct EdmLineFabricOpInterface {
     std::unordered_map<size_t, size_t> next_forward_direction_edm_available;
     std::unordered_map<size_t, size_t> next_backward_direction_edm_available;
 
-    std::vector<Device*> device_sequence;
+    std::vector<IDevice*> device_sequence;
     std::vector<Program*> programs;
 
     size_t num_links = 0;
 
     //   The constructor will assemble/connect the line across the specified device sequence, for all available links.
-    EdmLineFabricOpInterface (std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, std::optional<size_t> desired_num_links = std::nullopt);
+    EdmLineFabricOpInterface (std::vector<IDevice*> const& device_sequence, std::vector<Program*> const& program_sequence, std::optional<size_t> desired_num_links = std::nullopt);
 
 
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique connections
     // than available will result in an error.
-    SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::Device* device, Direction direction);
+    SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::IDevice* device, Direction direction);
 
     // builds the ethernet kernels for all EDMs in the "fabric"
     void build_kernels() const;

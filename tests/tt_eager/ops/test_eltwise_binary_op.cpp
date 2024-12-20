@@ -36,7 +36,7 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
 bool run_test(
-    const tt::tt_metal::LegacyShape& shape, const DeviceFunction& device_function, Device* device, Args... args) {
+    const tt::tt_metal::LegacyShape& shape, const DeviceFunction& device_function, IDevice* device, Args... args) {
     auto input_tensor_a = ttnn::random::random(shape, DataType::BFLOAT16);
     auto input_tensor_b = ttnn::random::random(shape, DataType::BFLOAT16);
 

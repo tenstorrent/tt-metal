@@ -64,7 +64,7 @@ protected:
 
     static const uint32_t NUM_PROGRAMS = 75;
 
-    Device* device_;
+    IDevice* device_;
 
     void SetUp() override {
         CommandQueueSingleCardProgramFixture::SetUp();

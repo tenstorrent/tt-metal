@@ -15,7 +15,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool test_interleaved_l1_buffer(tt_metal::Device* device, int num_pages_one, int num_pages_two, uint32_t page_size) {
+bool test_interleaved_l1_buffer(tt_metal::IDevice* device, int num_pages_one, int num_pages_two, uint32_t page_size) {
     bool pass = true;
 
     uint32_t buffer_size = num_pages_one * page_size;
@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         uint32_t page_size = 2 * 1024;
 

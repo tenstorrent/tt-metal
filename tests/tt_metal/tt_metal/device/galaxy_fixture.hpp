@@ -44,7 +44,7 @@ protected:
     }
 
 private:
-    std::map<chip_id_t, Device*> device_ids_to_devices_;
+    std::map<chip_id_t, IDevice*> device_ids_to_devices_;
 };
 
 class TGFixture : public GalaxyFixture {

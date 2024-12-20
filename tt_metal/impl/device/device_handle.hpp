@@ -13,7 +13,7 @@ class DevicePool;
 namespace tt_metal {
 inline namespace v0 {
 
-class Device;
+class IDevice;
 
 }  // namespace v0
 
@@ -34,10 +34,10 @@ public:
     DeviceHandle() = default;
 
     // TODO remove with v0
-    auto operator->() const -> Device*;
+    auto operator->() const -> IDevice*;
 
     // TODO remove with v0
-    operator Device*() const;
+    operator IDevice*() const;
 };
 
 }  // namespace v1

@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
             page_size);
 
         // Device setup
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         // Application setup
         auto buffer = tt_metal::Buffer::create(

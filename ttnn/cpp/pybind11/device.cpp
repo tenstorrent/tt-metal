@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 namespace py = pybind11;
 
 namespace {
-inline void DumpDeviceProfiler(Device* device, bool last_dump) {
+inline void DumpDeviceProfiler(IDevice* device, bool last_dump) {
     tt::tt_metal::detail::DumpDeviceProfileResults(device, last_dump);
 }
 }  // namespace
@@ -164,7 +164,7 @@ void device_module(py::module& m_device) {
         .def("enable_async", &Device::enable_async)
         .def(
             "create_sub_device_manager",
-            [](Device* device,
+            [](IDevice* device,
                const std::vector<SubDevice>& sub_devices,
                DeviceAddr local_l1_size) -> SubDeviceManagerId {
                 SubDeviceManagerId sub_device_manager_id;
@@ -189,7 +189,7 @@ void device_module(py::module& m_device) {
             )doc")
         .def(
             "create_sub_device_manager_with_fabric",
-            [](Device* device, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
+            [](IDevice* device, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
                 std::tuple<SubDeviceManagerId, SubDeviceId> manager_and_sub_device_ids;
                 device->push_work(
                     [device, sub_devices, local_l1_size, &manager_and_sub_device_ids] {
@@ -215,7 +215,7 @@ void device_module(py::module& m_device) {
             )doc")
         .def(
             "load_sub_device_manager",
-            [](Device* device, SubDeviceManagerId sub_device_manager_id) {
+            [](IDevice* device, SubDeviceManagerId sub_device_manager_id) {
                 device->push_work(
                     [device, sub_device_manager_id] { device->load_sub_device_manager(sub_device_manager_id); });
             },
@@ -228,13 +228,13 @@ void device_module(py::module& m_device) {
             )doc")
         .def(
             "clear_loaded_sub_device_manager",
-            [](Device* device) { device->push_work([device] { device->clear_loaded_sub_device_manager(); }); },
+            [](IDevice* device) { device->push_work([device] { device->clear_loaded_sub_device_manager(); }); },
             R"doc(
                 Clears the loaded sub-device manager for the given device.
             )doc")
         .def(
             "remove_sub_device_manager",
-            [](Device* device, SubDeviceManagerId sub_device_manager_id) {
+            [](IDevice* device, SubDeviceManagerId sub_device_manager_id) {
                 device->push_work(
                     [device, sub_device_manager_id] { device->remove_sub_device_manager(sub_device_manager_id); });
             },
@@ -520,7 +520,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "synchronize_device",
-        [](Device* device, const std::optional<uint8_t> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+        [](IDevice* device, const std::optional<uint8_t> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
             // Send finish command to issue queue through worker thread
             // Worker thread will stall until the device is flushed.
             device->push_work(

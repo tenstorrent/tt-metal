@@ -85,7 +85,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, Device*> devices_;
+    std::map<chip_id_t, IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -111,10 +111,10 @@ struct KernelXY {
 
 void generate_receiver_worker_kernels(
     Program& program,
-    Device* device,
-    CoreCoord const& worker_core,
-    CoreCoord const& edm_core,
-    ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& edm_channel,
+    IDevice* device,
+    const CoreCoord& worker_core,
+    const CoreCoord& edm_core,
+    const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& edm_channel,
     uint32_t page_size,
     uint32_t num_pages,
     std::size_t num_buffers_per_edm_channel,
@@ -193,10 +193,10 @@ void generate_receiver_worker_kernels(
 
 void generate_sender_worker_kernels(
     Program& program,
-    Device* device,
-    CoreCoord const& worker_core,
-    CoreCoord const& edm_core,
-    ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& edm_channel,
+    IDevice* device,
+    const CoreCoord& worker_core,
+    const CoreCoord& edm_core,
+    const ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface& edm_channel,
     uint32_t page_size,
     uint32_t num_pages_total,
     std::size_t num_buffers_per_edm_channel,
@@ -268,8 +268,8 @@ void generate_sender_worker_kernels(
 }
 
 bool RunWriteBWTest(
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,

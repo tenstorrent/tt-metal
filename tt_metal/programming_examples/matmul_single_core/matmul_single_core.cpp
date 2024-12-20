@@ -59,7 +59,7 @@ void matmul_single_core(
     uint32_t N,
     uint32_t K,
     uint32_t B,
-    Device* device) {
+    IDevice* device) {
     /*
      * Setup program to execute along with its buffers and kernels to use
      * Core range is just single core
@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
     try {
         /* Silicon accelerator setup */
         constexpr int device_id = 0;
-        Device* device = CreateDevice(device_id);
+        IDevice* device = CreateDevice(device_id);
 
         /* Create source data */
         constexpr uint32_t M = 640;  // user-defined

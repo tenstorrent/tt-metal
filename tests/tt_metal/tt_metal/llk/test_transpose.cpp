@@ -76,7 +76,7 @@ void validate_transpose_wh(
     EXPECT_TRUE(pass);
 }
 
-void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& test_config) {
+void run_single_core_transpose(tt_metal::IDevice* device, const TransposeConfig& test_config) {
     TT_FATAL(test_config.shape.size() == 4, "Error");
 
     Program program = tt_metal::CreateProgram();

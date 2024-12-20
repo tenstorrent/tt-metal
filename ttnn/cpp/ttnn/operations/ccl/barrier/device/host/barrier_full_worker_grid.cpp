@@ -44,11 +44,11 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle> schedule_kernel_comp
 
 static std::tuple<std::array<uint32_t, 7>, std::array<uint32_t, 10>, std::array<uint32_t, 5>> get_rt_args(
     tt::tt_metal::Program& program,
-    Device* device,
+    IDevice* device,
     bool is_starting_core,
-    CoreCoord const& eth_sender_core,
-    CoreCoord const& eth_receiver_core,
-    CoreCoord const& sem_init_core) {
+    const CoreCoord& eth_sender_core,
+    const CoreCoord& eth_receiver_core,
+    const CoreCoord& sem_init_core) {
     const uint32_t worker_sem0 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
     const uint32_t worker_sem1 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
     constexpr uint32_t start_semaphore_address =

@@ -35,7 +35,7 @@ protected:
 
     void TearDown() override { tt::tt_metal::CloseDevice(device_); }
 
-    tt::tt_metal::Device* device_;
+    tt::tt_metal::IDevice* device_;
     tt::ARCH arch_;
     size_t num_devices_;
 };
@@ -64,7 +64,7 @@ protected:
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(devs); }
 
-    std::map<chip_id_t, tt::tt_metal::Device*> devs;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> devs;
     tt::ARCH arch_;
     size_t num_devices_;
 };

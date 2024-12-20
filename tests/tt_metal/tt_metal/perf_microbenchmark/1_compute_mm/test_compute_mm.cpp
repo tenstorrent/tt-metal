@@ -120,7 +120,7 @@ template <typename T>
 std::vector<T> get_col_slice(std::vector<T> data, int start_col_index, int num_cols, int rows, int cols);
 
 void prepare_inputs(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     CoreCoord core_range,
     uint32_t Mt,
     uint32_t Nt,
@@ -137,7 +137,7 @@ void prepare_inputs(
     std::vector<std::vector<float>>& in1_bfp8_unpack_slice);
 
 tt_metal::Program create_program_single_core(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -157,7 +157,7 @@ tt_metal::Program create_program_single_core(
     uint32_t interm_cb_dtype);
 
 tt_metal::Program create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -191,7 +191,7 @@ bool validation_single_core(
     const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer);
 
 bool validation(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     CoreCoord core_range,
     uint32_t Mt,
     uint32_t Nt,
@@ -215,10 +215,10 @@ bool validation_single_core_fp8(
     const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer);
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
-    tt_metal::Device* device, const vector<uint32_t>& activations, uint32_t Mt, uint32_t Nt);
+    tt_metal::IDevice* device, const vector<uint32_t>& activations, uint32_t Mt, uint32_t Nt);
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb_fp8(
-    tt_metal::Device* device, const vector<uint32_t>& activations, uint32_t Mt, uint32_t Nt);
+    tt_metal::IDevice* device, const vector<uint32_t>& activations, uint32_t Mt, uint32_t Nt);
 
 ////////////////////////////////////////////////////////////////////////////
 //                      Main
@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
         }
 
         int pci_express_slot = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(pci_express_slot);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(pci_express_slot);
         uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
         const tt::ARCH arch = device->arch();
         ////////////////////////////////////////////////////////////////////////////
@@ -875,7 +875,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
 }
 
 tt_metal::Program create_program_single_core(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1083,7 +1083,7 @@ tt_metal::Program create_program_single_core(
 }
 
 tt_metal::Program create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1457,7 +1457,7 @@ void print_vec(const std::vector<float>& data, int rows, int cols, const string&
 }
 
 void prepare_inputs(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     CoreCoord core_range,
     uint32_t Mt,
     uint32_t Nt,
@@ -1612,7 +1612,7 @@ bool validation_single_core_fp8(
 }
 
 bool validation(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     CoreCoord core_range,
     uint32_t Mt,
     uint32_t Nt,
@@ -1683,7 +1683,7 @@ bool validation(
 }
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
-    tt_metal::Device* device, const vector<uint32_t>& activations, uint32_t Mt, uint32_t Nt) {
+    tt_metal::IDevice* device, const vector<uint32_t>& activations, uint32_t Mt, uint32_t Nt) {
     uint32_t size_bytes = Mt * tt::constants::TILE_HEIGHT * Nt * tt::constants::TILE_WIDTH * 2;
     uint32_t page_size_bytes = tt::constants::TILE_HW * 2;
 
@@ -1710,7 +1710,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
 }
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb_fp8(
-    tt_metal::Device* device, const vector<uint32_t>& activations, uint32_t Mt, uint32_t Nt) {
+    tt_metal::IDevice* device, const vector<uint32_t>& activations, uint32_t Mt, uint32_t Nt) {
     uint32_t size_bytes = Mt * Nt * 1088;
     uint32_t page_size_bytes = 1088;
 

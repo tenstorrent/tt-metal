@@ -19,13 +19,13 @@ MultiDeviceGlobalSemaphore::MultiDeviceGlobalSemaphore(MeshDevice* mesh_device) 
 }
 
 std::shared_ptr<GlobalSemaphore> create_global_semaphore(
-    Device* device,
+    IDevice* device,
     const CoreRangeSet& cores,
     uint32_t initial_value,
     BufferType buffer_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     std::shared_ptr<GlobalSemaphore> global_semaphore = nullptr;
-    device->push_work(
+    device->run(
         [device, &cores, initial_value, buffer_type, sub_device_ids, &global_semaphore] {
             global_semaphore = GlobalSemaphore::create(device, cores, initial_value, buffer_type, sub_device_ids);
         },
@@ -36,7 +36,7 @@ std::shared_ptr<GlobalSemaphore> create_global_semaphore(
 tt::tt_metal::DeviceAddr get_global_semaphore_address(const std::shared_ptr<GlobalSemaphore>& global_semaphore) {
     auto* device = global_semaphore->device();
     tt::tt_metal::DeviceAddr address = 0;
-    device->push_work([&global_semaphore, &address] { address = global_semaphore->address(); }, /*blocking=*/true);
+    device->run([&global_semaphore, &address] { address = global_semaphore->address(); }, /*blocking=*/true);
     return address;
 }
 
@@ -45,7 +45,7 @@ void reset_global_semaphore_value(
     uint32_t reset_value,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto* device = global_semaphore->device();
-    device->push_work([global_semaphore, reset_value, sub_device_ids] {
+    device->run([global_semaphore, reset_value, sub_device_ids] {
         global_semaphore->reset_semaphore_value(reset_value, sub_device_ids);
     });
 }
@@ -61,7 +61,7 @@ MultiDeviceGlobalSemaphore create_global_semaphore(
     for (uint32_t i = 0; i < devices.size(); ++i) {
         auto* device = devices[i];
         auto& global_semaphore = multi_device_global_semaphore.global_semaphores[i];
-        device->push_work([device, &cores, initial_value, buffer_type, sub_device_ids, &global_semaphore] {
+        device->run([device, &cores, initial_value, buffer_type, sub_device_ids, &global_semaphore] {
             global_semaphore = GlobalSemaphore::create(device, cores, initial_value, buffer_type, sub_device_ids);
         });
     }
@@ -77,7 +77,7 @@ std::vector<tt::tt_metal::DeviceAddr> get_global_semaphore_address(const MultiDe
         const auto& global_semaphore = global_semaphores[i];
         auto& address = addresses[i];
         auto* device = global_semaphore->device();
-        device->push_work([&global_semaphore, &address] { address = global_semaphore->address(); });
+        device->run([&global_semaphore, &address] { address = global_semaphore->address(); });
     }
     for (const auto& global_semaphore : global_semaphores) {
         global_semaphore->device()->synchronize();

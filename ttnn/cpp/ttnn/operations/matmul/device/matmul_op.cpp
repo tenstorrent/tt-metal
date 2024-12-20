@@ -171,7 +171,7 @@ inline uint32_t get_estimated_size_of_cbs(
 }
 
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    tt::tt_metal::Device* device = input_tensor_a.device();
+    tt::tt_metal::IDevice* device = input_tensor_a.device();
     const std::vector<uint32_t>& bank_ids =
         device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
     std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
@@ -840,7 +840,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
                 compute_kernel_config,
                 mem_config);
         } else {
-            tt::tt_metal::Device* device = input_tensor_a.device();
+            tt::tt_metal::IDevice* device = input_tensor_a.device();
             auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
             return create_simple_matmul_program_config(
                 input_tensor_a, input_tensor_b, compute_kernel_config, compute_with_storage_grid_size, mem_config);

@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
     bool pass = true;
     try {
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CommandQueue& cq = device->command_queue();
 

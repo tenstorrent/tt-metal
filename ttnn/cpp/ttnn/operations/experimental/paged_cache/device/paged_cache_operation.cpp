@@ -33,7 +33,7 @@ void PagedUpdateCacheDeviceOperation::validate(
     const auto validateTensorBasics = [](const Tensor& cache_tensor, const Tensor& input_tensor) {
         // Device and storage validation
         TT_FATAL(
-            input_tensor.storage_type() == StorageType::DEVICE && cache_tensor.storage_type() == StorageType::DEVICE,
+            input_tensor.storage_type() == StorageType::IDevice && cache_tensor.storage_type() == StorageType::DEVICE,
             "Operands to update_cache need to be on device!");
         TT_FATAL(
             input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");

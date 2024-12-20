@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& 
     uint32_t num_tiles = a.volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

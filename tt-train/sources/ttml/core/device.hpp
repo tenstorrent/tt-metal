@@ -14,16 +14,16 @@ namespace ttml::core {
 class Device {
 public:
     explicit Device(int device_index);
-    Device(Device&& device) = default;
-    Device(const Device&) = delete;
+    Device(IDevice&& device) = default;
+    Device(const IDevice&) = delete;
 
-    Device& operator=(const Device&) = delete;
-    Device& operator=(Device&&) = default;
+    IDevice& operator=(const IDevice&) = delete;
+    IDevice& operator=(IDevice&&) = default;
     ~Device() = default;
 
-    [[nodiscard]] tt::tt_metal::Device& get_device();
+    [[nodiscard]] tt::tt_metal::IDevice& get_device();
 
 private:
-    std::unique_ptr<tt::tt_metal::Device, void (*)(tt::tt_metal::Device*)> m_device;
+    std::unique_ptr<tt::tt_metal::Device, void (*)(tt::tt_metal::IDevice*)> m_device;
 };
 }  // namespace ttml::core

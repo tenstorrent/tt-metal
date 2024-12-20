@@ -2436,10 +2436,10 @@ void Device::compile_command_queue_programs() {
         chip_id_t device_id = this->id();
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         uint8_t num_hw_cqs = this->num_hw_cqs();
-        Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
+        IDevice *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
 
-        auto &tunnel_device_dispatch_workers = mmio_device->tunnel_device_dispatch_workers_;
-        auto &tunnels_from_mmio = mmio_device->tunnels_from_mmio_;
+        auto &tunnel_device_dispatch_workers = mmio_device->get_tunnel_device_dispatch_workers();
+        auto &tunnels_from_mmio = mmio_device->get_tunnels_from_mmio();
 
         std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> device_worker_variants;
         std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> mmio_device_worker_variants;
@@ -2765,7 +2765,7 @@ void Device::compile_command_queue_programs() {
 void Device::configure_command_queue_programs() {
     chip_id_t device_id = this->id();
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-    Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
+    IDevice *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
     log_debug(tt::LogMetal, "Device {} - Channel {}", this->id_, channel);
 
@@ -2943,7 +2943,7 @@ void Device::init_command_queue_device() {
     if (!this->is_mmio_capable()) {
         if (tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1) {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
-            Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
+            IDevice *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
             std::vector<std::vector<CoreCoord>>logical_cores = mmio_command_queue_program.logical_cores();
             for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
@@ -3892,7 +3892,7 @@ void v1::EnableProgramCache(DeviceHandle device) { device->enable_program_cache(
 void v1::DisableAndClearProgramCache(DeviceHandle device) { device->disable_and_clear_program_cache(); }
 
 void v1::PushWork(DeviceHandle device, std::function<void()> work, bool blocking) {
-    device->push_work(std::move(work), blocking);
+    device->run(std::move(work), blocking);
 }
 
 void v1::Synchronize(DeviceHandle device) { device->synchronize(); }

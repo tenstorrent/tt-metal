@@ -24,7 +24,7 @@ OptionalAnyDevice::OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::Device
 OptionalAnyDevice::OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::distributed::MeshDevice> mesh_device) :
     device_(std::make_optional<AnyDevice>(&mesh_device.get())) {}
 
-OptionalAnyDevice::OptionalAnyDevice(tt::tt_metal::Device& device) : device_(std::make_optional<AnyDevice>(&device)) {}
+OptionalAnyDevice::OptionalAnyDevice(tt::tt_metal::IDevice& device) : device_(std::make_optional<AnyDevice>(&device)) {}
 OptionalAnyDevice::OptionalAnyDevice(tt::tt_metal::distributed::MeshDevice& mesh_device) :
     device_(std::make_optional<AnyDevice>(&mesh_device)) {}
 

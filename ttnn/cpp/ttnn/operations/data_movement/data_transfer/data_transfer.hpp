@@ -14,7 +14,7 @@ struct DataTransferToHostOperation {
 };
 
 struct DataTransferToDeviceOperation {
-    static Tensor invoke(const Tensor& input_tensor, Device* device, const MemoryConfig& memory_config);
+    static Tensor invoke(const Tensor& input_tensor, IDevice* device, const MemoryConfig& memory_config);
 };
 
 }  // namespace operations::data_movement

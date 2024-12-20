@@ -118,7 +118,7 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
         get_required_outputs(are_required_outputs);
 
     TT_FATAL(
-        output_grad.storage_type() == StorageType::DEVICE && input.storage_type() == StorageType::DEVICE &&
+        output_grad.storage_type() == StorageType::IDevice && input.storage_type() == StorageType::IDevice &&
             weight.storage_type() == StorageType::DEVICE,
         "input and weight tensors need to be on device");
 

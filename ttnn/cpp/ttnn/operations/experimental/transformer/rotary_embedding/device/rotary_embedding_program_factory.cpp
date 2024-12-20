@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.get_legacy_shape()[-1] * sizeof(bfloat16);
 
-    tt_metal::Device* device = input.device();
+    tt_metal::IDevice* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);

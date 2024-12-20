@@ -126,7 +126,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     tt::tt_metal::Program program{};
-    tt::tt_metal::Device* device{input.device()};
+    tt::tt_metal::IDevice* device{input.device()};
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

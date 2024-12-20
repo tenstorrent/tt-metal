@@ -61,7 +61,7 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
     return expected_dst_vec;
 }
 
-bool flatten(DispatchFixture* fixture, tt_metal::Device* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten(DispatchFixture* fixture, tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     bool pass = true;
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -173,7 +173,7 @@ bool flatten(DispatchFixture* fixture, tt_metal::Device* device, uint32_t num_ti
     return pass;
 }
 
-bool flatten_stress(Device* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten_stress(IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     // Test Simulating Program Caching with Async Command Queues
     bool pass = true;
     // Create a program used across all loops

@@ -31,4 +31,7 @@ target_include_directories(
     PUBLIC
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
+        # tt_metal/tools/profiler/CMakeFiles/profiler.dir/tt_metal_profiler.cpp.o  build fails because it can't find tt_metal/temp/device.hpp
+        # it means this object file depends on device.hpp, which means it depends on metal. wow. wtf are we doing?
+        ${PROJECT_SOURCE_DIR}/tt_metal/include/
 )

@@ -21,7 +21,7 @@ std::vector<std::string> expected = {
 };
 
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_type) {
+static void RunTest(WatcherFixture* fixture, IDevice* device, riscv_id_t riscv_type) {
     // Set up program
     Program program = Program();
 
@@ -146,61 +146,49 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
 
 TEST_F(WatcherFixture, TestWatcherRingBufferBrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugBrisc);},
-            device
-        );
+            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, DebugBrisc); }, device);
     }
 }
 
 TEST_F(WatcherFixture, TestWatcherRingBufferNCrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugNCrisc);},
-            device
-        );
+            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, DebugNCrisc); }, device);
     }
 }
 
 TEST_F(WatcherFixture, TestWatcherRingBufferTrisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc0);},
-            device
-        );
+            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, DebugTrisc0); }, device);
     }
 }
 
 TEST_F(WatcherFixture, TestWatcherRingBufferTrisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc1);},
-            device
-        );
+            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, DebugTrisc1); }, device);
     }
 }
 
 TEST_F(WatcherFixture, TestWatcherRingBufferTrisc2) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc2);},
-            device
-        );
+            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, DebugTrisc2); }, device);
     }
 }
 
 TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugErisc);},
-            device
-        );
+            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, DebugErisc); }, device);
     }
 }
 
@@ -210,10 +198,8 @@ TEST_F(WatcherFixture, TestWatcherRingBufferIErisc) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugIErisc);},
-            device
-        );
+            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, DebugIErisc); }, device);
     }
 }

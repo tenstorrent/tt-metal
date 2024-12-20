@@ -20,7 +20,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void UpdateGoldenOutput(std::vector<string>& golden_output, const Device* device, const string& risc) {
+static void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
     // Using wildcard characters in lieu of actual values for the physical coordinates as physical coordinates can vary
     // by machine
     const string& device_core_risc = std::to_string(device->id()) + ":(x=*,y=*):" + risc + ": ";
@@ -34,7 +34,7 @@ static void UpdateGoldenOutput(std::vector<string>& golden_output, const Device*
     }
 }
 
-static void RunTest(DPrintFixture* fixture, Device* device, const bool add_active_eth_kernel = false) {
+static void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_kernel = false) {
     std::vector<string> golden_output;
 
     CoreRange cores({0, 0}, {0, 1});
@@ -88,9 +88,9 @@ static void RunTest(DPrintFixture* fixture, Device* device, const bool add_activ
 TEST_F(DPrintFixture, TensixTestPrintPrependDeviceCoreRisc) {
     tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [](DPrintFixture* fixture, Device* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device); }, device);
+            [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device); }, device);
     }
     tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, false);
@@ -99,13 +99,13 @@ TEST_F(DPrintFixture, TensixTestPrintPrependDeviceCoreRisc) {
 TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
     tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         if (device->get_active_ethernet_cores(true).empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no active ethernet cores...", device->id());
             continue;
         }
         this->RunTestOnDevice(
-            [](DPrintFixture* fixture, Device* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true); },
+            [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true); },
             device);
     }
     tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(

@@ -103,9 +103,9 @@ std::vector<v1::DeviceHandle> get_device_ring(std::vector<tt::tt_metal::v1::Devi
     return device_ring;
 }
 
-std::vector<std::tuple<Device*, Device*, CoreCoord, CoreCoord>> get_sender_receiver_cores(
+std::vector<std::tuple<IDevice*, IDevice*, CoreCoord, CoreCoord>> get_sender_receiver_cores(
     std::vector<tt::tt_metal::v1::DeviceHandle> device_ring) {
-    std::vector<std::tuple<Device*, Device*, CoreCoord, CoreCoord>> sender_receivers;
+    std::vector<std::tuple<IDevice*, IDevice*, CoreCoord, CoreCoord>> sender_receivers;
     sender_receivers.reserve(device_ring.size() - 1);
 
     // Special case for 2 devices to ensure core pairs are not the same for send and receive
@@ -116,7 +116,7 @@ std::vector<std::tuple<Device*, Device*, CoreCoord, CoreCoord>> get_sender_recei
         for (const auto& first_eth_core : first_device->get_active_ethernet_cores(true)) {
             auto [device_id, second_eth_core] = first_device->get_connected_ethernet_core(first_eth_core);
             if (second_device->id() == device_id) {
-                Device *sender_device, *receiver_device;
+                IDevice *sender_device, *receiver_device;
                 CoreCoord sender_eth_core, receiver_eth_core;
                 if (i == 0) {
                     sender_device = first_device, receiver_device = second_device;

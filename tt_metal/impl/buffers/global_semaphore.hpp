@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class Buffer;
-class Device;
+class IDevice;
 
 class GlobalSemaphore {
     struct Private {
@@ -26,14 +26,14 @@ class GlobalSemaphore {
 
 public:
     static std::shared_ptr<GlobalSemaphore> create(
-        Device* device,
+        IDevice* device,
         const CoreRangeSet& cores,
         uint32_t initial_value,
         BufferType buffer_type = BufferType::L1,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     static std::shared_ptr<GlobalSemaphore> create(
-        Device* device,
+        IDevice* device,
         CoreRangeSet&& cores,
         uint32_t initial_value,
         BufferType buffer_type = BufferType::L1,
@@ -45,7 +45,7 @@ public:
     GlobalSemaphore(GlobalSemaphore&&) noexcept = delete;
     GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = delete;
 
-    Device* device() const;
+    IDevice* device() const;
 
     DeviceAddr address() const;
 
@@ -57,7 +57,7 @@ public:
     // "Private" constructor to prevent direct instantiation
     // Use GlobalSemaphore::create instead
     GlobalSemaphore(
-        Device* device,
+        IDevice* device,
         const CoreRangeSet& cores,
         uint32_t initial_value,
         BufferType buffer_type,
@@ -65,7 +65,7 @@ public:
         Private);
 
     GlobalSemaphore(
-        Device* device,
+        IDevice* device,
         CoreRangeSet&& cores,
         uint32_t initial_value,
         BufferType buffer_type,
@@ -78,7 +78,7 @@ private:
     // GlobalSemaphore is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
     std::shared_ptr<Buffer> buffer_;
-    Device* device_;
+    IDevice* device_;
     CoreRangeSet cores_;
 };
 

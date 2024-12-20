@@ -67,17 +67,17 @@ struct EdmInterfaceAddresses {
 // 2) Compute the semaphore and buffer addresses (for each EDM channel and worker)
 // For now - the mapping between workers and EDM channels is 1:1
 static void add_worker_config_to_edm_builders(
-    Device* device,
+    IDevice* device,
     RingReduceScatterWrappedTensorSlicer&
         tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
-    std::vector<WorkerAttributes> const& all_worker_attributes,
+    const std::vector<WorkerAttributes>& all_worker_attributes,
     std::size_t num_channels_per_edm,
     std::size_t num_buffers_per_channel,
 
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& clockwise_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
 
-    ttnn::ccl::RingTopology const& topology_config,
+    const ttnn::ccl::RingTopology& topology_config,
     std::size_t link,
 
     EdmInterfaceAddresses& edm_interface_addresses) {

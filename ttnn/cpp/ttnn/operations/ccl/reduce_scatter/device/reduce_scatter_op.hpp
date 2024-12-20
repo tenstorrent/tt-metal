@@ -59,7 +59,7 @@ ReduceScatter create_reduce_scatter_struct(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology);
 }  // namespace reduce_scatter_detail
 }  // namespace ccl

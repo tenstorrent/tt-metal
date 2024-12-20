@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(
     uint32_t wFill,
     float val_hi,
     float val_lo) {
-    tt::tt_metal::Device* device = any.device();
+    tt::tt_metal::IDevice* device = any.device();
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 

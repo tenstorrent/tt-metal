@@ -27,7 +27,7 @@ namespace experimental {
  * @return Handle to the allocated global circular buffer.
  */
 std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
-    Device* device,
+    IDevice* device,
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,

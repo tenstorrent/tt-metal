@@ -38,7 +38,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t ntiles = a.volume() / TILE_HW;
@@ -271,7 +271,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     uint32_t ntiles = a.volume() / TILE_HW;
     uint32_t stick_s = a.get_legacy_shape()[-1];
@@ -721,7 +721,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     uint32_t leftover_width_in_row = num_leftover_tiles * output.element_size();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

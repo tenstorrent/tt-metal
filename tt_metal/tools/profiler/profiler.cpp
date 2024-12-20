@@ -384,7 +384,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
     }
 }
 
-void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& worker_cores, bool lastDump) {
+void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& worker_cores, bool lastDump) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 

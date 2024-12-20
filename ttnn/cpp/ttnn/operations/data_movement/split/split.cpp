@@ -29,7 +29,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
 
     const bool on_host =
         input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED;
-    std::optional<Device*> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
+    std::optional<IDevice*> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
 
     Tensor preprocessed = ttnn::unsqueeze_to_4D(input_tensor);  // ensure we're 4D before slicing
     dim += 4 - input_rank;                                      // convert to 4D index
@@ -68,7 +68,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
         }
 
         tt::tt_metal::Layout layout = input_tensor.get_layout();
-        if (device && (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::UINT16) &&
+        if (IDevice && (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::UINT16) &&
             chunk_len % 2 != 0) {
             layout = Layout::TILE;  // bf16 and uint16 tensors must be tiled if the chunk length is odd due to packing
                                     // constraints

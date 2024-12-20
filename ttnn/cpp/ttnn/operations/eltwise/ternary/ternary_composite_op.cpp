@@ -15,7 +15,7 @@ Tensor _addcmul(
     float value,
     const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(
-        input_a.storage_type() == StorageType::DEVICE && input_b.storage_type() == StorageType::DEVICE &&
+        input_a.storage_type() == StorageType::IDevice && input_b.storage_type() == StorageType::IDevice &&
             input_c.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input tensors to be on Device.");
 
@@ -34,7 +34,7 @@ Tensor _addcdiv(
     float value,
     const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(
-        input_a.storage_type() == StorageType::DEVICE && input_b.storage_type() == StorageType::DEVICE &&
+        input_a.storage_type() == StorageType::IDevice && input_b.storage_type() == StorageType::IDevice &&
             input_c.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input tensors to be on Device.");
 

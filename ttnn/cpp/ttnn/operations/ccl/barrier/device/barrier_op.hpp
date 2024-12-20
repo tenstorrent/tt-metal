@@ -13,7 +13,7 @@ namespace ttnn {
 struct Barrier {
     const MemoryConfig output_mem_config;
     const ttnn::ccl::Topology topology;
-    std::vector<Device*> devices;
+    std::vector<IDevice*> devices;
     bool is_starting_core = false;
     uint32_t ring_size = devices.size();
     uint32_t ring_index = 0;

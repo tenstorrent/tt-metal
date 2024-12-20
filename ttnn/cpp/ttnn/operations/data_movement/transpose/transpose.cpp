@@ -36,7 +36,7 @@ inline uint32_t get_estimated_size_of_cbs(const Tensor& input_tensor_a) {
 }
 
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    tt::tt_metal::Device* device = input_tensor_a.device();
+    tt::tt_metal::IDevice* device = input_tensor_a.device();
     const std::vector<uint32_t>& bank_ids =
         device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
     std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
@@ -105,11 +105,11 @@ inline Tensor transpose_(
         // constraint, CN).
         if (tiled_only) {
             // convert to tiled
-            Tensor b = ttnn::to_layout(a, Layout::TILE, std::nullopt, std::nullopt, (Device*)nullptr);
+            Tensor b = ttnn::to_layout(a, Layout::TILE, std::nullopt, std::nullopt, (IDevice*)nullptr);
             // run the transpose.
             b = operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {b}).at(0);
             // back to original layout
-            b = ttnn::to_layout(b, a.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
+            b = ttnn::to_layout(b, a.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
             return b;
         }
         return operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {a}).at(0);

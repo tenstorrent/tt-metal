@@ -59,7 +59,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, Device*> devices_;
+    std::map<chip_id_t, IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -123,7 +123,7 @@ Correctness run_output_check(
     return Correctness::Correct;
 };
 
-void run_programs(std::vector<Program>& programs, std::vector<Device*> const& devices) {
+void run_programs(std::vector<Program>& programs, const std::vector<IDevice*>& devices) {
     EXPECT_EQ(programs.size(), devices.size());
     const size_t num_programs = programs.size();
     try {
@@ -158,7 +158,7 @@ void run_programs(std::vector<Program>& programs, std::vector<Device*> const& de
 }
 
 std::tuple<std::shared_ptr<Buffer>, std::vector<uint32_t>> build_input_buffer(
-    Device* first_device, size_t tensor_size_bytes, BankedConfig const& test_config) {
+    IDevice* first_device, size_t tensor_size_bytes, const BankedConfig& test_config) {
     auto inputs = std::vector<uint32_t>(tensor_size_bytes / sizeof(uint32_t), 0);
     std::iota(inputs.begin(), inputs.end(), 0);
 
@@ -191,10 +191,10 @@ using mode_variant_t = std::variant<mcast_send, unicast_send>;
 static constexpr size_t PACKET_HEADER_SIZE_BYTES = sizeof(tt::fabric::PacketHeader);
 void generate_sender_worker_kernels(
     Program& program,
-    Device* device,
-    CoreCoord const& worker_core,
-    ttnn::ccl::SenderWorkerAdapterSpec const& worker_fabric_connection,
-    mode_variant_t const& mode,
+    IDevice* device,
+    const CoreCoord& worker_core,
+    const ttnn::ccl::SenderWorkerAdapterSpec& worker_fabric_connection,
+    const mode_variant_t& mode,
     std::size_t edm_buffer_size,
     uint32_t page_plus_header_size,
     uint32_t num_pages_total,
@@ -207,7 +207,7 @@ void generate_sender_worker_kernels(
     bool dest_is_dram,
     uint32_t worker_buffer_index_semaphore_id,
     // farthest to closest
-    std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos) {
+    const std::vector<ttnn::ccl::edm_termination_info_t>& edm_termination_infos) {
     auto const& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
         src_is_dram,      //
@@ -314,8 +314,8 @@ void generate_sender_worker_kernels(
 }
 
 bool RunLoopbackTest(
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
@@ -439,7 +439,7 @@ bool RunLoopbackTest(
 }
 
 bool RunLineFabricTest(
-    std::vector<tt_metal::Device*> devices,
+    std::vector<tt_metal::IDevice*> devices,
 
     const size_t mcast_first_chip,
     const size_t mcast_last_chip,
@@ -598,7 +598,7 @@ int TestLineFabricEntrypoint(
     T3000TestDevice test_fixture;
 
     // build a line of devices
-    std::vector<Device*> devices = {
+    std::vector<IDevice*> devices = {
         test_fixture.devices_.at(0),
         test_fixture.devices_.at(1),
         test_fixture.devices_.at(2),

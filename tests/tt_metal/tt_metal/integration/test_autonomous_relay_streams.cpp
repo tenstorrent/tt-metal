@@ -63,11 +63,11 @@ constexpr uint32_t noc_word_size = 16;
 
 // Reads data from input
 std::vector<uint32_t> get_sender_reader_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t input_buffer_addr,
     uint32_t page_size_plus_header,
     uint32_t num_messages_to_read,
-    std::array<uint32_t, num_sizes> const& sub_sizes) {
+    const std::array<uint32_t, num_sizes>& sub_sizes) {
     auto args = std::vector<uint32_t>{input_buffer_addr, page_size_plus_header, num_messages_to_read};
     for (auto const& sub_size : sub_sizes) {
         args.push_back(sub_size);
@@ -76,14 +76,14 @@ std::vector<uint32_t> get_sender_reader_rt_args(
 }
 // sender stream data mover kernel
 std::vector<uint32_t> get_sender_writer_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t num_messages,
     uint32_t relay_done_semaphore,
-    CoreCoord const& relay_core,
+    const CoreCoord& relay_core,
     uint32_t sender_noc_id,
-    stream_config_t const& sender_stream_config,
-    stream_config_t const& relay_stream_config,
-    CoreCoord const& other_relay_to_notify_when_done,
+    const stream_config_t& sender_stream_config,
+    const stream_config_t& relay_stream_config,
+    const CoreCoord& other_relay_to_notify_when_done,
     uint32_t other_relay_done_semaphore,
     uint32_t sender_wait_for_receiver_semaphore,
     uint32_t first_relay_remote_src_start_phase_id,
@@ -117,16 +117,16 @@ std::vector<uint32_t> get_sender_writer_rt_args(
 }
 
 std::vector<uint32_t> get_relay_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t relay_stream_overlay_blob_addr,
     uint32_t relay_done_semaphore,
-    CoreCoord const& sender_core,
-    CoreCoord const& receiver_core,
+    const CoreCoord& sender_core,
+    const CoreCoord& receiver_core,
     uint32_t sender_noc_id,
     uint32_t receiver_noc_id,
     // stream_config_t const& sender_stream_config,
-    stream_config_t const& relay_stream_config,
-    stream_config_t const& receiver_stream_config,
+    const stream_config_t& relay_stream_config,
+    const stream_config_t& receiver_stream_config,
     uint32_t remote_src_start_phase_addr,
     uint32_t dest_remote_src_start_phase_addr,
     bool is_first_relay_in_chain) {
@@ -161,16 +161,16 @@ std::vector<uint32_t> get_relay_rt_args(
 
 // Receiver stream data mover kernel
 std::vector<uint32_t> get_receiver_reader_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t num_messages,
     uint32_t relay_done_semaphore,
-    CoreCoord const& relay_core,
+    const CoreCoord& relay_core,
     uint32_t receiver_noc_id,
-    stream_config_t const& relay_stream_config,
-    stream_config_t const& receiver_stream_config,
-    CoreCoord const& other_relay_core_to_notify_when_done,
+    const stream_config_t& relay_stream_config,
+    const stream_config_t& receiver_stream_config,
+    const CoreCoord& other_relay_core_to_notify_when_done,
     uint32_t other_relay_done_semaphore,
-    CoreCoord const& sender_core,
+    const CoreCoord& sender_core,
     uint32_t sender_receiver_semaphore,
     uint32_t remote_src_start_phase_id) {
     return std::vector<uint32_t>{
@@ -199,22 +199,22 @@ std::vector<uint32_t> get_receiver_reader_rt_args(
         remote_src_start_phase_id};
 }
 std::vector<uint32_t> get_receiver_writer_rt_args(
-    Device* device, uint32_t output_buffer_addr, uint32_t page_size, uint32_t num_messages_to_read) {
+    IDevice* device, uint32_t output_buffer_addr, uint32_t page_size, uint32_t num_messages_to_read) {
     return std::vector<uint32_t>{output_buffer_addr, page_size, num_messages_to_read};
 }
 
 // TODO: randomize each noc for testing purposes
 void build_and_run_autonomous_stream_test(
     std::vector<Program>& programs,
-    std::vector<Device*> const& devices,
+    const std::vector<IDevice*>& devices,
     std::size_t num_messages,
     std::size_t page_size,
     uint32_t tile_header_buffer_num_messages,
-    stream_builder_spec_t const& sender_stream_spec,
-    stream_builder_spec_t const& relay_stream_spec,
-    stream_builder_spec_t const& receiver_stream_spec,
+    const stream_builder_spec_t& sender_stream_spec,
+    const stream_builder_spec_t& relay_stream_spec,
+    const stream_builder_spec_t& receiver_stream_spec,
     bool enable_page_size_variations,
-    std::array<uint32_t, num_sizes> const& sub_sizes,
+    const std::array<uint32_t, num_sizes>& sub_sizes,
     std::size_t num_loop_iterations) {
     TT_ASSERT(programs.size() == 0);
     // Make configurable
@@ -232,7 +232,7 @@ void build_and_run_autonomous_stream_test(
     uint32_t relay_stream_overlay_blob_size_bytes = 256;
 
     programs.emplace_back();
-    Device* device = devices.at(0);
+    IDevice* device = devices.at(0);
     Program& program = programs.at(0);
     log_trace(tt::LogTest, "Device ID: {}", device->id());
 

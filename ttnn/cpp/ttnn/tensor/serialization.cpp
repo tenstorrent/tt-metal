@@ -313,8 +313,8 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
 }
 
 // Explicit instantiations
-Tensor load_tensor(const std::string& file_name, Device* device) {
-    return load_tensor_helper<Device*>(file_name, device);
+Tensor load_tensor(const std::string& file_name, IDevice* device) {
+    return load_tensor_helper<IDevice*>(file_name, device);
 }
 Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     return load_tensor_helper<MeshDevice*>(file_name, device);
