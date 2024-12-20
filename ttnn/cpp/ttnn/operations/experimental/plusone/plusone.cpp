@@ -12,11 +12,11 @@
 namespace ttnn::operations::experimental {
 
 ttnn::Tensor PlusOneOperation::invoke(
-    uint8_t queue_id, const Tensor& input_tensor, const std::optional<CoreRangeSet> sub_core_grids) {
+    uint8_t queue_id, const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids) {
     return operation::run(PlusOne{sub_core_grids}, {input_tensor}, {}, {}, queue_id).at(0);
 }
 
-ttnn::Tensor PlusOneOperation::invoke(const Tensor& input_tensor, const std::optional<CoreRangeSet> sub_core_grids) {
+ttnn::Tensor PlusOneOperation::invoke(const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids) {
     return invoke(DefaultQueueId, input_tensor, sub_core_grids);
 }
 

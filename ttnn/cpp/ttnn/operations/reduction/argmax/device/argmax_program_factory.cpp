@@ -117,7 +117,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const Tensor& input,
     const Tensor& output,
     const std::optional<uint32_t> dim,
-    const std::optional<CoreRangeSet> sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -137,10 +137,6 @@ operation::ProgramWithCallbacks argmax_multi_core(
         core_grid = sub_core_grids.value();
         num_cores = core_grid.num_cores();
     }
-
-    // tt::log_info("num_cores: {}", num_cores);
-    // tt::log_info("core_grid: {}", core_grid);
-    // tt::log_info("all_cores: {}", core_grid);
 
     const auto& input_shape = input.get_legacy_shape();
     const uint32_t B = input_shape[0];
@@ -191,8 +187,6 @@ operation::ProgramWithCallbacks argmax_multi_core(
     uint32_t final_cores_physical_x = final_cores_physical.x;
     uint32_t final_cores_physical_y = final_cores_physical.y;
 
-    // tt::log_info("final_cores_physical: {}", final_cores_physical);
-
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index,
         intermed0_cb_index,
@@ -228,9 +222,6 @@ operation::ProgramWithCallbacks argmax_multi_core(
     //     all_cores,
     //     tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc =
     //     tt::tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
-
-    // tt::log_info("cores: {}", cores);
-    // tt::log_info("old cores: {}", grid_to_cores(num_cores, num_cores_x, num_cores_y, false));
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);
