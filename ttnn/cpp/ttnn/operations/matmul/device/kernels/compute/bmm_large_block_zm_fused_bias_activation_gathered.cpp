@@ -157,17 +157,15 @@ void MAIN {
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
-    constexpr uint32_t in0_cb_id = tt::CB::c_in0;
-    constexpr uint32_t in1_cb_id = tt::CB::c_in1;
-    constexpr uint32_t in2_cb_id = tt::CB::c_in2;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_7;
-    constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_8;
+    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
+    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
+    constexpr uint32_t in2_cb_id = tt::CBIndex::c_2;
+    constexpr uint32_t sync_cb = tt::CBIndex::c_3;
+    constexpr uint32_t sync_cb2 = tt::CBIndex::c_4;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_5;
+    constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_6;
 
     constexpr uint32_t mm_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
-
-    // constexpr uint32_t remote_cb_id = 31;
-    constexpr uint32_t sync_cb = 5;
-    constexpr uint32_t sync_cb2 = 6;
 
     uint32_t in1_cb_start_addr = 0;
     uint32_t in1_rd_ptr_start_addr = 0;

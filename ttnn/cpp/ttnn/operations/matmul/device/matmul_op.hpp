@@ -54,9 +54,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     CoreRangeSet hop_cores,
     bool untilize_out,
     const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
-    uint32_t num_global_cb_receivers
-    // std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb
-);
+    uint32_t num_global_cb_receivers);
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,

@@ -10,7 +10,6 @@
 #include "circular_buffer_constants.h"
 #include "remote_circular_buffer_api.h"
 #include "risc_attribs.h"
-#include "debug/dprint.h"
 
 // NCRISC and BRISC setup read and write
 // TRISC sets up read or write
@@ -56,54 +55,6 @@ inline void setup_local_cb_read_write_interfaces(
 }
 
 namespace experimental {
-
-template <bool update_remote_over_noc = false>
-inline void setup_remote_cb_interfaces_no_resize(uint32_t tt_l1_ptr* cb_l1_base, uint32_t start_cb_index) {
-#ifdef COMPILE_FOR_TRISC
-    uint8_t noc = 0;
-#else
-    uint8_t noc = noc_index;
-#endif
-    volatile tt_l1_ptr uint32_t* circular_buffer_config_addr = cb_l1_base;
-
-    for (uint32_t cb_id = NUM_CIRCULAR_BUFFERS - 1, end_id = start_cb_index - 1; cb_id != end_id; cb_id--) {
-        uint32_t config_addr = circular_buffer_config_addr[0];
-        uint32_t page_size = circular_buffer_config_addr[1];
-        volatile tt_l1_ptr uint32_t* l1_remote_cb_config_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_addr);
-        const bool is_sender = l1_remote_cb_config_addr[0];
-        uint32_t num_receivers = l1_remote_cb_config_addr[1];
-        uint32_t fifo_start_addr = l1_remote_cb_config_addr[2];
-        uint32_t fifo_size = l1_remote_cb_config_addr[3];
-        uint32_t fifo_ptr = l1_remote_cb_config_addr[4];
-        uint32_t remote_noc_xy_addr = l1_remote_cb_config_addr[5];
-        uint32_t aligned_pages_sent_addr = l1_remote_cb_config_addr[6];
-        if (is_sender) {
-            RemoteSenderCBInterface& sender_cb_interface = get_remote_sender_cb_interface(cb_id);
-            sender_cb_interface.config_ptr = config_addr;
-            sender_cb_interface.fifo_start_addr = fifo_start_addr;
-            sender_cb_interface.fifo_wr_ptr = fifo_ptr;
-            sender_cb_interface.receiver_noc_xy_ptr = remote_noc_xy_addr;
-            sender_cb_interface.aligned_pages_sent_ptr = aligned_pages_sent_addr;
-            sender_cb_interface.num_receivers = num_receivers;
-            // resize_remote_sender_cb_interface<update_remote_over_noc>(cb_id, page_size, noc);
-        } else {
-            uint32_t aligned_pages_acked_addr = aligned_pages_sent_addr + L1_ALIGNMENT;
-            uint32_t sender_noc_x = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_noc_xy_addr)[0];
-            uint32_t sender_noc_y = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_noc_xy_addr)[1];
-            RemoteReceiverCBInterface& receiver_cb_interface = get_remote_receiver_cb_interface(cb_id);
-            receiver_cb_interface.config_ptr = config_addr;
-            receiver_cb_interface.fifo_start_addr = fifo_start_addr;
-            receiver_cb_interface.fifo_rd_ptr = fifo_ptr;
-            receiver_cb_interface.sender_noc_x = sender_noc_x;
-            receiver_cb_interface.sender_noc_y = sender_noc_y;
-            receiver_cb_interface.aligned_pages_acked_ptr = aligned_pages_acked_addr;
-            DPRINT << "fifo_ptr " << fifo_ptr << ENDL();
-            // resize_remote_receiver_cb_interface<update_remote_over_noc>(cb_id, page_size, noc);
-        }
-        circular_buffer_config_addr += UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
-    }
-}
 
 template <bool update_remote_over_noc = false>
 inline void setup_remote_cb_interfaces(uint32_t tt_l1_ptr* cb_l1_base, uint32_t start_cb_index) {
