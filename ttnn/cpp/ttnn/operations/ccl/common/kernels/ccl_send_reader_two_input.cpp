@@ -27,8 +27,6 @@ using arg_idx_t = uint16_t;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-static constexpr bool use_packet_header_buffer = true;
-
 struct no_addrgen {};
 static constexpr size_t num_packet_headers_storable = 8;
 constexpr uint16_t my_chip_id = get_compile_time_arg_val(0);
@@ -627,11 +625,6 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
     if (!cb_pages_reservable_at_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages)) {
         return;
     }
-    // Hack for now - we will eventually move to having a packet header buffer that will render this pointless
-    uint16_t header_padding =
-        cmd_ctx.command_requires_fabric() && !use_packet_header_buffer
-            ? sizeof(tt::fabric::PacketHeader)
-            : 0;  // Fabric doesn't support reads, nor do current use cases expect/require this behaviour
 
     DPRINT << "tensor -> CB: " << (uint32_t)cmd_ctx.cb_id << "\n";
 
@@ -644,7 +637,6 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
     cb_reserve_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages);
     const uint32_t l1_write_addr_base = get_write_ptr(cmd_ctx.cb_id);
     uint32_t l1_write_addr = l1_write_addr_base;
-    l1_write_addr += header_padding;
 
     for (uint16_t i = 0; i < max_pages_readable; i += contig_pages_advanced) {
         DPRINT << "t_id: " << (uint32_t)cmd_specific_ctx.curr_tile_id << "\n";
@@ -694,17 +686,12 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     // address noc_index coordinates
     const size_t payload_size_bytes = static_cast<size_t>(contig_pages_advanced) * cmd_ctx.page_size;
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
-    const size_t payload_l1_address = l1_read_addr + (use_packet_header_buffer ? 0 : sizeof(tt::fabric::PacketHeader));
-    size_t packet_send_size_bytes = payload_size_bytes + /*(use_packet_header_buffer ? 0 :*/ sizeof(tt::fabric::PacketHeader)/*)*/;
-
-    auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(l1_read_addr);
-    if constexpr (use_packet_header_buffer) {
-        ASSERT(cmd_ctx.packet_header_buffer_addr != 0);
-        pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
-    }
+    const size_t payload_l1_address = l1_read_addr;
+    auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
     #ifdef DEBUG_PRINT_ENABLED
     pkt_hdr->reserved2 = my_chip_id;
     #endif
+    size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
     pkt_hdr->to_write()->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
         dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)});
     switch (cmd_ctx.current_cmd_header.dest_type) {
@@ -716,14 +703,9 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
 
             pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{unicast_args.distance_in_hops});
             fabric_connection.wait_for_empty_write_slot();
-            if constexpr (use_packet_header_buffer) {
-                fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_send_size_bytes);
-                fabric_connection.send_payload_flush_blocking_from_address(
-                        (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
-            } else {
-                fabric_connection.send_payload_flush_blocking_from_address(l1_read_addr, packet_send_size_bytes);
-            }
-
+            fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
+            fabric_connection.send_payload_flush_blocking_from_address(
+                    (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
         } break;
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
             noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
@@ -732,14 +714,9 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
                 pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                     1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
                 cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                if constexpr (use_packet_header_buffer) {
-                    cmd_ctx.fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_send_size_bytes);
-                    cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                            (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
-                } else {
-                    cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                        l1_read_addr, packet_send_size_bytes);
-                }
+                cmd_ctx.fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
+                cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                        (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
             }
 
             // Write the mcast packet (backward)
@@ -747,15 +724,9 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
                 pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                     1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                 cmd_ctx.fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-
-                if constexpr (use_packet_header_buffer) {
-                    cmd_ctx.fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_send_size_bytes);
-                    cmd_ctx.fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                            (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
-                } else {
-                    cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-                        l1_read_addr, packet_send_size_bytes);
-                }
+                cmd_ctx.fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
+                cmd_ctx.fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                        (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
             }
         } break;
         default: {
@@ -774,7 +745,6 @@ FORCE_INLINE void write_payload_then_advance_read_address(
     command_context_t<Addrgen>& cmd_ctx,
     wrapped_worker_slice_read_context& cmd_specific_ctx,
     size_t& l1_read_addr,
-    size_t header_padding,
     uint16_t contig_pages_advanced) {
     static_assert(
         ((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0,
@@ -807,8 +777,6 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& c
         return;
     }
     DPRINT << "CB -> tensor: " << (uint32_t)cmd_ctx.stream_id << "\n";
-    size_t header_padding = cmd_ctx.command_requires_fabric() && !use_packet_header_buffer
-        ? sizeof(tt::fabric::PacketHeader) : 0;
 
     wrapped_worker_slice_read_context& cmd_specific_ctx = cmd_ctx.cmd_specific_ctx.wrapped_worker_slice_read_ctx;
     const uint16_t max_pages_writable = std::min<size_t>(
@@ -839,7 +807,7 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& c
         contig_pages_advanced = std::min<uint16_t>(cmd_ctx.packet_size_in_pages - i, contig_pages_);
 
         write_payload_then_advance_read_address(
-            noc0_dest_noc_addr, cmd_ctx, cmd_specific_ctx, l1_read_addr, header_padding, contig_pages_advanced);
+            noc0_dest_noc_addr, cmd_ctx, cmd_specific_ctx, l1_read_addr, contig_pages_advanced);
 
         auto done_worker_slice = ttnn::ccl::v2::advance_worker_global_page(
             cmd_specific_ctx.curr_tile_id,  // Updated internally
