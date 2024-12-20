@@ -56,6 +56,12 @@ jobs:
             cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 5 -m "not disable_fast_runtime_mode"
           - name: ttnn group 6
             cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 6 -m "not disable_fast_runtime_mode"
+          - name: ttnn integration group 1
+            cmd: pytest tests/ttnn/integration_tests -m "not models_performance_bare_metal and not models_device_performance_bare_metal" -k "not stable_diffusion" -xv --splits 2 --group 1
+            ttnn_integration_test: true
+          - name: ttnn integration group 2
+            cmd: pytest tests/ttnn/integration_tests -m "not models_performance_bare_metal and not models_device_performance_bare_metal" -k "not stable_diffusion" -xv --splits 2 --group 2
+            ttnn_integration_test: true
           - name: ttnn fast runtime off
             cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
@@ -69,6 +75,13 @@ jobs:
       - "in-service"
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - uses: ./.github/actions/retry-command
+        if: ${{ matrix.test-group.ttnn_integration_test }}
+        with:
+          timeout-seconds: 100
+          max-retries: 10
+          backoff-seconds: 60
+          command: ./.github/scripts/cloud_utils/mount_weka.sh
       - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
@@ -76,16 +89,20 @@ jobs:
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
+      - name: Set WH eth dispatch for models tests
+        if: ${{ matrix.test-group.ttnn_integration_test }}
+        run: |
+          echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
           docker_username: ${{ github.actor }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
-          run_args: |
-            WHEEL_FILENAME=$(ls -1 *.whl)
-            pip3 install --user $WHEEL_FILENAME
-            ${{ matrix.test-group.cmd }}
+          docker_image_arch: ${{ inputs.arch }}
+          install_wheel: true
+          mount_mlperf_weka: ${{ matrix.test-group.ttnn_integration_test }}
+          run_args: ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
