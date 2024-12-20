@@ -36,7 +36,7 @@ Examples:
   $0 llama-3.1-70b-instruct main dev
 
   # Deploy with specific commit SHAs
-  $0 llama-3.1-70b-instruct v0.53.0-rc36 384f1790c3be16e1d1b10de07252be2e66d00935
+  $0 llama-3.1-70b-instruct v0.54.0-rc2 e3dd6f5d20ab4988dd781ddaa666bdd8825df58b
 
 EOF
     exit 0
