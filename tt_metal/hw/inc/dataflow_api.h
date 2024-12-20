@@ -713,34 +713,6 @@ std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
     return NOC_XY_ADDR(my_x[noc], my_y[noc], addr);
 }
 
-/**
- * Initiates an asynchronous read from a specified source node located at NOC
- * coordinates (x,y) at a local address (encoded as a uint64_t using \a
- * get_noc_addr function). The destination is in L1 memory on the Tensix core
- * executing this function call. Also, see \a noc_async_read_barrier.
- *
- * The source node can be either a DRAM bank, a Tensix core or a PCIe controller.
- *
- * Return value: None
- *
- * | Argument          | Description                                        | Data type | Valid range | required |
- * |-------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
- * | src_noc_addr      | Encoding of the source NOC location (x,y)+address  | uint64_t  | DOX-TODO(ref to explain valid
- * coords)    | Yes      | | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB
- * | Yes      | | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB | Yes |
- */
-inline void noc_async_read(
-    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
-    /*
-        Read requests - use static VC
-        Read responses - assigned VCs dynamically
-    */
-    WAYPOINT("NARW");
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-    ncrisc_noc_fast_read_any_len(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
-    WAYPOINT("NARD");
-}
-
 // TODO: write docs
 // this issues only a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
 FORCE_INLINE
@@ -774,6 +746,39 @@ void noc_async_read_one_packet(
     noc_reads_num_issued[noc] += 1;
 
     WAYPOINT("NAOD");
+}
+
+/**
+ * Initiates an asynchronous read from a specified source node located at NOC
+ * coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). The destination is in L1 memory on the Tensix core
+ * executing this function call. Also, see \a noc_async_read_barrier.
+ *
+ * The source node can be either a DRAM bank, a Tensix core or a PCIe controller.
+ *
+ * Return value: None
+ *
+ * | Argument          | Description                                        | Data type | Valid range | required |
+ * |-------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
+ * | src_noc_addr      | Encoding of the source NOC location (x,y)+address  | uint64_t  | DOX-TODO(ref to explain valid
+ * coords)    | Yes      | | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB
+ * | Yes      | | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB | Yes |
+ */
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
+inline void noc_async_read(
+    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    /*
+        Read requests - use static VC
+        Read responses - assigned VCs dynamically
+    */
+    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, noc);
+    } else {
+        WAYPOINT("NARW");
+        DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
+        ncrisc_noc_fast_read_any_len(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
+        WAYPOINT("NARD");
+    }
 }
 
 // TODO: write docs
@@ -1365,6 +1370,23 @@ FORCE_INLINE std::uint64_t get_noc_addr(
 }
 
 template <bool DRAM>
+FORCE_INLINE std::uint64_t get_noc_addr(
+    const uint32_t id, const InterleavedPow2AddrGenFast<DRAM>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
+    /*
+        Alternative API for getting the noc address when we are reading using a swizzled
+        layout. This version assumes bank unit size is a power of 2 and less than or equal to NOC_MAX_BURST_SIZE.
+        For arbitrary bank unit size, use get_noc_addr(const uint32_t id, const InterleavedOffset s)
+
+        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
+        bank for this unit of data.
+
+        InterleavedPow2AddrGenFast: Check struct for attribute definitions.
+    */
+
+    return s.get_noc_addr(id, offset, noc);
+}
+
+template <bool DRAM>
 FORCE_INLINE void noc_async_read_page(
     const uint32_t id,
     const InterleavedAddrGen<DRAM>& s,
@@ -1415,7 +1437,7 @@ template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_write(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size);
+        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
     } else {
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
@@ -2014,4 +2036,21 @@ uint64_t get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offse
         noc_addr = l1_bank_to_noc_xy[noc_index][bank_id];
     }
     return (noc_addr << NOC_ADDR_COORD_SHIFT) | (bank_address_offset);
+}
+
+template <bool DRAM, uint32_t page_size>
+FORCE_INLINE auto get_interleaved_addr_gen(uint32_t base_addr) {
+    constexpr bool is_pow_2 = is_power_of_2(page_size);
+    if constexpr (is_pow_2) {
+        constexpr uint32_t log2_page_size = __builtin_ctz(page_size);
+        if constexpr (page_size <= NOC_MAX_BURST_SIZE) {
+            return InterleavedPow2AddrGenFast<DRAM>{
+                .bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};
+        } else {
+            return InterleavedPow2AddrGen<DRAM>{
+                .bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};
+        }
+    } else {
+        return InterleavedAddrGen<DRAM>{.bank_base_address = base_addr, .page_size = page_size};
+    }
 }
