@@ -11,7 +11,7 @@
 
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
 
 inline uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {

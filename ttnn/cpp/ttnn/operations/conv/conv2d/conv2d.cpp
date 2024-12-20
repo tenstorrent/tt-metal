@@ -18,6 +18,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -87,7 +88,7 @@ Result conv2d(
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(
         init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false));
-    auto [input_tensor_post_tm, parallel_config, output_parallel_config, tensor_manipulated, use_non_tile_height] =
+    auto [input_tensor_post_tm, parallel_config, output_parallel_config, use_non_tile_height] =
         shard_or_reshard_tensor_if_required(
             device,
             input_tensor,
@@ -100,14 +101,6 @@ Result conv2d(
             mm_conv,
             auto_shard,
             is_non_tile_mul_width);
-    if (tensor_manipulated) {
-        if (conv_config.deallocate_activation) {
-            ttnn::Tensor input_tensor_ = input_tensor;  // TODO: allow in place modification of inputs to the op
-            input_tensor_.deallocate();
-            // ttnn::operations::core::deallocate(input_tensor_);
-        }
-        conv_config.deallocate_activation = true;
-    }
 
     uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     uint32_t nhw_out = batch_size * output_height * output_width;
@@ -171,13 +164,8 @@ Result conv2d(
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     if (mm_conv) {
-        Tensor input_tensor_post_tm_out = ttnn::to_layout(
+        input_tensor_post_tm = ttnn::to_layout(
             input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), device);
-        if (conv_config.deallocate_activation) {
-            input_tensor_post_tm.deallocate();
-            // ttnn::operations::core::deallocate(input_tensor_post_tm);
-        }
-        input_tensor_post_tm = input_tensor_post_tm_out;
     }
     // call optimized conv op or matmul micro op
     bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
@@ -219,15 +207,14 @@ Result conv2d(
                 !use_non_tile_height);
 
             if (conv_config.deallocate_activation) {
-                ttnn::operations::core::deallocate(input_tensor_post_tm);
+                input_tensor_post_tm.deallocate(/*force*/true);
             }
 
+            input_tensor_post_tm = std::move(halo_output);
+
             if (conv_config.reallocate_halo_output) {
-                auto move_output = ttnn::operations::core::reallocate(halo_output, input_tensor_post_tm.memory_config());
-                ttnn::operations::core::deallocate(halo_output);
-                halo_output = move_output;
+                input_tensor_post_tm = ttnn::move(input_tensor_post_tm);
             }
-            input_tensor_post_tm = halo_output;
         }
 
         // call conv micro op

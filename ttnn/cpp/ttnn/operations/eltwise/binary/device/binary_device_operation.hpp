@@ -34,6 +34,7 @@ struct BinaryDeviceOperation {
         const std::optional<float> scalar;
         const MemoryConfig memory_config;
         const DataType dtype;
+        const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
         tt::stl::hash::hash_t to_hash() const {
@@ -58,7 +59,7 @@ struct BinaryDeviceOperation {
             tt::tt_metal::CBHandle cb_src0;
             tt::tt_metal::CBHandle cb_src1;
             tt::tt_metal::CBHandle cb_output;
-            CoreCoord compute_with_storage_grid_size;
+            CoreRangeSet all_device_cores;
             uint32_t src0_single_tile_size;
             uint32_t src1_single_tile_size;
             uint32_t dst_single_tile_size;
@@ -85,7 +86,7 @@ struct BinaryDeviceOperation {
             tt::tt_metal::CBHandle cb_src0;
             tt::tt_metal::CBHandle cb_src1;
             tt::tt_metal::CBHandle cb_output;
-            CoreCoord compute_with_storage_grid_size;
+            CoreRangeSet all_device_cores;
             uint32_t src0_single_tile_size;
             uint32_t src1_single_tile_size;
             uint32_t dst_single_tile_size;

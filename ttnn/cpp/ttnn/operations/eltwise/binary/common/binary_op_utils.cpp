@@ -204,6 +204,14 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
             op_name = "xor_binary_tile";
             break;
+        case BinaryOpType::LEFT_SHIFT:
+            new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
+            op_name = "binary_left_shift_tile";
+            break;
+        case BinaryOpType::RIGHT_SHIFT:
+            new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});
+            op_name = "binary_right_shift_tile";
+            break;
         case BinaryOpType::LOGADDEXP:
             // PRE_IN0_0 ===> Applies prescaling for first input
             // PRE_IN1_0 ====> Applies prescaling for second input

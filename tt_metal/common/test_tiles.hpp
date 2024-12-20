@@ -14,7 +14,7 @@
 #include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "math.hpp"
 
 namespace tests::utils {

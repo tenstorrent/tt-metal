@@ -3,12 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // This code is temporarily copied from ttnn/cpp/ttnn/operations/datamovement/binary/device/ to demonstrate
-<<<<<<< HEAD
-// the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_16 below.
-=======
 // the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_2 below.
->>>>>>> 500923c2b7... #7493: Updating some ops to use c_2 instead of c_16 given the dependency on eltwise
-// When broadcating is properly supported we expect this code to be deleted or refactored substantially.
+// When broadcasting is properly supported we expect this code to be deleted or refactored substantially.
 
 #include <stdint.h>
 #include "dataflow_api.h"
