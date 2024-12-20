@@ -113,7 +113,7 @@ static const std::vector<dispatch_kernel_node_t> two_chip_arch_2cq = {
 };
 
 static const std::vector<dispatch_kernel_node_t> galaxy_nine_chip_arch_1cq = {
-    // For MMIO chip, TODO: investigate removing these, they aren't neede
+    // For MMIO chip, TODO: investigate removing these, they aren't needed
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
@@ -398,7 +398,6 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
         total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 36,
         "Unexpected target.");
     uint32_t num_devices = device_ids.size();
-    tt::log_debug("FD Config: {}/{} devices, {} HW CQs", num_devices, total_devices, num_hw_cqs);
     TT_ASSERT(num_devices > 0, "Can't determine dispatch architecture with no active devices.");
     TT_ASSERT(num_devices <= total_devices);
     std::vector<dispatch_kernel_node_t> nodes;
@@ -412,8 +411,6 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
             remote_devices.insert(id);
         }
     }
-    // Supported grid either has one remote per mmio or none
-    tt::log_debug("FD Config: mmio_count={}, remote_count={}", mmio_devices.size(), remote_devices.size());
 
     // Helper function to get nodes for single device
     auto populate_single_device = [&]() {
@@ -514,19 +511,6 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
         }
     }
 
-#if 0
-    for (auto &node : nodes) {
-        std::string upstream = "";
-        for (int id : node.upstream_ids)
-            upstream += fmt::format("{}, ", id);
-        std::string downstream = "";
-        for (int id : node.downstream_ids)
-            downstream += fmt::format("{}, ", id);
-
-        tt::log_info("[{}, {}, {}, {}, [{}], [{}], {}, {}, {}]", node.id, node.device_id, node.cq_id, node.kernel_type, upstream, downstream, node.my_noc, node.upstream_noc, node.downstream_noc);
-    }
-#endif
-
     return nodes;
 }
 
@@ -559,13 +543,11 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
     for (const auto& node : nodes) {
         for (int idx = 0; idx < DISPATCH_MAX_UPSTREAM; idx++) {
             if (node.upstream_ids[idx] >= 0) {
-                // tt::log_info("Node {} has upstream node: {}", node.id, node.upstream_ids[idx]);
                 node_id_to_kernel.at(node.id)->AddUpstreamKernel(node_id_to_kernel.at(node.upstream_ids[idx]));
             }
         }
         for (int idx = 0; idx < DISPATCH_MAX_DOWNSTREAM; idx++) {
             if (node.downstream_ids[idx] >= 0) {
-                // tt::log_info("Node {} has downstream node: {}", node.id, node.downstream_ids[idx]);
                 node_id_to_kernel.at(node.id)->AddDownstreamKernel(node_id_to_kernel.at(node.downstream_ids[idx]));
             }
         }
@@ -625,7 +607,7 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
     }
 
     // Write VC count to all tunnelers
-    std::map<chip_id_t, uint32_t> device_id_to_num_routers;  // Need to build this first. TODO: in the future walkt the
+    std::map<chip_id_t, uint32_t> device_id_to_num_routers;  // Need to build this first. TODO: in the future walk the
                                                              // graph to populate VC counts
     std::map<chip_id_t, uint32_t> device_id_to_remaining_routers;
     for (auto fd_kernel : node_id_to_kernel) {
@@ -688,13 +670,7 @@ std::unique_ptr<Program> create_and_compile_cq_program(Device* device) {
     for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
         if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
             node_id_to_kernel[idx]->AddDeviceAndProgram(device, cq_program_ptr.get());
-            tt::log_debug("GenerateStaticConfigs for Node {}", idx);
             node_id_to_kernel[idx]->GenerateStaticConfigs();
-            tt::log_debug(
-                "Node {} has coord: {} (phys={})",
-                idx,
-                node_id_to_kernel[idx]->GetLogicalCore().str(),
-                node_id_to_kernel[idx]->GetVirtualCore().str());
         }
     }
 
@@ -702,19 +678,13 @@ std::unique_ptr<Program> create_and_compile_cq_program(Device* device) {
     // for (auto &node_and_kernel : node_id_to_kernel) {
     for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
         if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
-            tt::log_debug("GenerateDependentConfigs for Node {}", idx);
             node_id_to_kernel[idx]->GenerateDependentConfigs();
-            tt::log_debug("CreateKernel for Node {}", idx);
             node_id_to_kernel[idx]->CreateKernel();
         }
     }
 
     // Compile the program and return it so Device can register it
     detail::CompileProgram(device, *cq_program_ptr, /*fd_bootloader_mode=*/true);
-    tt::log_debug(
-        "Done Compiling CQ Program for Device {}, grid size = {}",
-        device->id(),
-        device->compute_with_storage_grid_size().str());
     return cq_program_ptr;
 }
 
@@ -750,8 +720,6 @@ void configure_dispatch_cores(Device* device) {
                     cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                 std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
-                tt::log_warning(
-                    "Configure CQ Writer (device {} core {})", mmio_device->id(), completion_q_writer_location.str());
                 detail::WriteToDeviceL1(
                     mmio_device,
                     completion_q_writer_location,

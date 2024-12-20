@@ -347,7 +347,6 @@ void DispatchKernel::ConfigureCore() {
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     uint32_t dispatch_message_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    tt::log_warning("Configure Dispatch (device {} core {})", device_->id(), logical_core_.str());
     for (uint32_t i = 0; i < dispatch_constants::DISPATCH_MESSAGE_ENTRIES; i++) {
         uint32_t dispatch_s_sync_sem_addr =
             dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
@@ -359,7 +358,6 @@ void DispatchKernel::ConfigureCore() {
 
     // For DISPATCH_D, need to clear completion q events
     if (!static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
-        tt::log_warning("Configure Dispatch D Counters (device {} core {})", device_->id(), logical_core_.str());
         uint32_t completion_q0_last_event_ptr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
         uint32_t completion_q1_last_event_ptr =
