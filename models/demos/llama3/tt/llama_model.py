@@ -98,7 +98,7 @@ class TtTransformer(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
 
-    def prepare_inputs_prefill(self, tokens, page_table=None):
+    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
@@ -108,7 +108,7 @@ class TtTransformer(LightweightModule):
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
         dims = (None, -1) if self.args.is_galaxy else (None, None)
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
+        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.args.cluster_shape)
 
         tokens = ttnn.from_torch(
             tokens,
@@ -117,8 +117,8 @@ class TtTransformer(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=mesh_mapper,
         )
-
         tokens_embd = self.embd(tokens)
+        tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         tt_rot_mats_prefill = get_prefill_rot_mat(
             self.args.head_dim,
@@ -126,6 +126,7 @@ class TtTransformer(LightweightModule):
             self.mesh_device,
             seq_len=S,
             scale_factor=self.args.rope_scaling_factor,
+            start_pos=start_pos,
         )
 
         if page_table is not None:
@@ -139,7 +140,18 @@ class TtTransformer(LightweightModule):
         else:
             tt_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill, tt_page_table
+        if chunk_page_table is not None:
+            tt_chunk_page_table = ttnn.from_torch(
+                chunk_page_table,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_chunk_page_table = None
+
+        return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -163,7 +175,7 @@ class TtTransformer(LightweightModule):
         assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
 
         dims = (None, -1) if self.args.is_galaxy else (None, None)
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
+        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.args.cluster_shape)
 
         tokens = ttnn.from_torch(
             tokens,
@@ -246,7 +258,10 @@ class TtTransformer(LightweightModule):
         rot_mats,
         user_id,
         page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
         get_last_token=-1,
+        kv_cache=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -256,20 +271,16 @@ class TtTransformer(LightweightModule):
             x,
             current_pos=None,
             rot_mats=rot_mats,
-            transformation_mats=None,
             user_id=user_id,
             mode="prefill",
             page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
+            kv_cache=kv_cache,
         )
 
-    def ttnn_decode_forward(
-        self,
-        x,
-        current_pos,
-        rot_mats,
-        page_table=None,
-    ):
+    def ttnn_decode_forward(self, x, current_pos, rot_mats, page_table=None, kv_cache=None):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
@@ -280,6 +291,7 @@ class TtTransformer(LightweightModule):
             rot_mats=rot_mats,
             mode="decode",
             page_table=page_table,
+            kv_cache=kv_cache,
         )
 
     def forward(
@@ -290,14 +302,27 @@ class TtTransformer(LightweightModule):
         user_id=0,
         mode="decode",
         page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
         get_last_token=-1,
+        kv_cache=None,
     ):
         # No-op if callers already provide the right memory config
         if mode == "decode" and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
-        for layer in self.layers:
-            x = layer(x, current_pos, rot_mats, user_id, mode, page_table)
+        for i, layer in enumerate(self.layers):
+            x = layer(
+                x,
+                current_pos,
+                rot_mats,
+                user_id,
+                mode,
+                page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                kv_cache=kv_cache[i] if kv_cache is not None else None,
+            )
 
         if mode == "prefill" and get_last_token == -1:
             return x

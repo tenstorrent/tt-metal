@@ -60,12 +60,18 @@ run_t3000_llama3_tests() {
   # Llama3.2-11B
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
+  # Install Vision-specific packages
+  pip install -r models/demos/llama3/requirements.txt
+
   # Run test model for llama3 - 1B, 3B, 8B and 11B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k full ; fail+=$?
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model_prefill.py ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
+
+  # Run chunked prefill test for llama3-1B
+  LLAMA_DIR=$llama1b WH_ARCH_YAML=$wh_arch_yaml pytest models/demos/llama3/tests/test_llama_chunked_generation.py; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
