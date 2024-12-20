@@ -61,9 +61,9 @@ void nt_memcpy_128b(uint8_t* __restrict dst, const uint8_t* __restrict src, size
                 blk = simde_mm_stream_load_si128((simde__m128i*)src);
             } else {
                 if constexpr (aligned_load) {
-                    blk = _mm_load_si128((simde__m128i*)src);
+                    blk = simde_mm_load_si128((simde__m128i*)src);
                 } else {
-                    blk = _mm_loadu_si128((simde__m128i*)src);
+                    blk = simde_mm_loadu_si128((simde__m128i*)src);
                 }
             }
             /* non-temporal store */
