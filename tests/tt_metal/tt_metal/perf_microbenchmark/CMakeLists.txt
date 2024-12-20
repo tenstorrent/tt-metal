@@ -60,10 +60,8 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     target_include_directories(
         ${TEST_TARGET}
         PRIVATE
-            ${PROJECT_SOURCE_DIR}
-            ${PROJECT_SOURCE_DIR}/tt_metal
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
-            ${PROJECT_SOURCE_DIR}/tt_metal/common
             ${PROJECT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
