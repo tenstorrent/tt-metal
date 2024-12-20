@@ -281,8 +281,7 @@ def test_post_allgather_layernorm(
 @pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
-@pytest.mark.parametrize("core_grid", ((4, 8),))
-@pytest.mark.parametrize("grid_offset", [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)])
+@pytest.mark.parametrize("core_grid, grid_offset", [((4, 8), ttnn.CoreCoord(0, 0)), ((4, 4), ttnn.CoreCoord(1, 0))])
 def test_simulated_distributed_layernorm(
     device,
     use_program_cache,
