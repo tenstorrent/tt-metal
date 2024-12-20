@@ -29,11 +29,13 @@ def test_abs(input_shape, device):
         partial(torch_random, low=-100, high=100, dtype=torch.float32), ttnn.int32
     )(input_shape)
 
+    torch_input_tensor_a_bias = torch_input_tensor_a + 2000
+
     golden_function = ttnn.get_golden_function(ttnn.abs)
     torch_output_tensor = golden_function(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
+        torch_input_tensor_a_bias,
         dtype=ttnn.int32,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -43,6 +45,7 @@ def test_abs(input_shape, device):
     start_time = start_measuring_time()
     result = ttnn.abs(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(result)
+    # output_tensor = 2000 - output_tensor
     e2e_perf = stop_measuring_time(start_time)
 
     print(torch_input_tensor_a)
