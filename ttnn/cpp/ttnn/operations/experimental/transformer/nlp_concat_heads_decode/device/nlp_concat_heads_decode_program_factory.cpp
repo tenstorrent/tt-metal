@@ -162,19 +162,19 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    uint32_t head_tiles = head_dim / TILE_WIDTH;
-    uint32_t head_size = head_tiles * single_tile_size;
+    const uint32_t head_tiles = head_dim / TILE_WIDTH;
+    const uint32_t head_size = head_tiles * single_tile_size;
 
-    uint32_t element_size = input_tensor.element_size();
-    uint32_t sub_tile_line_bytes = 16 * element_size;
-    auto q_shard_spec = output.shard_spec().value();
-    auto q_cores = q_shard_spec.grid;
-    auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
-    auto in_shard_spec = input_tensor.shard_spec().value();
-    auto in_cores = in_shard_spec.grid;
-    auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
+    const uint32_t element_size = input_tensor.element_size();
+    const uint32_t sub_tile_line_bytes = 16 * element_size;
+    const auto q_shard_spec = output.shard_spec().value();
+    const auto q_cores = q_shard_spec.grid;
+    const auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
+    const auto in_shard_spec = input_tensor.shard_spec().value();
+    const auto in_cores = in_shard_spec.grid;
+    const auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
     uint32_t q_output_cb_index = CBIndex::c_16;
     tt_metal::CircularBufferConfig cb_q_output_config =
@@ -186,11 +186,11 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
     uint32_t q_base_addr = input_tensor.buffer()->address();
 
     // cores to read and write to output
-    uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
+    const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
     const auto& cores = corerange_to_cores(q_cores, num_cores, true);
 
     // cores for input
-    uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
+    const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
     const auto& in_cores_vec = corerange_to_cores(in_cores, in_num_cores, true);
 
     std::vector<uint32_t> noc_x_coords;

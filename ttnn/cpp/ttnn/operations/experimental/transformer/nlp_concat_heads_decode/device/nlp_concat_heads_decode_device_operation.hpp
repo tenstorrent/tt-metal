@@ -20,6 +20,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
 
 struct NLPConcatHeadsDecodeDeviceOperation {
     const uint32_t num_heads;
+    const bool on_subcoregrids = false;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;

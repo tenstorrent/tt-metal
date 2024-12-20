@@ -33,9 +33,11 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     auto shard_spec = input_tensor.shard_spec().value();
     TT_FATAL(shard_spec.shape[1] == input_tensor.get_legacy_shape()[-1], "Error");
     TT_FATAL(shard_spec.shape[0] == input_tensor.get_legacy_shape()[-2], "Error");
-    auto shard_grid = shard_spec.grid.bounding_box().grid_size();
-    auto num_cores = shard_grid.x * shard_grid.y;
-    // TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
+    auto num_cores = shard_spec.grid.num_cores();
+    TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
+    if (this->on_subcoregrids) {
+        TT_FATAL(num_cores >= this->num_heads, "For subcoregrid inputs, we only support num_heads<=num_cores");
+    }
 }
 
 std::vector<tt::tt_metal::LegacyShape> NLPConcatHeadsDecodeDeviceOperation::compute_output_shapes(
@@ -66,17 +68,15 @@ std::vector<Tensor> NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(
     auto head_dim = input_shape[3];
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
     auto batch = output_shape[2];
-    // when input is sharded on subcoregrids
-    auto input_core_grid = input_tensor.shard_spec().value().grid.ranges();
     CoreRangeSet output_core_grid;
-    if (input_core_grid.size() > 1) {
-        auto start_coord = input_core_grid[0].start_coord;
-        // TODO: pass given subcoregrid to the function
-        output_core_grid = num_cores_to_corerangeset_in_subcoregrids(
-            start_coord, num_heads, input_tensor.shard_spec().value().grid, true);
+    if (this->on_subcoregrids) {
+        const auto input_core_ranges = input_tensor.shard_spec().value().grid.ranges();
+        CoreRangeSet input_core_grid = input_tensor.shard_spec().value().grid;
+        const auto start_coord = input_core_ranges[0].start_coord;
+        output_core_grid = num_cores_to_corerangeset_in_subcoregrids(start_coord, num_heads, input_core_grid, true);
     } else {
-        auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-        output_core_grid = num_cores_to_corerangeset(num_heads, core_grid, true);
+        output_core_grid =
+            num_cores_to_corerangeset(num_heads, input_tensor.device()->compute_with_storage_grid_size(), true);
     }
 
     ShardSpec shard_spec{output_core_grid, {batch, head_dim}};
@@ -93,7 +93,7 @@ operation::ProgramWithCallbacks NLPConcatHeadsDecodeDeviceOperation::create_prog
     auto& output_tensor = output_tensors.at(0);
 
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    if (input_tensor.shard_spec().value().grid.ranges().size() > 1) {
+    if (this->on_subcoregrids) {
         return multi_core_nlp_concat_heads_decode_subcoregrids(
             input_tensor, output_tensor, compute_with_storage_grid_size);
     }
