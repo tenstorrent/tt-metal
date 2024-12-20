@@ -54,7 +54,9 @@ def test_var(device, batch_size, h, w, dim):
 @pytest.mark.parametrize("c", [1, 4, 8, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
-@pytest.mark.parametrize("dim", [None, [0, 1, 2, 3]])
+@pytest.mark.parametrize(
+    "dim", [None, [], 0, 1, 2, 3, [0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3], [0, 1, 2], [1, 2, 3], [0, 1, 2, 3]]
+)
 @pytest.mark.parametrize("keepdim", [True])
 def test_sum_4d_tensors(device, batch_size, c, h, w, dim, keepdim):
     torch.manual_seed(0)
