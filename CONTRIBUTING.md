@@ -88,6 +88,15 @@ Then to check if Hugepages is enabled:
 python3 infra/machine_setup/scripts/setup_hugepages.py check
 ```
 
+### Software dependencies for codebase contributions
+1. Install dependencies
+
+```sh
+sudo apt install pandoc libtbb-dev libcapstone-dev pkg-config
+```
+
+2. Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
+
 ## Developing tt-metal
 
 Currently, the most convenient way to develop is to do so on our cloud
