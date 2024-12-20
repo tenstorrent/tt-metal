@@ -1633,7 +1633,9 @@ void EnqueueProgramCommand::process() {
     // Calculate all commands size and determine how many fetch q entries to use
     // Preamble, some waits and stalls
     // can be written directly to the issue queue
+    this->write_program_command_sequence(program.get_cached_program_command_sequences().begin().second());
     if (!is_cached) {
+        // program.lower(this->device);
         ProgramCommandSequence program_command_sequence;
         this->assemble_preamble_commands(program_command_sequence, kernel_config_addrs);
         this->assemble_stall_commands(program_command_sequence, true);
@@ -2518,7 +2520,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
         program.set_program_binary_status(device->id(), ProgramBinaryStatus::InFlight);
     }
-
+    program.lower(device);
     program.set_last_used_command_queue_for_testing(this);
 
 #ifdef DEBUG

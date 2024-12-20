@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/program/program.hpp"
-
+#include "tt_metal/impl/program/program_dispatch_utils.hpp"
 #include <range/v3/view/filter.hpp>
 #include <range/v3/view/transform.hpp>
 
@@ -1158,105 +1157,18 @@ void detail::Program_::populate_dispatch_data(Device *device) {
     return;
 }
 
-uint32_t configure_rta_offsets_for_kernel_groups(uint32_t programmable_core_type_index, std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels, std::vector<KernelGroup>& kernel_groups, uint32_t base_offset) {
-    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
-    std::vector<uint32_t> max_rtas(processor_classes);
-    uint32_t max_unique_rta_size = 0;
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-
-    for (auto& kg : kernel_groups) {
-        for (std::size_t dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            max_rtas[dispatch_class] = 0;
-            auto& optional_id = kg.kernel_ids[dispatch_class];
-            if (optional_id) {
-                auto kernel = kernels.at(optional_id.value());
-                for (const CoreRange& core_range : kg.core_ranges.ranges()) {
-                    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                            CoreCoord core_coord(x, y);
-                            max_rtas[dispatch_class] =
-                                std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
-                        }
-                    }
-                }
-            }
-        }
-        uint32_t offset = 0;
-        for (std::size_t dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            auto& optional_id = kg.kernel_ids[dispatch_class];
-            kg.rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
-            if (optional_id) {
-                auto kernel = kernels.at(optional_id.value());
-                kernel->set_runtime_args_count(kg.core_ranges, max_rtas[dispatch_class]);
-                kg.launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
-                offset += max_rtas[dispatch_class] * sizeof(uint32_t);
-            } else {
-                kg.launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = 0;
-            }
-        }
-        kg.total_rta_size = offset;
-        offset = align(offset, l1_alignment);
-        max_unique_rta_size = std::max(offset, max_unique_rta_size);
-    }
-    return max_unique_rta_size;
-}
-
-uint32_t configure_crta_offsets_for_kernel_groups(uint32_t programmable_core_type_index, std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels, std::vector<KernelGroup>& kernel_groups, uint32_t crta_base_offset, std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets, std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
-    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
-    std::vector<uint32_t> max_crtas(processor_classes);
-
-    for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-        max_crtas[dispatch_class] = 0;
-    }
-    // Find the max # common RTAs across all kernels for each dispatch class
-    for (auto& kernel_info : kernels) {
-        auto kernel = kernel_info.second;
-        uint32_t dispatch_class = kernel->dispatch_class();
-        max_crtas[dispatch_class] =
-            std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
-    }
-
-    // Derive crta offsets and sizes per dispatch class
-    uint32_t offset = 0;
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-        uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
-        crta_offsets[dispatch_class] = crta_base_offset + offset;
-        crta_sizes[dispatch_class] = size;
-        offset += size;
-        offset = align(offset, l1_alignment);
-    }
-    uint32_t total_crta_size = offset;
-
-    // Set the runtime_args_data sizing info based on the shared max
-    for (auto& kernel_info : kernels) {
-        auto kernel = kernel_info.second;
-        uint32_t dispatch_class = kernel->dispatch_class();
-        kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
-    }
-    // Set the kernel group common runtime arg offsets use in the launch message
-    for (auto& kg : kernel_groups) {
-        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            kg.launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset = crta_offsets[dispatch_class];
-        }
-    }
-    return total_crta_size;
-}
-
 uint32_t detail::Program_::finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset) {
 
     // Iterate over kernels in the program and "level" the number of RTAs based on the max
     // Unique RTAs are packed across dispatch classes
     // Common RTAs come after unique RTAs
-    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
-
     CoreType core_type = hal.get_core_type(programmable_core_type_index);
     HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
 
-    uint32_t max_unique_rta_size = configure_rta_offsets_for_kernel_groups(programmable_core_type_index, this->kernels_[programmable_core_type_index], this->get_kernel_groups(programmable_core_type_index), base_offset);
+    uint32_t max_unique_rta_size = program_utils::configure_rta_offsets_for_kernel_groups(programmable_core_type_index, this->kernels_[programmable_core_type_index], this->get_kernel_groups(programmable_core_type_index), base_offset);
     this->get_program_config(programmable_core_type_index).rta_offset = base_offset;
     uint32_t crta_base_offset = base_offset + max_unique_rta_size;
-    uint32_t total_crta_size = configure_crta_offsets_for_kernel_groups(programmable_core_type_index, this->kernels_[programmable_core_type_index], this->get_kernel_groups(programmable_core_type_index), crta_base_offset, this->get_program_config(programmable_core_type_index).crta_offsets, this->get_program_config(programmable_core_type_index).crta_sizes);
+    uint32_t total_crta_size = program_utils::configure_crta_offsets_for_kernel_groups(programmable_core_type_index, this->kernels_[programmable_core_type_index], this->get_kernel_groups(programmable_core_type_index), crta_base_offset, this->get_program_config(programmable_core_type_index).crta_offsets, this->get_program_config(programmable_core_type_index).crta_sizes);
 
 
     // TODO: this is asserted here as the leveling above can break the limits enforced by the API
@@ -1276,21 +1188,7 @@ ProgramConfig& Program::get_program_config(uint32_t programmable_core_type_index
 }
 
 uint32_t detail::Program_::finalize_sems(uint32_t programmable_core_type_index, uint32_t base_offset) {
-
-    int max_id = -1;
-    CoreType core_type = hal.get_core_type(programmable_core_type_index);
-    for (const auto & sem : this->semaphores_) {
-        if (sem.core_type() == core_type && (int)sem.id() > max_id) {
-            max_id = sem.id();
-        }
-    }
-
-    uint32_t sem_size = (max_id + 1) * hal.get_alignment(HalMemType::L1);
-
-    this->program_configs_[programmable_core_type_index].sem_offset = base_offset;
-    this->program_configs_[programmable_core_type_index].sem_size = sem_size;
-
-    return base_offset + sem_size;
+    return program_utils::finalize_sems(programmable_core_type_index, base_offset, this->semaphores_, this->program_configs_[programmable_core_type_index].sem_offset, this->program_configs_[programmable_core_type_index].sem_size);
 }
 
 void detail::Program_::set_launch_msg_sem_offsets() {
@@ -1306,104 +1204,11 @@ void detail::Program_::set_launch_msg_sem_offsets() {
 }
 
 uint32_t detail::Program_::finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset) {
-    uint32_t max_local_end_index = 0;
-    uint32_t min_remote_start_index = NUM_CIRCULAR_BUFFERS;
-    // TODO: has to be better way to do this and don't read from volatile
-    auto& kernel_groups = this->get_kernel_groups(programmable_core_type_index);
-    for (auto& kg : kernel_groups) {
-        max_local_end_index =
-            std::max(max_local_end_index, (uint32_t)kg.launch_msg.kernel_config.max_local_cb_end_index);
-        min_remote_start_index =
-            std::min(min_remote_start_index, (uint32_t)kg.launch_msg.kernel_config.min_remote_cb_start_index);
-    }
-
-    uint32_t local_cb_size = max_local_end_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-    uint32_t remote_cb_offset = base_offset + local_cb_size;
-    for (auto& kg : kernel_groups) {
-        kg.launch_msg.kernel_config.local_cb_offset = base_offset;
-        kg.launch_msg.kernel_config.remote_cb_offset = remote_cb_offset;
-    }
-
-    uint32_t remote_cb_size = (NUM_CIRCULAR_BUFFERS - min_remote_start_index) *
-                              UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-    uint32_t total_cb_size = local_cb_size + remote_cb_size;
-    this->program_configs_[programmable_core_type_index].cb_offset = base_offset;
-    this->program_configs_[programmable_core_type_index].cb_size = total_cb_size;
-    this->program_configs_[programmable_core_type_index].local_cb_size = local_cb_size;
-
-    return align(base_offset + total_cb_size, hal.get_alignment(HalMemType::L1));
+    return program_utils::finalize_cbs(programmable_core_type_index, this->get_kernel_groups(programmable_core_type_index), base_offset, this->program_configs_[programmable_core_type_index].cb_offset, this->program_configs_[programmable_core_type_index].cb_size, this->program_configs_[programmable_core_type_index].local_cb_size);
 }
 
 uint32_t detail::Program_::finalize_kernel_bins(Device *device, uint32_t programmable_core_type_index, uint32_t base_offset) {
-
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-
-    uint32_t max_offset = 0;
-    for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
-        uint32_t offset = base_offset;
-
-        for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
-            auto& optional_id = kg.kernel_ids[class_id];
-            if (optional_id) {
-                const auto kernel = this->get_kernel(optional_id.value());
-                std::vector<ll_api::memory const*> const& binaries = kernel->binaries(device->build_key());
-                // TODO: this is really ugly, save me future-HAL!
-                if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
-                    uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
-
-                    if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
-                        kg.kernel_bin_sizes[0] = binary_packed_size;
-                        kg.kernel_text_offsets[0] = offset;
-                        kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
-                        offset += binary_packed_size;
-                        offset = align(offset, l1_alignment);
-                    } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
-                        kg.kernel_bin_sizes[1] = binary_packed_size;
-                        kg.kernel_text_offsets[1] = offset;
-                        kg.launch_msg.kernel_config.kernel_text_offset[1] = offset;
-                        offset += binary_packed_size;
-                        offset = align(offset, l1_alignment);
-
-                        uint32_t binary_text_size = kernel->get_binary_text_size(device, 0);
-                        TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
-                        kg.launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
-                    } else {
-                        constexpr uint32_t max_math_processors_count = 3;
-                        for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count; proc_type_index++) {
-                            uint32_t binary_packed_size = kernel->get_binary_packed_size(device, proc_type_index);
-                            kg.kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
-                            kg.kernel_text_offsets[2 + proc_type_index] = offset;
-                            kg.launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
-                            offset += binary_packed_size;
-                            offset = align(offset, l1_alignment);
-                        }
-                    }
-                } else {
-                    uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
-                    kg.kernel_bin_sizes[class_id] = binary_packed_size;
-
-                    // No kernel config buffer on active eth yet
-                    if (hal.get_programmable_core_type(kg.programmable_core_type_index) ==
-                        HalProgrammableCoreType::IDLE_ETH) {
-                        kg.kernel_text_offsets[class_id] = offset;
-                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
-                        offset += binary_packed_size;
-                        offset = align(offset, l1_alignment);
-                    } else {
-                        kg.kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
-                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0]->get_text_addr();
-                    }
-                }
-            }
-        }
-
-        max_offset = std::max(offset, max_offset);
-    }
-
-    this->program_configs_[programmable_core_type_index].kernel_text_offset = base_offset;
-    this->program_configs_[programmable_core_type_index].kernel_text_size = max_offset - base_offset;
-
-    return max_offset;
+    return program_utils::finalize_kernel_bins(device, programmable_core_type_index, this->kernels_[programmable_core_type_index], this->get_kernel_groups(programmable_core_type_index), base_offset, this->program_configs_[programmable_core_type_index].kernel_text_offset, this->program_configs_[programmable_core_type_index].kernel_text_size);
 }
 
 uint32_t& detail::Program_::get_program_config_size(uint32_t programmable_core_type_index) {
@@ -1505,6 +1310,29 @@ void detail::Program_::finalize(Device *device) {
     }
 
     finalized_ = true;
+}
+
+void Program::lower(Device* device) {
+    bool is_cached = this->is_cached();
+    if (!is_cached) {
+        uint64_t command_hash = device->build_key();
+        if (not hal.is_coordinate_virtualization_enabled()) {
+            // When coordinate virtualization is not enabled, explicitly encode the device
+            // id into the command hash, to always assert on programs being reused across devices.
+            command_hash = (command_hash << 32) | (device->id());
+        }
+        auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
+        auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
+        TT_FATAL(cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
+        auto sub_device_id = this->determine_sub_device_ids(device)[0];
+        ProgramCommandSequence program_command_sequence;
+        program_utils::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
+        program_utils::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_utils::assemble_runtime_args_commands(program_command_sequence, *this, device);
+        program_utils::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
+        cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
+        this->set_cached();
+    }
 }
 
 void Program::allocate_kernel_bin_buf_on_device(Device* device) { pimpl_->allocate_kernel_bin_buf_on_device(device); }
