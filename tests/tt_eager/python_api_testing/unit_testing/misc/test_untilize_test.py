@@ -53,8 +53,7 @@ def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
         use_multicore=True,
         sub_core_grids=ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6)),
             }
         ),
     )
