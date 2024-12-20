@@ -116,6 +116,8 @@ The diagram below illustrates the corresponding Downsample1 module:
 ### 4.3 Trace and 2cq
   - You may consider a naive TTNN implementation by taking the example of [YOLO-v4 basic demo](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/demo/demo.py). Then consider studying [the demo implementated using trace and 2 command quueues available in TTNN](https://github.com/tenstorrent/tt-metal/blob/774156701fe466c47d78fbdbd8265811801773f1/models/demos/yolov4/tests/yolov4_perfomant_webdemo.py). 
 
+  - As you start on implementing trace + 2cq for your model, we recommend getting your model to work with trace only first. Then get it working with 2cq only. Finally, combine the two. Also, it is the recommended flow to have seprate pytests for each case. 
+
   - To understand trace technique for optimization refer to [Metal Trace Documentation](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#1-metal-trace) 
 
   - To understand the multiple command queues technique for optimization refer to [Multiple Command Queues Documentation](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md#2-multiple-command-queues) 
