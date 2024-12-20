@@ -216,7 +216,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                                       (std::uint32_t)block_size};
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_legacy_shape()[-1] * gamma.value().element_size();
+        auto gamma_stick_size = gamma.value().get_tensor_spec().physical_shape().width() * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
@@ -227,7 +227,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             reader_compile_time_args.push_back(gamma_stick_size);
         }
     } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().get_legacy_shape()[-1] * beta.value().element_size();
+        auto beta_stick_size = beta.value().get_tensor_spec().physical_shape().width() * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         reader_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
@@ -619,7 +619,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t post_all_gather_stats_block_tiles = 1;
     uint32_t num_distributed_devices = 1;
     if (is_post_all_gather && stats.has_value()) {
-        post_all_gather_stats_block_tiles = stats.value().get_legacy_shape()[-1] / TILE_WIDTH;
+        post_all_gather_stats_block_tiles = stats.value().get_tensor_spec().physical_shape().width() / TILE_WIDTH;
         num_distributed_devices = post_all_gather_stats_block_tiles / pre_all_gather_stats_block_tiles;
     }
 
@@ -1003,7 +1003,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)block_wt};
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_legacy_shape()[-1] * gamma.value().element_size();
+        auto gamma_stick_size = gamma.value().get_tensor_spec().physical_shape().width() * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
@@ -1017,7 +1017,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             writer_mcast_receiver_compile_time_args.push_back(gamma_stick_size);
         }
     } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().get_legacy_shape()[-1] * beta.value().element_size();
+        auto beta_stick_size = beta.value().get_tensor_spec().physical_shape().width() * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
