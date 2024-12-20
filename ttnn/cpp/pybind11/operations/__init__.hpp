@@ -46,6 +46,7 @@
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/mul_add/mul_add_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -162,6 +163,9 @@ void py_module(py::module& module) {
 
     auto m_bernoulli = module.def_submodule("bernoulli", "bernoulli operations");
     bernoulli::bind_bernoulli_operation(m_bernoulli);
+
+    auto m_mul_add = module.def_submodule("mul_add", "mul add operation");
+    mul_add::py_module(m_mul_add);
 }
 }  // namespace operations
 
