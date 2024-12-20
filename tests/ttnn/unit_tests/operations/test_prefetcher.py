@@ -459,32 +459,6 @@ def test_run_prefetcher(
         tensor_addrs, device=device, dtype=ttnn.uint32, memory_config=tensor_addrs_mem_config
     )
 
-    ##### Output mem config #####
-    reader_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            sender_core_range_set,
-            [
-                32,  # K * num_tensors,
-                32,  # N // len(sender_cores),
-            ],  # Assuming all tensors have the same shape TODO: extend to different shapes
-            ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-
-    writer_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            receiver_core_range_set,
-            [K * num_tensors, N // receiver_core_range_set.num_cores()],
-            ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
-
     ##### Setup up sub devices #####
     prefetcher_sub_device = ttnn.SubDevice([sender_core_range_set])
     worker_sub_device = ttnn.SubDevice([worker_cores_range_set])
@@ -642,8 +616,6 @@ def test_run_prefetcher(
             tt_tensor_addrs,
             num_layers,
             global_circular_buffer,
-            reader_output_mem_config,
-            writer_output_mem_config,
         )
 
         outputs_dram = []
