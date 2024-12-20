@@ -138,16 +138,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
         shard_orientation,
         !use_non_tile_height);
 
-    auto output_parallel_config = parallel_config;
-    if(conv_config.shard_layout.value() == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !mm_conv) {
-        uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
-        output_parallel_config = {
-            .grid = num_cores_to_corerangeset( find_closest_largest_divisor(tt::div_up(out_channels, tt::constants::TILE_WIDTH),max_num_cores), compute_grid_size, true),
-            .shard_scheme = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
-            .shard_orientation = parallel_config.shard_orientation
-        };
-        log_debug(tt::LogOp, "Changing width sharded output grid to  {}",output_parallel_config.grid);
-    }
+    ParallelConfig output_parallel_config =
+        determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, mm_conv);
 
     uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
@@ -196,6 +188,9 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     const bool parameters_on_device,
     bool is_non_tile_mul_width) {
 
+    std::cout << "pcwbmtd " << input_channels_alignment << " " << weight_block_h_ntiles << " " << weight_block_w_ntiles << " " << groups << " " << act_block_h_ntiles << " " << input_width << " " << is_non_tile_mul_width << std::endl;
+    std::cout << "parallel config" << (int)parallel_config.shard_scheme << " " << (int)parallel_config.shard_orientation << std::endl;
+
     validate_weight_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
@@ -230,6 +225,8 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
     uint32_t window_w = weights_shape[3];
+
+    std::cout << "for bias -> " << out_channels << std::endl;
 
     uint32_t num_cores_channels = get_num_cores_channels_from_parallel_config(parallel_config);
     uint32_t out_channels_padded = tt::round_up(out_channels, num_cores_channels * tt::constants::TILE_WIDTH);
@@ -316,6 +313,7 @@ ttnn::Tensor prepare_conv_weights(
     T *device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
+    std::cout << "prepare conv weight" << std::endl;
     TT_FATAL(!ttnn::is_tensor_on_device_or_multidevice(weight_tensor), "Error: weight tensor must be on host for preparation.");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(init_device_compute_kernel_config(
@@ -407,6 +405,8 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
 
     TT_FATAL(!ttnn::is_tensor_on_device_or_multidevice(bias_tensor), "Error: bias tensor must be on host for preparation.");
+
+    std::cout << "prepare conv bias" << std::endl;
 
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
     const uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
