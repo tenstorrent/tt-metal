@@ -70,8 +70,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     if (device->arch() == tt::ARCH::GRAYSKULL)
         max_rows_for_reduction /= 2; */
 
-    printf("in_tiles_c: %d\n", in_ntiles_c);
-
     // Hardware can do reduction of 8 tiles at a time.
     // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -109,7 +107,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // CBs
     uint32_t multi_buffering_factor = 1;
 
-    uint32_t split_reader = 0;
+    uint32_t split_reader = 1;
 
     // scalar CB as coefficient of reduce
     uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
@@ -158,6 +156,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             ? (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
             : input_shape[3] / num_shards_c * kernel_size_hw_padded;
         if (is_wide_reduction) {
+            TT_FATAL(
+                in_ntiles_c % MAX_TILES_PER_REDUCTION == 0,
+                "for large kernels, wide reductions currently need to be a multiple of MAX_TILES_PER_REDUCTION");
             in_nblocks_c = std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION);
         }
     } else {
@@ -176,8 +177,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
     uint32_t in_cb_npages = multi_buffering_factor * nblocks;
-
-    printf("in_cb_sz: %d, in_cb_page_padded: %d, in_cb_pagesize: %d, in_cb_npages: %d\n", in_cb_sz, in_cb_page_padded, in_cb_pagesize, in_cb_npages);
 
     CircularBufferConfig in_cb_config_0 = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id_0, in_df}})
                                               .set_page_size(in_cb_id_0, in_cb_pagesize);
@@ -204,8 +203,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto in_tiled_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_tiled_cb_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_tiled_cb_id, in_tiled_cb_pagesize, in_tiled_cb_npages);
 
-    printf("in_tiled_cb_pagesize: %d, in_tiled_cb_npages: %d\n", in_tiled_cb_pagesize, in_tiled_cb_npages);
-
     // output of reduce == writer to write
     uint32_t out_cb_id = tt::CB::c_out0;  // output rows in RM
     // after reduction
@@ -213,10 +210,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         tt::constants::TILE_WIDTH * out_nbytes;  // there is just one row of channels after each reduction (or 1 block
                                                  // of c if its greater than 8 tiles)
     uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_ntiles_c;
-    printf("out_cb_pagesize: %d, out_cb_npages: %d\n", out_cb_pagesize, out_cb_npages);
-
-    printf("shard 0: %d, shard 1: %d\n", output.shard_spec().value().shape[0], output.shard_spec().value().shape[1]);
-    printf("out_nbytes: %d, in_nblocks_c: %d\n", out_nbytes, in_nblocks_c);
 
     CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
                                              .set_page_size(out_cb_id, out_cb_pagesize)
