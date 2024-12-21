@@ -28,8 +28,9 @@ struct Pool2DOp {
         std::array<uint32_t, 2> stride,
         std::array<uint32_t, 2> padding,
         std::array<uint32_t, 2> dilation,
-        const std::optional<const MemoryConfig>& memory_config,
-        const std::optional<const TensorMemoryLayout> applied_shard_scheme);
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+        bool ceil_mode = false);
 };
 
 }  // namespace operations::pool

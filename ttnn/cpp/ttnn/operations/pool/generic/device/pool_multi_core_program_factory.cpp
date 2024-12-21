@@ -29,6 +29,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t stride_w,
     uint32_t pad_h,
     uint32_t pad_w,
+    uint32_t ceil_pad_w,
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t num_shards_c,
@@ -302,7 +303,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         bf16_one_u32,
         in_nblocks_c,
         in_cb_sz,
-        max_rows_for_reduction};
+        max_rows_for_reduction,
+        ceil_pad_w};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -319,7 +321,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         bf16_one_u32,
         in_nblocks_c,
         in_cb_sz,
-        max_rows_for_reduction};
+        max_rows_for_reduction,
+        ceil_pad_w};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
@@ -439,6 +442,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto stride_w = sliding_window_config.stride_hw.second;
     auto pad_h = sliding_window_config.pad_hw.first;
     auto pad_w = sliding_window_config.pad_hw.second;
+    auto ceil_pad_w = sliding_window_config.get_ceil_pad_w();
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
@@ -460,6 +464,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         stride_w,
         pad_h,
         pad_w,
+        ceil_pad_w,
         dilation_h,
         dilation_w,
         num_shards_c,

@@ -43,14 +43,16 @@ Tensor Pool2DOp<pool_type>::invoke(
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
     const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<const TensorMemoryLayout> applied_shard_scheme) {
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    bool ceil_mode) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
             .input_hw = {input_h, input_w},
             .window_hw = {kernel_size.at(0), kernel_size.at(1)},
             .stride_hw = {stride.at(0), stride.at(1)},
             .pad_hw = {padding.at(0), padding.at(1)},
-            .dilation_hw = {dilation.at(0), dilation.at(1)}
+            .dilation_hw = {dilation.at(0), dilation.at(1)},
+            .ceil_mode = ceil_mode,
     };
     auto output_shape = sliding_window_config.get_output_shape();   // last dim/width is 0
     auto input_tensor_sharded = input_tensor;
@@ -123,7 +125,8 @@ Tensor Pool2DOp<pool_type>::invoke(
             .num_cores_nhw = num_cores_nhw,
             .num_cores_c = num_cores_c,
             .core_range_set = parallel_config.grid,
-            .snap_to_tile = false
+            .snap_to_tile = false,
+            .ceil_mode = ceil_mode,
     };
 
     // Call the halo uop
