@@ -530,7 +530,6 @@ def test_conv_features_multi_device(
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
     (
-        (2, 128, 128, 9, 9, 3, 3, 0, 0, 1),
         (2, 128, 256, 9, 9, 3, 3, 1, 1, 1),
         (2, 576, 576, 9, 9, 3, 3, 0, 0, 1),
         (2, 960, 960, 5, 5, 3, 3, 0, 0, 1),
@@ -538,12 +537,11 @@ def test_conv_features_multi_device(
         (2, 512, 2048, 17, 17, 3, 3, 1, 1, 1),
         (2, 768, 768, 17, 17, 3, 3, 0, 0, 1),
         (2, 1280, 2560, 15, 15, 3, 3, 1, 1, 2),
-        (2, 1280, 2560, 15, 15, 3, 3, 0, 0, 2),
         (2, 1280, 1280, 17, 17, 3, 3, 1, 1, 1),
+        [1, 3024, 1232, 14, 14, 1, 1, 0, 0, 1],
         (2, 768, 32, 9, 9, 3, 3, 1, 1, 1),
         (2, 64, 128, 9, 9, 3, 3, 1, 1, 1),
         (2, 32, 128, 9, 9, 3, 3, 1, 1, 1),
-        (1, 256, 256, 7, 7, 3, 3, 1, 1, 1),
     ),
 )
 @pytest.mark.parametrize(

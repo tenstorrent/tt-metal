@@ -60,7 +60,6 @@ Result conv2d(
     const uint32_t output_width =
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
 
-    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     bool auto_shard = false;
@@ -195,8 +194,9 @@ Result conv2d(
 
         if (bypass_halo) {
             if (input_tensor_post_tm.layout() == Layout::TILE) {
-                input_tensor_post_tm =
-                    ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
+                input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.get_padded_shape());
+                input_tensor_post_tm = ttnn::to_layout(
+                    input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
             }
         } else {
             Tensor halo_output = ttnn::halo(

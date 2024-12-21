@@ -538,9 +538,7 @@ ttnn::Tensor conv_bias_layout_convert(
     validate_bias_tensor(bias_tensor_);
     if (!is_non_tile_mul_width) {
         auto bias_shape = bias_tensor_.get_shape();
-        TT_FATAL(
-            bias_shape[3] == out_channels && bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1,
-            "bias shape is not correct");
+        TT_FATAL(bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1, "bias shape is not correct");
         tt::tt_metal::LegacyShape bias_channels_padded_shape = tt::tt_metal::LegacyShape(
             std::array<uint32_t, 4>({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)}));
         bias_tensor_ =
@@ -768,7 +766,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         bias_tensor_ = bias_tensor.value();
         bool is_bias_tensor_is_on_device = ttnn::is_tensor_on_device_or_multidevice(bias_tensor_);
         if(!is_bias_tensor_is_on_device) {
-            bias_tensor_ = conv_bias_layout_convert(bias_tensor_, weights_bias_dtype, weight_block_h_ntiles, weight_block_w_ntiles, input_parallel_config, device, out_channels, is_non_tile_mul_width);
+            bias_tensor_ = conv_bias_layout_convert(bias_tensor_, weights_bias_dtype, weight_block_h_ntiles, weight_block_w_ntiles, output_parallel_config, device, out_channels_padded, is_non_tile_mul_width);
             bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
         }
     }
@@ -935,6 +933,9 @@ ttnn::Tensor prepare_conv_bias(
         shard_orientation,
         !use_non_tile_height);
 
+    ParallelConfig output_parallel_config =
+        determine_output_parallel_config(parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
+
     bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
     ttnn::Tensor bias_tensor_ = bias_tensor;
     bias_tensor_ = conv_bias_layout_convert(
@@ -942,7 +943,7 @@ ttnn::Tensor prepare_conv_bias(
         conv_config.weights_dtype,
         opt_conv_op_block_config.act_block_h_ntiles,
         weight_block_w_ntiles,
-        parallel_config,
+        output_parallel_config,
         device,
         out_channels,
         is_non_tile_mul_width);
