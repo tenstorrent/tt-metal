@@ -216,10 +216,12 @@ std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> create_global_
     std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> semaphores;
     auto worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(6, 6)));
     for (Device* d : devices) {
+        CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
+        auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
         auto worker_subdevice_id = worker_subdevice_id_opt.has_value()
                                        ? tt::stl::Span<const SubDeviceId>{{worker_subdevice_id_opt.value()}}
                                        : tt::stl::Span<const SubDeviceId>{};
-        auto sem = CreateGlobalSemaphore(d, worker_cores, 0, BufferType::L1, worker_subdevice_id);
+        auto sem = CreateGlobalSemaphore(d, core_grid, 0, BufferType::L1, worker_subdevice_id);
         semaphores.push_back(sem);
     }
 
@@ -238,11 +240,13 @@ std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> create_global_
             size_t attempts = 1000;
             size_t attempt = 0;
             std::vector<std::shared_ptr<tt::tt_metal::GlobalSemaphore>> garbage;
+            CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
+            auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
             while (semaphores[i]->address() != highest_addr) {
                 auto worker_subdevice_id = worker_subdevice_id_opt.has_value()
                                                ? tt::stl::Span<const SubDeviceId>{worker_subdevice_id_opt.value()}
                                                : tt::stl::Span<const SubDeviceId>{};
-                auto sem = CreateGlobalSemaphore(devices[i], worker_cores, 0, BufferType::L1, worker_subdevice_id);
+                auto sem = CreateGlobalSemaphore(devices[i], core_grid, 0, BufferType::L1, worker_subdevice_id);
                 if (sem->address() == highest_addr) {
                     semaphores[i] = sem;
                 } else {

@@ -704,7 +704,7 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
         for (size_t i = 0; i < line_view.size(); i++) {
             Device *device = line_view[i];
             Program &program = programs[i];
-            tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);
+            tt::tt_metal::EnqueueProgram(device->command_queue(), program, true);
         }
     };
 

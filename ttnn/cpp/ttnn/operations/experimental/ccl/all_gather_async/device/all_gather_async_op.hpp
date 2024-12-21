@@ -121,6 +121,7 @@ Tensor all_gather_async(
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    std::optional<SubDeviceId> subdevice_id = std::nullopt,
     bool enable_persistent_fabric_mode = false);  // TODO make reference
 
 }  // namespace ccl
