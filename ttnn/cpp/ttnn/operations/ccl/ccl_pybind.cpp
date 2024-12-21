@@ -19,4 +19,11 @@ void py_bind_common(pybind11::module& module) {
     module.def("teardown_edm_fabric", &ttnn::ccl::teardown_edm_fabric, py::kw_only(), py::arg("mesh_device"));
 }
 
+void py_module(py::module& module) {
+    ccl::py_bind_common(module);
+    ccl::py_bind_all_gather(module);
+    ccl::py_bind_reduce_scatter(module);
+    ccl::py_bind_barrier(module);
+}
+
 }  // namespace ttnn::operations::ccl

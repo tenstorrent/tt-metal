@@ -76,7 +76,8 @@ void py_module(py::module& module) {
     plusone::detail::bind_experimental_plusone_operation(module);
 
     // CCL ops
-    auto m_experimental_ccl = module.def_submodule("ccl", "experimental collective communication operations");
+    auto m_experimental_ccl =
+        module.def_submodule("ccl_experimental", "experimental collective communication operations");
     ccl::py_module(m_experimental_ccl);
 }
 
