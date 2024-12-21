@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 namespace ttnn::ccl::cmd {
 

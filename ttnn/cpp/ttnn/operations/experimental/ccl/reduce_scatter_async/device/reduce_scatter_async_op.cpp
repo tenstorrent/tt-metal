@@ -6,6 +6,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
 
+#include <ranges>
 #include <algorithm>
 #include <cstdint>
 #include <optional>
@@ -33,13 +34,27 @@ ReduceScatterAsync create_reduce_scatter_struct(
 
     TT_FATAL(receiver_device_id != std::nullopt || sender_device_id != std::nullopt, "Error, Reduce-scatter was unable to identify either a sender or receiver device ID and atleast one must be identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments may be incorrect");
 
+    auto find_device = [](const std::vector<Device*>& devices, std::optional<chip_id_t> id) -> std::optional<Device*> {
+        if (id == std::nullopt) {
+            return std::nullopt;
+        }
+        auto device = std::find_if(
+            devices.begin(), devices.end(), [id_ = id.value()](Device const* d) { return d->id() == id_; });
+        TT_FATAL(
+            device != devices.end(),
+            "Device with ID {} not found in the list of devices, but it should be here since it was provided "
+            "previously",
+            id.value());
+        return *device;
+    };
+
     return ttnn::ReduceScatterAsync{
         binary_op_type,
         scatter_dim,
         num_devices,
         device_index,
-        receiver_device_id.has_value() ? devices.at(receiver_device_id.value()) : std::optional<Device*>(std::nullopt),
-        sender_device_id.has_value() ? devices.at(sender_device_id.value()) : std::optional<Device*>(std::nullopt),
+        find_device(devices, receiver_device_id),
+        find_device(devices, sender_device_id),
         output_mem_config,
         topology,
         forward_output_tensors,
@@ -132,9 +147,9 @@ std::vector<Tensor> ReduceScatterAsync::create_output_tensors(const std::vector<
 
 operation::ProgramWithCallbacks ReduceScatterAsync::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    for (Buffer* b : output_tensors.at(0).buffers()) {
-        log_info(tt::LogOp, "Output tensor buffer->address: {}. Device: {}", b->address(), b->device()->id());
-    }
+    // for (Buffer* b : output_tensors.at(0).buffers()) {
+    //     log_info(tt::LogOp, "Output tensor buffer->address: {}. Device: {}", b->address(), b->device()->id());
+    // }
 
     std::optional<Tensor> foreward_direction_remote_output_tensor = std::nullopt;
     std::optional<Tensor> backward_direction_remote_output_tensor = std::nullopt;
