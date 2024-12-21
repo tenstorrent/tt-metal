@@ -25,8 +25,8 @@ def create_and_load_sub_device_manager_with_fabric_interface(
 
 
 def teardown_fabric_interface(mesh_device):
+    ttnn.teardown_edm_fabric(mesh_device)
     for device_id in mesh_device.get_device_ids():
-        ttnn.teardown_fabric_interface(mesh_device.get_device(device_id))
         ttnn.synchronize_device(mesh_device.get_device(device_id))
 
 
@@ -116,6 +116,7 @@ def run_reduce_scatter_test(
     topology=ttnn.Topology.Ring,
     trace_mode=False,
 ):
+    enable_persistent_fabric = True
     if len(mesh_device.get_device_ids()) < num_devices:
         pytest.skip(
             f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(mesh_device.get_device_ids())}"
@@ -178,7 +179,7 @@ def run_reduce_scatter_test(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-        mesh_device, [worker_sub_device], 0, 0
+        mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
     )
 
     # Run the op
@@ -203,16 +204,15 @@ def run_reduce_scatter_test(
                 num_links=num_links,
                 memory_config=mem_config,
                 topology=topology,
-                subdevice_id=ttnn.SubDeviceId(0),
+                subdevice_id=worker_sub_device_id,
             )
 
             logger.info(f"Waiting for op {i}")
             for device_id in mesh_device.get_device_ids():
-                ttnn.synchronize_device(mesh_device.get_device(device_id), sub_device_ids=[ttnn.SubDeviceId(0)])
+                ttnn.synchronize_device(mesh_device.get_device(device_id), sub_device_ids=[worker_sub_device_id])
             logger.info(f"Done iteration {i}")
 
-    ttnn.teardown_edm_fabric(mesh_device)
-    # ttnn.visualize_mesh_device(t3k_mesh_device, tensor=output_tensor_mesh)
+    teardown_fabric_interface(mesh_device)
     # Compute golden
     # TODO: Make it model how reduce scatter actually works for numerical correctness/ordering
     golden_canonical_out_tensor = torch.zeros(canonical_input_shape).bfloat16()
@@ -307,7 +307,7 @@ def run_reduce_scatter_test(
 @pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 27648}], indirect=True)
-def test_line_reduce_scatter_post_commit(
+def test_line_reduce_scatter_async_post_commit(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
