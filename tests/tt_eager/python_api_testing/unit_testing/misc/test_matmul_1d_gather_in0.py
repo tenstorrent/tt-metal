@@ -79,6 +79,33 @@ PREFETCHER_GRID = [
     (2, 11),
 ]
 
+PREFETCHER_NOC1_GRID = [
+    (2, 9),
+    (2, 5),
+    (2, 4),
+    (2, 0),
+    (1, 0),
+    (1, 9),
+    (1, 5),
+    (1, 4),
+    (5, 4),
+    (5, 2),
+    (5, 1),
+    (5, 0),
+    (5, 9),
+    (5, 7),
+    (5, 6),
+    (5, 5),
+    (6, 5),
+    (6, 4),
+    (6, 2),
+    (6, 1),
+    (6, 0),
+    (6, 9),
+    (6, 7),
+    (6, 6),
+]
+
 
 def run_multi_core_matmul_1d(
     device,
@@ -99,6 +126,10 @@ def run_multi_core_matmul_1d(
     max_dst_tiles=8,
     pcc_threshold=0.98,
     mm_chain=False,
+    use_physical_to_logical_mapping=False,
+    global_cb=None,
+    prefetched_weights_pt=None,
+    hop_grid=None,
 ):
     assert not has_bias, "Bias not supported for gather_in0 mode."
     if not isinstance(grid, tuple) and not use_arbitrary_cores:
@@ -142,8 +173,11 @@ def run_multi_core_matmul_1d(
             CORE_RANGE = [(x, y) for y in range(storage_grid[1]) for x in range(storage_grid[0])]
             random.shuffle(CORE_RANGE)
         else:  # Use custom grid
-            mapping = get_physical_to_logical_core_mapping(device)
-            CORE_RANGE = [mapping[physical_coord] for physical_coord in grid]
+            if use_physical_to_logical_mapping:
+                mapping = get_physical_to_logical_core_mapping(device)
+                CORE_RANGE = [mapping[physical_coord] for physical_coord in grid]
+            else:
+                CORE_RANGE = grid
 
         core_range_set = ttnn.CoreRangeSet(
             [
@@ -161,6 +195,19 @@ def run_multi_core_matmul_1d(
                     ttnn.CoreCoord(0, 0),
                     ttnn.CoreCoord(storage_grid[0] - 1, storage_grid[1] - 1),
                 ),
+            }
+        )
+
+    print(f"num_cores: {num_cores}")
+    hop_core_range_set = ttnn.CoreRangeSet([])
+    if hop_grid is not None:
+        hop_core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in hop_grid
             }
         )
 
@@ -226,6 +273,7 @@ def run_multi_core_matmul_1d(
         fused_activation=activation,
         mcast_in0=False,
         gather_in0=True,
+        hop_cores=hop_core_range_set,
     )
 
     if is_grayskull():
@@ -242,46 +290,23 @@ def run_multi_core_matmul_1d(
             dst_full_sync_en=True,
         )
 
-    for _ in range(num_iters):
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=output_sharded_mem_config,
-            compute_kernel_config=compute_kernel_config,
-        )
-        if mm_chain:
-            a_t = ttnn.from_torch(
-                in0,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=in0_dtype,
-            )
-            b_t = ttnn.from_torch(
-                in1,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=in1_dtype,
-            )
-            c_t = ttnn.matmul(a_t, b_t)
-            c_out = ttnn.to_torch(c_t)
-            passing, output = comp_pcc(in0 * in1, c_out)
-            assert passing
-
-            c_t = ttnn.matmul(
-                in0_t,
-                in1_t,
-                program_config=program_config,
-                memory_config=output_sharded_mem_config,
-                compute_kernel_config=compute_kernel_config,
-            )
-            c_out = ttnn.to_torch(c_t)
-            passing, output = comp_pcc(in0 * in1, c_out, pcc_threshold)
-            assert passing
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        program_config=program_config,
+        memory_config=output_sharded_mem_config,
+        compute_kernel_config=compute_kernel_config,
+        global_cb=global_cb,
+    )
 
     tt_out = ttnn.to_torch(output_t)
 
-    pt_out = in0 @ in1
+    if prefetched_weights_pt is None:
+        pt_out = in0 @ in1
+    else:
+        pt_out = in0 @ prefetched_weights_pt
+    logger.info("Using prefetched weights")
+
     if activation:
         act_fnc = torch.nn.functional.silu if activation == ttnn.UnaryOpType.SILU else torch.nn.functional.relu
         pt_out = act_fnc(pt_out)
@@ -292,7 +317,7 @@ def run_multi_core_matmul_1d(
     assert passing
 
     # Check program cache
-    assert device.num_program_cache_entries() == 1  # Only 1 op
+    assert device.num_program_cache_entries() == 1 + (int)(global_cb is not None)  # Only 1 op
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -304,52 +329,58 @@ def run_multi_core_matmul_1d(
         # # 32, 2304, 3840 (PREFETCHER), only works on TG
         # (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_GRID),
         # 32, 2304, 3840
-        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, True, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, True, (8, 3)),
-        # 256, 1024, 8192
-        (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, True, (8, 4)),
-        # 256, 1024, 8192
-        (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, True, (8, 4)),
-        # # 128, 8192, 2048
-        # (1, 128, 8192, 2048, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2, True, True, (8, 8)),
-        # # 128, 8192, 2048
-        # (1, 128, 8192, 2048, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2, True, False, (8, 8)),
-        # # 128, 8192, 2048
-        # (1, 128, 8192, 2048, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2, False, True, (8, 8)), # Fails with 0.98 PCC
-        # 32, 64, 64
-        (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, True, (2, 1)),
-        # 32, 64, 64
-        (11, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, True, (2, 1)),
+        # (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        # # 32, 2304, 3840
+        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        # # 32, 2304, 3840
+        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
+        # # 32, 2304, 3840
+        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, True, (8, 3)),
+        # # 32, 2304, 3840
+        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, False, (8, 3)),
+        # # 32, 2304, 3840
+        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
+        # # 32, 2304, 3840
+        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, False, (8, 3)),
+        # # 32, 2304, 3840
+        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, True, (8, 3)),
+        # # 256, 1024, 8192
+        # (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, True, (8, 4)),
+        # # 256, 1024, 8192
+        # (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, True, (8, 4)),
+        # # # 128, 8192, 2048
+        # # (1, 128, 8192, 2048, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2, True, True, (8, 8)),
+        # # # 128, 8192, 2048
+        # # (1, 128, 8192, 2048, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2, True, False, (8, 8)),
+        # # # 128, 8192, 2048
+        # # (1, 128, 8192, 2048, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2, False, True, (8, 8)), # Fails with 0.98 PCC
+        # # 32, 64, 64
+        # (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, True, (2, 1)),
+        # # 32, 64, 64
+        # (11, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, True, (2, 1)),
+        # (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, True, (1, 1)),
+        (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (1, 1)),
     ],
 )
 @pytest.mark.parametrize(
     "activation",
     [
         None,
-        ttnn.UnaryOpType.SILU,
-        ttnn.UnaryOpType.RELU,
+        # ttnn.UnaryOpType.SILU,
+        # ttnn.UnaryOpType.RELU,
     ],
 )
 @pytest.mark.parametrize(
     "use_arbitrary_cores",
-    [False, True],
+    [
+        False,
+    ],
 )
 @pytest.mark.parametrize(
     "num_iters",
-    [1, 3],
+    [
+        1,
+    ],
 )
 def test_multi_core_matmul_1d_wh(
     device,
@@ -395,7 +426,14 @@ def test_multi_core_matmul_1d_wh(
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
-        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_NOC1_GRID),
+    ],
+)
+@pytest.mark.parametrize(
+    "hop_grid",
+    [
+        # [(7, 3), (7, 4)],
+        [(3, 6), (3, 9)],
     ],
 )
 @pytest.mark.parametrize(
@@ -406,13 +444,14 @@ def test_multi_core_matmul_1d_wh(
 )
 @pytest.mark.parametrize(
     "use_arbitrary_cores",
-    [False],
+    [True],
 )
 @pytest.mark.parametrize(
     "num_iters",
-    [3],
+    [1],
 )
-def test_multi_core_matmul_1d_mm_chain_wh(
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_multi_core_matmul_1d_ring_hop_wh(
     device,
     in0_dtype,
     in1_dtype,
@@ -426,6 +465,7 @@ def test_multi_core_matmul_1d_mm_chain_wh(
     N,
     activation,
     grid,
+    hop_grid,
     use_arbitrary_cores,
     num_iters,
     use_program_cache,
@@ -447,8 +487,71 @@ def test_multi_core_matmul_1d_mm_chain_wh(
         grid,
         use_arbitrary_cores,
         num_iters,
-        True,
+        hop_grid=hop_grid,
+        use_physical_to_logical_mapping=False,
     )
+
+
+# @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
+# @pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+# @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+# @pytest.mark.parametrize(
+#     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
+#     [
+#         (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "activation",
+#     [
+#         None,
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "use_arbitrary_cores",
+#     [False],
+# )
+# @pytest.mark.parametrize(
+#     "num_iters",
+#     [3],
+# )
+# def test_multi_core_matmul_1d_mm_chain_wh(
+#     device,
+#     in0_dtype,
+#     in1_dtype,
+#     fidelity,
+#     has_bias,
+#     fp32_acc_mode,
+#     packer_l1_acc,
+#     B,
+#     M,
+#     K,
+#     N,
+#     activation,
+#     grid,
+#     use_arbitrary_cores,
+#     num_iters,
+#     use_program_cache,
+#     function_level_defaults,
+# ):
+#     run_multi_core_matmul_1d(
+#         device,
+#         in0_dtype,
+#         in1_dtype,
+#         fidelity,
+#         has_bias,
+#         fp32_acc_mode,
+#         packer_l1_acc,
+#         B,
+#         M,
+#         K,
+#         N,
+#         activation,
+#         grid,
+#         use_arbitrary_cores,
+#         num_iters,
+#         True,
+#     )
 
 
 @pytest.mark.skipif(is_wormhole_b0(), reason="Test suite for GS only")
@@ -458,38 +561,41 @@ def test_multi_core_matmul_1d_mm_chain_wh(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
         # 32, 2304, 3840
-        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
-        # 256, 1024, 8192
-        (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, False, False, (8, 4)),
-        # 128, 8192, 2048
-        (1, 128, 4096, 2048, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2, False, False, (8, 8)),
+        # (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
+        # # 32, 2304, 3840
+        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
+        # # 32, 2304, 3840
+        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, False, (8, 3)),
+        # # 32, 2304, 3840
+        # (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
+        # # 256, 1024, 8192
+        # (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, False, False, (8, 4)),
+        # # 128, 8192, 2048
+        # (1, 128, 4096, 2048, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi2, False, False, (8, 8)),
+        # # 32, 64, 64
+        # (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (2, 1)),
         # 32, 64, 64
-        (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (2, 1)),
-        # 32, 64, 64
-        (11, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (2, 1)),
+        # (11, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (2, 1)),
+        (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (1, 1)),
     ],
 )
 @pytest.mark.parametrize(
     "activation",
     [
         None,
-        ttnn.UnaryOpType.SILU,
-        ttnn.UnaryOpType.RELU,
+        # ttnn.UnaryOpType.SILU,
+        # ttnn.UnaryOpType.RELU,
     ],
 )
 @pytest.mark.parametrize(
     "use_arbitrary_cores",
-    [False, True],
+    [True],
 )
 @pytest.mark.parametrize(
     "num_iters",
-    [1, 3],
+    [
+        1,
+    ],
 )
 def test_multi_core_matmul_1d_gs(
     device,

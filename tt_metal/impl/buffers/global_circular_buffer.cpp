@@ -25,7 +25,7 @@ namespace experimental {
 
 GlobalCircularBuffer::GlobalCircularBuffer(
     Device* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
@@ -150,7 +150,7 @@ void GlobalCircularBuffer::setup_cb_buffers(
 
 std::shared_ptr<GlobalCircularBuffer> GlobalCircularBuffer::create(
     Device* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -171,6 +171,10 @@ DeviceAddr GlobalCircularBuffer::buffer_address() const { return this->cb_buffer
 DeviceAddr GlobalCircularBuffer::config_address() const { return this->cb_config_buffer_->address(); }
 
 uint32_t GlobalCircularBuffer::size() const { return this->size_; }
+
+const std::vector<std::pair<CoreCoord, CoreRangeSet>>& GlobalCircularBuffer::sender_receiver_core_mapping() const {
+    return this->sender_receiver_core_mapping_;
+}
 
 }  // namespace experimental
 

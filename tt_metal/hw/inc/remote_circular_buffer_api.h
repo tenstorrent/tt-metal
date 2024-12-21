@@ -22,11 +22,12 @@ FORCE_INLINE void resize_remote_sender_cb_interface(uint32_t cb_id, uint32_t pag
     uint32_t fifo_wr_ptr = sender_cb_interface.fifo_wr_ptr;
     uint32_t cb_size_page_aligned = fifo_size - fifo_size % page_size;
     uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
+    uint32_t prev_fifo_limit_page_aligned = sender_cb_interface.fifo_limit_page_aligned;
 
     uint32_t next_fifo_wr_ptr = fifo_start_addr + align(fifo_wr_ptr - fifo_start_addr, page_size);
-    if (next_fifo_wr_ptr > fifo_limit_page_aligned) {
+    if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
         next_fifo_wr_ptr = fifo_start_addr;
-    } else if (next_fifo_wr_ptr != fifo_wr_ptr) {
+    } else {
 #ifndef COMPILE_FOR_TRISC
         if constexpr (update_remote_over_noc) {
             uint32_t aligned_pages_sent_addr = sender_cb_interface.aligned_pages_sent_ptr;
@@ -34,6 +35,10 @@ FORCE_INLINE void resize_remote_sender_cb_interface(uint32_t cb_id, uint32_t pag
             uint32_t num_receivers = sender_cb_interface.num_receivers;
             uint32_t aligned_page_adjustment =
                 (next_fifo_wr_ptr - fifo_wr_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            if (prev_fifo_limit_page_aligned < fifo_limit_page_aligned) {
+                aligned_page_adjustment +=
+                    (fifo_limit_page_aligned - prev_fifo_limit_page_aligned) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            }
             // increment the aligned pages sent because we skipped to next aligned page location
             volatile tt_l1_ptr uint32_t* pages_sent_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_sent_addr);
@@ -44,7 +49,9 @@ FORCE_INLINE void resize_remote_sender_cb_interface(uint32_t cb_id, uint32_t pag
                     DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]), DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1])));
                 *pages_sent_ptr += aligned_page_adjustment;
                 uint64_t remote_ack_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
-                noc_semaphore_inc(remote_ack_ptr_addr, aligned_page_adjustment, noc);
+                if (aligned_page_adjustment != 0) {
+                    noc_semaphore_inc(remote_ack_ptr_addr, aligned_page_adjustment, noc);
+                }
                 pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
                 remote_noc_xy_ptr += 2;
             }
@@ -65,11 +72,12 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(uint32_t cb_id, uint32_t p
     uint32_t fifo_rd_ptr = receiver_cb_interface.fifo_rd_ptr;
     uint32_t cb_size_page_aligned = fifo_size - fifo_size % page_size;
     uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
+    uint32_t prev_fifo_limit_page_aligned = receiver_cb_interface.fifo_limit_page_aligned;
 
     uint32_t next_fifo_rd_ptr = fifo_start_addr + align(fifo_rd_ptr - fifo_start_addr, page_size);
-    if (next_fifo_rd_ptr > fifo_limit_page_aligned) {
+    if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
         next_fifo_rd_ptr = fifo_start_addr;
-    } else if (next_fifo_rd_ptr != fifo_rd_ptr) {
+    } else {
 #ifndef COMPILE_FOR_TRISC
         if constexpr (update_remote_over_noc) {
             uint32_t aligned_pages_acked_addr = receiver_cb_interface.aligned_pages_acked_ptr;
@@ -77,12 +85,18 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(uint32_t cb_id, uint32_t p
             uint32_t sender_noc_y = receiver_cb_interface.sender_noc_y;
             uint32_t aligned_page_adjustment =
                 (next_fifo_rd_ptr - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            if (prev_fifo_limit_page_aligned < fifo_limit_page_aligned) {
+                aligned_page_adjustment +=
+                    (fifo_limit_page_aligned - prev_fifo_limit_page_aligned) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            }
             // increment the aligned pages acked because we skipped to next aligned page location
             volatile tt_l1_ptr uint32_t* pages_acked_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_acked_addr);
             *pages_acked_ptr += aligned_page_adjustment;
             uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, (uint32_t)pages_acked_ptr, noc);
-            noc_semaphore_inc(remote_ack_ptr_addr, aligned_page_adjustment, noc);
+            if (aligned_page_adjustment != 0) {
+                noc_semaphore_inc(remote_ack_ptr_addr, aligned_page_adjustment, noc);
+            }
         }
 #endif
     }
@@ -122,14 +136,18 @@ FORCE_INLINE void remote_cb_pop_front(uint32_t cb_id, uint32_t num_pages, uint8_
 
     *pages_acked_ptr += num_aligned_pages;
     remote_cb.fifo_rd_ptr += len_bytes;
+    uint32_t cb_size = remote_cb.fifo_limit_page_aligned - remote_cb.fifo_start_addr;
 
     if (remote_cb.fifo_rd_ptr >= remote_cb.fifo_limit_page_aligned) {
-        remote_cb.fifo_rd_ptr = remote_cb.fifo_start_addr;
+        // remote_cb.fifo_rd_ptr = remote_cb.fifo_start_addr;
+        remote_cb.fifo_rd_ptr -= cb_size;
     }
 
     uint64_t remote_ack_ptr_addr =
         get_noc_addr(remote_cb.sender_noc_x, remote_cb.sender_noc_y, (uint32_t)pages_acked_ptr, noc);
     noc_semaphore_inc(remote_ack_ptr_addr, num_aligned_pages, noc);
+
+    // DPRINT << "remote_cb_pop_front  pages_acked" << *pages_acked_ptr <<ENDL();
 }
 
 FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
@@ -144,12 +162,15 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr + L1_ALIGNMENT);
 
     uint32_t num_receivers = remote_cb.num_receivers;
-    uint32_t fifo_aligned_num_pages = remote_cb.fifo_limit_page_aligned / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+    uint32_t fifo_aligned_num_pages =
+        (remote_cb.fifo_limit_page_aligned - remote_cb.fifo_start_addr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+
     for (uint32_t i = 0; i < num_receivers; ++i) {
         do {
             uint32_t pages_acked = *pages_acked_ptr;
             uint32_t pages_sent = *pages_sent_ptr;
-            free_pages = fifo_aligned_num_pages - (pages_sent - pages_acked);
+            uint32_t sent_minus_ack = pages_sent - pages_acked;
+            free_pages = fifo_aligned_num_pages >= sent_minus_ack ? (fifo_aligned_num_pages - sent_minus_ack) : 0;
         } while (free_pages < num_pages_wait);
         pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
@@ -230,6 +251,10 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         noc_semaphore_inc(remote_sent_ptr_addr, pages_sent, noc);
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         remote_noc_xy_ptr += 2;
+    }
+
+    if (dest_addr == remote_cb.fifo_limit_page_aligned) {
+        dest_addr = remote_cb.fifo_start_addr;
     }
 
     remote_cb.fifo_wr_ptr = dest_addr;
