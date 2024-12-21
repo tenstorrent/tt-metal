@@ -145,7 +145,6 @@ void kernel_main() {
     const InterleavedAddrGen<dest1_is_dram> dest_addr_gen1 = {
         .bank_base_address = output_buffer1_addr, .page_size = page_size};
 
-
     ASSERT(num_buffers_per_channel > 0);
 
     sender.open();
@@ -183,7 +182,6 @@ void kernel_main() {
         }
 
     } else if constexpr (read_mode == ReadMode::ARBITRARILY_ORDERED) {
-
         size_t current_page_in0 = 0;
         size_t current_page_in1 = 0;
         while (current_page_in0 < total_pages_to_send || current_page_in1 < total_pages_to_send) {
@@ -194,7 +192,6 @@ void kernel_main() {
                 non_blocking_read_and_forward(current_page_in1, cb_id_in1, dest_addr_gen1, sender, config, page_size, total_pages_to_send, num_pages_per_send);
             }
         }
-
     }
 
     sender.wait_for_empty_write_slot();
@@ -222,5 +219,4 @@ void kernel_main() {
     if (!closed_fabric_connection) {
         sender.close();
     }
-
 }
