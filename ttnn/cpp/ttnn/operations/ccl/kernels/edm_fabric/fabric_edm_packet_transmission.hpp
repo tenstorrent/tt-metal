@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -10,6 +9,10 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
 #include <cstdint>
+
+// If the hop/distance counter equals to the below value, it indicates that it has
+// arrived at (atleast one of) the intended destination(s)
+static constexpr size_t DESTINATION_HOP_COUNT = 1;
 
 void write_unicast_blocking(uint32_t local_address, uint64_t dest_address, uint32_t size_bytes) {
     noc_async_write(local_address, dest_address, size_bytes);
@@ -77,6 +80,8 @@ void execute_chip_unicast_to_local_chip(volatile tt::fabric::PacketHeader *const
         case tt::fabric::CommandType::WRITE: {
             switch (noc_send_type) {
                 case tt::fabric::NocSendType::NOC_UNICAST: {
+                    DPRINT << "C_UNI to y|x" << (uint32_t)((header.command_fields.unicast_write.noc_y << 16) | header.command_fields.unicast_write.noc_x) <<
+                        ", " << (uint32_t)header.command_fields.unicast_write.address << "\n";
                     auto const dest_address = get_noc_addr(
                         header.command_fields.unicast_write.noc_x,
                         header.command_fields.unicast_write.noc_y,
@@ -143,7 +148,7 @@ void update_packet_header_for_next_hop(volatile tt::fabric::PacketHeader * packe
             packet_header->routing_fields.chip_unicast.distance_in_hops--;
         } break;
         case tt::fabric::CHIP_MULTICAST: {
-            if (packet_header->routing_fields.chip_mcast.start_distance_in_hops == 0) {
+            if (packet_header->routing_fields.chip_mcast.start_distance_in_hops == DESTINATION_HOP_COUNT) {
                 packet_header->routing_fields.chip_mcast.range_hops--;
             } else {
                 packet_header->routing_fields.chip_mcast.start_distance_in_hops--;
@@ -185,18 +190,13 @@ void execute_chip_multicast_to_local_chip(volatile tt::fabric::PacketHeader *con
     ASSERT(false);
 }
 
-bool packet_must_be_consumed_locally(tt::fabric::PacketHeader const& packet_header) {
+bool packet_must_be_consumed_locally(volatile tt::fabric::PacketHeader const& packet_header) {
     switch (packet_header.chip_send_type) {
         case tt::fabric::ChipSendType::CHIP_UNICAST: {
-            // TODO: does it make more sense to have 0 as the terminating distance or 1?
-            //       depends where we want to do the decrement and what the starting value
-            //       is expected to be for worker
-            //       Maybe at API level we just always decrement by 1 under the hood
-            //       so user can call `fabric_send_packet(payload_addr, size, n_hops=1)
-            return packet_header.routing_fields.chip_unicast.distance_in_hops == 0;
+            return packet_header.routing_fields.chip_unicast.distance_in_hops == DESTINATION_HOP_COUNT;
         }
         case tt::fabric::ChipSendType::CHIP_MULTICAST: {
-            return packet_header.routing_fields.chip_mcast.start_distance_in_hops == 0;
+            return packet_header.routing_fields.chip_mcast.start_distance_in_hops == DESTINATION_HOP_COUNT;
         }
         default: {
             ASSERT(false);
@@ -206,18 +206,13 @@ bool packet_must_be_consumed_locally(tt::fabric::PacketHeader const& packet_head
 }
 
 
-bool packet_must_be_forwarded_to_next_chip(tt::fabric::PacketHeader const& packet_header) {
+bool packet_must_be_forwarded_to_next_chip(volatile tt::fabric::PacketHeader const& packet_header) {
     switch (packet_header.chip_send_type) {
         case tt::fabric::ChipSendType::CHIP_UNICAST:
-            // TODO: does it make more sense to have 0 as the terminating distance or 1?
-            //       depends where we want to do the decrement and what the starting value
-            //       is expected to be for worker
-            //       Maybe at API level we just always decrement by 1 under the hood
-            //       so user can call `fabric_send_packet(payload_addr, size, n_hops=1)
-            return packet_header.routing_fields.chip_unicast.distance_in_hops != 0;
+            return packet_header.routing_fields.chip_unicast.distance_in_hops != DESTINATION_HOP_COUNT;
 
         case tt::fabric::ChipSendType::CHIP_MULTICAST:
-            return packet_header.routing_fields.chip_mcast.range_hops != 0;
+            return packet_header.routing_fields.chip_mcast.range_hops != 1;
 
         default:
             ASSERT(false);

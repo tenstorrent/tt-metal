@@ -21,6 +21,7 @@ static FORCE_INLINE coord_t coord_from_args(std::size_t& arg_idx) {
 }
 
 enum EDM_IO_BLOCKING_MODE {
+    FLUSH_BLOCKING,
     BLOCKING,
     NON_BLOCKING
 };
@@ -64,7 +65,10 @@ FORCE_INLINE void send_chunk(
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
     noc_async_write(l1_read_addr, remote_l1_write_addr, page_size * num_pages);
-    if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING) {
+    if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING) {
+        noc_async_writes_flushed();
+        cb_pop_front(cb_id, num_pages);
+    } else if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING) {
         noc_async_write_barrier();
         cb_pop_front(cb_id, num_pages);
     }

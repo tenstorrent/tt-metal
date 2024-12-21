@@ -19,6 +19,8 @@
 
 #include <vector>
 #include <unordered_map>
+#include <optional>
+
 namespace ttnn {
 namespace ccl {
 
@@ -87,6 +89,10 @@ struct SenderWorkerAdapterSpec {
     size_t buffer_size_bytes = 0;
     size_t buffer_index_semaphore_id = 0; // the semaphore ID on the EDM, not the worker
 };
+
+void append_worker_to_fabric_edm_sender_rt_args(SenderWorkerAdapterSpec const& connection, size_t sender_worker_flow_control_semaphore_id, size_t sender_worker_buffer_index_semaphore_id, std::vector<uint32_t>& args_out);
+size_t log_worker_to_fabric_edm_sender_rt_args(std::vector<uint32_t> const& args, size_t starting_arg_idx = 0);
+
 class FabricEriscDatamoverBuilder {
    public:
     FabricEriscDatamoverBuilder(
@@ -180,7 +186,8 @@ struct edm_termination_info_t {
     uint32_t termination_addr = 0;
 };
 
-struct EdmLineFabricOpInterface {
+class EdmLineFabricOpInterface {
+   public:
     enum Direction {
         // Ascending chips in the sequence
         FORWARD,
@@ -189,22 +196,13 @@ struct EdmLineFabricOpInterface {
         BACKWARD,
     };
 
-    // Device ID -> EDM Builders
-    std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
-    std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_backward_direction;
-
-    // Device ID -> link index
-    std::unordered_map<size_t, size_t> next_forward_direction_edm_available;
-    std::unordered_map<size_t, size_t> next_backward_direction_edm_available;
-
-    std::vector<Device*> device_sequence;
-    std::vector<Program*> programs;
-
-    size_t num_links = 0;
 
     //   The constructor will assemble/connect the line across the specified device sequence, for all available links.
     EdmLineFabricOpInterface (std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, std::optional<size_t> desired_num_links = std::nullopt);
 
+    // Invocable per chip if we want to collectively build the fabric by building this separately per chip
+    // (and implicitly building the fabric that way)
+    EdmLineFabricOpInterface (Device* local_device, std::optional<Device*> forward_device, std::optional<Device*> backward_device,  Program* program, std::optional<size_t> desired_num_links);
 
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique connections
@@ -222,6 +220,41 @@ struct EdmLineFabricOpInterface {
     // and so a termination signal may be sent to our link first before the other eth core links
     // on the chip so multi-link isn't officially supported yet
     std::vector<edm_termination_info_t> generate_ordered_termination_info_farthest_to_nearest() const;
+
+    // Generates a list of termination infos for the local chip's EDMs
+    std::vector<edm_termination_info_t> generate_local_chip_fabric_termination_infos(Device *device) const;
+
+    // Accessors
+    size_t get_num_links() const { return num_links; }
+
+    size_t get_device_count() const { return device_sequence.size(); }
+
+    size_t get_index_of_device(Device *device) const {
+        for (size_t i = 0; i < device_sequence.size(); i++) {
+            if (device_sequence[i] == device) {
+                return i;
+            }
+        }
+        TT_THROW("Device {} not found in device sequence of line fabric", device->id());
+        return -1;
+    }
+
+    size_t get_edm_buffer_size_bytes() const { return buffer_size_bytes; }
+
+   private:
+    // Device ID -> EDM Builders
+    std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
+    std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_backward_direction;
+
+    // Device ID -> link index
+    std::unordered_map<size_t, size_t> next_forward_direction_edm_available;
+    std::unordered_map<size_t, size_t> next_backward_direction_edm_available;
+
+    std::vector<Device*> device_sequence;
+    std::vector<Program*> programs;
+
+    size_t num_links;
+    size_t buffer_size_bytes;
 };
 
 };  // namespace ccl
