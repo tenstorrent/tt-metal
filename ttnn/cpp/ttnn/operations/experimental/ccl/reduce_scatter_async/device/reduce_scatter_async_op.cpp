@@ -218,7 +218,7 @@ std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> create_global_
     auto worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(6, 6)));
     for (Device* d : devices) {
         auto worker_subdevice_id =
-            worker_subdevice_by_device.has_value()
+            worker_subdevice_by_device.has_value() && worker_subdevice_by_device.value().size() > 0
                 ? tt::stl::Span<const SubDeviceId>{worker_subdevice_by_device.value().at(d->id())}
                 : tt::stl::Span<const SubDeviceId>{};
         auto sem = CreateGlobalSemaphore(d, worker_cores, 0, BufferType::L1, worker_subdevice_id);

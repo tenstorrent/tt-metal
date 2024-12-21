@@ -401,6 +401,81 @@ struct ReduceScatterBuilderConfig {
 };
 
 /*
+static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links, Device *device) {
+
+    auto build_all_workers_list = [](CoreRangeSet const& available_cores, size_t total_cores_needed, std::vector<CoreCoord> &all_cores_out) {
+
+        for (const auto& cr : available_cores.ranges()) {
+            auto start = cr.start_coord;
+            auto end = cr.end_coord;
+            for (size_t y = start.y; y <= end.y; y++) {
+                for (size_t x = start.x; x <= end.x; x++) {
+                    all_cores_out.push_back(CoreCoord(x, y));
+                    if (all_cores_out.size() == total_cores_needed) {
+                        return;
+                    }
+                }
+            }
+        }
+    };
+
+    static constexpr std::size_t num_directions_per_line = 2;
+    WorkerCoreBundle worker_cores;
+    size_t current_chunk = 0;
+
+    constexpr size_t num_final_reducers_per_link = 1;
+    constexpr size_t per_link_num_workers_needed = num_directions_per_line + num_final_reducers_per_link;
+    const size_t total_cores_needed = per_link_num_workers_needed * num_links;
+    const auto available_cores =
+        device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
+    if (available_cores.num_cores() < total_cores_needed) {
+        log_warning(
+            tt::LogOp,
+            "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+            "cores are available ({} per link and {} links) are made available but only {} are available. This may "
+            "lead to performance loss.",
+            total_cores_needed,
+            per_link_num_workers_needed,
+            num_links,
+            available_cores.num_cores());
+        TT_THROW("Reduce scatter async currently doesn't support running with fewer than preferred number of workers");
+    }
+    std::vector<CoreCoord> all_cores;
+    all_cores.reserve(total_cores_needed);
+    build_all_workers_list(available_cores, total_cores_needed, all_cores);
+
+    auto add_workers = [&num_links](std::vector<CoreCoord>::iterator &worker_iter, CoreRangeSet& cores) {
+        for (size_t l = 0; l < num_links; l++) {
+            cores = cores.merge(CoreRangeSet(CoreRange(*worker_iter)));
+            worker_iter++;
+        }
+    };
+
+    auto worker_coord_iter = all_cores.begin();
+    for (size_t d = 0; d < num_directions_per_line; d++) {
+        add_workers(worker_coord_iter, worker_cores.partial_reducers[d]);
+    }
+    add_workers(worker_coord_iter, worker_cores.final_reducers);
+
+    // Merge them all into the global set for convenience anywhere we want to access all worker cores easily
+    for (size_t d = 0; d < num_directions_per_line; d++) {
+        worker_cores.all_worker_cores = worker_cores.all_worker_cores.merge(worker_cores.partial_reducers[d]);
+    }
+    worker_cores.all_worker_cores = worker_cores.all_worker_cores.merge(worker_cores.final_reducers);
+    log_trace(tt::LogOp, "Worker cores: ", worker_cores.all_worker_cores);
+
+    worker_cores.all_worker_cores_vec = corerange_to_cores(worker_cores.all_worker_cores, std::nullopt, true);
+    worker_cores.final_reducers_vec = corerange_to_cores(worker_cores.final_reducers, std::nullopt, true);
+    for (size_t d = 0; d < num_directions_per_line; d++) {
+        worker_cores.partial_reducers_vec[d] = corerange_to_cores(worker_cores.partial_reducers[d], std::nullopt, true);
+    }
+
+    return worker_cores;
+}
+*/
+
+
+/*
  * Core range sets for line topology
  * BORROWED FROM REDUCE SCATTER but modified a fair bit
  * TODO: COMMONIZE
@@ -1583,7 +1658,8 @@ static void initialize_op_internal_tensor_syncs(
     std::array<Device*, 2> const& neighbour_devices,
     ProgramTensorsBundle& all_tensors,
     WorkerCoreBundle const& worker_cores,
-    std::shared_ptr<const GlobalSemaphore> const& from_remote_sem) {
+    std::shared_ptr<const GlobalSemaphore> const& from_remote_sem,
+    std::shared_ptr<const GlobalSemaphore> const& to_remote_sem) {
     auto core_coord_lt = [](CoreCoord const& a, CoreCoord const& b) { return a.y < b.y || (a.y == b.y && a.x < b.x); };
 
     TT_FATAL(
@@ -1610,6 +1686,8 @@ static void initialize_op_internal_tensor_syncs(
 
             // remote output sync
             if (neighbour_devices[direction] != nullptr) {
+                all_tensors.remote_output_sync[direction].semaphore_ids.push_back(to_remote_sem.get());// = all_tensors.input_tensor_from_remote_sync[direction];
+                all_tensors.remote_output_sync[direction].completion_target_value_per_semaphore.push_back(1);// = all_tensors.input_tensor_from_remote_sync[direction];
                 all_tensors.remote_output_sync[direction] = all_tensors.input_tensor_from_remote_sync[direction];
                 all_tensors.remote_output_sync[direction].targets.back() = TensorSyncSpec::target_rect{
                     neighbour_devices[direction]->worker_core_from_logical_core(worker_core).x,
@@ -1768,7 +1846,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     size_t fabric_buffer_size_pages = fabric.get_edm_buffer_size_bytes() / get_page_size(input_tensor);
     auto const& topology_config = LineTopology(line_size, line_index);
 
-    auto const& worker_cores = select_worker_cores(topology, num_links);
+    auto const& worker_cores = select_worker_cores(topology, num_links);//, device);
     ProgramTensorsBundle all_tensors = {
         ProgramTensorsBundle::build_handle(input_tensor),
         {},
@@ -1798,7 +1876,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
 
 
     initialize_op_internal_tensor_syncs(
-        program, device, neighbour_devices, all_tensors, worker_cores, from_remote_sems);
+        program, device, neighbour_devices, all_tensors, worker_cores, from_remote_sems, to_remote_sem);
 
     validate_tensors(all_tensors, topology_config);
 
@@ -1888,8 +1966,8 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     Device* device = input_tensor.device();
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = fabric_handle_;
-    fabric_lifetime_mode fabric_mode =
-        fabric_handle.has_value() ? fabric_lifetime_mode::PERSISTENT : fabric_lifetime_mode::TRANSIENT;
+    fabric_lifetime_mode fabric_mode = fabric_lifetime_mode::PERSISTENT;
+        // fabric_handle.has_value() ? fabric_lifetime_mode::PERSISTENT : fabric_lifetime_mode::TRANSIENT;
     // We only build the local chip's part of the fabric
     if (!fabric_handle.has_value()) {
         fabric_handle = ttnn::ccl::EdmLineFabricOpInterface(
