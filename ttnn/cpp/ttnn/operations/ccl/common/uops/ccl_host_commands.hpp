@@ -37,7 +37,7 @@ using CclHostLowLevelCommandSequence = std::vector<CclHostLowLevelWorkerCommand>
 
 namespace uops {
 
-using semaphore_id_t = std::variant<uint32_t, tt::tt_metal::GlobalSemaphore>;
+using semaphore_id_t = std::variant<uint32_t, tt::tt_metal::GlobalSemaphore const*>;
 
 [[nodiscard]] CclHostLowLevelWorkerCommand read_tensor_slice_to_cb_for_eventual_fabric_write(
     ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);

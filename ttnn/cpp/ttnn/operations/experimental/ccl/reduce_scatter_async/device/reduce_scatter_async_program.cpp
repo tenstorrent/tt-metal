@@ -143,7 +143,7 @@ struct TensorSyncSpec {
         int dest_noc0_y_end = UNINITIALIZED_DEST_NOC;
     };
     // always equal to number of slices for now
-    std::vector<std::variant<uint32_t, GlobalSemaphore>> semaphore_ids;
+    std::vector<std::variant<uint32_t, const GlobalSemaphore*>> semaphore_ids;
     std::vector<size_t> completion_target_value_per_semaphore;
     std::vector<target_rect> targets;
 
@@ -157,7 +157,7 @@ struct TensorSyncSpec {
 
     size_t num_semaphores() const { return semaphore_ids.size(); }
 
-    std::variant<uint32_t, GlobalSemaphore> const& get_tensor_sync_semaphore(size_t slice_index) const {
+    std::variant<uint32_t, const GlobalSemaphore*> const& get_tensor_sync_semaphore(size_t slice_index) const {
         TT_FATAL(
             slice_index < semaphore_ids.size(),
             "Internal error. Requested semaphore id for slice index that does not exist");
@@ -901,97 +901,6 @@ static void set_math_runtime_args(
     tt::tt_metal::SetRuntimeArgs(program, math_kernel_id, worker_logical, rt_args);
 }
 
-static void append_fabric_teardown_commands(
-    Program& program,
-    Device* device,
-    Device* forward_device,
-    ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
-    LineTopology const& topology_config,
-    CoreCoord const& teardown_worker_core,
-    ttnn::ccl::cmd::CclHostLowLevelCommandSequence& cmd_stream_out) {
-    std::optional<ttnn::ccl::SyncModeSpec> sync_details = ttnn::ccl::SyncModeSpec{};
-    sync_details->core = teardown_worker_core;
-    sync_details->add_signal(tt::tt_metal::CreateSemaphore(program, teardown_worker_core, 0), 1);
-
-    // auto const edm_termination_infos = line_fabric.generate_ordered_termination_info_farthest_to_nearest();
-    auto const edm_termination_infos = line_fabric.generate_local_chip_fabric_termination_infos(device);
-
-    cmd_stream_out.push_back({ttnn::ccl::cmd::uops::local_core_semaphore_inc(sync_details->sem_ids.at(0), 1)});
-    auto teardown_commands = ttnn::ccl::worker_detail::build_ccl_cmd_proc_teardown_commands(
-        program,
-        device,
-        forward_device,
-        topology_config.line_size(),
-        topology_config.line_index(),
-        edm_termination_infos,
-        sync_details.value(),
-        line_fabric);
-    std::ranges::copy(teardown_commands, std::back_inserter(cmd_stream_out));
-}
-
-struct FabricTeardownInfo {
-    ttnn::ccl::cmd::CclHostLowLevelCommandSequence teardown_core_commands;
-    ttnn::ccl::cmd::CclHostLowLevelCommandSequence fwd_completion_signal_commands;
-    ttnn::ccl::cmd::CclHostLowLevelCommandSequence bwd_completion_signal_commands;
-    ttnn::ccl::cmd::uops::semaphore_id_t teardown_core_sem_id;
-    CoreCoord teardown_core_logical;
-    ttnn::ccl::cmd::CclHostLowLevelCommandSequence non_teardown_core_commands;
-};
-
-static FabricTeardownInfo generate_teardown_commands(
-    Program& program,
-    Device* device,
-    Device* forward_device,
-    ccl::EdmLineFabricOpInterface& fabric_interface,
-    LineTopology const& topology_config,
-    CoreCoord const& teardown_worker_core,
-    // how many local semaphore updates the teardown core expects before proceeding
-    size_t num_completion_signaling_cores,
-    GlobalSemaphore const& teardown_sems) {
-    FabricTeardownInfo teardown_info;
-
-    teardown_info.teardown_core_sem_id = teardown_sems;
-    append_fabric_teardown_commands(
-        program,
-        device,
-        forward_device,
-        fabric_interface,
-        topology_config,
-        teardown_worker_core,
-        teardown_info.teardown_core_commands);
-
-    teardown_info.teardown_core_logical = teardown_worker_core;
-    auto const teardown_worker_noc0 = device->worker_core_from_logical_core(teardown_worker_core);
-    teardown_info.non_teardown_core_commands.push_back(ttnn::ccl::cmd::uops::local_chip_noc_semaphore_inc(
-        teardown_worker_noc0.x, teardown_worker_noc0.y, teardown_info.teardown_core_sem_id, 1));
-
-    return teardown_info;
-}
-
-static void create_non_end_of_line_teardown_commands(
-    ReduceScatterBuilderConfig& builder_config,
-    fabric_lifetime_mode fabric_mode,
-    std::optional<FabricTeardownInfo> const& fabric_teardown_cmd_info,
-    WorkerCommandStreams& worker_command_streams_out) {
-    auto const& final_reducer_worker_cores = builder_config.worker_cores.get().final_reducers_vec;
-    bool teardown_fabric = fabric_mode == fabric_lifetime_mode::TRANSIENT;
-    if (teardown_fabric) {
-        auto const& w_logical = final_reducer_worker_cores[0];
-        TT_FATAL(
-            fabric_teardown_cmd_info.has_value(),
-            "Internal error. Expected fabric teardown info to be populated when running in transient fabric mode");
-        if (w_logical == fabric_teardown_cmd_info->teardown_core_logical) {
-            std::ranges::copy(
-                fabric_teardown_cmd_info->teardown_core_commands,
-                std::back_inserter(
-                    worker_command_streams_out.writer_cmds0.at(fabric_teardown_cmd_info->teardown_core_logical)));
-        } else {
-            std::ranges::copy(
-                fabric_teardown_cmd_info->non_teardown_core_commands,
-                std::back_inserter(worker_command_streams_out.writer_cmds0.at(w_logical)));
-        }
-    }
-}
 
 static void create_non_end_of_line_final_reducer_worker_commands(
     ReduceScatterBuilderConfig& builder_config,
@@ -1504,26 +1413,7 @@ static void create_end_of_line_worker_runtime_args(
     }
 }
 
-static void create_end_of_line_worker_teardown_commands(
-    ReduceScatterBuilderConfig& builder_config,
-    fabric_lifetime_mode fabric_mode,
-    std::optional<FabricTeardownInfo> const& fabric_teardown_cmd_info,
-    WorkerCommandStreams& worker_command_streams) {
-    bool teardown_fabric = fabric_mode == fabric_lifetime_mode::TRANSIENT;
-    if (teardown_fabric) {
-        auto const& w_logical = builder_config.worker_cores.get().partial_reducers_vec[LineDirection::FORWARD][0];
-        auto& writer_cmd_stream = worker_command_streams.writer_cmds0.at(w_logical);
-        TT_FATAL(
-            fabric_teardown_cmd_info.has_value(),
-            "Internal error. Expected fabric teardown info to be populated when running in transient fabric mode");
-        if (w_logical == fabric_teardown_cmd_info->teardown_core_logical) {
-            std::ranges::copy(fabric_teardown_cmd_info->teardown_core_commands, std::back_inserter(writer_cmd_stream));
-        } else {
-            std::ranges::copy(
-                fabric_teardown_cmd_info->non_teardown_core_commands, std::back_inserter(writer_cmd_stream));
-        }
-    }
-}
+
 
 static void create_end_of_line_worker_commands(
     ReduceScatterBuilderConfig& builder_config,
@@ -1636,24 +1526,6 @@ static void create_worker_runtime_args_not_end_of_line(
     populate_partial_reduce_rt_args(builder_config, worker_command_streams_out, math_page_counts_out);
 }
 
-static void add_final_output_sync_for_safe_fabric_teardown(
-    ProgramTensorsBundle& all_tensors,
-    Device* device,
-    Program& program,
-    CoreCoord teardown_worker,
-    size_t expected_number_of_producers) {
-    if (!all_tensors.local_output_sync.has_value()) {
-        int dest_noc0_x_start = device->worker_core_from_logical_core(teardown_worker).x;
-        int dest_noc0_y_start = device->worker_core_from_logical_core(teardown_worker).y;
-        int dest_noc0_x_end = device->worker_core_from_logical_core(teardown_worker).x;
-        int dest_noc0_y_end = device->worker_core_from_logical_core(teardown_worker).y;
-        all_tensors.local_output_sync = TensorSyncSpec{
-            {CreateSemaphore(program, CoreRange(teardown_worker), 0, CoreType::WORKER)},
-            {expected_number_of_producers},
-            {TensorSyncSpec::target_rect{dest_noc0_x_start, dest_noc0_y_start, dest_noc0_x_end, dest_noc0_y_end}}};
-    }
-}
-
 static void validate_tensors(ProgramTensorsBundle const& all_tensors, LineTopology topology_config) {
     if (topology_config.topology() == ttnn::ccl::Topology::Linear) {
         const size_t page_size = get_page_size(*all_tensors.input_tensor);
@@ -1711,7 +1583,7 @@ static void initialize_op_internal_tensor_syncs(
     std::array<Device*, 2> const& neighbour_devices,
     ProgramTensorsBundle& all_tensors,
     WorkerCoreBundle const& worker_cores,
-    GlobalSemaphore const& from_remote_sem) {
+    std::shared_ptr<const GlobalSemaphore> const& from_remote_sem) {
     auto core_coord_lt = [](CoreCoord const& a, CoreCoord const& b) { return a.y < b.y || (a.y == b.y && a.x < b.x); };
 
     TT_FATAL(
@@ -1733,7 +1605,7 @@ static void initialize_op_internal_tensor_syncs(
                 device->worker_core_from_logical_core(worker_core).x,
                 device->worker_core_from_logical_core(worker_core).y,
             });
-            all_tensors.input_tensor_from_remote_sync[direction].semaphore_ids.push_back(from_remote_sem);
+            all_tensors.input_tensor_from_remote_sync[direction].semaphore_ids.push_back(from_remote_sem.get());
             all_tensors.input_tensor_from_remote_sync[direction].completion_target_value_per_semaphore.push_back(1);
 
             // remote output sync
@@ -1833,20 +1705,7 @@ static void generate_worker_command_streams(
     }
 }
 
-static void generate_append_fabric_teardown_commands(
-    ReduceScatterBuilderConfig& builder_config,
-    fabric_lifetime_mode fabric_mode,
-    std::optional<FabricTeardownInfo> const& fabric_teardown_cmd_info,
-    WorkerCommandStreams& command_streams) {
-    bool is_end_of_line = builder_config.topology_config.get().is_at_end_of_line();
-    if (is_end_of_line) {
-        create_end_of_line_worker_teardown_commands(
-            builder_config, fabric_mode, fabric_teardown_cmd_info, command_streams);
-    } else {
-        create_non_end_of_line_teardown_commands(
-            builder_config, fabric_mode, fabric_teardown_cmd_info, command_streams);
-    }
-}
+
 
 static void populate_worker_runtime_args(
     ReduceScatterBuilderConfig& builder_config,
@@ -1883,8 +1742,8 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     ttnn::ccl::Topology topology,
 
     fabric_lifetime_mode fabric_mode,
-    GlobalSemaphore const& from_remote_sems,
-    std::optional<GlobalSemaphore> const& teardown_sems) {
+    std::shared_ptr<const GlobalSemaphore> const& from_remote_sems,
+    std::shared_ptr<const GlobalSemaphore> const& to_remote_sem) {
     using namespace ttnn::ccl::worker_detail;
     bool do_dynamic_fabric_bringup_and_teardown = fabric_mode == fabric_lifetime_mode::TRANSIENT;
 
@@ -1937,25 +1796,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
          ProgramTensorsBundle::build_handle(partial_output_tensor_to_backward_direction)},
         {}};
 
-    // This needs to stay up here for now to initialize the tensor sync properly
-    std::optional<FabricTeardownInfo> fabric_teardown_cmd_info;
-    if (do_dynamic_fabric_bringup_and_teardown) {
-        size_t num_final_output_writer_cores = worker_cores.final_reducers.num_cores();
-        size_t num_completion_signals_before_teardown = num_final_output_writer_cores - 1;
-        auto const& teardown_core = worker_cores.partial_reducers_vec.at(LineDirection::FORWARD).at(0);
-        TT_FATAL(
-            teardown_sems.has_value(),
-            "Internal error: non persistent fabric mode was specified but not fabric teardown semaphores were created");
-        fabric_teardown_cmd_info = generate_teardown_commands(
-            program,
-            device,
-            forward_device.value_or(nullptr),
-            fabric,
-            topology_config,
-            teardown_core,
-            num_completion_signals_before_teardown,
-            teardown_sems.value());
-    }
+
     initialize_op_internal_tensor_syncs(
         program, device, neighbour_devices, all_tensors, worker_cores, from_remote_sems);
 
@@ -1999,19 +1840,12 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     std::unordered_map<CoreCoord, size_t> math_page_counts;
     generate_worker_command_streams(builder_config, fabric_mode, command_streams, math_page_counts);
 
-    if (do_dynamic_fabric_bringup_and_teardown) {
-        generate_append_fabric_teardown_commands(
-            builder_config, fabric_mode, fabric_teardown_cmd_info, command_streams);
-    }
-
     populate_worker_runtime_args(builder_config, fabric_mode, command_streams, math_page_counts);
 
-    if (do_dynamic_fabric_bringup_and_teardown) {
-        fabric.build_kernels();
-    }
+
     // Synchronous mode kernel invocation
     auto override_runtime_arguments_callback =
-        [topology_config, from_remote_sems, teardown_sems, kernel_ids, worker_cores](
+        [topology_config, from_remote_sems, to_remote_sem, kernel_ids, worker_cores](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -2045,8 +1879,8 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     const uint32_t line_index,
     ttnn::ccl::Topology topology,
     std::optional<size_t> num_links_preferred,
-    tt::tt_metal::GlobalSemaphore const& from_remote_sem,
-    tt::tt_metal::GlobalSemaphore const& teardown_sem,
+    std::shared_ptr<const tt::tt_metal::GlobalSemaphore> const& from_remote_sem,
+    std::shared_ptr<const tt::tt_metal::GlobalSemaphore> const& to_remote_sem,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle_) {
     auto program = tt::tt_metal::Program();
 
@@ -2067,6 +1901,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
             num_links_preferred.value_or(line_size));
     }
 
+    TT_FATAL(fabric_mode == fabric_lifetime_mode::PERSISTENT, "Reduce scatter doesn't support transient fabric mode");
     return reduce_scatter_async_on_instantiated_edm_fabric(
         program,
         fabric_handle.value(),
@@ -2088,7 +1923,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
         ttnn::ccl::Topology::Linear,
         fabric_mode,
         from_remote_sem,
-        fabric_mode == fabric_lifetime_mode::PERSISTENT ? std::optional<GlobalSemaphore>{std::nullopt} : teardown_sem);
+        to_remote_sem);
 }
 
 }  // namespace ttnn::ccl::reduce_scatter_detail

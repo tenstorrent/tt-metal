@@ -23,21 +23,21 @@ AllGatherAsync create_all_gather_async_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<Device*>& devices,
     const ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore_handles,
+    const std::vector<std::shared_ptr<GlobalSemaphore>>& semaphore_handles,
     std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) {
     uint32_t num_devices = devices.size();
 
     std::optional<Device*> forward_device = std::nullopt;
     std::optional<Device*> backward_device = std::nullopt;
-    const GlobalSemaphore* semaphore_handle = nullptr;
+    std::shared_ptr<const GlobalSemaphore> semaphore_handle = nullptr;
     bool persistent_fabric = fabric_handle.has_value();
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == input_tensor.device()) {
             device_index = i;
             if (!persistent_fabric) {
-                semaphore_handle = &semaphore_handles.at(i);  // Get raw pointer
+                semaphore_handle = semaphore_handles.at(i);  // Get raw pointer
             }
             if (i != 0) {
                 backward_device = devices.at(i - 1);
@@ -57,7 +57,7 @@ AllGatherAsync create_all_gather_async_struct(
         device_index,
         memory_config.value_or(input_tensor.memory_config()),
         topology,
-        semaphore_handle == nullptr ? std::optional<GlobalSemaphore>{std::nullopt} : *semaphore_handle,
+        semaphore_handle,
         sub_device_id_map,
         fabric_handle};
 }
@@ -171,20 +171,20 @@ Tensor all_gather_async(
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
     bool persistent_fabric_mode = fabric_handle.has_value();
-    std::vector<GlobalSemaphore> semaphore_handles;
+    std::vector<std::shared_ptr<GlobalSemaphore>> semaphore_handles;
     if (!persistent_fabric_mode) {
         for (const auto& device : devices) {
             auto handle = GlobalSemaphore::create(device, core_grid, 0);
             log_trace(
                 tt::LogOp, "Created semaphore handle at address {} for device {}", handle->address(), device->id());
-            semaphore_handles.push_back(std::move(*handle));
+            semaphore_handles.push_back(handle);
         }
         // HACK: assert every handle address is the same
         TT_FATAL(
             std::all_of(
                 semaphore_handles.begin(),
                 semaphore_handles.end(),
-                [&](const auto& handle) { return handle.address() == semaphore_handles.front().address(); }),
+                [&](const auto& handle) { return handle->address() == semaphore_handles.front()->address(); }),
             "[Hack] All semaphore handles should have the same address");
     }
 
