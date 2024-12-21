@@ -1886,6 +1886,7 @@ static void log_worker_command_streams(WorkerCommandStreams const& command_strea
             case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
                 TT_THROW("Got an unsupported command in a command stream (STREAM_EDM_TO_TENSOR). This command is deprecated and unsupported by this infrastructure. This will lead to undefined and invalid behaviour");
             case ttnn::ccl::cmd::CclCommandCode::INVALID:
+            default:
                 TT_THROW("Got an invalid command in a command stream. This will lead to undefined and invalid behaviour");
                 return "";
         }

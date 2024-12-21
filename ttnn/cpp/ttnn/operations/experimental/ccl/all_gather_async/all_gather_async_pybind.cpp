@@ -18,7 +18,7 @@ namespace detail {
 
 template <typename ccl_operation_t>
 void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
-    namespace py = pybind11;
+    // namespace py = pybind11;
 
     bind_registered_operation(
         module,
