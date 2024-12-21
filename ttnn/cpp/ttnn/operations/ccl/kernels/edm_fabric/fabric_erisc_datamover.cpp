@@ -412,7 +412,7 @@ void receiver_send_received_ack(
         reinterpret_cast<volatile eth_channel_sync_t *>(local_receiver_buffer_channel.get_current_bytes_sent_address())
             ->receiver_ack == 0);
 
-    DPRINT << "EDMS rsc to " << (uint32_t)sender_buffer_channel.get_current_bytes_sent_address() << "\n";
+    DPRINT << "EDMR rsc to " << (uint32_t)sender_buffer_channel.get_current_bytes_sent_address() << "\n";
 
     ASSERT(!eth_txq_is_busy());
     internal_::eth_send_packet_unsafe(
@@ -435,7 +435,7 @@ FORCE_INLINE void receiver_send_completion_ack(
     *(local_receiver_buffer_channel.get_current_bytes_acked_address()) = 0;
     ASSERT(src_sender_channel < NUM_SENDER_CHANNELS);
 
-    DPRINT << "EDMS rsc to " << (uint32_t)remote_sender_channels[src_sender_channel].get_current_bytes_sent_address() << "\n";
+    DPRINT << "EDMR rsc to " << (uint32_t)remote_sender_channels[src_sender_channel].get_current_bytes_sent_address() << "\n";
 
     ASSERT(!eth_txq_is_busy());
     internal_::eth_send_packet_unsafe(
@@ -511,6 +511,7 @@ bool run_sender_channel_state_machine_step(
     tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS> &local_sender_channel,
     tt::fabric::EdmChannelWorkerInterface &local_sender_channel_worker_interface,
     tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &remote_receiver_channel,
+    bool graceful_termination_mode,
     SenderState *const sender_state_out) {
     bool incr_sender_channel_index = true;
     switch (*sender_state_out) {
@@ -532,7 +533,7 @@ bool run_sender_channel_state_machine_step(
                 // and not be able to send the channel sync for the packet we just sent, which overall negatively
                 // impact latency
                 incr_sender_channel_index = send_status != tt::fabric::SendStatus::SENT_PAYLOAD_ONLY;
-            } else {
+            } else if (!graceful_termination_mode) {
                 if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
                     local_sender_channel_worker_interface.teardown_connection();
                     *sender_state_out = SenderState::SENDER_WAIT_WORKER_HANDSHAKE;
@@ -653,16 +654,14 @@ FORCE_INLINE bool got_termination_signal(volatile tt::fabric::TerminationSignal 
 template <size_t RECEIVER_NUM_BUFFERS, size_t SENDER_NUM_BUFFERS, size_t NUM_SENDER_CHANNELS>
 bool all_channels_drained(tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &local_receiver_channel,
                           std::array<tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &local_sender_channels,
-                          std::array<SenderState, NUM_SENDER_CHANNELS> sender_states,
                           std::array<tt::fabric::EdmChannelWorkerInterface, NUM_SENDER_CHANNELS> &local_sender_channel_worker_interfaces) {
-    // Unfortunately have to do this for now instead of only conditionally checking
-    // each undrained channel due to code size issues...
-    bool eth_buffers_drained = local_sender_channels[0].all_buffers_drained() && local_sender_channels[1].all_buffers_drained() &&
-           local_receiver_channel.all_buffers_drained();
 
-    return eth_buffers_drained &&
-            (sender_states[0] == SenderState::SENDER_WAITING_FOR_WORKER && !local_sender_channel_worker_interfaces[0].has_payload() &&
-           sender_states[1] == SenderState::SENDER_WAITING_FOR_WORKER && !local_sender_channel_worker_interfaces[1].has_payload());
+    bool eth_buffers_drained = local_sender_channels[0].all_buffers_drained() && local_sender_channels[1].all_buffers_drained() && local_receiver_channel.all_buffers_drained();
+
+    bool sender0_has_unsent_packets = (local_sender_channel_worker_interfaces[0].has_payload());
+    bool sender1_has_unsent_packets = (local_sender_channel_worker_interfaces[1].has_payload());
+
+    return eth_buffers_drained && !sender0_has_unsent_packets && !sender1_has_unsent_packets;
 }
 
 /*
@@ -688,10 +687,11 @@ void run_fabric_edm_main_loop(
     *termination_signal_ptr = tt::fabric::TerminationSignal::KEEP_RUNNING;
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
-        if (got_graceful_termination_signal(termination_signal_ptr)) {
+        bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
+        if (got_graceful_termination) {
             DPRINT << "EDM Graceful termination\n";
             bool all_drained = all_channels_drained<RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, NUM_SENDER_CHANNELS>(
-                local_receiver_channel, local_sender_channels, sender_states, local_sender_channel_worker_interfaces);
+                local_receiver_channel, local_sender_channels, local_sender_channel_worker_interfaces);
 
             if (all_drained) {
                 return;
@@ -707,6 +707,7 @@ void run_fabric_edm_main_loop(
             local_sender_channel,
             local_sender_channel_worker_interface,
             remote_receiver_channel,
+            got_graceful_termination,
             &(sender_states[sender_channel_index]));
         if (incr_sender_channel_index) {
             // TODO: this can probably be optimized
@@ -809,8 +810,6 @@ void kernel_main() {
         get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++)));
     auto sender1_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t *>(
         get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++)));
-    *sender0_worker_semaphore_ptr = 0;
-    *sender1_worker_semaphore_ptr = 0;
 
     //////////////////////////////
     //////////////////////////////

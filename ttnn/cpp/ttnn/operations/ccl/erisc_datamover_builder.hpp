@@ -32,7 +32,7 @@ struct FabricEriscDatamoverConfig {
 
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
-    static constexpr std::size_t handshake_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    static constexpr std::size_t handshake_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE/* + 1024*/;
     static constexpr std::size_t edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
     static constexpr std::size_t termination_signal_address =
         edm_channel_ack_addr + (2 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work

@@ -229,7 +229,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_edm_worker_location_info_address.value_or(0),
         this->receiver_channel_local_buffer_index_addr,
         // this is the receiver channel's local sem for flow controlling with downstream fabric sender
-        this->receiver_channel_downstream_flow_control_semaphore_id.value_or(0),
+        this->receiver_channel_downstream_flow_control_semaphore_id.value_or(-1),
         this->sender_channel_0_flow_control_semaphore_id,
         this->sender_channel_1_flow_control_semaphore_id
     };
@@ -242,7 +242,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     chip_id_t local_chip_id,
     chip_id_t peer_chip_id,
     FabricEriscDatamoverConfig const& config) {
-    std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id = std::nullopt;
+    std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id = tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
     auto sender_channel_0_flow_control_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
     auto sender_channel_1_flow_control_semaphore_id =
