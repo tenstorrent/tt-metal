@@ -61,6 +61,16 @@ ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void eltwise_binop_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX>())); }
+ALWI void add_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ADD_BINARY>())); }
+
+ALWI void sub_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, SUB_BINARY>())); }
+
+ALWI void mul_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, MUL_BINARY>())); }
+
+ALWI void div_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, DIV_BINARY>())); }
+
+ALWI void rsub_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, RSUB_BINARY>())); }
+
+ALWI void power_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, POW_BINARY>())); }
 
 }  // namespace ckernel
