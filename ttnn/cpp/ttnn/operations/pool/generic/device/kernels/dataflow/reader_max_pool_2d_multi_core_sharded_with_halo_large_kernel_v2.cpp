@@ -68,6 +68,8 @@ void kernel_main() {
     constexpr uint32_t in_cb_sz = get_compile_time_arg_val(13);
     constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(14);
 
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+
     constexpr uint32_t TILE_SIZE = 32 * 32;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
@@ -98,7 +100,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
 
-    uint32_t in_w_padded = in_w + 2 * pad_w;
+    uint32_t in_w_padded = in_w + 2 * pad_w + ceil_pad_w;
 
     uint32_t read_bytes = in_nbytes_c;
     if (in_nbytes_c > MAX_ELE_PER_REDUCTION) {
