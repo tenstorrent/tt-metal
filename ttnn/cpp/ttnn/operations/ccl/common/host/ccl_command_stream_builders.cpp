@@ -121,8 +121,8 @@ std::vector<ttnn::ccl::v2::TensorSlice> split_tensor_slice_across_workers_wrappe
 
     auto to_cmd_tensor = [&tensor_slice](std::pair<size_t, size_t> size_offset) {
         auto worker_slice = tensor_slice;
-        worker_slice.worker_slice_shape.x = size_offset.first;
-        worker_slice.worker_slice_offset.x = size_offset.second;
+        worker_slice.worker_slice_shape = {1, 1, 1, size_offset.first};
+        worker_slice.worker_slice_offset = {0, 0, 0, size_offset.second};
         return worker_slice;
     };
 
