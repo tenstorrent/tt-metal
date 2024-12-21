@@ -18,7 +18,8 @@ struct ExecuteAllGatherAsync {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         std::optional<SubDeviceId> subdevice_id = std::nullopt,
-        bool enable_persistent_fabric_mode = false);
+        bool enable_persistent_fabric_mode = false,
+        bool create_semaphore_handles = true);
 };
 
 }  // namespace operations::experimental::ccl

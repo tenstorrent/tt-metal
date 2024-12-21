@@ -56,6 +56,57 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     return False, ""
 
 
+def run_with_trace(
+    mesh_device,
+    all_gather_topology,
+    input_tensor_mesh,
+    dim,
+    num_links,
+    output_mem_config,
+    num_iter=20,
+    subdevice_id=None,
+):
+    # Compile Run
+    logger.info("Compiling model")
+    tt_out_tensor = ttnn.experimental.all_gather_async(
+        input_tensor_mesh,
+        dim,
+        num_links=num_links,
+        memory_config=output_mem_config,
+        topology=all_gather_topology,
+        subdevice_id=subdevice_id,
+        create_semaphore_handles=True,
+    )
+    for d in mesh_device.get_devices():
+        ttnn.synchronize_device(d)
+
+    # Capture trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(num_iter):
+        tt_out_tensor = ttnn.experimental.all_gather_async(
+            input_tensor_mesh,
+            dim,
+            num_links=num_links,
+            memory_config=output_mem_config,
+            topology=all_gather_topology,
+            subdevice_id=subdevice_id,
+            create_semaphore_handles=False,
+        )
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for d in mesh_device.get_devices():
+        ttnn.synchronize_device(d)
+
+    # Run the op
+    logger.info("Starting Trace perf test...")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    for d in mesh_device.get_devices():
+        ttnn.synchronize_device(d)
+
+    return tt_out_tensor
+
+
 def run_all_gather_impl(
     mesh_device,
     num_devices,
@@ -168,6 +219,8 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
+            num_iter=num_iters,
+            subdevice_id=worker_sub_device_id,
         )
     else:
         for i in range(num_iters):

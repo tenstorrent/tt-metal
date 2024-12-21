@@ -130,10 +130,14 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::shared_ptr<const GlobalSemaphore>& semaphore_handle,
+    const std::optional<std::shared_ptr<const GlobalSemaphore>>& semaphore_handle_opt,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
+
+    TT_FATAL(semaphore_handle_opt.has_value(), "Semaphore handle is required for compile time");
+
+    auto semaphore_handle = semaphore_handle_opt.value();
 
     Device* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
@@ -178,7 +182,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device);
 
     // L1 Scratch CB Creation
-    uint32_t num_pages_per_packet = 1;                 // we assume 1 page per packet for now
+    uint32_t num_pages_per_packet = 4;                 // we assume 4 page per packet for now
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size() + sizeof(tt::fabric::PacketHeader);
