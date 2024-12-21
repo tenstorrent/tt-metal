@@ -6,6 +6,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
 
 namespace tt::tt_metal {
 namespace program_utils {
@@ -245,12 +246,23 @@ inline uint32_t get_packed_write_max_unicast_sub_cmds(Device* device) {
     return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 }
 
-void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence) {
+void insert_empty_program_dispatch_preamble_cmd(
+    ProgramCommandSequence& program_command_sequence, const std::vector<ConfigBufferEntry> kernel_config_addrs) {
     // Initialize an empty preamble command in the Program Dispatch Cmd Sequence, which will be
     // updated with the correct write offsets when the program is enqueued
     uint32_t preamble_cmd_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-    program_command_sequence.preamble_command_sequence = HostMemDeviceCommand(preamble_cmd_sizeB);
-    program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(0, 0, 0);
+    std::cout << kernel_config_addrs.size() << " "
+              << hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) << " "
+              << hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) << std::endl;
+    if (hal.get_programmable_core_type_count() >= 2) {
+        program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(
+            0,
+            kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)].addr,
+            kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)].addr);
+    } else {
+        program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(
+            0, kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)].addr, 0);
+    }
 }
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, Device* device) {
@@ -652,7 +664,11 @@ uint32_t insert_write_packed_payloads(
 }
 
 void assemble_device_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id) {
+    ProgramCommandSequence& program_command_sequence,
+    Program& program,
+    Device* device,
+    SubDeviceId sub_device_id,
+    const std::vector<ConfigBufferEntry> kernel_config_addrs) {
     uint32_t cmd_sequence_sizeB = 0;
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     NOC noc_index = NOC::NOC_0;
@@ -957,8 +973,8 @@ void assemble_device_commands(
     uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     for (KernelGroup& kernel_group : program.get_kernel_groups(programmable_core_index)) {
         kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
-        for (uint32_t i = 0; i < NUM_PROGRAMMABLE_CORE_TYPES; i++) {
-            kernel_group.launch_msg.kernel_config.kernel_config_base[i] = 0;
+        for (uint32_t i = 0; i < kernel_config_addrs.size(); i++) {
+            kernel_group.launch_msg.kernel_config.kernel_config_base[i] = kernel_config_addrs[i].addr;
         }
         kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
         const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
@@ -990,8 +1006,8 @@ void assemble_device_commands(
             kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
             // Set the kernel_config_base addrs to 0 when generating the dispatch commands for the program
             // Will be resolved at runtime
-            for (uint32_t i = 0; i < 1; i++) {
-                kernel_group.launch_msg.kernel_config.kernel_config_base[i] = 0;
+            for (uint32_t i = 0; i < kernel_config_addrs.size(); i++) {
+                kernel_group.launch_msg.kernel_config.kernel_config_base[i] = kernel_config_addrs[i].addr;
             }
             kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
             const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);

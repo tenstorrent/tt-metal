@@ -12,6 +12,7 @@
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
+#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
 #include "dev_msgs.h"
 
 namespace tt {
@@ -151,7 +152,7 @@ class Program {
 
     void compile(Device * device, bool fd_bootloader_mode = false);
 
-    void lower(Device* device);
+    void lower(Device* device, const std::vector<ConfigBufferEntry> kernel_config_addrs);
 
     void invalidate_circular_buffer_allocation();
 

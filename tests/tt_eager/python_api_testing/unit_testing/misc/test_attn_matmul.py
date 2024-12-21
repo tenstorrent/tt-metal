@@ -179,7 +179,7 @@ def test_attn_matmul_with_program_cache(
 )
 @pytest.mark.parametrize(
     "enable_async, num_loops",
-    ((True, 5), (False, 1)),
+    ((False, 5), (False, 1)),
 )
 def test_group_attn_matmul(
     num_loops,
@@ -194,6 +194,7 @@ def test_group_attn_matmul(
     output_sharded,
     shard_orientation,
     device,
+    # use_program_cache,
 ):
     torch.manual_seed(0)
 

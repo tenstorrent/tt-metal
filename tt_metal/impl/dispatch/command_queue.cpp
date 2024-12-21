@@ -362,7 +362,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
 }
 
 void EnqueueProgramCommand::assemble_preamble_commands(
-    ProgramCommandSequence& program_command_sequence, const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs) {
+    ProgramCommandSequence& program_command_sequence) {
     uint32_t uncached_cmd_sequence_sizeB =
         CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_SET_WRITE_OFFSET
 
@@ -371,13 +371,9 @@ void EnqueueProgramCommand::assemble_preamble_commands(
 
     // Send write offsets
     if (hal.get_programmable_core_type_count() >= 2) {
-        program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(
-            0,
-            kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)].addr,
-            kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)].addr);
+        program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(0, 0, 0);
     } else {
-        program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(
-            0, kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)].addr, 0);
+        program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(0, 0, 0);
     }
 }
 
@@ -789,7 +785,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
 }
 
 void EnqueueProgramCommand::assemble_device_commands(
-    ProgramCommandSequence& program_command_sequence, const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs) {
+    ProgramCommandSequence& program_command_sequence) {
     // Calculate size of command and fill program indices of data to update
     // TODO: Would be nice if we could pull this out of program
     uint32_t cmd_sequence_sizeB = 0;
@@ -1096,8 +1092,8 @@ void EnqueueProgramCommand::assemble_device_commands(
     uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     for (KernelGroup& kernel_group : program.get_kernel_groups(programmable_core_index)) {
         kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
-        for (uint32_t i = 0; i < kernel_config_addrs.size(); i++) {
-            kernel_group.launch_msg.kernel_config.kernel_config_base[i] = kernel_config_addrs[i].addr;
+        for (uint32_t i = 0; i < NUM_PROGRAMMABLE_CORE_TYPES; i++) {
+            kernel_group.launch_msg.kernel_config.kernel_config_base[i] = 0; // kernel_config_addrs[i].addr;
         }
         kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
         const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
@@ -1126,8 +1122,8 @@ void EnqueueProgramCommand::assemble_device_commands(
     if (programmable_core_index != -1) {
         for (KernelGroup& kernel_group : program.get_kernel_groups(programmable_core_index)) {
             kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
-            for (uint32_t i = 0; i < kernel_config_addrs.size(); i++) {
-                kernel_group.launch_msg.kernel_config.kernel_config_base[i] = kernel_config_addrs[i].addr;
+            for (uint32_t i = 0; i < NUM_PROGRAMMABLE_CORE_TYPES; i++) {
+                kernel_group.launch_msg.kernel_config.kernel_config_base[i] = 0; //kernel_config_addrs[i].addr;
             }
             kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
             const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);
@@ -1601,11 +1597,7 @@ void EnqueueProgramCommand::process() {
         // id into the command hash, to always assert on programs being reused across devices.
         command_hash = (command_hash << 32) | (device->id());
     }
-    bool is_cached = program.is_cached(); // Program is cached, its is assocated command stream was previously generated
-    auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
-    // Is the program was cached, the current command_hash, must match the one generated when the program was cached
-    // Finalizing the program multiple times/Regenerating program cache state is not currently supported
-    TT_FATAL((not is_cached) or cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
+
     if (program.get_program_binary_status(device->id()) == ProgramBinaryStatus::InFlight) {
         // assemble_stall_commands is hardcoded to always wait for everything for now.
         this->config_buffer_mgr.free(this->expected_num_workers_completed);
@@ -1630,6 +1622,9 @@ void EnqueueProgramCommand::process() {
 
     RecordProgramRun(program);
 
+    this->device->command_queue().hw_command_queue().lower(program);
+    auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
+
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
     static constexpr uint32_t tensix_l1_write_offset_offset =
         (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset1));
@@ -1638,6 +1633,9 @@ void EnqueueProgramCommand::process() {
 
     auto& cached_program_command_sequence = cached_cmd_iter->second;
     if (program.get_program_binary_status(device->id()) != ProgramBinaryStatus::Committed) {
+        // Insert a stall before writing any program configs when binaries are in flight
+        stall_first = true;
+        stall_before_program = false;
         cached_program_command_sequence.current_stall_seq_idx = UncachedStallSequenceIdx;
         program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
     } else {
@@ -2476,6 +2474,53 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
         this->finish(sub_device_ids);
     }
 }
+void HWCommandQueue::lower(Program& program) {
+    uint64_t command_hash = device->build_key();
+    if (not hal.is_coordinate_virtualization_enabled()) {
+        // When coordinate virtualization is not enabled, explicitly encode the device
+        // id into the command hash, to always assert on programs being reused across devices.
+        command_hash = (command_hash << 32) | (device->id());
+    }
+
+    auto& cached_program_command_sequences = program.get_cached_program_command_sequences();
+    if (!program.is_cached()) {
+        std::vector<SubDeviceId> sub_device_ids = {program.determine_sub_device_ids(device)};
+        ProgramCommandSequence program_command_sequence;
+        auto sub_device_id = sub_device_ids[0];
+        auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(sub_device_id);
+        auto command = EnqueueProgramCommand(
+            this->id,
+            this->device,
+            this->noc_index,
+            program,
+            this->virtual_enqueue_program_dispatch_core,
+            this->manager,
+            this->get_config_buffer_mgr(sub_device_id.to_index()),
+            0,
+            // The assembled program command will encode the location of the launch messages in the ring buffer
+            0,
+            0,
+            sub_device_id);
+        command.assemble_preamble_commands(program_command_sequence);
+        command.assemble_stall_commands(program_command_sequence, true);
+        program_command_sequence.current_stall_seq_idx = UncachedStallSequenceIdx;
+        // Runtime Args Command Sequence
+        command.assemble_runtime_args_commands(program_command_sequence);
+
+        // Record kernel groups in this program, only need to do it once.
+        for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+            CoreType core_type = hal.get_core_type(index);
+            RecordKernelGroups(program, core_type, program.get_kernel_groups(index));
+        }
+        command.assemble_device_commands(program_command_sequence, kernel_config_addrs);
+        command.assemble_stall_commands(program_command_sequence, false);
+        cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
+        program.set_cached();
+    } else {
+        auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
+        TT_FATAL(cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
+    }
+}
 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
@@ -2493,7 +2538,6 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
         program.set_program_binary_status(device->id(), ProgramBinaryStatus::InFlight);
     }
-    program.lower(device);
     program.set_last_used_command_queue_for_testing(this);
 
 #ifdef DEBUG

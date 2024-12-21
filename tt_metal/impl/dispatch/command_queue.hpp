@@ -332,11 +332,11 @@ class EnqueueProgramCommand : public Command {
         SubDeviceId sub_device_id);
 
     void assemble_preamble_commands(
-        ProgramCommandSequence& program_command_sequence, const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs);
+        ProgramCommandSequence& program_command_sequence);
     void assemble_stall_commands(ProgramCommandSequence& program_command_sequence, bool prefetch_stall);
     void assemble_runtime_args_commands(ProgramCommandSequence& program_command_sequence);
     void assemble_device_commands(
-        ProgramCommandSequence& program_command_sequence, const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs);
+        ProgramCommandSequence& program_command_sequence);
     void update_device_commands(
         ProgramCommandSequence& cached_program_command_sequence,
         const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs);
@@ -527,7 +527,7 @@ class HWCommandQueue {
     void set_num_worker_sems_on_dispatch(uint32_t num_worker_sems);
     void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
     void reset_worker_state(bool reset_launch_msg_state);
-
+    void lower(Program& program, const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs);
    private:
     uint32_t id;
     uint32_t size_B;
