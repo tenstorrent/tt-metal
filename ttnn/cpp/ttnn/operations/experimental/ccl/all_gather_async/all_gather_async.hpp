@@ -20,6 +20,18 @@ struct ExecuteAllGatherAsync {
         std::optional<SubDeviceId> subdevice_id = std::nullopt,
         bool enable_persistent_fabric_mode = false,
         bool create_semaphore_handles = true);
+        
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const int32_t dim,
+        const uint32_t cluster_axis,
+        const MeshDevice& mesh_device,
+        const ttnn::ccl::Topology topology,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<size_t> num_preferred_links = std::nullopt,
+        std::optional<SubDeviceId> subdevice_id = std::nullopt,
+        bool enable_persistent_fabric_mode = false,
+        bool create_semaphore_handles = true);
 };
 
 }  // namespace operations::experimental::ccl
