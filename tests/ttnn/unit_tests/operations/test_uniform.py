@@ -75,6 +75,7 @@ def validate_uniform(npu_input, shape, rand_from, rand_to, seed, dtype, compute_
     assert np.allclose(npu_var, expected_var, rtol=0.5)
 
 
+# Due to the issue with tensix instruction to generated pseudo-random numbers: #13904, the seed is temporarily fixed to make the test result consistent.
 def run_uniform(shape, rand_range, dtype, device, seed=0, compute_kernel_options=None, mode=TestMode.VALIDATE):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     rand_from, rand_to = rand_range[0], rand_range[1]
