@@ -156,8 +156,8 @@ void LayerNorm::validate(
                 TT_FATAL(K % TILE_WIDTH == 0, "K must be divisible by tile width.");
                 const auto bbox = shard_spec.grid.bounding_box();
                 TT_FATAL(
-                    bbox.end_coord.x < program_config.compute_with_storage_grid_size.x &&
-                        bbox.end_coord.y < program_config.compute_with_storage_grid_size.y,
+                    bbox.end_coord.x - bbox.start_coord.x < program_config.compute_with_storage_grid_size.x &&
+                        bbox.end_coord.y - bbox.start_coord.y < program_config.compute_with_storage_grid_size.y,
                     "Error");
 
                 bool mcast_1d = M == block_h;
@@ -218,10 +218,9 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                 if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
                     auto shard_spec = input_tensor.shard_spec().value();
                     shard_spec.shape[1] = output_shape[3];
-
-                    CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(0, 0));
-                    CoreRangeSet core_range_set({first_core_range});
-                    shard_spec.grid = core_range_set;
+                    CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
+                    CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
+                    shard_spec.grid = output_grid;
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {TensorSpec(
