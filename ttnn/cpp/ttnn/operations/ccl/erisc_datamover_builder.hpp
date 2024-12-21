@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "eth_l1_address_map.h"
+#include "ttnn/distributed/types.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -287,6 +288,9 @@ class EdmLineFabricOpInterface {
     size_t num_links;
     size_t buffer_size_bytes;
 };
+
+void initialize_edm_fabric(distributed::MeshDevice* mesh_device);
+void teardown_edm_fabric(distributed::MeshDevice* mesh_device);
 
 };  // namespace ccl
 };  // namespace ttnn
