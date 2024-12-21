@@ -13,7 +13,9 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const int32_t dim,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const ttnn::ccl::Topology topology) {
-    return ttnn::operations::experimental::ccl::all_gather_async(input_tensor, dim, num_links, memory_config, topology);
+    const ttnn::ccl::Topology topology,
+    bool enable_persistent_fabric_mode) {
+    return ttnn::operations::experimental::ccl::all_gather_async(
+        input_tensor, dim, num_links, memory_config, topology, enable_persistent_fabric_mode);
 }
 }  // namespace ttnn::operations::experimental::ccl

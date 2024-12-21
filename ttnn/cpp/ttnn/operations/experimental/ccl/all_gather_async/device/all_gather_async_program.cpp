@@ -72,6 +72,51 @@ static void print_tensor_slice(const ttnn::ccl::v2::TensorSlice& slice_v2) {
         slice_v2.worker_slice_offset.x);
 }
 
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, Device* device) {
+    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
+    CoreRangeSet sender_worker_core_range;
+    if (persistent_fabric_mode) {
+        const size_t num_workers_preferred = num_workers_per_link * num_links;
+        const auto available_cores =
+            device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
+        if (available_cores.num_cores() < num_workers_preferred) {
+            log_warning(
+                tt::LogOp,
+                "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+                "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
+                "performance loss.",
+                num_workers_preferred,
+                num_workers_per_link,
+                num_links,
+                available_cores.num_cores());
+        }
+        for (const auto& cr : available_cores.ranges()) {
+            auto start = cr.start_coord;
+            auto end = cr.end_coord;
+            for (size_t y = start.y; y <= end.y; y++) {
+                for (size_t x = start.x; x <= end.x; x++) {
+                    sender_worker_core_range =
+                        sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
+                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                        break;
+                    }
+                }
+                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                    break;
+                }
+            }
+            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                break;
+            }
+        }
+    } else {
+        sender_worker_core_range =
+            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_workers_per_link - 1, num_links - 1)));
+    }
+    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
+}
+
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
@@ -86,9 +131,9 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::shared_ptr<const GlobalSemaphore>& semaphore_handle,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& _fabric_handle) {
-    bool persistent_fabric_mode = _fabric_handle.has_value();
+    bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
+    const bool enable_async_output_tensor = false;
 
     Device* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
@@ -100,11 +145,8 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         is_first_chip,
         is_last_chip);
 
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle = _fabric_handle;
-    if (!persistent_fabric_mode) {
-        local_fabric_handle =
-            ccl::EdmLineFabricOpInterface(device, forward_device, backward_device, &program, false, num_links);
-    }
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
+        ccl::EdmLineFabricOpInterface(device, forward_device, backward_device, &program, false, num_links);
 
     LineTopology line_topology(ring_size, ring_index);
 
@@ -128,9 +170,8 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
-    const auto& sender_worker_core_range =
-        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_workers_per_link - 1, num_links - 1)));
-    const auto& sender_worker_cores = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
+    const auto [sender_worker_core_range, sender_worker_cores] =
+        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device);
 
     // L1 Scratch CB Creation
     uint32_t num_pages_per_packet = 1;                 // we assume 1 page per packet for now
@@ -273,22 +314,25 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_write_cb_to_tensor_slice(
             output_worker_slice_v2, src0_cb_index, mcast_dest_args));
         // 2, mcast the semaphore to all dest for teardown
-        bool generate_teardown_commands = !persistent_fabric_mode && link == 0;
-        if (generate_teardown_commands) {
-            TT_FATAL(
-                semaphore_handle != nullptr,
-                "Internal error during all-=gather fatcory. Global semaphore for fabric teardown not properly "
-                "initialized for non-persistent fabric mode");
-            writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_multicast_semaphore_inc(
-                semaphore_handle.get(),
-                ttnn::ccl::cmd::CclCommandAtomicInc{1},
-                drain_sync_core.x,
-                drain_sync_core.y,
-                mcast_dest_args));
+        TT_FATAL(
+            semaphore_handle != nullptr,
+            "Internal error during all-=gather fatcory. Global semaphore for fabric teardown not properly "
+            "initialized for non-persistent fabric mode");
+        writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_multicast_semaphore_inc(
+            semaphore_handle.get(),
+            ttnn::ccl::cmd::CclCommandAtomicInc{1},
+            drain_sync_core.x,
+            drain_sync_core.y,
+            mcast_dest_args));
+        if (!enable_async_output_tensor) {
             // 3, wait for n_chip*num_links number of semaphore at teardown semaphore address for first chip, and
             // n_chip*num_links+1 for other chips
             writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_semaphore_wait(
                 semaphore_handle.get(), is_first_chip ? ring_size * num_links : ring_size * num_links + 1));
+        }
+
+        bool generate_teardown_commands = !enable_persistent_fabric_mode && link == 0;
+        if (generate_teardown_commands) {
             // 4, send semaphore unicast to forward device except for the last chip
             if (!is_last_chip) {
                 writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_unicast_semaphore_inc(
@@ -326,7 +370,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             {backward_fabric_connection});
     }
 
-    if (!persistent_fabric_mode) {
+    if (!enable_persistent_fabric_mode) {
         local_fabric_handle->build_kernels();
     }
 

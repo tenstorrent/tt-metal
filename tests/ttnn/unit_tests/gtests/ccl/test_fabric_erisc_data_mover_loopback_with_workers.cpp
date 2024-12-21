@@ -3026,13 +3026,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     log_info(tt::LogTest, "Lauching op");
 
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
-        input_mesh_tensor,
-        dim,
-        num_links,
-        operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        ttnn::ccl::Topology::Linear,
-        subdevice_managers->worker_subdevice_id,
-        fabric_handle);
+        input_mesh_tensor, dim, num_links, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, ttnn::ccl::Topology::Linear, true);
 
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");
