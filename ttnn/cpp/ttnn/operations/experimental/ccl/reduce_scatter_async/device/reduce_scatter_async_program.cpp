@@ -107,6 +107,7 @@ static_assert(
     static_cast<size_t>(LineDirection::BACKWARD) ==
     static_cast<size_t>(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
 
+constexpr LineDirection relay_to_final_output_dir = LineDirection::FORWARD;
 // TODO: promote to header
 
 struct ReduceScatterCircularBuffers {
@@ -280,8 +281,8 @@ static ReduceScatterCircularBuffers create_worker_circular_buffers(
 
 template <typename T>
 static std::vector<T> vslice(std::vector<T> const& vec, std::size_t start, std::size_t end_inclusive) {
-    assert(end_inclusive < vec.size());
-    assert(start < vec.size());
+    TT_FATAL(end_inclusive < vec.size(), "Out of bounds access in vslice for vector of size {}. Requested end_inclusive index {}.", vec.size(), end_inclusive);
+    TT_FATAL(start < vec.size(), "Out of bounds access in vslice for vector of size {}. Requested start index {}.", vec.size(), start);
     std::vector<T> output;
     if (start > end_inclusive) {
         size_t n_elem = start - end_inclusive + 1;
@@ -742,7 +743,8 @@ static void generate_partial_reducer_reader_worker_command_streams(
     // Same for both operands
     std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> const& worker_tensor_slices,
     std::vector<CoreCoord> const& worker_cores,
-    WorkerCommandStreams& worker_command_streams_out) {
+    WorkerCommandStreams& worker_command_streams_out,
+    bool skip_math_for_last_slice) {
     using namespace ttnn::ccl::cmd;
     using namespace ttnn::ccl::cmd::uops;
     using namespace ttnn::ccl::cmd::builder;
@@ -786,7 +788,13 @@ static void generate_partial_reducer_reader_worker_command_streams(
                 if (last_slice) {
                     // Make sure not to add the space at the beginning of the CB chunk for packet header
                     // so when we write out from the other side, we maintain proper alignment
-                    worker_command_stream0.push_back(read_tensor_slice_to_cb(s, get_cb(i)));
+                    if (!skip_math_for_last_slice) {
+                        // for linear topology, one of the direction mustn't do a partial reduce for it's last
+                        // input chunk with the `input_tensor` otherwise `input_tensor` for that chunk will be accumulated
+                        // twice. We arbitrarily choose the forward direction as the one that will not partial reduce
+                        // for the last input chunk
+                        worker_command_stream0.push_back(read_tensor_slice_to_cb(s, get_cb(i)));
+                    }
                 } else {
                     worker_command_stream0.push_back(read_tensor_slice_to_cb_for_eventual_fabric_write(s, get_cb(i)));
                 }
@@ -800,7 +808,7 @@ static void generate_partial_reducer_reader_worker_command_streams(
                 worker_command_stream1.push_back(
                     local_semaphore_wait(from_remote_input_tensor_sync.value().get_tensor_sync_semaphore(w), i + 1));
                 if (last_slice) {
-                    worker_command_stream1.push_back(read_tensor_slice_to_cb(s, reader_cbs.math_in1));
+                    worker_command_stream1.push_back(read_tensor_slice_to_cb(s, skip_math_for_last_slice ? reader_cbs.pass_through : reader_cbs.math_in1));
                 } else {
                     worker_command_stream1.push_back(
                         read_tensor_slice_to_cb_for_eventual_fabric_write(s, reader_cbs.math_in1));
@@ -816,7 +824,8 @@ static void generate_partial_reducer_writer_worker_command_streams(
     TensorSyncBundle const& local_partial_output_tensor_sync_bundle,
     std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> const& remote_out_worker_tensor_slices,
     LineDirection direction,
-    WorkerCommandStreams& worker_command_streams) {
+    WorkerCommandStreams& worker_command_streams,
+    bool skip_math_for_last_slice) {
     auto const& topology_config = builder_config.topology_config.get();
     auto const& worker_cores = builder_config.worker_cores.get().partial_reducers[direction];
     auto const& worker_cores_vec = builder_config.worker_cores.get().partial_reducers_vec[direction];
@@ -948,7 +957,7 @@ static void generate_partial_reducer_writer_worker_command_streams(
             std::ranges::copy(
                 CclHostLowLevelCommandSequence{
                     local_semaphore_wait(internal_command_stream_sync_sem_id, 1),
-                    local_write_cb_to_tensor_slice(local_output_tensor_slices_per_worker[w][0], writer_cbs.math_out),
+                    local_write_cb_to_tensor_slice(local_output_tensor_slices_per_worker[w][0], skip_math_for_last_slice ? writer_cbs.pass_through : writer_cbs.math_out),
                     local_chip_semaphore_inc_mcast(
                         // NOTE: Per worker semaphores
                         local_partial_output_tensor_sync_bundle.sync_spec.value().get_tensor_sync_semaphore(w),
@@ -1035,8 +1044,18 @@ static void populate_partial_reduce_worker_commands(
 
     std::array<std::vector<CoreCoord>, 2> partial_reducer_worker_cores_vec = {
         partial_reducer_worker_cores[LineDirection::FORWARD], partial_reducer_worker_cores[LineDirection::BACKWARD]};
+
+    std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> slices_through_math_forward_direction;
+    slices_through_math_forward_direction.reserve(reader_worker_slices_by_direction[LineDirection::FORWARD].size());
+    // For line topology, we don't want to partial reduce for input_tensor for the last input chunk, otherwise we will
+    // end up reducing with that chunk of `input_tensor` twice.
+    for (auto const& slices : reader_worker_slices_by_direction[LineDirection::FORWARD]) {
+        TT_FATAL(slices.size() > 1, "Internal error. Expected at least two slices");
+        slices_through_math_forward_direction.push_back(vslice(slices, 0, slices.size() - 2));
+    }
+
     compute_math_pages_from_per_worker_tensor_slices(
-        reader_worker_slices_by_direction[LineDirection::FORWARD],
+        slices_through_math_forward_direction,//reader_worker_slices_by_direction[LineDirection::FORWARD],
         builder_config.pages_per_cb_packet,
         partial_reducer_worker_cores_vec[LineDirection::FORWARD],
         math_page_counts_out);
@@ -1055,7 +1074,8 @@ static void populate_partial_reduce_worker_commands(
             all_tensors.input_tensor_from_remote_sync[line_direction],
             reader_worker_slices_by_direction[line_direction],
             partial_reducer_worker_cores_vec[line_direction],
-            worker_command_streams_out);
+            worker_command_streams_out,
+            is_forward_direction);
 
         generate_partial_reducer_writer_worker_command_streams(
             builder_config,
@@ -1065,7 +1085,8 @@ static void populate_partial_reduce_worker_commands(
                 all_tensors.local_output_partial_sync[line_direction]},
             writer_worker_slices_by_direction[line_direction],
             line_direction,
-            worker_command_streams_out);
+            worker_command_streams_out,
+            is_forward_direction);
     }
 }
 
