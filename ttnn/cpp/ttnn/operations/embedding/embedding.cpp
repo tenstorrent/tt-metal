@@ -29,14 +29,6 @@ ttnn::Tensor EmbeddingOperation::invoke(
     Tensor mutable_input_tensor = input_tensor_arg;
     Tensor mutable_weight = weight_arg;
 
-    // TODO: Add support for indices tensor in tile layout
-    // Issue #: 14915
-    // TT_FATAL(input_tensor_arg.get_layout() == ttnn::ROW_MAJOR_LAYOUT, "Indices tensor must be in row major layout.");
-
-    // if (mutable_input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
-    //     mutable_input_tensor = ttnn::to_layout(
-    //         mutable_input_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, mutable_input_tensor.device());
-    // }
     if (mutable_weight.get_layout() == ttnn::TILE_LAYOUT) {
         mutable_weight = ttnn::to_layout(
             mutable_weight, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, mutable_weight.device());

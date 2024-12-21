@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "ttnn/operations/core/core.hpp"
+#include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -577,9 +579,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
 
     uint32_t batch_size = a.get_logical_shape()[0];  // num rows
     uint32_t num_cols = a.get_logical_shape()[-1];
-    std::cout << "a_shape: " << a.get_legacy_shape() << std::endl;
     uint32_t volume = num_cols * batch_size;
-    std::cout << "volume: " << volume << std::endl;
     constexpr uint32_t alignment = 32;
     constexpr uint32_t tile_size = 32;
     constexpr uint32_t face_size = 16;
@@ -656,7 +656,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)weight_stick_size_is_power_of_two,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)weight_log2_stick_size,
-        (std::uint32_t)face_size,
+        (std::uint32_t)a.get_logical_shape()[-1],  // width/length of a row
         (std::uint32_t)face_size};
 
     EmbeddingsIndexType embeddings_index_type;
@@ -711,9 +711,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
 
     uint32_t row = 0;
-    uint32_t tiles_per_row = (num_cols + tile_size - 1) / tile_size;
-
-    std::cout << "units_per_core: " << num_blocks_per_core_group_1 << " " << num_blocks_per_core_group_2 << std::endl;
+    uint32_t tiles_per_tile_row = (num_cols + tile_size - 1) / tile_size;
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -722,20 +720,15 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         uint32_t r_f_offset = ((row % tile_size) / face_size) * 2 * face_size * face_size + row * face_size;
         uint32_t c_f_offset = ((col_offset % tile_size) / face_size) * face_size * face_size;
         uint32_t face_offset = r_f_offset + c_f_offset;
-        std::cout << "Core " << core.x << " " << core.y << std::endl;
-        std::cout << "Units: " << local_num_blocks << std::endl;
-        std::cout << "Tile " << (row / tile_size) * tiles_per_row + (col_offset / tile_size) << ", face_offset "
-                  << face_offset << std::endl;
-        std::cout << "Row " << row << ", Col " << col_offset << std::endl << std::endl;
+        uint32_t curr_tile = (row / tile_size) * tiles_per_tile_row + (col_offset / tile_size);
 
         // Reader
         {
-            reader_runtime_args[2] =
-                (row / tile_size) * tiles_per_row + (col_offset / tile_size);  // What tile we on I think
+            reader_runtime_args[2] = curr_tile;  // What tile we on I think
             // reader_runtime_args[3] = round_down(col_offset % num_cols, tile_size) * input_element_size_bytes;
             reader_runtime_args[3] = face_offset;
             reader_runtime_args[4] = local_num_blocks;
-            reader_runtime_args[5] = 0;  // index offset, what index in the tile?
+            reader_runtime_args[5] = col_offset;  // index offset, what index in the tile?
             tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         }
 
@@ -786,14 +779,12 @@ operation::ProgramWithCallbacks embeddings_(
     bool tilized,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
-    // if (tilized) {
-    // return embeddings_fused(a, weights, output, embeddings_type, pad_token);
-    // }
-    // else if(a.get_layout() == ttnn::TILE_LAYOUT) {
-    return embeddings_tilized_indices(a, weights, output, embeddings_type, pad_token);
-    // }
-    // else {
-    //     return embeddings_rm(a, weights, output, embeddings_type, pad_token);
-    // }
+    if (a.get_layout() == ttnn::TILE_LAYOUT) {
+        return embeddings_tilized_indices(a, weights, output, embeddings_type, pad_token);
+    } else if (tilized) {
+        return embeddings_fused(a, weights, output, embeddings_type, pad_token);
+    } else {
+        return embeddings_rm(a, weights, output, embeddings_type, pad_token);
+    }
 }
 }  // namespace ttnn::operations::embedding::detail
