@@ -404,12 +404,12 @@ struct command_context_t final {
                 shape_t const global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
 
                 size_t const curr_tile_id = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
+                DPRINT << "wslc: " << (uint32_t)(command_tensor.worker_pages_per_slice) << "\n";
+                DPRINT << "t_start: " << (uint32_t)curr_tile_id << "\n";
                 cmd_specific_ctx.wrapped_worker_slice_read_ctx = wrapped_worker_slice_read_context{curr_tile_id};
 #endif
             } break;
             case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
-                DPRINT << (uint32_t)src_addr_info.address << "\n";
-                DPRINT << (uint32_t)cmd_specific_ctx.inline_value_ctx.value << "\n";
             case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
             case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES: break;
             default: ASSERT(false);
@@ -644,10 +644,12 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
 
     uint16_t contig_pages_advanced = 1;
     cb_reserve_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages);
-    uint32_t l1_write_addr = get_write_ptr(cmd_ctx.cb_id);
+    const uint32_t l1_write_addr_base = get_write_ptr(cmd_ctx.cb_id);
+    uint32_t l1_write_addr = l1_write_addr_base;
     l1_write_addr += header_padding;
 
     for (uint16_t i = 0; i < max_pages_readable; i += contig_pages_advanced) {
+        DPRINT << "t_id: " << (uint32_t)cmd_specific_ctx.curr_tile_id << "\n";
         auto const [noc_addr, contig_pages_] = get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT, MEM_LAYOUT>(
             cmd_specific_ctx.curr_tile_id,
             cmd_specific_ctx.offset_into_worker_slice,
@@ -665,6 +667,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
         }
         l1_write_addr += cmd_ctx.page_size * contig_pages_advanced;
 
+
         bool done_worker_slice = ttnn::ccl::v2::advance_worker_global_page(
             cmd_specific_ctx.curr_tile_id,  // Updated internally
             cmd_specific_ctx.offset_into_worker_slice,
@@ -676,6 +679,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
     }
 
     noc_async_read_barrier();
+
     cb_push_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages);
 }
 #endif
@@ -692,7 +696,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     const size_t payload_size_bytes = static_cast<size_t>(contig_pages_advanced) * cmd_ctx.page_size;
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr + (use_packet_header_buffer ? 0 : sizeof(tt::fabric::PacketHeader));
-    size_t packet_send_size_bytes = payload_size_bytes + /*(use_packet_header_buffer ? 0 :*/ sizeof(tt::fabric::PacketHeader));
+    size_t packet_send_size_bytes = payload_size_bytes + /*(use_packet_header_buffer ? 0 :*/ sizeof(tt::fabric::PacketHeader)/*)*/;
 
     auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(l1_read_addr);
     if constexpr (use_packet_header_buffer) {
@@ -804,7 +808,6 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& c
         return;
     }
     DPRINT << "CB -> tensor: " << (uint32_t)cmd_ctx.stream_id << "\n";
-    // DPRINT << "CB -> tensor: " << (uint32_t)cmd_ctx.cb_id << "\n";
     size_t header_padding = cmd_ctx.command_requires_fabric() && !use_packet_header_buffer
         ? sizeof(tt::fabric::PacketHeader) : 0;
 
@@ -825,6 +828,7 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& c
         // However, if we're writing locally, then we need to actually write using `noc_index` based coordinates.
         // This can lead to a discrepancy, so to stay consistent, we always generate noc0 based addresses here
         // so we can reliably translate to `noc_index` based addresses writing locally, inside the write function
+        DPRINT << "t_id: " << (uint32_t)cmd_specific_ctx.curr_tile_id << "\n";
         auto const [noc0_dest_noc_addr, contig_pages_] =
             get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT, MEM_LAYOUT>(
                 cmd_specific_ctx.curr_tile_id,
@@ -918,10 +922,8 @@ void kernel_main() {
 #ifndef NO_TENSOR_MODE
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
-    DPRINT << "tensor0_addr " << (uint32_t)tensor_address0 << "\n";
 #ifndef SINGLE_TENSOR
     address_t tensor_address1 = get_arg_val<address_t>(arg_idx++);
-    DPRINT << "tensor1_addr " << (uint32_t)tensor_address1 << "\n";
 #endif
 #endif
     uint8_t num_commands0 = get_arg_val<address_t>(arg_idx++);
@@ -942,18 +944,12 @@ void kernel_main() {
 #else
         0;
 #endif
-    if constexpr (use_packet_header_buffer) {
-        tensor0_page_size -= sizeof(tt::fabric::PacketHeader);
-    }
     uint16_t tensor1_page_size =
 #if !defined(NO_TENSOR_MODE) and !defined(SINGLE_TENSOR)
         get_arg_val<uint32_t>(arg_idx++);
 #else
         0;
 #endif
-    if constexpr (use_packet_header_buffer) {
-        tensor1_page_size -= sizeof(tt::fabric::PacketHeader);
-    }
 
     auto tensor0_addrgen =
 #ifndef NO_TENSOR_MODE
@@ -1044,5 +1040,6 @@ void kernel_main() {
         fabric_connection.close();
     }
 
+    noc_async_write_barrier();
     DPRINT << "DONE \n";
 }

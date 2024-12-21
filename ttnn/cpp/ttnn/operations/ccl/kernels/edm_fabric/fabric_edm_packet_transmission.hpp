@@ -21,7 +21,7 @@ void write_unicast_blocking(uint32_t local_address, uint64_t dest_address, uint3
     // TODO - PERF: noc_async_write<NOC_MAX_BURST_SIZE>
     // Don't do it yet because we want to sweep perf on buffer size
     noc_async_write(local_address, dest_address, size_bytes);
-    noc_async_writes_flushed();
+    noc_async_write_barrier();
 }
 
 void print_pkt_hdr_routing_fields(volatile tt::fabric::PacketHeader *const packet_start) {
@@ -107,7 +107,7 @@ void execute_chip_unicast_to_local_chip(volatile tt::fabric::PacketHeader *const
                     auto const num_dests = header.command_fields.mcast_write.mcast_rect_size_x * header.command_fields.mcast_write.mcast_rect_size_y;
                     auto const size = header.command_fields.mcast_write.size - sizeof(tt::fabric::PacketHeader);
                     noc_async_write_multicast_one_packet(payload_start_address, mcast_dest_address, size, num_dests);
-                    noc_async_writes_flushed();
+                    noc_async_write_barrier();
 
                 }break;
                 default: {

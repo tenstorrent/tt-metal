@@ -803,7 +803,7 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
     static constexpr auto packet_header_size_bytes = sizeof(tt::fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes,
+            num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     log_trace(
