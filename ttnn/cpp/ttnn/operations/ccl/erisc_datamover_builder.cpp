@@ -410,8 +410,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     static_assert(EdmLineFabricOpInterface::Direction::FORWARD < 2);
     static_assert(EdmLineFabricOpInterface::Direction::BACKWARD < 2);
     std::array<std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>>*, 2> edm_builders_maps;
-    edm_builders_maps[EdmLineFabricOpInterface::Direction::FORWARD] = &edm_builders_forward_direction;
-    edm_builders_maps[EdmLineFabricOpInterface::Direction::BACKWARD] = &edm_builders_backward_direction;
+    edm_builders_maps[EdmLineFabricOpInterface::Direction::FORWARD] = &this->edm_builders_forward_direction;
+    edm_builders_maps[EdmLineFabricOpInterface::Direction::BACKWARD] = &this->edm_builders_backward_direction;
 
     std::optional<size_t> counted_num_links = std::nullopt;
     std::optional<size_t> obtained_channel_buffer_size = std::nullopt;
@@ -454,7 +454,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     TT_FATAL(obtained_channel_buffer_size.has_value(), "No channel buffer size was counted");
     this->buffer_size_bytes = obtained_channel_buffer_size.value();
 
-    // Establish local connections between EDMs on the same chips to establish the lin fabric
+    // Establish local connections between EDMs on the same chips to establish the line fabric
     if (forward_device.has_value() && backward_device.has_value()) {
         auto& forward_direction_edm = edm_builders_forward_direction.at(local_device->id());
         auto& backward_direction_edm = edm_builders_backward_direction.at(local_device->id());
