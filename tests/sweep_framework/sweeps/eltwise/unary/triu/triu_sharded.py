@@ -33,9 +33,8 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(16, max_tensor_size_per_core=36 * 1024, layouts=["TILE_LAYOUT"]),
-        "input_a_dtype": [ttnn.bfloat16],
-        "eps": [0.2],  # 0, 10e-6, 10e-4, 10e-2,
+        "input_spec": gen_sharded_spec_unary(16, layouts=["TILE_LAYOUT"]),
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
 
@@ -47,10 +46,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     input_layout = test_vector["input_spec"]["input_layout"]
     sharding_invalidated, output_str = invalidate_vector_sharding(test_vector["input_spec"])
 
-    if input_layout == "ROW_MAJOR_LAYOUT":
-        return True, "Input to eltwise binary must be tilized"
-    if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
+    if input_layout == "ROW_MAJOR_LAYOUT" or test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "Row Major layout and bfloat8_b are not supported"
     if sharding_invalidated:
         return sharding_invalidated, output_str
 
@@ -64,7 +61,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_spec,
     input_a_dtype,
-    eps,
     *,
     device,
 ) -> list:
@@ -96,7 +92,12 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    torch_output_tensor = torch.logit(torch_input_tensor_a, eps)
+
+    low = -(input_shape[-2] - 2)
+    high = input_shape[-1]
+    diagonal = torch.randint(low, high, (1,)).item()
+
+    torch_output_tensor = torch.triu(torch_input_tensor_a, diagonal)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -107,9 +108,9 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.logit(input_tensor_a, eps=eps, memory_config=sharded_config)
+    output_tensor = ttnn.triu(input_tensor_a, diagonal=diagonal, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
+
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    return [pcc, e2e_perf]
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
