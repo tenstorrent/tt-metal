@@ -136,16 +136,20 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
         t.memory_config().memory_layout);
     // shard_grid_height (cores)
     args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
+    TT_FATAL(args.back() > 0, "Passed shard_grid height == 0 to sharded addrgen, which is invalid");
     // shard_grid_width (cores)
     args.push_back(shard_grid_end.x - shard_grid_start.x + 1);
+    TT_FATAL(args.back() > 0, "Passed shard_grid width == 0 to sharded addrgen, which is invalid");
     // shard_grid_start_y
     args.push_back(shard_grid_start.y);
     // shard_grid_start_x
     args.push_back(shard_grid_start.x);
     // pages_per_shard_y
     args.push_back(pages_per_shard_y);
+    TT_FATAL(args.back() > 0, "Passed pages per shard y == 0 to sharded addrgen, which is invalid");
     // pages_per_shard_x
     args.push_back(pages_per_shard_x);
+    TT_FATAL(args.back() > 0, "Passed pages per shard x == 0 to sharded addrgen, which is invalid");
     // transposed grid
     args.push_back(static_cast<uint32_t>(shard_grid_transposed));
 

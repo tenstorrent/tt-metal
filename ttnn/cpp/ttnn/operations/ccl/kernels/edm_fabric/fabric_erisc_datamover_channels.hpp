@@ -213,6 +213,7 @@ struct EdmChannelWorkerInterface {
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
 
+        DPRINT << "EDM ntf wrkr sem @" << (uint64_t)worker_semaphore_address << "\n";
         noc_semaphore_inc(worker_semaphore_address, 1);
     }
 
