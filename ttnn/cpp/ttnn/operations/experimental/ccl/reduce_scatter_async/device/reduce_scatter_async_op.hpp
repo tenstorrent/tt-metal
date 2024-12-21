@@ -25,7 +25,7 @@ struct ReduceScatterAsync {
         std::optional<size_t> num_links_preferred,
         const std::shared_ptr<const GlobalSemaphore>& from_remote_sem,
         const std::shared_ptr<const GlobalSemaphore>& to_remote_sem,
-        std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+        std::optional<SubDeviceId>& sub_device_id,
         std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) :
         binary_op_type(binary_op_type),
         scatter_dim(scatter_dim),
@@ -41,9 +41,7 @@ struct ReduceScatterAsync {
         from_remote_sem(from_remote_sem),
         to_remote_sem(to_remote_sem),
         fabric_handle(fabric_handle),
-        sub_device_id_map(sub_device_id_map) {
-        // TT_FATAL(sub_device_id_map.size() > 0, "Reduce scatter async was given an uninitialized subdevice ID");
-    }
+        sub_device_id(sub_device_id) {}
 
     const ttnn::operations::binary::BinaryOpType binary_op_type;
     const uint32_t scatter_dim;
@@ -60,7 +58,7 @@ struct ReduceScatterAsync {
     std::shared_ptr<const GlobalSemaphore> from_remote_sem;
     std::shared_ptr<const GlobalSemaphore> to_remote_sem;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle;
-    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map;
+    std::optional<SubDeviceId> sub_device_id;
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
@@ -141,7 +139,7 @@ Tensor reduce_scatter(
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::unordered_map<chip_id_t, SubDeviceId> sub_device_id_map = {},                 // TODO make reference
+    std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt,                 // TODO make reference
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
 
 }  // namespace ccl

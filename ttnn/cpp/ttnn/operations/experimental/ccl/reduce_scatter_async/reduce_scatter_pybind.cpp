@@ -30,8 +30,9 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
-               const std::optional<size_t> num_links) -> ttnn::Tensor {
-                return self(input_tensor, dim, math_op, memory_config, topology, num_links);
+               const std::optional<size_t> num_links,
+               std::optional<SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
+                return self(input_tensor, dim, math_op, memory_config, topology, num_links, worker_subdevice_id_opt);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -39,7 +40,8 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
-            py::arg("num_links") = std::nullopt});
+            py::arg("num_links") = std::nullopt,
+            py::arg("subdevice_id") = std::nullopt});
 }
 
 }  // namespace detail

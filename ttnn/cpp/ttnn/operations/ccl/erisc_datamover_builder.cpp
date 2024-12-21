@@ -687,6 +687,7 @@ void EdmLineFabricOpInterface::teardown_from_host(tt::fabric::TerminationSignal 
 }
 
 void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
+    static std::unordered_set<chip_id_t> built_chips;
     auto build = [](std::vector<Device*> const& line_view) {
         std::vector<Program> programs(line_view.size());
         std::vector<Program*> program_ptrs;
@@ -695,6 +696,9 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
         EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true);
         edm_fabric.build_kernels();
         for (size_t i = 0; i < line_view.size(); i++) {
+            TT_FATAL(built_chips.find(line_view[i]->id()) == built_chips.end(), "Chip {} was already built", line_view.front()->id());
+            built_chips.insert(line_view[i]->id());
+
             tt::tt_metal::detail::CompileProgram(line_view[i], programs[i]);
         }
         for (size_t i = 0; i < line_view.size(); i++) {
@@ -708,9 +712,9 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
     for (auto const &row_view : mesh_device->get_view()->get_row_views()) {
         build(row_view);
     }
-    for (auto const &col_view : mesh_device->get_view()->get_column_views()) {
-        build(col_view);
-    }
+    // for (auto const &col_view : mesh_device->get_view()->get_column_views()) {
+    //     build(col_view);
+    // }
 }
 
 void teardown_edm_fabric(distributed::MeshDevice* mesh_device) {
@@ -726,9 +730,9 @@ void teardown_edm_fabric(distributed::MeshDevice* mesh_device) {
     for (auto const &row_view : mesh_device->get_view()->get_row_views()) {
         teardown(row_view);
     }
-    for (auto const &col_view : mesh_device->get_view()->get_column_views()) {
-        teardown(col_view);
-    }
+    // for (auto const &col_view : mesh_device->get_view()->get_column_views()) {
+    //     teardown(col_view);
+    // }
 }
 
 

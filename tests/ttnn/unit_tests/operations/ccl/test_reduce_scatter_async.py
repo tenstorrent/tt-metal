@@ -67,6 +67,7 @@ def run_with_trace(
         num_workers=n_worker,
         num_buffers_per_channel=n_buffer,
         topology=topology,
+        subdevice_id=ttnn.SubDeviceId(0),
     )
     for device_id in t3k_mesh_device.get_device_ids():
         ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
@@ -84,6 +85,7 @@ def run_with_trace(
             num_workers=n_worker,
             num_buffers_per_channel=n_buffer,
             topology=topology,
+            subdevice_id=ttnn.SubDeviceId(0),
         )
     ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
     for device_id in t3k_mesh_device.get_device_ids():
@@ -192,6 +194,7 @@ def run_reduce_scatter_test(
                 num_links=num_links,
                 memory_config=mem_config,
                 topology=topology,
+                subdevice_id=ttnn.SubDeviceId(0),
             )
 
             for device_id in mesh_device.get_device_ids():

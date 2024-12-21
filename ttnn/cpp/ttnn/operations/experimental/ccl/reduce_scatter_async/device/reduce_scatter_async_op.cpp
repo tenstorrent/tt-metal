@@ -28,7 +28,7 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<size_t> num_links_preferred,
     const std::vector<std::shared_ptr<const GlobalSemaphore>>& from_remote_sems,
     const std::vector<std::shared_ptr<const GlobalSemaphore>>& to_remote_sems,
-    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+    std::optional<SubDeviceId> sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) {
     uint32_t num_devices = devices.size();
 
@@ -69,7 +69,7 @@ ReduceScatterAsync create_reduce_scatter_struct(
         num_links_preferred,
         from_remote_sems.at(device_index),
         to_remote_sems.at(device_index),
-        sub_device_id_map,
+        sub_device_id,
         fabric_handle};
 }
 }  // namespace reduce_scatter_detail
@@ -212,15 +212,13 @@ ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(
 }  // namespace
 
 std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> create_global_semaphores(
-    const std::vector<Device*>& devices,
-    std::optional<std::unordered_map<chip_id_t, SubDeviceId>> worker_subdevice_by_device = std::nullopt) {
+    const std::vector<Device*>& devices, std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt) {
     std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> semaphores;
     auto worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(6, 6)));
     for (Device* d : devices) {
-        auto worker_subdevice_id =
-            worker_subdevice_by_device.has_value() && worker_subdevice_by_device.value().size() > 0
-                ? tt::stl::Span<const SubDeviceId>{worker_subdevice_by_device.value().at(d->id())}
-                : tt::stl::Span<const SubDeviceId>{};
+        auto worker_subdevice_id = worker_subdevice_id_opt.has_value()
+                                       ? tt::stl::Span<const SubDeviceId>{{worker_subdevice_id_opt.value()}}
+                                       : tt::stl::Span<const SubDeviceId>{};
         auto sem = CreateGlobalSemaphore(d, worker_cores, 0, BufferType::L1, worker_subdevice_id);
         semaphores.push_back(sem);
     }
@@ -241,10 +239,9 @@ std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> create_global_
             size_t attempt = 0;
             std::vector<std::shared_ptr<tt::tt_metal::GlobalSemaphore>> garbage;
             while (semaphores[i]->address() != highest_addr) {
-                auto worker_subdevice_id =
-                    worker_subdevice_by_device.has_value()
-                        ? tt::stl::Span<const SubDeviceId>{worker_subdevice_by_device.value().at(devices[i]->id())}
-                        : tt::stl::Span<const SubDeviceId>{};
+                auto worker_subdevice_id = worker_subdevice_id_opt.has_value()
+                                               ? tt::stl::Span<const SubDeviceId>{worker_subdevice_id_opt.value()}
+                                               : tt::stl::Span<const SubDeviceId>{};
                 auto sem = CreateGlobalSemaphore(devices[i], worker_cores, 0, BufferType::L1, worker_subdevice_id);
                 if (sem->address() == highest_addr) {
                     semaphores[i] = sem;
@@ -272,7 +269,7 @@ Tensor reduce_scatter(
     const MemoryConfig& output_mem_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_links_preferred,
-    std::unordered_map<chip_id_t, SubDeviceId> sub_device_id_map,
+    std::optional<SubDeviceId> worker_subdevice_id_opt,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
@@ -296,8 +293,8 @@ Tensor reduce_scatter(
         rank - 1,
         dim);
 
-    const auto from_remote_inputs_semaphores = create_global_semaphores(devices, sub_device_id_map);
-    const auto to_remote_inputs_semaphores = create_global_semaphores(devices, sub_device_id_map);
+    const auto from_remote_inputs_semaphores = create_global_semaphores(devices, worker_subdevice_id_opt);
+    const auto to_remote_inputs_semaphores = create_global_semaphores(devices, worker_subdevice_id_opt);
 
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input_tensor})),
@@ -318,7 +315,7 @@ Tensor reduce_scatter(
          devices,
          num_links_preferred,
          output_tensors,
-         sub_device_id_map,
+         worker_subdevice_id_opt,
          fabric_handle](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -338,7 +335,7 @@ Tensor reduce_scatter(
                     num_links_preferred,
                     from_remote_inputs_semaphores,
                     to_remote_inputs_semaphores,
-                    sub_device_id_map,
+                    worker_subdevice_id_opt,
                     fabric_handle),
                 {input_tensor});
         },
