@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,6 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         create_semaphore_handles);
 }
 
-
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
@@ -39,8 +38,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode,
-    bool create_semaphore_handles) { 
-
+    bool create_semaphore_handles) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
         dim,

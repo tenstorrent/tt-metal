@@ -21,9 +21,7 @@
 #include <optional>
 #include <variant>
 
-namespace ttnn {
-namespace ccl {
-namespace worker_detail {
+namespace ttnn::ccl::worker_detail {
 
 CCLWorkerArgBuilder::CCLWorkerArgBuilder(
     Device const* device,
@@ -1068,9 +1066,8 @@ void generate_multi_input_command_stream_kernel_rt_args(
                     ttnn::ccl::emit_address_generator_runtime_args(t->buffer()->device(), *t),
                     std::back_inserter(rt_args));
             }
-        } else {
-            // Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
         }
+        // else: Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
     }
 
     rt_args.push_back(forward_fabric_connections.has_value());
@@ -1570,6 +1567,4 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args
     return args;
 }
 
-}  // namespace worker_detail
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl::worker_detail

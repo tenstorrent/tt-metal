@@ -1,4 +1,4 @@
-/// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+/// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,8 +60,8 @@ AllGatherAsync create_all_gather_async_struct(
 }
 
 std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> get_global_semaphores(
-    std::vector<Device*> const& devices, 
-    CoreRange const& core_range,
+    const std::vector<Device*>& devices,
+    const CoreRange& core_range,
     std::optional<SubDeviceId> subdevice_id,
     bool create_semaphore_handles) {
     std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> semaphore_handles_opt;
@@ -91,7 +91,6 @@ std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> get_global_semaphor
     return semaphore_handles_opt;
 }
 
-
 }  // namespace all_gather_detail
 }  // namespace ccl
 
@@ -117,6 +116,22 @@ void AllGatherAsync::validate(const std::vector<Tensor>& input_tensors) const {
             input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout);
+}
+
+static void validate_output_tensor_allocation(const std::vector<Tensor>& output_tensors) {
+    for (const auto& output_tensor : output_tensors) {
+        const auto& buffers = output_tensor.buffers();
+        const auto first_address = buffers.front()->address();
+        TT_FATAL(
+            std::all_of(
+                buffers.begin(),
+                buffers.end(),
+                [&first_address](const auto& buffer) {
+                    return buffer != nullptr && buffer->address() == first_address;
+                }),
+            "Output buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
+            "different addresses across devices.");
+    }
 }
 
 std::vector<ttnn::SimpleShape> AllGatherAsync::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -204,11 +219,8 @@ Tensor all_gather_async(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
-    std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> semaphore_handles_opt = ttnn::ccl::all_gather_detail::get_global_semaphores(
-        devices, 
-        core_grid,
-        subdevice_id,
-        create_semaphore_handles);
+    std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> semaphore_handles_opt =
+        ttnn::ccl::all_gather_detail::get_global_semaphores(devices, core_grid, subdevice_id, create_semaphore_handles);
 
     operation::launch_op(
         [dim,
@@ -257,7 +269,7 @@ Tensor all_gather_async(
         "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     int32_t rank = input_tensor.get_logical_shape().rank();
 
@@ -273,11 +285,8 @@ Tensor all_gather_async(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> semaphore_handles_opt = ttnn::ccl::all_gather_detail::get_global_semaphores(
-        devices, 
-        core_grid,
-        subdevice_id,
-        create_semaphore_handles);
+    std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> semaphore_handles_opt =
+        ttnn::ccl::all_gather_detail::get_global_semaphores(devices, core_grid, subdevice_id, create_semaphore_handles);
 
     operation::launch_op(
         [gather_dim,
@@ -293,12 +302,11 @@ Tensor all_gather_async(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
-            
-            const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
-            std::vector<Device*> devices = (cluster_axis == 0)
-                                           ? mesh_view->get_devices_on_column(coordinate.col)
-                                           : mesh_view->get_devices_on_row(coordinate.row);
-      
+
+            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
+            std::vector<Device*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate.col)
+                                                               : mesh_view.get_devices_on_row(coordinate.row);
+
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(

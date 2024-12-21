@@ -64,8 +64,6 @@ void kernel_main() {
     auto worker_buffer_index_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     bool connected_to_persistent_fabric = get_arg_val<uint32_t>(arg_idx++) != 0;
 
-    DPRINT << "worker_buffer_index_semaphore_addr: " << (uint32_t)worker_buffer_index_semaphore_addr << "\n";
-    DPRINT << "connected_to_persistent_fabric: " << (uint32_t)connected_to_persistent_fabric << "\n";
     // TODO: move to semaphore
     auto edm_buffer_index_sem_id = get_arg_val<uint32_t>(arg_idx++);
     ASSERT(edm_buffer_index_sem_id < 8);
@@ -80,7 +78,6 @@ void kernel_main() {
     } else {
         config.unicast.distance = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
     }
-    DPRINT << "config.unicast.distance: " << (uint32_t)config.unicast.distance << "\n";
 
     const InterleavedAddrGen<dest_is_dram> dest_addr_gen = {
         .bank_base_address = dest_addr, .page_size = page_size};
@@ -101,9 +98,7 @@ void kernel_main() {
         writer_send_sem_addr,
         worker_buffer_index_semaphore_addr);
 
-    DPRINT << "sender open\n";
     sender.open();
-    DPRINT << "opened\n";
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
@@ -116,10 +111,8 @@ void kernel_main() {
     uint32_t buffer_index = 0;
     cb_wait_front(cb_id_in0, 1);
     auto a_packet_header_addr = get_read_ptr(cb_id_in0);
-    DPRINT << "total_pages_to_send: " << (uint32_t)total_pages_to_send << "\n";
     for (uint32_t p = 0; p < total_pages_to_send; p += num_pages_per_send) {
         uint32_t pages_to_send = std::min<uint32_t>(num_pages_per_send, total_pages_to_send - p);
-        DPRINT << "wait empty write slot\n";
         sender.wait_for_empty_write_slot();
         cb_wait_front(cb_id_in0, pages_to_send);
 
@@ -156,22 +149,15 @@ void kernel_main() {
         uint64_t buffer_address = sender.edm_buffer_addr +
                                   (*sender.buffer_index_ptr * (sender.buffer_size_bytes + sizeof(eth_channel_sync_t)));
         sender.send_payload_blocking_from_address(packet_addr, packet_size);
-        DPRINT << "noc write barrier\n";
         noc_async_writes_flushed();
-        DPRINT << "cb pop front\n";
         cb_pop_front(cb_id_in0, pages_to_send);
-        DPRINT << "cb pop front done\n";
     }
 
-    DPRINT << "DONE MAIN LOOP\n";
     if constexpr (!mcast_mode) {
-        DPRINT << "TEARDOWN\n";
         sender.wait_for_empty_write_slot();
 
         auto& packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(a_packet_header_addr);
         ASSERT(*last_message_semaphore_address == 0);
-        packet_header.reserved = 0xE;
-        packet_header.reserved2 = 0xFFFF;
         packet_header.to_atomic_inc();
         packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{2});
         packet_header.to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader(
@@ -180,16 +166,12 @@ void kernel_main() {
         sender.send_payload_blocking_from_address(
             a_packet_header_addr, packet_header.get_payload_size_including_header());
 
-        DPRINT << "WAITING FOR COMPLETION LOOPBACK @: " << (uint32_t)last_message_semaphore_address << "\n";
         noc_semaphore_wait(last_message_semaphore_address, 1);
-        DPRINT << "\t got it!\n";
     }
 
     bool closed_fabric_connection = terminate_fabric_endpoints_farthest_to_nearest(sender, a_packet_header_addr, arg_idx);
 
     if (!closed_fabric_connection) {
-        DPRINT << "CLOSE\n";
         sender.close();
     }
-    DPRINT << "DONE\n";
 }

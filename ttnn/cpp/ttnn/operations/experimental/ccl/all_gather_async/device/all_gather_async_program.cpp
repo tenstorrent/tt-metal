@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -172,9 +172,6 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
-    const auto& input_tensor_partition = ttnn::ccl::TensorPartition(1, 0);  // one partition, 0 index
-    const auto& output_tensor_partition =
-        ttnn::ccl::TensorPartition(ring_size, ring_index);  // ring_size partitions, ring_index index
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;

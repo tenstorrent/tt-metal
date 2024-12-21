@@ -68,8 +68,7 @@ public:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 8 and
-            tt::tt_metal::GetNumPCIeDevices() == 4) {
+        if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ == 8 and tt::tt_metal::GetNumPCIeDevices() == 4) {
             mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
 
             std::vector<chip_id_t> ids(num_devices_, 0);
@@ -1128,7 +1127,7 @@ int TestLineFabricEntrypoint(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on N300 devices");
+        log_info("This test can only be run on T3000 devices");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -1141,7 +1140,7 @@ int TestLineFabricEntrypoint(
 
     // build a line of devices
     std::vector<Device*> devices = {
-        view->get_device(0, 0), view->get_device(0, 1), view->get_device(0, 2), view->get_device(0, 3)};
+        view.get_device(0, 0), view.get_device(0, 1), view.get_device(0, 2), view.get_device(0, 3)};
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
@@ -1211,7 +1210,7 @@ int TestLoopbackEntrypoint(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on N300 devices");
+        log_info("This test can only be run on T3000 devices");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -1222,8 +1221,8 @@ int TestLoopbackEntrypoint(
     T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    const auto& device_0 = view->get_device(0, 0);
-    const auto& device_1 = view->get_device(0, 1);
+    const auto& device_0 = view.get_device(0, 0);
+    const auto& device_1 = view.get_device(0, 1);
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
@@ -1385,7 +1384,7 @@ bool TestMultiInputReaderKernel(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on N300 devices");
+        log_info("This test can only be run on T3000 devices");
         return true;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -1403,7 +1402,7 @@ bool TestMultiInputReaderKernel(
     std::vector<Device*> devices;
     devices.reserve(fabric_num_devices);
     for (size_t i = 0; i < fabric_num_devices; i++) {
-        devices.push_back(view->get_device(0, i));
+        devices.push_back(view.get_device(0, i));
     }
 
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
@@ -1702,23 +1701,15 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
     Tensor output_tensor0 = ttnn::ones(tensor_shape, DataType::UINT32, layout).reshape(tensor_shape);
     Tensor output_tensor1 = ttnn::ones(tensor_shape, DataType::UINT32, layout).reshape(tensor_shape);
     input_tensor0.set_tensor_spec(TensorSpec(
-        logical_shape,
-        TensorLayout(
-            /*DataType::BFLOAT16*/ DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
     input_tensor1.set_tensor_spec(TensorSpec(
-        logical_shape,
-        TensorLayout(
-            /*DataType::BFLOAT16*/ DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
     output_tensor0.set_tensor_spec(TensorSpec(
-        logical_shape,
-        TensorLayout(
-            /*DataType::BFLOAT16*/ DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
     output_tensor1.set_tensor_spec(TensorSpec(
-        logical_shape,
-        TensorLayout(
-            /*DataType::BFLOAT16*/ DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
 
-    size_t page_size = tile_size(DataFormat::RawUInt32);  // DataFormat::Float16);// DataFormat::RawUInt32);
+    size_t page_size = tile_size(DataFormat::RawUInt32);
 
     ttnn::ccl::Shape4D<uint32_t> tensor_shape_in_pages = shape_to_shape_in_tiles(tensor_shape);
     ttnn::ccl::Shape4D<uint32_t> tensor_slice_shape_in_pages = tensor_shape_in_pages;
@@ -1726,12 +1717,12 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
     ttnn::ccl::Shape4D<uint32_t> worker_slice_shape = tensor_shape_in_pages;
     ttnn::ccl::Shape4D<uint32_t> worker_slice_offset = {0, 0, 0, 0};
 
-    ttnn::ccl::v2::TensorSlice tensor_slice{// using ords_t = Shape4D<uint32_t>;
-                                            tensor_shape_in_pages,
-                                            tensor_slice_shape_in_pages,
-                                            tensor_slice_offset,
-                                            worker_slice_shape,
-                                            worker_slice_offset};
+    ttnn::ccl::v2::TensorSlice tensor_slice{
+        tensor_shape_in_pages,
+        tensor_slice_shape_in_pages,
+        tensor_slice_offset,
+        worker_slice_shape,
+        worker_slice_offset};
 
     auto const in0_tensor_slice = tensor_slice;
     auto const in1_tensor_slice = tensor_slice;
@@ -1755,7 +1746,7 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
         out1_tensor_slice,
 
         page_size,
-        test_writeback_mode,  // TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK,
+        test_writeback_mode,
         ttnn::ccl::cmd::LocalOnlyCommandDestArgs{},
         false);
 
@@ -1978,7 +1969,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 // Copying even slightly large tensors exposes issues in underlying tensor code
 // that isn't under test here
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
-    ttnn::Shape tensor_shape = {1, 1, 256, 256};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 256, 256};
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -1993,8 +1984,6 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
 // TODO: update the test infra to be able to properly compare tensors if we are only
 // doing a slice of the larger tensor
 
-// EnablePersistentKernelCache
-
 // ////////////////////////////////////////////////////////////////////
 // ////////////////////////////////////////////////////////////////////
 // ////               FABRIC UNICAST TENSOR WRITE (2 INPUT)
@@ -2002,7 +1991,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
 // ////////////////////////////////////////////////////////////////////
 
 TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SinglePageTile_OneHop) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     auto logical_shape = tensor_shape.logical_shape();
@@ -2035,12 +2024,12 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
     ttnn::ccl::Shape4D<uint32_t> worker_slice_shape = tensor_shape_in_pages;
     ttnn::ccl::Shape4D<uint32_t> worker_slice_offset = {0, 0, 0, 0};
 
-    ttnn::ccl::v2::TensorSlice tensor_slice{// using ords_t = Shape4D<uint32_t>;
-                                            tensor_shape_in_pages,
-                                            tensor_slice_shape_in_pages,
-                                            tensor_slice_offset,
-                                            worker_slice_shape,
-                                            worker_slice_offset};
+    ttnn::ccl::v2::TensorSlice tensor_slice{
+        tensor_shape_in_pages,
+        tensor_slice_shape_in_pages,
+        tensor_slice_offset,
+        worker_slice_shape,
+        worker_slice_offset};
 
     auto const in0_tensor_slice = tensor_slice;
     auto const in1_tensor_slice = tensor_slice;
@@ -2073,7 +2062,7 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SinglePageTile_OneHop_PersistentFabric) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     auto logical_shape = tensor_shape.logical_shape();
@@ -2106,12 +2095,12 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
     ttnn::ccl::Shape4D<uint32_t> worker_slice_shape = tensor_shape_in_pages;
     ttnn::ccl::Shape4D<uint32_t> worker_slice_offset = {0, 0, 0, 0};
 
-    ttnn::ccl::v2::TensorSlice tensor_slice{// using ords_t = Shape4D<uint32_t>;
-                                            tensor_shape_in_pages,
-                                            tensor_slice_shape_in_pages,
-                                            tensor_slice_offset,
-                                            worker_slice_shape,
-                                            worker_slice_offset};
+    ttnn::ccl::v2::TensorSlice tensor_slice{
+        tensor_shape_in_pages,
+        tensor_slice_shape_in_pages,
+        tensor_slice_offset,
+        worker_slice_shape,
+        worker_slice_offset};
 
     auto const in0_tensor_slice = tensor_slice;
     auto const in1_tensor_slice = tensor_slice;
@@ -2184,12 +2173,12 @@ void RunFabricMcastFullTensorPropagateTest(
     ttnn::ccl::Shape4D<uint32_t> worker_slice_shape = tensor_shape_in_pages;
     ttnn::ccl::Shape4D<uint32_t> worker_slice_offset = {0, 0, 0, 0};
 
-    ttnn::ccl::v2::TensorSlice tensor_slice{// using ords_t = Shape4D<uint32_t>;
-                                            tensor_shape_in_pages,
-                                            tensor_slice_shape_in_pages,
-                                            tensor_slice_offset,
-                                            worker_slice_shape,
-                                            worker_slice_offset};
+    ttnn::ccl::v2::TensorSlice tensor_slice{
+        tensor_shape_in_pages,
+        tensor_slice_shape_in_pages,
+        tensor_slice_offset,
+        worker_slice_shape,
+        worker_slice_offset};
 
     auto const in0_tensor_slice = tensor_slice;
     auto const in1_tensor_slice = tensor_slice;
@@ -2222,38 +2211,38 @@ void RunFabricMcastFullTensorPropagateTest(
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_SingleHop) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 128};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 128};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop) {
-    ttnn::Shape tensor_shape = {1, 1, 128, 32};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 128, 32};
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop) {
-    ttnn::Shape tensor_shape = {1, 1, 64, 64};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 64, 64};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
@@ -2266,39 +2255,39 @@ TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsP
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_SingleHop_PersistentFabric) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop_PersistentFabric) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop_PersistentFabric) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop_PersistentFabric) {
-    ttnn::Shape tensor_shape = {1, 1, 32, 128};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 32, 128};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop_PersistentFabric) {
-    ttnn::Shape tensor_shape = {1, 1, 128, 32};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 128, 32};
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop_PersistentFabric) {
-    ttnn::Shape tensor_shape = {1, 1, 64, 64};  // 16384 crashes... TBD
+    ttnn::Shape tensor_shape = {1, 1, 64, 64};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
@@ -2330,7 +2319,7 @@ bool RunPipelinedWorkersTest(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on N300 devices");
+        log_info("This test can only be run on T3000 devices");
         return true;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -2347,7 +2336,7 @@ bool RunPipelinedWorkersTest(
     T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    Device* device = view->get_device(0, 0);
+    Device* device = view.get_device(0, 0);
     ;
 
     // General setup is as follows:
@@ -2357,7 +2346,6 @@ bool RunPipelinedWorkersTest(
     // HOWEVER. the reader will be programmed to read the chunks in a different order than they were written, this way
     // we can identify synchronization related bugs (e.g. if sender semaphore increments before writes flush)
 
-    ///// PROMOTE EVERYTHING ABOVE HERE TO ARGUMENTS TO THIS CODE WHICH WILL EVENTUALLY BECOME A FUNCTION
     TT_FATAL(num_workers_per_stage.size() == num_stages, "Must have a read order for each stage");
     TT_FATAL(worker_chunk_read_order.size() == num_stages, "Must have a read order for each stage");
     for (size_t i = 0; i < num_stages; ++i) {
@@ -2559,7 +2547,7 @@ bool RunPipelinedWorkersTest(
                 {&device_tensors[stage]},
                 {page_size_bytes},
                 device,
-                cb_packet_size_in_pages,  // TODO: get from fabric
+                cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
                 reader_cmd_stream,
                 std::nullopt,
@@ -2571,7 +2559,7 @@ bool RunPipelinedWorkersTest(
                 {&device_tensors[stage + 1]},
                 {page_size_bytes},
                 device,
-                cb_packet_size_in_pages,  // TODO: get from fabric
+                cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
                 writer_cmd_stream,
                 std::nullopt,
@@ -2865,8 +2853,6 @@ TEST(
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
-    // JUST MAKE SURE IT DOESN'T HANG - CORRECTNESS CHECKS ARE DONE IN PYTEST
-    // HERE WE JUST CHECK THE BASIC PLUMBING IS DONE
     const size_t dim = 3;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
@@ -2874,7 +2860,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 4;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        log_info("This test can only be run on N300 devices");
+        log_info("This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -2886,7 +2872,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
     // build a line of devices
     std::vector<Device*> devices = {
-        view->get_device(0, 1), view->get_device(1, 1), view->get_device(1, 2), view->get_device(0, 2)};
+        view.get_device(0, 1), view.get_device(1, 1), view.get_device(1, 2), view.get_device(0, 2)};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -2911,8 +2897,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         device_input_tensors.push_back(t.to(devices[i]));
     }
     // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor =
-        ttnn::distributed::api::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
+    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
 
     // FABRIC setup
     const bool enable_persistent_fabric = true;
@@ -2969,7 +2954,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 4;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        log_info("This test can only be run on N300 devices");
+        log_info("This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -2981,7 +2966,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     // build a line of devices
     std::vector<Device*> devices = {
-        view->get_device(0, 0), view->get_device(0, 1), view->get_device(0, 2), view->get_device(0, 3)};
+        view.get_device(0, 0), view.get_device(0, 1), view.get_device(0, 2), view.get_device(0, 3)};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -3004,8 +2989,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
         device_input_tensors.push_back(t.to(devices[i]));
     }
     // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor =
-        ttnn::distributed::api::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
+    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
 
     // FABRIC setup
     const bool enable_persistent_fabric = true;
@@ -3044,10 +3028,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     log_info(tt::LogTest, "Fabric teardown");
     persistent_fabric_teardown_sequence(
-        devices,
-        subdevice_managers,
-        fabric_handle.value(),
-        tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);  // tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+        devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {

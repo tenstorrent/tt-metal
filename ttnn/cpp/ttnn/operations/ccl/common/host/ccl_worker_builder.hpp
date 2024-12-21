@@ -13,19 +13,16 @@
 #include <optional>
 #include <unordered_map>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 inline namespace v0 {
 
 // Forward declarations
 class Device;
 
 }  // namespace v0
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 class WorkerEdmInterfaceArgs;
 class SenderWorkerAdapterSpec;
 
@@ -172,5 +169,4 @@ struct CCLWorkerArgBuilder {
 };
 
 }  // namespace worker_detail
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

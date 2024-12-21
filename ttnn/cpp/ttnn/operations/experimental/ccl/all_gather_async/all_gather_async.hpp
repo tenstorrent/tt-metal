@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ struct ExecuteAllGatherAsync {
         std::optional<SubDeviceId> subdevice_id = std::nullopt,
         bool enable_persistent_fabric_mode = false,
         bool create_semaphore_handles = true);
-        
+
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const int32_t dim,

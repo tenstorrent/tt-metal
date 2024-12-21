@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tests/ttnn/unit_tests/gtests/ccl/kernels/test_kernels.common.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
 
 struct unicast_mode {
     uint8_t distance;
@@ -51,9 +52,7 @@ auto forward_to_fabric_from_cb(
 
     // bit of a hack to extract X/Y
     const auto dest_noc_address = get_noc_addr(current_page, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
-    const size_t dest_addr = dest_noc_address & 0xFFFFFFFF;
-    const size_t dest_noc_x = (dest_noc_address >> NOC_ADDR_LOCAL_BITS) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
-    const size_t dest_noc_y = (dest_noc_address >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
+    const auto [dest_worker_noc, dest_addr] = get_noc_address_components(dest_noc_address);
     const size_t packet_size = page_size + sizeof(tt::fabric::PacketHeader);
 
     auto packet_addr = get_read_ptr(cb_id);
@@ -64,20 +63,16 @@ auto forward_to_fabric_from_cb(
             .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
                 dest_addr,
                 (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader),
-                static_cast<uint8_t>(dest_noc_x),
-                static_cast<uint8_t>(dest_noc_y)
-            });
-        packet_header.reserved2 = 0x1111; // debug only
+                static_cast<uint8_t>(dest_worker_noc.x),
+                static_cast<uint8_t>(dest_worker_noc.y)});
     } else {
         packet_header.to_write()
             .to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{config.unicast.distance})
             .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
                 dest_addr,
                 (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader),
-                static_cast<uint8_t>(dest_noc_x),
-                static_cast<uint8_t>(dest_noc_y)
-            });
-        packet_header.reserved2 = 0x1111; // debug only
+                static_cast<uint8_t>(dest_worker_noc.x),
+                static_cast<uint8_t>(dest_worker_noc.y)});
     }
 
     uint64_t buffer_address = sender.edm_buffer_addr + (*sender.buffer_index_ptr * (sender.buffer_size_bytes + sizeof(eth_channel_sync_t)));
@@ -196,12 +191,13 @@ void kernel_main() {
 
     sender.wait_for_empty_write_slot();
 
+    constexpr size_t kLoopbackNumHopsToMyChip = 2;
     auto &packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(a_packet_header_addr);
     ASSERT(*last_message_semaphore_address == 0);
     packet_header.reserved = 0xE;
     packet_header.reserved2 = 0xFFFF;
     packet_header.to_atomic_inc();
-    packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{2});
+    packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{kLoopbackNumHopsToMyChip});
     packet_header.to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader(
             reinterpret_cast<size_t>(last_message_semaphore_address),
             1,

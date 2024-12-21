@@ -652,7 +652,6 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
             contig_pages_advanced = std::min<uint16_t>(cmd_ctx.packet_size_in_pages - i, contig_pages_);
             ASSERT(contig_pages_advanced > 0);
             ASSERT(contig_pages_advanced <= cmd_ctx.packet_size_in_pages);
-            ASSERT(cmd_ctx.page_size != 0xD3AD);
             noc_async_read(noc_addr, l1_write_addr, cmd_ctx.page_size * contig_pages_advanced);
         }
         l1_write_addr += cmd_ctx.page_size * contig_pages_advanced;
