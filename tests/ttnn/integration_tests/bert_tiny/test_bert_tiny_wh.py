@@ -20,10 +20,12 @@ from models.utility_functions import skip_for_grayskull, is_wormhole_b0
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("batch_size", [8])
 def test_bert_attention_inference(
     model_location_generator,
     mesh_device,
     reset_seeds,
+    batch_size,
 ):
     model_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
@@ -32,7 +34,7 @@ def test_bert_attention_inference(
     pytorch_attention_model = hugging_face_reference_model.bert.encoder.layer[encoder_idx].attention
     config = hugging_face_reference_model.config
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
-    batch_size = 16 if mesh_device_flag else 8
+    batch_size = 2 * batch_size if mesh_device_flag else batch_size
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
@@ -77,9 +79,11 @@ def test_bert_attention_inference(
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("batch_size", [8])
 def test_bert_intermediate_inference(
     model_location_generator,
     mesh_device,
+    batch_size,
     reset_seeds,
 ):
     model_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
@@ -89,7 +93,7 @@ def test_bert_intermediate_inference(
     pytorch_intermediate_model = hugging_face_reference_model.bert.encoder.layer[encoder_idx].intermediate
 
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
-    batch_size = 16 if mesh_device_flag else 8
+    batch_size = 2 * batch_size if mesh_device_flag else batch_size
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
@@ -123,9 +127,11 @@ def test_bert_intermediate_inference(
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("batch_size", [8])
 def test_bert_output_inference(
     model_location_generator,
     mesh_device,
+    batch_size,
     reset_seeds,
 ):
     model_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
@@ -136,7 +142,7 @@ def test_bert_output_inference(
     pytorch_output_model = hugging_face_reference_model.bert.encoder.layer[encoder_idx].attention.output
 
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
-    batch_size = 16 if mesh_device_flag else 8
+    batch_size = 2 * batch_size if mesh_device_flag else batch_size
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
@@ -180,8 +186,10 @@ def test_bert_output_inference(
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("batch_size", [8])
 def test_bert_layer_inference(
     model_location_generator,
+    batch_size,
     mesh_device,
     reset_seeds,
 ):
@@ -193,7 +201,7 @@ def test_bert_layer_inference(
     pytorch_layer_model = hugging_face_reference_model.bert.encoder.layer[encoder_idx]
 
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
-    batch_size = 16 if mesh_device_flag else 8
+    batch_size = 2 * batch_size if mesh_device_flag else batch_size
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
@@ -231,7 +239,10 @@ def test_bert_layer_inference(
 @pytest.mark.parametrize("model_name", ["mrm8488/bert-tiny-finetuned-squadv2"])
 @pytest.mark.parametrize("sequence_size", [128])
 @pytest.mark.parametrize("num_hidden_layers", [1])
-def test_bert_for_question_answering(mesh_device, model_name, sequence_size, num_hidden_layers, reset_seeds):
+@pytest.mark.parametrize("batch_size", [8])
+def test_bert_for_question_answering(
+    mesh_device, model_name, batch_size, sequence_size, num_hidden_layers, reset_seeds
+):
     inputs_mesh_mapper = None
     output_mesh_composer = None
     parameters = None
@@ -243,7 +254,7 @@ def test_bert_for_question_answering(mesh_device, model_name, sequence_size, num
         config.num_hidden_layers = num_hidden_layers
 
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
-    batch_size = 16 if mesh_device_flag else 8
+    batch_size = 2 * batch_size if mesh_device_flag else batch_size
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
