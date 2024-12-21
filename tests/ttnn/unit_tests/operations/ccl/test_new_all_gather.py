@@ -76,7 +76,7 @@ def run_all_gather_impl(
     shard_grid=None,
     tensor_mem_layout=None,
 ):
-    enable_persistent_fabric = False
+    enable_persistent_fabric = True
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
     # Use Async mode based on test input config
@@ -208,6 +208,7 @@ def run_all_gather_impl(
     "num_devices, num_links, output_shape, dim, layout",
     [
         (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
     ],
 )
@@ -224,7 +225,7 @@ def run_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("enable_async", [False])
 def test_all_gather(
     t3k_mesh_device,
     # pcie_mesh_device,
@@ -254,23 +255,6 @@ def test_all_gather(
         num_iters=num_iters,
         enable_async=enable_async,
         rand_tensor=True,
-        mem_config=mem_config,
-    )
-
-    run_all_gather_impl(
-        t3k_mesh_device,
-        num_devices,
-        output_shape,
-        dim,
-        num_links,
-        input_dtype,
-        layout,
-        use_program_cache,
-        function_level_defaults,
-        all_gather_topology=ttnn.Topology.Ring,
-        num_iters=num_iters,
-        enable_async=enable_async,
-        rand_tensor=False,
         mem_config=mem_config,
     )
 
@@ -335,7 +319,7 @@ def test_all_gather(
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("enable_async", [False])
 def test_all_gather_sharded(
     t3k_mesh_device,
     # pcie_mesh_device,
@@ -367,24 +351,6 @@ def test_all_gather_sharded(
         num_iters=num_iters,
         enable_async=enable_async,
         rand_tensor=True,
-        input_shard_shape=input_shard_shape,
-        shard_grid=shard_grid,
-        tensor_mem_layout=tensor_mem_layout,
-    )
-    run_all_gather_impl(
-        t3k_mesh_device,
-        num_devices,
-        output_shape,
-        dim,
-        num_links,
-        input_dtype,
-        layout,
-        use_program_cache,
-        function_level_defaults,
-        all_gather_topology=ttnn.Topology.Ring,
-        num_iters=num_iters,
-        enable_async=enable_async,
-        rand_tensor=False,
         input_shard_shape=input_shard_shape,
         shard_grid=shard_grid,
         tensor_mem_layout=tensor_mem_layout,

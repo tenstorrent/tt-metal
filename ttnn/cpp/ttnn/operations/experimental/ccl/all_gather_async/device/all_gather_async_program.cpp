@@ -146,7 +146,11 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         is_last_chip);
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
-        ccl::EdmLineFabricOpInterface(device, forward_device, backward_device, &program, false, num_links);
+        enable_persistent_fabric_mode
+            ? ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+                  device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links)
+            : ccl::EdmLineFabricOpInterface(
+                  device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links);
 
     LineTopology line_topology(ring_size, ring_index);
 
@@ -328,7 +332,8 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             // 3, wait for n_chip*num_links number of semaphore at teardown semaphore address for first chip, and
             // n_chip*num_links+1 for other chips
             writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_semaphore_wait(
-                semaphore_handle.get(), is_first_chip ? ring_size * num_links : ring_size * num_links + 1));
+                semaphore_handle.get(),
+                is_first_chip ? ring_size * num_links : ring_size * num_links + !enable_persistent_fabric_mode));
         }
 
         bool generate_teardown_commands = !enable_persistent_fabric_mode && link == 0;
