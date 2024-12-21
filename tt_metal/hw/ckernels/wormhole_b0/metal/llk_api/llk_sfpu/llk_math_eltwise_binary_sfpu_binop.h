@@ -12,9 +12,10 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, int binop_mode>
 inline void llk_math_eltwise_binary_sfpu_binop_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>(
+        ckernel::sfpu::sfpu_binary_init<APPROXIMATE, binop_mode>);
 }
 
 template <bool APPROXIMATE, int binop_mode>
