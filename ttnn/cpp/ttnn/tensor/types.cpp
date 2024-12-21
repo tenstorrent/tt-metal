@@ -33,6 +33,24 @@ const Shape Shape::to_rank(size_t new_rank) const {
 
 namespace tt::tt_metal {
 
+bool is_floating_point(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16:
+        case DataType::FLOAT32:
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: return true;
+        default: return false;
+    }
+}
+
+bool is_block_float(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: return true;
+        default: return false;
+    }
+}
+
 tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype) {
     switch (datatype) {
         case tt::tt_metal::DataType::BFLOAT16: return tt::DataFormat::Float16_b;
