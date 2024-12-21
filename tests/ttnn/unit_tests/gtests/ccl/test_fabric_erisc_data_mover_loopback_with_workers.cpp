@@ -2940,6 +2940,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         ttnn::ccl::Topology::Linear,
         num_links,
         subdevice_managers->worker_subdevice_id.at(devices[0]->id()),
+        true,
         fabric_handle);
 
     // wait for op completion
