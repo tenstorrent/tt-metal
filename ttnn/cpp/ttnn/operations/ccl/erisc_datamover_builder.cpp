@@ -695,12 +695,12 @@ std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_ordered_t
 
 void FabricEriscDatamoverBuilder::teardown_from_host(Device *d, tt::fabric::TerminationSignal termination_signal) const {
     std::vector<uint32_t> val(1, termination_signal);
-    tt::tt_metal::detail::WriteToDeviceL1(
+    d->push_work([&](){tt::tt_metal::detail::WriteToDeviceL1(
         d,
         d->logical_core_from_ethernet_core(CoreCoord(this->my_noc_x, this->my_noc_y)),
         ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address,
         val,
-        CoreType::ETH);
+        CoreType::ETH);}, true);
 }
 
 void EdmLineFabricOpInterface::teardown_from_host(tt::fabric::TerminationSignal termination_signal) const {
@@ -727,14 +727,17 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
         EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true);
         edm_fabric.build_kernels();
         for (size_t i = 0; i < line_view.size(); i++) {
-
-            tt::tt_metal::detail::CompileProgram(line_view[i], programs[i]);
+            log_info(tt::LogAlways, "Compile EDM program");
+            Device *device = line_view[i];
+            device->push_work([&](){tt::tt_metal::detail::CompileProgram(line_view[i], programs[i]);}, false);
         }
         for (size_t i = 0; i < line_view.size(); i++) {
             Device *device = line_view[i];
             Program &program = programs[i];
-            tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);
+            log_info(tt::LogAlways, "Enqueue EDM program");
+            device->push_work([&](){tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);}, true);
         }
+        log_info(tt::LogAlways, "DONE");
     };
 
 
