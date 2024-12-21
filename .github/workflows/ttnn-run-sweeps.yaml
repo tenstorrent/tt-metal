@@ -234,24 +234,31 @@ on:
           - eltwise.binary.multiply.multiply_scalar_pytorch2
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
+          - eltwise.binary.div.div_forge
           - eltwise.binary.div_no_nan.div_no_nan
           - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
           - eltwise.binary.logical_or.logical_or_output
+          - eltwise.binary.logical_or.logical_or_forge
           - eltwise.binary.logical_xor.logical_xor_
           - eltwise.binary.logical_xor.logical_xor
           - eltwise.binary.logical_and.logical_and_
           - eltwise.binary.logical_and.logical_and
           - eltwise.binary.logical_and.logical_and_output
+          - eltwise.binary.logical_and.logical_and_forge
           - eltwise.binary.polyval.polyval
           - eltwise.binary.remainder.remainder
+          - eltwise.binary.remainder.remainder_scalar_pytorch2
+          - eltwise.binary.remainder.remainder_forge
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
-          - eltwise.binary.remainder.remainder_scalar_pytorch2
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
           - eltwise.binary.eq.eq_scalar_pytorch2
+          - eltwise.binary.eq.eq_forge
+          - eltwise.binary.ge.ge_forge
           - eltwise.binary.gt.gt_scalar_pytorch2
+          - eltwise.binary.gt.gt_forge
           - eltwise.binary.le.le_tensor_pytorch2
           - eltwise.binary.fmod.fmod
           - eltwise.binary.floor_divide.floor_divide_pytorch2
@@ -260,7 +267,9 @@ on:
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.lt.lt_tensor_pytorch2
           - eltwise.binary.lt.lt_scalar_pytorch2
+          - eltwise.binary.lt.lt_forge
           - eltwise.binary.ne.ne_scalar_pytorch2
+          - eltwise.binary.ne.ne_forge
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
           - eltwise.binary_backward.ldexp_bw.ldexp_bw
@@ -293,6 +302,7 @@ on:
           - eltwise.ternary.lerp.lerp
           - eltwise.ternary.where.where
           - eltwise.ternary.where.where_pytorch2
+          - eltwise.ternary.where.where_forge
           - eltwise.ternary_backward.addcmul_bw
           - eltwise.ternary_backward.addcdiv_bw
           - embedding.embedding
