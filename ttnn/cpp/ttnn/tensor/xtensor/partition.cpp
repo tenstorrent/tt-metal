@@ -151,9 +151,13 @@ std::vector<Tensor> chunk_impl(const Tensor& tensor, const TensorLayout& layout,
 std::vector<Tensor> chunk(const Tensor& tensor, int num_chunks, int dim) {
     const auto& reference_layout = tensor.tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
-        case DataType::BFLOAT16: return adaptor::chunk_impl<float>(tensor, reference_layout, num_chunks, dim);
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT16:
         case DataType::FLOAT32: return adaptor::chunk_impl<float>(tensor, reference_layout, num_chunks, dim);
         case DataType::INT32: return adaptor::chunk_impl<int32_t>(tensor, reference_layout, num_chunks, dim);
+        case DataType::UINT8: return adaptor::chunk_impl<uint8_t>(tensor, reference_layout, num_chunks, dim);
+        case DataType::UINT16: return adaptor::chunk_impl<uint16_t>(tensor, reference_layout, num_chunks, dim);
         case DataType::UINT32: return adaptor::chunk_impl<uint32_t>(tensor, reference_layout, num_chunks, dim);
         default: TT_THROW("Unsupported data type: {}", reference_layout.get_data_type());
     }
@@ -163,9 +167,13 @@ Tensor concat(const std::vector<Tensor>& tensors, int dim) {
     TT_FATAL(tensors.size() > 0, "Cannot concatenate an empty list of tensors");
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
-        case DataType::BFLOAT16: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT16:
         case DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
         case DataType::INT32: return adaptor::concat_impl<int32_t>(tensors, reference_layout, dim);
+        case DataType::UINT8: return adaptor::concat_impl<uint8_t>(tensors, reference_layout, dim);
+        case DataType::UINT16: return adaptor::concat_impl<uint16_t>(tensors, reference_layout, dim);
         case DataType::UINT32: return adaptor::concat_impl<uint32_t>(tensors, reference_layout, dim);
         default: TT_THROW("Unsupported data type: {}", reference_layout.get_data_type());
     }
