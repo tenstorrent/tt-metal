@@ -52,10 +52,9 @@ def run_with_trace(
     num_links,
     math_op,
     output_mem_config,
-    n_worker=None,
-    n_buffer=None,
     num_iters=40,
     topology=ttnn.Topology.Ring,
+    subdevice_id=None,
 ):
     # Compile Run
     logger.info("Compiling model")
@@ -65,10 +64,9 @@ def run_with_trace(
         math_op=math_op,
         num_links=num_links,
         memory_config=output_mem_config,
-        num_workers=n_worker,
-        num_buffers_per_channel=n_buffer,
         topology=topology,
-        subdevice_id=ttnn.SubDeviceId(0),
+        subdevice_id=subdevice_id,
+        create_semaphore_handles=True,
     )
     for device_id in t3k_mesh_device.get_device_ids():
         ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
@@ -83,10 +81,9 @@ def run_with_trace(
             math_op=math_op,
             num_links=num_links,
             memory_config=output_mem_config,
-            num_workers=n_worker,
-            num_buffers_per_channel=n_buffer,
             topology=topology,
-            subdevice_id=ttnn.SubDeviceId(0),
+            subdevice_id=subdevice_id,
+            create_semaphore_handles=False,
         )
     ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
     for device_id in t3k_mesh_device.get_device_ids():
@@ -195,6 +192,7 @@ def run_reduce_scatter_test(
             mem_config,
             num_iters=num_iters,
             topology=topology,
+            subdevice_id=ttnn.SubDeviceId(0),
         )
     else:
         for i in range(num_iters):
@@ -307,6 +305,8 @@ def run_reduce_scatter_test(
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("trace_mode", [False])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 27648}], indirect=True)
 def test_line_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -320,6 +320,7 @@ def test_line_reduce_scatter_post_commit(
     use_program_cache,
     function_level_defaults,
     enable_async,
+    trace_mode,
     num_iters=1,
 ):
     run_reduce_scatter_test(
@@ -337,4 +338,5 @@ def test_line_reduce_scatter_post_commit(
         num_iters=num_iters,
         enable_async=enable_async,
         topology=ttnn.Topology.Linear,
+        trace_mode=trace_mode,
     )

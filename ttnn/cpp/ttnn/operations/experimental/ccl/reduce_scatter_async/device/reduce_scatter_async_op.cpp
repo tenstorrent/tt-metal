@@ -26,8 +26,8 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<std::vector<Tensor>> forward_output_tensors,
     std::optional<std::vector<Tensor>> backward_output_tensors,
     std::optional<size_t> num_links_preferred,
-    const std::vector<std::shared_ptr<const GlobalSemaphore>>& from_remote_sems,
-    const std::vector<std::shared_ptr<const GlobalSemaphore>>& to_remote_sems,
+    const std::optional<std::vector<std::shared_ptr<const GlobalSemaphore>>>& from_remote_sems,
+    const std::optional<std::vector<std::shared_ptr<const GlobalSemaphore>>>& to_remote_sems,
     std::optional<SubDeviceId> sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) {
     uint32_t num_devices = devices.size();
@@ -55,6 +55,15 @@ ReduceScatterAsync create_reduce_scatter_struct(
         return *device;
     };
 
+    std::optional<std::shared_ptr<const GlobalSemaphore>> from_remote_sem = std::nullopt;
+    std::optional<std::shared_ptr<const GlobalSemaphore>> to_remote_sem = std::nullopt;
+    if (from_remote_sems.has_value()) {
+        from_remote_sem = from_remote_sems.value().at(device_index);
+    }
+    if (to_remote_sems.has_value()) {
+        to_remote_sem = to_remote_sems.value().at(device_index);
+    }
+
     return ttnn::ReduceScatterAsync{
         binary_op_type,
         scatter_dim,
@@ -67,8 +76,8 @@ ReduceScatterAsync create_reduce_scatter_struct(
         forward_output_tensors,
         backward_output_tensors,
         num_links_preferred,
-        from_remote_sems.at(device_index),
-        to_remote_sems.at(device_index),
+        from_remote_sem,
+        to_remote_sem,
         sub_device_id,
         fabric_handle};
 }
@@ -192,8 +201,8 @@ operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tenso
         this->ring_size,
         this->ring_index,
         this->topology,
-        this->from_remote_sem->address(),
-        this->to_remote_sem->address());
+        this->from_remote_sem.has_value() ? this->from_remote_sem.value().get() : nullptr,
+        this->to_remote_sem.has_value() ? this->to_remote_sem.value().get() : nullptr);
 }
 
 namespace {
@@ -274,6 +283,7 @@ Tensor reduce_scatter(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_links_preferred,
     std::optional<SubDeviceId> worker_subdevice_id_opt,
+    bool create_semaphore_handles,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
@@ -297,8 +307,17 @@ Tensor reduce_scatter(
         rank - 1,
         dim);
 
-    const auto from_remote_inputs_semaphores = create_global_semaphores(devices, worker_subdevice_id_opt);
-    const auto to_remote_inputs_semaphores = create_global_semaphores(devices, worker_subdevice_id_opt);
+    std::optional<std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>>> from_remote_inputs_semaphores_opt;
+    std::optional<std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>>> to_remote_inputs_semaphores_opt;
+    if (create_semaphore_handles) {
+        const auto from_remote_inputs_semaphores = create_global_semaphores(devices, worker_subdevice_id_opt);
+        const auto to_remote_inputs_semaphores = create_global_semaphores(devices, worker_subdevice_id_opt);
+        from_remote_inputs_semaphores_opt = from_remote_inputs_semaphores;
+        to_remote_inputs_semaphores_opt = to_remote_inputs_semaphores;
+    } else {
+        from_remote_inputs_semaphores_opt = std::nullopt;
+        to_remote_inputs_semaphores_opt = std::nullopt;
+    }
 
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input_tensor})),
@@ -311,8 +330,8 @@ Tensor reduce_scatter(
         "Reduce scatter requires 5 output tensors. 1 is real and the others are temporaries");
     operation::launch_op(
         [binary_op_type,
-         from_remote_inputs_semaphores,
-         to_remote_inputs_semaphores,
+         from_remote_inputs_semaphores_opt,
+         to_remote_inputs_semaphores_opt,
          scatter_dim,
          output_mem_config,
          ccl_topology,
@@ -337,8 +356,8 @@ Tensor reduce_scatter(
                     std::nullopt,
                     std::nullopt,
                     num_links_preferred,
-                    from_remote_inputs_semaphores,
-                    to_remote_inputs_semaphores,
+                    from_remote_inputs_semaphores_opt,
+                    to_remote_inputs_semaphores_opt,
                     worker_subdevice_id_opt,
                     fabric_handle),
                 {input_tensor});
