@@ -10,6 +10,25 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import skip_for_grayskull
 
 
+def create_and_load_sub_device_manager_with_fabric_interface(
+    mesh_device, worker_sub_devices, ccl_worker_sub_device_id, local_allocator_size
+):
+    assert ccl_worker_sub_device_id < len(worker_sub_devices)
+    mesh_sub_device_manager_id, fabric_sub_device_id = mesh_device.create_sub_device_manager_with_fabric(
+        worker_sub_devices, local_allocator_size
+    )
+    mesh_device.load_sub_device_manager(mesh_sub_device_manager_id)
+    # fabric sub-device id can also be queried from device, no need to explicitly pass it in
+    fabric_interface = ttnn.initialize_edm_fabric(mesh_device, ccl_worker_sub_device_id, fabric_sub_device_id)
+    return mesh_sub_device_manager_id, fabric_interface, fabric_sub_device_id
+
+
+def teardown_fabric_interface(mesh_device):
+    for device_id in mesh_device.get_device_ids():
+        ttnn.teardown_fabric_interface(mesh_device.get_device(device_id))
+        ttnn.synchronize_device(mesh_device.get_device(device_id))
+
+
 def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         return True, "Invalid combination"
@@ -141,6 +160,20 @@ def run_all_gather_impl(
         logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    worker_sub_device = ttnn.SubDevice(
+        [
+            ttnn.CoreRangeSet(
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))
+            )
+        ]
+    )
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    mesh_sub_device_manager_id, fabric_interface, fabric_sub_device_id = create_fabric_sub_device_manager_and_interface(
+        mesh_device, [worker_sub_device], 0
+    )
+
     if trace_mode:
         tt_out_tensor = run_with_trace(
             mesh_device,
@@ -158,12 +191,15 @@ def run_all_gather_impl(
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
+                enable_persistent_fabric_mode=true,
             )
 
             logger.info(f"Waiting for op {i}")
             for d in mesh_device.get_devices():
                 ttnn.synchronize_device(d)
             logger.info(f"Done iteration {i}")
+
+            teardown_fabric_interface(mesh_device)
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
