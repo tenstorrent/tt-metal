@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include "sub_device/sub_device_types.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -28,7 +29,9 @@ struct ReduceScatterAsync {
         std::optional<std::vector<Tensor>>& backward_output_tensors,
         std::optional<size_t> num_links_preferred,
         const GlobalSemaphore& from_remote_sem,
-        const GlobalSemaphore& to_remote_sem) :
+        const GlobalSemaphore& to_remote_sem,
+        std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+        std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) :
         binary_op_type(binary_op_type),
         scatter_dim(scatter_dim),
         ring_size(ring_size),
@@ -41,7 +44,11 @@ struct ReduceScatterAsync {
         backward_output_tensors(backward_output_tensors),
         num_links_preferred(num_links_preferred),
         from_remote_sem(from_remote_sem),
-        to_remote_sem(to_remote_sem) {}
+        to_remote_sem(to_remote_sem),
+        fabric_handle(fabric_handle),
+        sub_device_id_map(sub_device_id_map) {
+        TT_FATAL(sub_device_id_map.size() > 0, "Reduce scatter async was given an uninitialized subdevice ID");
+    }
 
     const ttnn::operations::binary::BinaryOpType binary_op_type;
     const uint32_t scatter_dim;
@@ -57,6 +64,8 @@ struct ReduceScatterAsync {
     std::optional<size_t> num_links_preferred;
     const GlobalSemaphore from_remote_sem;
     const GlobalSemaphore to_remote_sem;
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle;
+    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map;
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
@@ -106,7 +115,8 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     ttnn::ccl::Topology topology,
     std::optional<size_t> num_links_preferred,
     GlobalSemaphore const& from_remote_sems,
-    GlobalSemaphore const& to_remote_sems);
+    GlobalSemaphore const& to_remote_sems,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 }
 }; // namespace ccl
 
@@ -121,7 +131,11 @@ ReduceScatterAsync create_reduce_scatter_struct(
     const ttnn::ccl::Topology topology,
     std::optional<std::vector<Tensor>> foreward_output_tensors,
     std::optional<std::vector<Tensor>> backward_output_tensors,
-    std::optional<size_t> num_links_preferred);
+    std::optional<size_t> num_links_preferred,
+    std::vector<GlobalSemaphore> const& from_remote_sems,
+    std::vector<GlobalSemaphore> const& to_remote_sems,
+    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 } // namespace reduce_scatter_detail
 } // namespace ccl
 
@@ -129,12 +143,14 @@ namespace operations{
 namespace experimental {
 namespace ccl{
 Tensor reduce_scatter(
-    const Tensor &input_tensor,
+    const Tensor& input_tensor,
     const int32_t dim,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-    const std::optional<size_t> num_preferred_links = std::nullopt);
+    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::unordered_map<chip_id_t, SubDeviceId> sub_device_id_map = {},                 // TODO make reference
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
 
 Tensor reduce_scatter(
     const ttnn::Tensor &input_tensor,

@@ -258,7 +258,7 @@ enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_LOCAL_AND_REMOTE = 0x3
 };
 
-static constexpr uint32_t SWITCH_INTERVAL = 4000;
+static constexpr uint32_t SWITCH_INTERVAL = 40000;
 static constexpr size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
 static constexpr size_t NUM_SENDER_CHANNELS = 2;
 static constexpr size_t num_workers_ctor = 1;
@@ -283,6 +283,7 @@ void send_channel_sync(
     tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &receiver_buffer_channel) {
 
     DPRINT << "EDMS scs to " << (uint32_t)receiver_buffer_channel.get_current_bytes_sent_address() << "\n";
+    DPRINT << "\tlocal ch sync addr: " << (uint32_t)sender_buffer_channel.get_current_bytes_sent_address() << "\n";
 
     eth_send_bytes_over_channel_payload_only_unsafe(
         reinterpret_cast<size_t>(sender_buffer_channel.get_current_bytes_sent_address()),
@@ -310,6 +311,9 @@ tt::fabric::SendStatus send_next_data(
     *sender_buffer_channel.get_current_bytes_sent_address() = sender_buffer_channel.get_current_max_eth_payload_size();
     *sender_buffer_channel.get_current_bytes_acked_address() = 0;
     *sender_buffer_channel.get_current_src_id_address() = sender_buffer_channel.get_id();
+    DPRINT << "\tbs=" << (uint32_t)*sender_buffer_channel.get_current_bytes_sent_address() << "\n";
+    DPRINT << "\tba=" << (uint32_t)*sender_buffer_channel.get_current_bytes_acked_address() << "\n";
+    DPRINT << "\tsrc_id=" << (uint32_t)*sender_buffer_channel.get_current_src_id_address() << "\n";
     ASSERT(*sender_buffer_channel.get_current_src_id_address() < 2);
 
     // TODO: TUNING - experiment with only conditionally breaking the transfer up into multiple packets if we are
@@ -320,6 +324,8 @@ tt::fabric::SendStatus send_next_data(
     //             channel sync
     ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader *>(reinterpret_cast<volatile tt::fabric::PacketHeader *>(sender_buffer_channel.get_current_buffer_address()))));
     const size_t payload_size = sender_buffer_channel.get_current_payload_plus_channel_sync_size();
+    DPRINT << "\tpayload_size: " << (uint32_t)payload_size << "\n";
+    DPRINT << "\tmax_size: " << (uint32_t)sender_buffer_channel.get_channel_buffer_max_size_in_bytes() << "\n";
     eth_send_bytes_over_channel_payload_only_unsafe(
         sender_buffer_channel.get_current_buffer_address(),
         receiver_buffer_channel.get_current_buffer_address(),  // get_remote_eth_buffer_address(),
@@ -328,12 +334,13 @@ tt::fabric::SendStatus send_next_data(
         payload_size >> ETH_BYTES_TO_WORDS_SHIFT);
 
     bool sent_payload_and_channel_sync_in_one_shot =
-        payload_size == sender_buffer_channel.get_channel_buffer_max_size_in_bytes();
+        payload_size == sender_buffer_channel.get_current_max_eth_payload_size();
     if (!sent_payload_and_channel_sync_in_one_shot) {
         // We weren't able to send the channel_sync_t in one shot with the payload so we need to send a second
         // packet
         // TODO: TUNING - consider busy waiting for a maximum amount of time
         if (!eth_txq_is_busy()) {
+            DPRINT << "\tquick scs\n";
             send_channel_sync(sender_buffer_channel, receiver_buffer_channel);
         } else {
             status = tt::fabric::SendStatus::SENT_PAYLOAD_ONLY;
@@ -345,6 +352,7 @@ tt::fabric::SendStatus send_next_data(
     if (status == tt::fabric::SendStatus::SENT_PAYLOAD_AND_SYNC) {
         sender_buffer_channel.advance_buffer_index();
         receiver_buffer_channel.advance_buffer_index();
+        DPRINT << "EDM advance buffer index to " << (uint32_t)sender_buffer_channel.buffer_index() << "\n";
     }
 
     return status;
@@ -446,6 +454,8 @@ FORCE_INLINE void receiver_send_completion_ack(
 
     local_receiver_buffer_channel.advance_buffer_index();
     remote_sender_channels[src_sender_channel].advance_buffer_index();
+    DPRINT << "EDMR next buffer index: " << (uint32_t)local_receiver_buffer_channel.buffer_index() << "\n";
+    DPRINT << "\tbytes_available_addr: " << (uint32_t)local_receiver_buffer_channel.get_current_bytes_sent_address() << "\n";
 }
 
 
@@ -512,14 +522,18 @@ bool run_sender_channel_state_machine_step(
     tt::fabric::EdmChannelWorkerInterface &local_sender_channel_worker_interface,
     tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &remote_receiver_channel,
     bool graceful_termination_mode,
-    SenderState *const sender_state_out) {
+    SenderState *const sender_state_out,
+    uint8_t sender_channel_index) {
     bool incr_sender_channel_index = true;
     switch (*sender_state_out) {
         case SenderState::SENDER_WAITING_FOR_WORKER: {
             bool able_to_send = local_sender_channel_worker_interface.has_payload() && !eth_txq_is_busy() &&
                                 local_sender_channel.eth_is_receiver_channel_send_done();
             if (able_to_send) {
-                DPRINT << "EDM send\n";
+                DPRINT << "EDMS " << (uint32_t)sender_channel_index << " send from buffer index: " << (uint32_t)local_sender_channel.buffer_index() << "\n";
+                DPRINT << "\taddress: " << (uint32_t)local_sender_channel.get_current_buffer_address() << "\n";
+                DPRINT << "\t1st 8B: " << (uint64_t)*reinterpret_cast<volatile uint64_t*>(local_sender_channel.get_current_buffer_address()) << "\n";
+                DPRINT << "\tsend to " << (uint32_t)remote_receiver_channel.get_current_buffer_address() << "\n";
                 auto send_status = send_next_data(local_sender_channel, remote_receiver_channel);
                 // TODO: align the enums and state values so I can just do
                 // sender_states[sender_channel_index] += send_status :)
@@ -528,6 +542,8 @@ bool run_sender_channel_state_machine_step(
                     send_status == tt::fabric::SendStatus::NOT_SENT            ? SenderState::SENDER_WAITING_FOR_WORKER
                     : send_status == tt::fabric::SendStatus::SENT_PAYLOAD_ONLY ? SenderState::SENDER_SEND_CHANNEL_SYNC
                                                                                : SenderState::SENDER_WAITING_FOR_ETH;
+                DPRINT << "\tsend_status: " << (uint32_t)send_status << "\n";
+                DPRINT << "\tnext state: " << (uint32_t)*sender_state_out << "\n";
                 // Avoid any sort of starvation/bubbles so we only advance if we've sent the packet and channel sync
                 // otherwise what can happen is we could start sending another large payload from the other channel
                 // and not be able to send the channel sync for the packet we just sent, which overall negatively
@@ -546,7 +562,9 @@ bool run_sender_channel_state_machine_step(
                 bool is_safe_to_receive_next_message = local_sender_channel.eth_is_receiver_channel_send_acked() ||
                                                        local_sender_channel.eth_is_receiver_channel_send_done();
                 if (is_safe_to_receive_next_message) {
-                    DPRINT << "EDM wkr con ntfy wrkr\n";
+                    DPRINT << "EDM ch " << (uint32_t)sender_channel_index << " wkr con ntfy wrkr\n";
+                    DPRINT << "\tl1 worker info ptr: " << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr << "\n";
+                    DPRINT << "\tworker.x=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_xy.x << ", .y=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_xy.y << ", sem_addr=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_semaphore_address << "\n";
                     sender_notify_workers_if_buffer_available_sequence(local_sender_channel_worker_interface);
                     *sender_state_out = SenderState::SENDER_WAITING_FOR_WORKER;
                 } else {
@@ -558,6 +576,7 @@ bool run_sender_channel_state_machine_step(
         case SenderState::SENDER_SEND_CHANNEL_SYNC: {
             bool can_send_channel_sync_without_blocking = !eth_txq_is_busy();
             if (can_send_channel_sync_without_blocking) {
+                DPRINT << "EDMS send channel sync\n";
                 send_channel_sync(local_sender_channel, remote_receiver_channel);
                 local_sender_channel.advance_buffer_index();
                 remote_receiver_channel.advance_buffer_index();
@@ -570,6 +589,7 @@ bool run_sender_channel_state_machine_step(
                                                    local_sender_channel.eth_is_receiver_channel_send_done();
             if (is_safe_to_receive_next_message) {
                 // This also notifies workers in the same call
+                DPRINT << "EDMS:\n";
                 sender_eth_check_receiver_ack_sequence(local_sender_channel, local_sender_channel_worker_interface);
                 *sender_state_out = SenderState::SENDER_WAITING_FOR_WORKER;
             }
@@ -698,7 +718,10 @@ void run_fabric_edm_main_loop(
             }
         }
 
-        //     // TODO
+        // Capture these to see if we made progress
+        auto old_send_state = sender_states[sender_channel_index];
+        auto old_recv_state = receiver_state;
+
         auto &local_sender_channel = local_sender_channels[sender_channel_index];
         auto &local_sender_channel_worker_interface = local_sender_channel_worker_interfaces[sender_channel_index];
         // There are some cases, mainly for performance, where we don't want to switch between sender channels
@@ -708,7 +731,9 @@ void run_fabric_edm_main_loop(
             local_sender_channel_worker_interface,
             remote_receiver_channel,
             got_graceful_termination,
-            &(sender_states[sender_channel_index]));
+            &(sender_states[sender_channel_index]),
+            sender_channel_index);
+        bool did_something_sender = old_send_state != sender_states[sender_channel_index];
         if (incr_sender_channel_index) {
             // TODO: this can probably be optimized
             sender_channel_index = 1 - sender_channel_index;
@@ -717,9 +742,15 @@ void run_fabric_edm_main_loop(
         run_receiver_channel_state_machine_step<RECEIVER_NUM_BUFFERS, SENDER_NUM_BUFFERS, NUM_SENDER_CHANNELS>(
             local_receiver_channel, remote_sender_channels, downstream_edm_noc_interface, &receiver_state);
 
-        if (did_nothing_count++ > SWITCH_INTERVAL) {
+        bool did_something = did_something_sender || old_recv_state != receiver_state;
+
+        if (did_something) {
             did_nothing_count = 0;
-            run_routing();
+        } else {
+            if (did_nothing_count++ > SWITCH_INTERVAL) {
+                did_nothing_count = 0;
+                run_routing();
+            }
         }
     }
     DPRINT << "EDM Terminating\n";
@@ -762,6 +793,10 @@ void kernel_main() {
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::fabric::TerminationSignal *>(get_compile_time_arg_val(13));
+    // In persistent mode, we must rely on static addresses for our local semaphores that are locally
+    // initialized, rather than metal device APIs. This way different subdevice programs can reliably
+    // resolve the semaphore addresses on the EDM core
+    static constexpr bool persistent_mode = get_compile_time_arg_val(14) != 0;
 
     static_assert(SENDER_NUM_BUFFERS > 0, "compile time argument [1]: SENDER_NUM_BUFFERS must be > 0");
     static_assert(RECEIVER_NUM_BUFFERS > 0, "compile time argument [2]: RECEIVER_NUM_BUFFERS must be > 0");
@@ -772,16 +807,17 @@ void kernel_main() {
     ///////////////////////
 
     const size_t local_sender_channel_0_connection_semaphore_addr =
+        persistent_mode ? get_arg_val<uint32_t>(arg_idx++) :
         get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
     const size_t local_sender_channel_1_connection_semaphore_addr =
         get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
 
     // unused - can later remove
     const size_t local_sender_channel_0_connection_buffer_index_addr =
+        persistent_mode ? get_arg_val<uint32_t>(arg_idx++) :
         get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
 
-    const size_t local_sender_channel_1_connection_buffer_index_addr =
-        get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
+    const size_t local_sender_channel_1_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
 
 
     // downstream EDM semaphore location
@@ -792,8 +828,10 @@ void kernel_main() {
 
     // remote address for flow control
     const auto downstream_edm_semaphore_id = get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID
-    const auto downstream_edm_worker_registration_address =
-        get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
+    const auto downstream_edm_worker_registration_id =
+        // get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
+            get_arg_val<uint32_t>(arg_idx++);
+            // );
     const auto downstream_edm_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_noc_interface_buffer_index_local_addr = get_arg_val<uint32_t>(arg_idx++);
 
@@ -807,10 +845,21 @@ void kernel_main() {
     // Sender runtime args
     ////////////////////////
     auto sender0_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t *>(
+        persistent_mode ? get_arg_val<uint32_t>(arg_idx++) :
         get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++)));
     auto sender1_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t *>(
         get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++)));
 
+    DPRINT << "send ch 0 flow ctrl sem addr: " << (uint32_t)sender0_worker_semaphore_ptr << "\n";
+    DPRINT << "send ch 1 flow ctrl sem addr: " << (uint32_t)sender1_worker_semaphore_ptr << "\n";
+
+    if constexpr (persistent_mode) {
+        // initialize the statically allocated "semaphores"
+
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 0;
+        *sender0_worker_semaphore_ptr = 0;
+    }
     //////////////////////////////
     //////////////////////////////
     //        Object Setup
@@ -833,15 +882,18 @@ void kernel_main() {
     auto downstream_edm_noc_interface =
         has_downstream_edm_buffer_connection
             ? tt::fabric::WorkerToFabricEdmSender(
+                 //persistent_mode -> hardcode to false because for EDM -> EDM
+                 // connections we must always use semaphore lookup
+                  false,
                   downstream_edm_noc_x,
                   downstream_edm_noc_y,
                   downstream_edm_buffer_base_address,
                   SENDER_NUM_BUFFERS,
                   downstream_edm_semaphore_id,
-                  downstream_edm_worker_registration_address,  // edm_connection_handshake_addr,
+                  downstream_edm_worker_registration_id, //downstream_edm_worker_registration_address,  // edm_connection_handshake_addr,
                   downstream_edm_worker_location_info_address,
                   channel_buffer_size,
-                  local_sender_channel_1_connection_buffer_index_addr, // our downstream is channel 1
+                  local_sender_channel_1_connection_buffer_index_id, // local_sender_channel_1_connection_buffer_index_addr, // our downstream is channel 1
                   reinterpret_cast<volatile uint32_t *const>(edm_forwarding_semaphore_address),
                   downstream_noc_interface_buffer_index_local_addr)
             : tt::fabric::WorkerToFabricEdmSender();
@@ -902,9 +954,8 @@ void kernel_main() {
     DPRINT << "EDM Done handshake\n";
 
     DPRINT << "EDM Core y|x " << (uint32_t)((my_y[0] << 16) | my_x[0]) << "\n";
-    // DPRINT << "EDM Connection address0 " << (uint32_t)local_sender_channel_worker_interfaces[0].connection_live_semaphore << "\n";
-    // DPRINT << "EDM Connection address1 " << (uint32_t)local_sender_channel_worker_interfaces[1].connection_live_semaphore << "\n";
-
+    DPRINT << "EDM Connection address0 " << (uint32_t)local_sender_channel_worker_interfaces[0].connection_live_semaphore << "\n";
+    DPRINT << "EDM Connection address1 " << (uint32_t)local_sender_channel_worker_interfaces[1].connection_live_semaphore << "\n";
 
     //////////////////////////////
     //////////////////////////////

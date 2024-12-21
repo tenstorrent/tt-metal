@@ -3,9 +3,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-#include "umd/device/types/arch.h"
-#include "gtest/gtest.h"
+#include "common/logger.hpp"
+#include "sub_device/sub_device_types.hpp"
 // #include "tt_backend_api_types.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/math.hpp"
@@ -17,27 +16,32 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+
+#include "tt_metal/impl/tile/tile.hpp"
+
+#include "umd/device/types/arch.h"
+#include "umd/device/types/cluster_descriptor_types.h"
+// #include "umd/device/tt_arch_types.h"
+
+#include "gtest/gtest.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <limits>
 #include <random>
-
-#include "tt_metal/impl/tile/tile.hpp"
+#include <unordered_set>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -48,6 +52,17 @@ enum TwoInputReaderKernelWriteMode {
     FABRIC_UNICAST,
     FABRIC_MULTICAST
 };
+
+static constexpr size_t TEST_WORKERS_SUBDEVICE_INDEX = 0;
+static constexpr size_t TEST_EDM_FABRIC_SUBDEVICE_INDEX = 1;
+
+using subdevice_managers_t = std::unordered_map<chip_id_t, SubDeviceManagerId>;
+struct SubdeviceInfo {
+    std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_managers;
+    std::unordered_map<chip_id_t, SubDeviceId> worker_subdevice_id;
+    std::unordered_map<chip_id_t, SubDeviceId> fabric_subdevice_id;
+};
+
 class T3000TestDevice {
 public:
     T3000TestDevice() : device_open(false) {
@@ -143,9 +158,30 @@ Correctness run_output_check(
         log_error("... (remaining mismatches omitted)");
     }
 
+    log_info(tt::LogTest, "Output check: {}", pass ? "PASS" : "FAIL");
     // }
     return pass ? Correctness::Correct : Correctness::Incorrect;
 };
+
+static SubdeviceInfo create_subdevices(std::vector<Device*> const& devices) {
+    SubdeviceInfo subdevice_info;
+    std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_manager_ids;
+    for (auto device : devices) {
+        const auto& tensix_sub_device =
+            tt_metal::SubDevice(std::array{device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0})});
+        const auto& eth_sub_device = tt_metal::SubDevice(
+            std::array{CoreRangeSet(), device->worker_cores(HalProgrammableCoreType::ACTIVE_ETH, SubDeviceId{0})});
+        subdevice_info.sub_device_managers.insert(
+            {device->id(), device->create_sub_device_manager({tensix_sub_device, eth_sub_device}, 0)});
+        device->load_sub_device_manager(subdevice_info.sub_device_managers.at(device->id()));
+        subdevice_info.worker_subdevice_id.insert(
+            {device->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
+        subdevice_info.fabric_subdevice_id.insert(
+            {device->id(), device->get_sub_device_ids().at(TEST_EDM_FABRIC_SUBDEVICE_INDEX)});
+    }
+
+    return subdevice_info;
+}
 
 Correctness run_output_check(
     std::vector<uint32_t> const& all_zeros,
@@ -158,7 +194,10 @@ Correctness run_output_check(
     return run_output_check(inputs, readback_data_vec);
 };
 
-void run_programs(std::vector<Program>& programs, std::vector<Device*> const& devices) {
+void run_programs(
+    std::vector<Program>& programs,
+    std::vector<Device*> const& devices,
+    std::optional<std::unordered_map<chip_id_t, SubDeviceId>> const& sub_device_ids = std::nullopt) {
     EXPECT_EQ(programs.size(), devices.size());
     const size_t num_programs = programs.size();
     try {
@@ -187,7 +226,11 @@ void run_programs(std::vector<Program>& programs, std::vector<Device*> const& de
 
         log_debug(tt::LogTest, "Calling Finish");
         for (size_t i = 0; i < num_programs; i++) {
-            tt_metal::Finish(devices.at(i)->command_queue());
+            if (sub_device_ids.has_value()) {
+                tt_metal::Finish(devices.at(i)->command_queue(), {sub_device_ids.value().at(devices.at(i)->id())});
+            } else {
+                tt_metal::Finish(devices.at(i)->command_queue());
+            }
         }
     }
 }
@@ -286,6 +329,7 @@ void generate_sender_worker_kernels(
         dram_output_buffer_base_addr,
         local_worker_last_message_semaphore_id,
         worker_buffer_index_semaphore_id,
+        worker_fabric_connection.persistent_fabric ? 1 : 0,
         worker_fabric_connection.buffer_index_semaphore_id};
 
     if (std::holds_alternative<mcast_send>(mode)) {
@@ -296,7 +340,6 @@ void generate_sender_worker_kernels(
     }
 
     get_runtime_args_for_edm_termination_infos(edm_termination_infos, sender_worker_writer_runtime_args);
-
 
     uint32_t src0_cb_index = CBIndex::c_0;
     log_trace(tt::LogTest, "\tSenderWriter CT Args");
@@ -346,13 +389,15 @@ bool RunLoopbackTest(
     const uint32_t page_size,
     const uint32_t num_pages_total,
     bool src_is_dram,
-    bool dest_is_dram) {
+    bool dest_is_dram,
+    std::vector<Program>& programs,
+    ttnn::ccl::FabricEriscDatamoverBuilder& chip_0_edm_builder,
+    std::optional<SubdeviceInfo>& subdevice_managers,
+    bool enable_persistent_fabric) {
+    auto& sender_program = programs.at(0);
+    // auto& receiver_program = programs.at(1);
     std::size_t page_plus_header_size = page_size + sizeof(tt::fabric::PacketHeader);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
-
-    std::vector<Program> programs(2);
-    auto& sender_program = programs.at(0);
-    auto& receiver_program = programs.at(1);
 
     std::vector<CoreCoord> worker_cores = {CoreCoord(0, 0)};
 
@@ -389,17 +434,17 @@ bool RunLoopbackTest(
     ////////////////////////////////////////////////////////////////////////////
 
     static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
-    const chip_id_t local_chip_id = 0;
-    const chip_id_t remote_chip_id = 1;
-    auto const& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
-    auto chip_0_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
-        sender_device, sender_program, eth_sender_core, local_chip_id, remote_chip_id, edm_config);
-    auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
-    auto chip_1_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
-        receiver_device, receiver_program, eth_receiver_core, remote_chip_id, local_chip_id, edm_config);
-    // Create the loopback connection on the second device
-    chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
+    // const chip_id_t local_chip_id = 0;
+    // const chip_id_t remote_chip_id = 1;
+    // auto const& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    // auto chip_0_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
+    //     sender_device, sender_program, eth_sender_core, local_chip_id, remote_chip_id, edm_config);
+    // auto chip_1_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
+    //     receiver_device, receiver_program, eth_receiver_core, remote_chip_id, local_chip_id, edm_config);
+    // // Create the loopback connection on the second device
+    // chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
 
+    auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
     ////////////////////////////////////////////////////////////////////////////
     // Build Workers
     ////////////////////////////////////////////////////////////////////////////
@@ -409,16 +454,21 @@ bool RunLoopbackTest(
     auto const& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
-    std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos = {
-        {1,
-         sender_device->ethernet_core_from_logical_core(eth_receiver_core).x,
-         sender_device->ethernet_core_from_logical_core(eth_receiver_core).y,
-         ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address},
-        {0,
-         sender_device->ethernet_core_from_logical_core(eth_sender_core).x,
-         sender_device->ethernet_core_from_logical_core(eth_sender_core).y,
-         ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address}};
+    std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos =
+        enable_persistent_fabric ? std::vector<ttnn::ccl::edm_termination_info_t>{}
+                                 : std::vector<ttnn::ccl::edm_termination_info_t>{
+                                       {1,
+                                        sender_device->ethernet_core_from_logical_core(eth_receiver_core).x,
+                                        sender_device->ethernet_core_from_logical_core(eth_receiver_core).y,
+                                        ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address},
+                                       {0,
+                                        sender_device->ethernet_core_from_logical_core(eth_sender_core).x,
+                                        sender_device->ethernet_core_from_logical_core(eth_sender_core).y,
+                                        ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address}};
 
+    TT_ASSERT(
+        (enable_persistent_fabric && edm_termination_infos.size() == 0) ||
+        (!enable_persistent_fabric && edm_termination_infos.size() > 0));
     generate_sender_worker_kernels(
         sender_program,
         sender_device,
@@ -441,16 +491,26 @@ bool RunLoopbackTest(
     ////////////////////////////////////////////////////////////////////////////
     // Build EDMs
     ////////////////////////////////////////////////////////////////////////////
-    auto local_edm_kernel =
-        ttnn::ccl::generate_edm_kernel(sender_program, sender_device, chip_0_edm_builder, eth_sender_core, NOC::NOC_0);
+    // auto local_edm_kernel =
+    //     ttnn::ccl::generate_edm_kernel(sender_program, sender_device, chip_0_edm_builder, eth_sender_core,
+    //     NOC::NOC_0);
 
-    auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        receiver_program, receiver_device, chip_1_edm_builder, eth_receiver_core, NOC::NOC_0);
+    // auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
+    //     receiver_program, receiver_device, chip_1_edm_builder, eth_receiver_core, NOC::NOC_0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    run_programs(programs, {sender_device, receiver_device});
+    std::vector<Device*> devices = {sender_device};
+    if (!enable_persistent_fabric) {
+        devices.push_back(receiver_device);
+    }
+    log_trace(tt::LogTest, "{} programs, {} devices", programs.size(), devices.size());
+    run_programs(
+        programs,
+        devices,
+        subdevice_managers.has_value() ? subdevice_managers.value().worker_subdevice_id
+                                       : std::optional<std::unordered_map<chip_id_t, SubDeviceId>>{std::nullopt});
     log_info(tt::LogTest, "Reading back outputs");
 
     bool pass = true;
@@ -654,15 +714,17 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
 
 bool RunLocalTestWithMultiInputReaders(
     std::vector<tt_metal::Device*> const& devices,
+    std::vector<Program>& programs,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
 
-    Tensor &input_tensor0,
-    MemoryConfig const& input_tensor0_mem_config,
-    Tensor &input_tensor1,
-    MemoryConfig const& input_tensor1_mem_config,
-    Tensor &output_tensor0,
-    MemoryConfig const& output_tensor0_mem_config,
-    Tensor &output_tensor1,
-    MemoryConfig const& output_tensor1_mem_config,
+    Tensor& input_tensor0,
+    Tensor& input_tensor1,
+    Tensor& output_tensor0,
+    Tensor& output_tensor1,
+    std::vector<Tensor> input0_tensors,   // Device
+    std::vector<Tensor> input1_tensors,   // Device
+    std::vector<Tensor> output0_tensors,  // Device
+    std::vector<Tensor> output1_tensors,  // Device
 
     ttnn::ccl::v2::TensorSlice const& in0_tensor_slice,
     ttnn::ccl::v2::TensorSlice const& in1_tensor_slice,
@@ -671,19 +733,20 @@ bool RunLocalTestWithMultiInputReaders(
 
     const uint32_t page_size,
     TwoInputReaderKernelWriteMode test_mode,
-    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args
-    ) {
+    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args,
+    std::optional<SubdeviceInfo>& subdevice_managers,
+    bool enable_persistent_fabric) {
     const bool fabric_enabled = test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK;
     tt_metal::Device* device = devices.at(0);
     for (size_t i = 0; i < devices.size(); i++) {
         log_info(tt::LogTest, "Device[{}] ID: {}", i, devices.at(i)->id());
     }
-    auto programs = std::vector<Program>(devices.size()); // test debugger will catch throw
+    // auto programs = std::vector<Program>(devices.size()); // test debugger will catch throw
     auto program_ptrs = std::vector<Program*>();
     program_ptrs.reserve(devices.size());
     std::ranges::transform(programs, std::back_inserter(program_ptrs), [](auto& p){return &p;});
 
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
+    // std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
     size_t output_tensor_dest_device_index = 0;
     if (fabric_enabled) {
         if (std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args)) {
@@ -697,7 +760,7 @@ bool RunLocalTestWithMultiInputReaders(
             TT_ASSERT(output_tensor_dest_device_index != 0, "Output tensor destination device index must be non-zero");
             TT_ASSERT(test_mode == TwoInputReaderKernelWriteMode::FABRIC_MULTICAST);
         }
-        line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, program_ptrs, 1);
+        // line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, program_ptrs, 1);
     } else {
         log_info(tt::LogTest, "No fabric enabled");
         TT_ASSERT(std::holds_alternative<ttnn::ccl::cmd::DestTypeArgsNull>(dest_args), "Local command dest args expected");
@@ -712,19 +775,6 @@ bool RunLocalTestWithMultiInputReaders(
     TT_ASSERT(input_tensor0.get_logical_shape()[-2] != 1);
 
     bool is_fabric_mcast = std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args);
-    std::vector<Tensor> input0_tensors;
-    std::vector<Tensor> input1_tensors;
-    std::vector<Tensor> output0_tensors;
-    std::vector<Tensor> output1_tensors;
-
-    // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
-    // multicast to a consistent destination address
-    for (size_t i = 0; i < devices.size(); i++) {
-        input0_tensors.push_back(input_tensor0.to(devices.at(i), input_tensor0_mem_config));
-        input1_tensors.push_back(input_tensor1.to(devices.at(i), input_tensor1_mem_config));
-        output0_tensors.push_back(output_tensor0.to(devices.at(i), output_tensor0_mem_config));
-        output1_tensors.push_back(output_tensor1.to(devices.at(i), output_tensor1_mem_config));
-    }
 
     auto input_tensor0_device = input0_tensors.at(0);
     auto input_tensor1_device = input1_tensors.at(0);
@@ -748,16 +798,17 @@ bool RunLocalTestWithMultiInputReaders(
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec>{std::nullopt};
 
     // always at start of line for now
-    std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> edm_termination_infos = fabric_enabled ?
-        line_fabric->generate_ordered_termination_info_farthest_to_nearest() :
-        std::optional<std::vector<ttnn::ccl::edm_termination_info_t>>{std::nullopt};
+    std::optional<std::vector<ttnn::ccl::edm_termination_info_t>> edm_termination_infos =
+        (!fabric_enabled || enable_persistent_fabric)
+            ? std::optional<std::vector<ttnn::ccl::edm_termination_info_t>>{std::nullopt}
+            : line_fabric->generate_ordered_termination_info_farthest_to_nearest();
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> chip0_worker_backward_fabric_connection = std::nullopt;
 
 
     std::optional<ttnn::ccl::SyncModeSpec> sync_details;
     std::optional<CoreCoord> teardown_worker_core;
     std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> teardown_command_stream;
-    if (fabric_enabled) {
+    if (fabric_enabled && !enable_persistent_fabric) {
         teardown_worker_core = worker_core;
 
         sync_details = ttnn::ccl::SyncModeSpec{};
@@ -765,7 +816,9 @@ bool RunLocalTestWithMultiInputReaders(
         sync_details->add_signal(tt::tt_metal::CreateSemaphore(programs.at(0), teardown_worker_core.value(), 0), 1);
         teardown_command_stream = {ttnn::ccl::cmd::uops::local_core_semaphore_inc(sync_details->sem_ids.at(0), 1)};
         TT_FATAL(edm_termination_infos.has_value(), "EDM termination infos must be set if fabric is enabled");
-        auto teardown_commands = ttnn::ccl::worker_detail::build_ccl_cmd_proc_teardown_commands(
+        ttnn::ccl::cmd::CclHostLowLevelCommandSequence teardown_commands;
+
+        teardown_commands = ttnn::ccl::worker_detail::build_ccl_cmd_proc_teardown_commands(
             programs.at(0),
             device,
             nullptr,  // forward device - in this test, we have a single source doing all teardown
@@ -798,27 +851,44 @@ bool RunLocalTestWithMultiInputReaders(
         chip0_worker_backward_fabric_connection,
         dest_args);
 
-    if (fabric_enabled) {
-
+    if (!enable_persistent_fabric) {
         log_info(tt::LogTest, "Building EDM kernels");
         line_fabric->build_kernels();
     }
 
+    log_info(tt::LogTest, "persistent_fabric: {}", enable_persistent_fabric);
+    log_info(tt::LogTest, "subdevice_managers.has_value(): {}", subdevice_managers.has_value());
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    run_programs(programs, devices);
+    run_programs(
+        programs,
+        enable_persistent_fabric ? std::vector<Device*>{devices[0]} : devices,
+        subdevice_managers.has_value() ? subdevice_managers.value().worker_subdevice_id
+                                       : std::optional<std::unordered_map<chip_id_t, SubDeviceId>>{std::nullopt}
+
+    );
     log_info(tt::LogTest, "Finished");
 
     bool pass = true;
     constexpr bool enable_check = true;
     if constexpr (enable_check) {
         log_info(tt::LogTest, "Reading back outputs");
-        auto output0_cpu = output_tensor0_device.cpu();
-        auto output1_cpu = output_tensor1_device.cpu();
+        std::vector<SubDeviceId> out_tensor_worker_subdevice_id =
+            subdevice_managers.has_value() ? std::vector<SubDeviceId>{subdevice_managers->worker_subdevice_id.at(
+                                                 devices.at(output_tensor_dest_device_index)->id())}
+                                           : std::vector<SubDeviceId>{};
+        auto output0_cpu = output_tensor0_device.cpu(true, ttnn::DefaultQueueId, out_tensor_worker_subdevice_id);
+        auto output1_cpu = output_tensor1_device.cpu(true, ttnn::DefaultQueueId, out_tensor_worker_subdevice_id);
 
-        auto in0_tensor_copyback_cpu = input_tensor0_device.cpu();
-        auto in1_tensor_copyback_cpu = input_tensor1_device.cpu();
+        auto in_tensor_worker_subdevice_id =
+            subdevice_managers.has_value()
+                ? std::vector<SubDeviceId>{subdevice_managers->worker_subdevice_id.at(devices.at(0)->id())}
+                : std::vector<SubDeviceId>{};
+        auto in0_tensor_copyback_cpu =
+            input_tensor0_device.cpu(true, ttnn::DefaultQueueId, in_tensor_worker_subdevice_id);
+        auto in1_tensor_copyback_cpu =
+            input_tensor1_device.cpu(true, ttnn::DefaultQueueId, in_tensor_worker_subdevice_id);
 
         auto in0_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(in0_tensor_copyback_cpu);
         auto in1_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(in1_tensor_copyback_cpu);
@@ -861,9 +931,9 @@ bool RunLocalTestWithMultiInputReaders(
     return pass;
 }
 
-
 bool RunLineFabricTest(
     std::vector<tt_metal::Device*> devices,
+    std::vector<Program>& programs,
 
     const size_t mcast_first_chip,
     const size_t mcast_last_chip,
@@ -871,18 +941,19 @@ bool RunLineFabricTest(
     const uint32_t page_size,
     const uint32_t num_pages_total,
     bool src_is_dram,
-    bool dest_is_dram) {
+    bool dest_is_dram,
+
+    std::optional<SubdeviceInfo>& subdevice_managers,
+    ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
+    bool enable_persistent_fabric) {
     std::size_t page_plus_header_size = page_size + sizeof(tt::fabric::PacketHeader);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
     static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
     const size_t local_chip_id = 0;
     const size_t remote_chip_id = 1;
-    auto programs = std::vector<Program>(devices.size());
     auto program_ptrs = std::vector<Program*>(devices.size());
     std::transform(programs.begin(), programs.end(), program_ptrs.begin(), [](auto& program) { return &program; });
-
-    auto line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, program_ptrs, 1);
 
     std::vector<CoreCoord> worker_cores = {CoreCoord(0, 0)};
 
@@ -904,8 +975,12 @@ bool RunLineFabricTest(
 
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     // output buffers
-    TT_ASSERT(mcast_first_chip <= mcast_last_chip, "mcast_first_chip must be less than or equal to mcast_last_chip");
-    TT_ASSERT(mcast_last_chip < devices.size(), "mcast_last_chip must be less than the number of devices");
+    TT_ASSERT(
+        enable_persistent_fabric || mcast_first_chip <= mcast_last_chip,
+        "mcast_first_chip must be less than or equal to mcast_last_chip");
+    TT_ASSERT(
+        enable_persistent_fabric || mcast_last_chip < devices.size(),
+        "mcast_last_chip must be less than the number of devices");
     std::vector<std::shared_ptr<Buffer>> output_buffers;
     output_buffers.reserve(devices.size());
     for (size_t i = 0; i < devices.size(); i++) {
@@ -940,7 +1015,9 @@ bool RunLineFabricTest(
     auto const& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
-    const auto edm_termination_infos = line_fabric.generate_ordered_termination_info_farthest_to_nearest();
+    const auto edm_termination_infos = enable_persistent_fabric
+                                           ? std::vector<ttnn::ccl::edm_termination_info_t>{}
+                                           : line_fabric.generate_ordered_termination_info_farthest_to_nearest();
 
     auto chip0_worker_fabric_connection =
         line_fabric.uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD);
@@ -969,13 +1046,19 @@ bool RunLineFabricTest(
     ////////////////////////////////////////////////////////////////////////////
     // Build EDM Kernels
     ////////////////////////////////////////////////////////////////////////////
-    line_fabric.build_kernels();
+    if (!enable_persistent_fabric) {
+        line_fabric.build_kernels();
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    run_programs(programs, devices);
+    run_programs(
+        programs,
+        devices,
+        subdevice_managers.has_value() ? subdevice_managers.value().worker_subdevice_id
+                                       : std::optional<std::unordered_map<chip_id_t, SubDeviceId>>{std::nullopt});
     log_info(tt::LogTest, "Reading back outputs");
 
     bool pass = true;
@@ -996,6 +1079,68 @@ bool RunLineFabricTest(
     return pass;
 }
 
+void persistent_fabric_teardown_sequence(
+    std::vector<Device*> const& devices,
+    std::optional<SubdeviceInfo>& subdevice_managers,
+    ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
+    tt::fabric::TerminationSignal termination_mode = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) {
+    // std::vector<Program> second_run_programs(1);
+    // success = launch_workers_lambda(second_run_programs) && success;
+    // success = launch_workers(second_run_programs) && success;
+
+    // Wait for workers to finish
+    auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
+    tt_metal::Finish(devices[0]->command_queue(), {subdevice_managers->worker_subdevice_id.at(devices[0]->id())});
+
+    // Teardown the fabric
+    line_fabric.teardown_from_host(termination_mode);
+
+    // wait for fabric teardown to finish
+    std::ranges::for_each(devices, [&](Device* d) {
+        tt_metal::Finish(d->command_queue(), {subdevice_managers->fabric_subdevice_id.at(d->id())});
+    });
+}
+
+void setup_test_with_persistent_fabric(
+    std::vector<Device*> const& devices,
+    std::vector<Program>& programs,
+    std::optional<SubdeviceInfo>& subdevice_managers,
+    std::optional<std::vector<Program>>& fabric_programs,
+    std::vector<Program*>& fabric_program_ptrs,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
+    bool enable_persistent_fabric,
+    std::optional<size_t> num_links = std::nullopt) {
+    if (enable_persistent_fabric) {
+        log_info(tt::LogTest, "Enabling persistent fabric");
+        fabric_programs = std::vector<Program>(devices.size());
+        subdevice_managers = create_subdevices(devices);
+        std::transform(
+            fabric_programs->begin(), fabric_programs->end(), std::back_inserter(fabric_program_ptrs), [](auto& p) {
+                return &p;
+            });
+    } else {
+        std::transform(
+            programs.begin(), programs.end(), std::back_inserter(fabric_program_ptrs), [](auto& p) { return &p; });
+    }
+
+    line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
+        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1));
+
+    if (enable_persistent_fabric) {
+        TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
+        TT_FATAL(devices.size() == fabric_programs->size(), "Number of devices must match number of programs");
+
+        log_info(tt::LogTest, "Building EDM kernels");
+        line_fabric->build_kernels();
+        for (size_t i = 0; i < devices.size(); i++) {
+            tt::tt_metal::detail::CompileProgram(devices[i], fabric_programs->at(i));
+        }
+        for (size_t i = 0; i < devices.size(); i++) {
+            tt_metal::EnqueueProgram(devices[i]->command_queue(), fabric_programs->at(i), false);
+        }
+    }
+}
+
 // RESUME HERE AND IMPLEMENT MCAST TEST
 int TestLineFabricEntrypoint(
     const size_t mcast_first_chip,
@@ -1003,7 +1148,8 @@ int TestLineFabricEntrypoint(
     const uint32_t page_size,
     const uint32_t num_pages_total,
     const bool src_is_dram,
-    const bool dest_is_dram) {
+    const bool dest_is_dram,
+    bool enable_persistent_fabric) {
     // argv[0]: program
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
@@ -1027,25 +1173,53 @@ int TestLineFabricEntrypoint(
         test_fixture.devices_.at(1),
         test_fixture.devices_.at(2),
         test_fixture.devices_.at(3)};
+    std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
+    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
+    std::optional<std::vector<Program>> fabric_programs;
+    std::vector<Program*> fabric_program_ptrs;
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
+    setup_test_with_persistent_fabric(
+        devices,
+        programs,
+        subdevice_managers,
+        fabric_programs,
+        fabric_program_ptrs,
+        line_fabric,
+        enable_persistent_fabric);
 
-    bool success = false;
-    try {
-        success = RunLineFabricTest(
-            devices,
-            // fabric_hops,
+    auto launch_workers = [&](std::vector<Program>& _programs) -> bool {
+        bool success = false;
+        try {
+            success = RunLineFabricTest(
+                enable_persistent_fabric ? std::vector<Device*>{devices[0]} : devices,
+                _programs,
+                // fabric_hops,
 
-            mcast_first_chip,
-            mcast_last_chip,
+                mcast_first_chip,
+                mcast_last_chip,
 
-            page_size,
-            num_pages_total,
-            src_is_dram,
-            dest_is_dram);
+                page_size,
+                num_pages_total,
+                src_is_dram,
+                dest_is_dram,
 
-    } catch (std::exception& e) {
-        log_error("Caught exception: {}", e.what());
-        test_fixture.TearDown();
-        return -1;
+                subdevice_managers,
+                line_fabric.value(),
+                enable_persistent_fabric);
+
+        } catch (std::exception& e) {
+            log_error("Caught exception: {}", e.what());
+            test_fixture.TearDown();
+            return false;
+        }
+        return success;
+    };
+    bool success = launch_workers(programs);
+
+    if (enable_persistent_fabric) {
+        std::vector<Program> second_run_programs(1);
+        success = launch_workers(second_run_programs);
+        persistent_fabric_teardown_sequence(devices, subdevice_managers, line_fabric.value());
     }
 
     test_fixture.TearDown();
@@ -1054,10 +1228,15 @@ int TestLineFabricEntrypoint(
 }
 
 int TestLoopbackEntrypoint(
-    const uint32_t page_size, const uint32_t num_pages_total, const bool src_is_dram, const bool dest_is_dram) {
+    const uint32_t page_size,
+    const uint32_t num_pages_total,
+    const bool src_is_dram,
+    const bool dest_is_dram,
+    bool enable_persistent_fabric) {
     // argv[0]: program
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
+    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
 
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -1090,6 +1269,54 @@ int TestLoopbackEntrypoint(
     TT_ASSERT(device_id == 1);
     const auto& device_1 = test_fixture.devices_.at(device_id);
 
+    std::vector<Program> programs(enable_persistent_fabric ? 1 : 2);
+    std::optional<std::vector<Program>> fabric_programs;
+    auto& sender_program = programs.at(0);
+    if (enable_persistent_fabric) {
+        log_info(tt::LogTest, "Enabling persistent fabric");
+        fabric_programs = std::vector<Program>(2);
+        subdevice_managers = create_subdevices({device_0, device_1});
+    }
+
+    auto& fabric_sender_program = enable_persistent_fabric ? fabric_programs->at(0) : sender_program;
+    auto& fabric_receiver_program = enable_persistent_fabric ? fabric_programs->at(1) : programs.at(1);
+    Device* sender_device = device_0;
+    Device* receiver_device = device_1;
+
+    static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
+    const chip_id_t local_chip_id = 0;
+    const chip_id_t remote_chip_id = 1;
+    auto const& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    auto chip_0_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
+        sender_device,
+        fabric_sender_program,
+        eth_sender_core,
+        local_chip_id,
+        remote_chip_id,
+        edm_config,
+        enable_persistent_fabric);
+    auto chip_1_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
+        receiver_device,
+        fabric_receiver_program,
+        eth_receiver_core,
+        remote_chip_id,
+        local_chip_id,
+        edm_config,
+        enable_persistent_fabric);
+    // Create the loopback connection on the second device
+    chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
+    auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
+        fabric_sender_program, sender_device, chip_0_edm_builder, eth_sender_core, NOC::NOC_0);
+    auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
+        fabric_receiver_program, receiver_device, chip_1_edm_builder, eth_receiver_core, NOC::NOC_0);
+
+    if (enable_persistent_fabric) {
+        tt::tt_metal::detail::CompileProgram(sender_device, fabric_sender_program);
+        tt::tt_metal::detail::CompileProgram(receiver_device, fabric_receiver_program);
+        tt_metal::EnqueueProgram(sender_device->command_queue(), fabric_sender_program, false);
+        tt_metal::EnqueueProgram(receiver_device->command_queue(), fabric_receiver_program, false);
+    }
+    log_trace(tt::LogTest, "{} programs ", programs.size());
     bool success = false;
     try {
         success = RunLoopbackTest(
@@ -1102,11 +1329,59 @@ int TestLoopbackEntrypoint(
             page_size,
             num_pages_total,
             src_is_dram,
-            dest_is_dram);
+            dest_is_dram,
+            programs,
+            chip_0_edm_builder,
+            subdevice_managers,
+            enable_persistent_fabric);
     } catch (std::exception& e) {
         log_error("Caught exception: {}", e.what());
         test_fixture.TearDown();
         return -1;
+    }
+
+    if (enable_persistent_fabric) {
+        // Run the test twice with a single fabric invocation
+
+        std::vector<Program> second_programs(1);
+        try {
+            success = RunLoopbackTest(
+                device_0,
+                device_1,
+
+                eth_sender_core,
+                eth_receiver_core,
+
+                page_size,
+                num_pages_total,
+                src_is_dram,
+                dest_is_dram,
+                second_programs,
+                chip_0_edm_builder,
+                subdevice_managers,
+                enable_persistent_fabric);
+        } catch (std::exception& e) {
+            log_error("Caught exception: {}", e.what());
+            test_fixture.TearDown();
+            return -1;
+        }
+        // Wait for worker programs to finish
+
+        auto d0_worker_subdevice = device_0->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
+        auto d1_worker_subdevice = device_1->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
+        auto d0_fabric_subdevice = device_0->get_sub_device_ids()[TEST_EDM_FABRIC_SUBDEVICE_INDEX];
+        auto d1_fabric_subdevice = device_1->get_sub_device_ids()[TEST_EDM_FABRIC_SUBDEVICE_INDEX];
+        // Teardown the fabric
+        tt_metal::Finish(sender_device->command_queue(), {d0_worker_subdevice});
+        // tt_metal::Finish(receiver_device->command_queue(), {d1_worker_subdevice});
+
+        // Notify fabric of teardown
+        chip_1_edm_builder.teardown_from_host(receiver_device);
+        chip_0_edm_builder.teardown_from_host(sender_device);
+
+        // wait for fabric finish
+        tt_metal::Finish(sender_device->command_queue(), {d0_fabric_subdevice});
+        tt_metal::Finish(receiver_device->command_queue(), {d1_fabric_subdevice});
     }
 
     test_fixture.TearDown();
@@ -1116,13 +1391,13 @@ int TestLoopbackEntrypoint(
 
 bool TestMultiInputReaderKernel(
     size_t fabric_num_devices,
-    Tensor &input_tensor0,
+    Tensor& input_tensor0,
     MemoryConfig const& input_tensor0_mem_config,
-    Tensor &input_tensor1,
+    Tensor& input_tensor1,
     MemoryConfig const& input_tensor1_mem_config,
-    Tensor &output_tensor0,
+    Tensor& output_tensor0,
     MemoryConfig const& output_tensor0_mem_config,
-    Tensor &output_tensor1,
+    Tensor& output_tensor1,
     MemoryConfig const& output_tensor1_mem_config,
 
     ttnn::ccl::v2::TensorSlice const& in0_tensor_slice,
@@ -1133,9 +1408,13 @@ bool TestMultiInputReaderKernel(
     const uint32_t page_size,
 
     TwoInputReaderKernelWriteMode test_mode,
-    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args
-) {
+    ttnn::ccl::cmd::CclCommandDestArgs const& dest_args,
+    bool enable_persistent_fabric) {
     T3000TestDevice test_fixture;
+
+    TT_FATAL(
+        !enable_persistent_fabric || test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK,
+        "Test configuration issue. Set local writeback mode with persistent fabric");
 
     std::vector<Device*> devices;
     devices.reserve(fabric_num_devices);
@@ -1143,26 +1422,94 @@ bool TestMultiInputReaderKernel(
         devices.push_back(test_fixture.devices_.at(i));
     }
 
-    return RunLocalTestWithMultiInputReaders(
+    std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
+    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
+    std::optional<std::vector<Program>> fabric_programs;
+    std::vector<Program*> fabric_program_ptrs;
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
+    setup_test_with_persistent_fabric(
         devices,
+        programs,
+        subdevice_managers,
+        fabric_programs,
+        fabric_program_ptrs,
+        line_fabric,
+        enable_persistent_fabric);
 
-        input_tensor0,
-        input_tensor0_mem_config,
-        input_tensor1,
-        input_tensor1_mem_config,
-        output_tensor0,
-        output_tensor0_mem_config,
-        output_tensor1,
-        output_tensor1_mem_config,
+    std::vector<Tensor> input0_tensors_device;
+    std::vector<Tensor> input1_tensors_device;
+    std::vector<Tensor> output0_tensors_device;
+    std::vector<Tensor> output1_tensors_device;
 
-        in0_tensor_slice,
-        in1_tensor_slice,
-        out0_tensor_slice,
-        out1_tensor_slice,
+    // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
+    // multicast to a consistent destination address
+    for (size_t i = 0; i < devices.size(); i++) {
+        std::vector<SubDeviceId> subdevice_target =
+            subdevice_managers.has_value()
+                ? std::vector<SubDeviceId>{subdevice_managers->worker_subdevice_id.at(devices[i]->id())}
+                : std::vector<SubDeviceId>{};
+        input0_tensors_device.push_back(
+            input_tensor0.to(devices.at(i), input_tensor0_mem_config, ttnn::DefaultQueueId, subdevice_target));
+        input1_tensors_device.push_back(
+            input_tensor1.to(devices.at(i), input_tensor1_mem_config, ttnn::DefaultQueueId, subdevice_target));
+        output0_tensors_device.push_back(
+            output_tensor0.to(devices.at(i), output_tensor0_mem_config, ttnn::DefaultQueueId, subdevice_target));
+        output1_tensors_device.push_back(
+            output_tensor1.to(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId, subdevice_target));
+    }
+    TT_FATAL(
+        !enable_persistent_fabric || subdevice_managers.has_value(),
+        "Subdevice managers must be set if fabric is enabled");
+    auto launch_ccl_command_interpreter_workers = [&](std::vector<Program>& _programs) {
+        return RunLocalTestWithMultiInputReaders(
+            devices,
+            _programs,
+            line_fabric,
 
-        page_size,
-        test_mode,
-        dest_args);
+            input_tensor0,
+            input_tensor1,
+            output_tensor0,
+            output_tensor1,
+
+            input0_tensors_device,
+            input1_tensors_device,
+            output0_tensors_device,
+            output1_tensors_device,
+
+            in0_tensor_slice,
+            in1_tensor_slice,
+            out0_tensor_slice,
+            out1_tensor_slice,
+
+            page_size,
+            test_mode,
+            dest_args,
+            subdevice_managers,
+            enable_persistent_fabric);
+    };
+
+    auto pass = launch_ccl_command_interpreter_workers(programs);
+    if (enable_persistent_fabric) {
+        std::vector<Program> second_run_programs(1);
+        // It looks suspicious that we are dropping the first result but there are two reasons we do this
+        // 1) We really only care that we can run back to back safely
+        // 2) The first run will end up racing with host and copy-back because there is no
+        //    receiver on the destination that can signal to us when we are done. We need to add this
+        //    to the test to make it more robust but that is future work
+        pass = launch_ccl_command_interpreter_workers(second_run_programs);
+
+        // Due to race between host and device some packets are in flight by the time host sends shutdown signals so
+        // some get shutdown in between any packets in the pipeline. This can only be fixed by having a "drainer" op to
+        // make sure it receives all writes before exiting
+        persistent_fabric_teardown_sequence(
+            devices, subdevice_managers, line_fabric.value(), tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+
+        log_info(tt::LogTest, "Finished");
+        for (auto d : devices) {
+            tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+        }
+    }
+    return pass;
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -1175,7 +1522,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_SingleMessage) {
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, false);
     ASSERT_EQ(result, 0);
 }
 
@@ -1186,7 +1533,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages) {
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, false);
     ASSERT_EQ(result, 0);
 }
 // Will wrapp sender but not receiver buffers
@@ -1196,7 +1543,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages) {
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, false);
     ASSERT_EQ(result, 0);
 }
 
@@ -1207,7 +1554,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_20_messages) {
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, false);
     ASSERT_EQ(result, 0);
 }
 
@@ -1217,11 +1564,69 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers) {
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, false);
     ASSERT_EQ(result, 0);
 }
 
-TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_SingleMessage_SingleSource) {
+// -------------------------
+// Persistent Fabric
+// -------------------------
+
+TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_SingleMessage_PersistentFabric) {
+    const uint32_t page_size = 2048;
+    const uint32_t num_pages_total = 1;
+    const bool src_is_dram = true;
+    const bool dest_is_dram = true;
+
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    ASSERT_EQ(result, 0);
+}
+
+// Will wrapp sender but not receiver buffers
+TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages_PersistentFabric) {
+    const uint32_t page_size = 2048;
+    const uint32_t num_pages_total = 2;
+    const bool src_is_dram = true;
+    const bool dest_is_dram = true;
+
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    ASSERT_EQ(result, 0);
+}
+// Will wrapp sender but not receiver buffers
+TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages_PersistentFabric) {
+    const uint32_t page_size = 2048;
+    const uint32_t num_pages_total = 10;
+    const bool src_is_dram = true;
+    const bool dest_is_dram = true;
+
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    ASSERT_EQ(result, 0);
+}
+
+// Will wrapp sender and receiver buffers
+TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_20_messages_PersistentFabric) {
+    const uint32_t page_size = 2048;
+    const uint32_t num_pages_total = 20;
+    const bool src_is_dram = true;
+    const bool dest_is_dram = true;
+
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    ASSERT_EQ(result, 0);
+}
+
+TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_PersistentFabric) {
+    const uint32_t page_size = 2048;
+    const uint32_t num_pages_total = 10000;
+    const bool src_is_dram = true;
+    const bool dest_is_dram = true;
+
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    ASSERT_EQ(result, 0);
+}
+
+////////////////////////////////
+
+TEST(WorkerFabricEdmDatapath, LineFabricMcast_SingleMessage_SingleSource) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 1;
     const bool src_is_dram = true;
@@ -1230,13 +1635,13 @@ TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_SingleMessage_SingleSourc
     const size_t mcast_last_chip = 3;
 
     auto result = TestLineFabricEntrypoint(
-        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram);
+        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram, false);
 
     ASSERT_EQ(result, 0);
 }
 
 // Non-functional on harvested parts. Needs testing on unharvested parts.
-TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_ManyMessages_SingleSource) {
+TEST(WorkerFabricEdmDatapath, LineFabricMcast_ManyMessages_SingleSource) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 10000;
     const bool src_is_dram = true;
@@ -1245,7 +1650,36 @@ TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_ManyMessages_SingleSource
     const size_t mcast_last_chip = 3;
 
     auto result = TestLineFabricEntrypoint(
-        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram);
+        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram, false);
+
+    ASSERT_EQ(result, 0);
+}
+
+TEST(WorkerFabricEdmDatapath, LineFabricMcast_SingleMessage_SingleSource_PersistentFabric) {
+    const uint32_t page_size = 2048;
+    const uint32_t num_pages_total = 1;
+    const bool src_is_dram = true;
+    const bool dest_is_dram = true;
+    const size_t mcast_first_chip = 1;
+    const size_t mcast_last_chip = 3;
+
+    auto result = TestLineFabricEntrypoint(
+        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+
+    ASSERT_EQ(result, 0);
+}
+
+// Non-functional on harvested parts. Needs testing on unharvested parts.
+TEST(WorkerFabricEdmDatapath, LineFabricMcast_ManyMessages_SingleSource_PersistentFabric) {
+    const uint32_t page_size = 2048;
+    const uint32_t num_pages_total = 10000;
+    const bool src_is_dram = true;
+    const bool dest_is_dram = true;
+    const size_t mcast_first_chip = 1;
+    const size_t mcast_last_chip = 3;
+
+    auto result = TestLineFabricEntrypoint(
+        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram, true);
 
     ASSERT_EQ(result, 0);
 }
@@ -1327,9 +1761,9 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
         out1_tensor_slice,
 
         page_size,
-        test_writeback_mode,//TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK,
-        ttnn::ccl::cmd::LocalOnlyCommandDestArgs{}
-    );
+        test_writeback_mode,  // TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK,
+        ttnn::ccl::cmd::LocalOnlyCommandDestArgs{},
+        false);
 
     return pass;
 }
@@ -1662,12 +2096,82 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 
         page_size,
         TwoInputReaderKernelWriteMode::FABRIC_UNICAST,
-        dest_args
-    );
+        dest_args,
+        false);
 
     ASSERT_TRUE(pass);
 }
 
+TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SinglePageTile_OneHop_PersistentFabric) {
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    constexpr size_t distance_dest_device = 1;
+    constexpr size_t num_devices = 4;
+    auto logical_shape = tensor_shape.logical_shape();
+    Layout const layout = Layout::TILE;
+    MemoryConfig const in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    MemoryConfig const in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    MemoryConfig const out0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    MemoryConfig const out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+
+    auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
+    Tensor input_tensor0 = ttnn::numpy::arange<uint32_t>(0, num_elems, 1).reshape(tensor_shape).to(layout);
+    Tensor input_tensor1 = ttnn::numpy::arange<uint32_t>(num_elems, 2 * num_elems, 1).reshape(tensor_shape).to(layout);
+    Tensor output_tensor0 = ttnn::numpy::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
+    Tensor output_tensor1 = ttnn::numpy::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
+
+    input_tensor0.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
+    input_tensor1.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
+    output_tensor0.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
+    output_tensor1.set_tensor_spec(TensorSpec(
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
+
+    size_t page_size = tile_size(DataFormat::RawUInt32);
+
+    ttnn::ccl::Shape4D<uint32_t> tensor_shape_in_pages = shape_to_shape_in_tiles(tensor_shape);
+    ttnn::ccl::Shape4D<uint32_t> tensor_slice_shape_in_pages = tensor_shape_in_pages;
+    ttnn::ccl::Shape4D<uint32_t> tensor_slice_offset = {0, 0, 0, 0};
+    ttnn::ccl::Shape4D<uint32_t> worker_slice_shape = tensor_shape_in_pages;
+    ttnn::ccl::Shape4D<uint32_t> worker_slice_offset = {0, 0, 0, 0};
+
+    ttnn::ccl::v2::TensorSlice tensor_slice{// using ords_t = Shape4D<uint32_t>;
+                                            tensor_shape_in_pages,
+                                            tensor_slice_shape_in_pages,
+                                            tensor_slice_offset,
+                                            worker_slice_shape,
+                                            worker_slice_offset};
+
+    auto const in0_tensor_slice = tensor_slice;
+    auto const in1_tensor_slice = tensor_slice;
+    auto const out0_tensor_slice = tensor_slice;
+    auto const out1_tensor_slice = tensor_slice;
+
+    ttnn::ccl::cmd::CclCommandDestArgs dest_args = ttnn::ccl::cmd::UnicastCommandDestArgs{distance_dest_device, true};
+    auto pass = TestMultiInputReaderKernel(
+        num_devices,
+        input_tensor0,
+        in0_memory_config,
+        input_tensor1,
+        in1_memory_config,
+        output_tensor0,
+        out0_memory_config,
+        output_tensor1,
+        out1_memory_config,
+
+        in0_tensor_slice,
+        in1_tensor_slice,
+        out0_tensor_slice,
+        out1_tensor_slice,
+
+        page_size,
+        TwoInputReaderKernelWriteMode::FABRIC_UNICAST,
+        dest_args,
+        true);
+
+    ASSERT_TRUE(pass);
+}
 
 // ////////////////////////////////////////////////////////////////////
 // ////////////////////////////////////////////////////////////////////
@@ -1676,10 +2180,7 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 // ////////////////////////////////////////////////////////////////////
 
 void RunFabricMcastFullTensorPropagateTest(
-    ttnn::Shape const& tensor_shape,
-    size_t distance_dest_device,
-    size_t num_devices
-) {
+    ttnn::Shape const& tensor_shape, size_t distance_dest_device, size_t num_devices, bool enable_persistent_fabric) {
     auto logical_shape = tensor_shape.logical_shape();
     Layout const layout = Layout::TILE;
     MemoryConfig const in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
@@ -1743,86 +2244,100 @@ void RunFabricMcastFullTensorPropagateTest(
 
         page_size,
         TwoInputReaderKernelWriteMode::FABRIC_MULTICAST,
-        dest_args
-    );
+        dest_args,
+        enable_persistent_fabric);
 
     ASSERT_TRUE(pass);
-
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_SingleHop) {
     ttnn::Shape tensor_shape = {1, 1, 32, 32}; // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(
-        tensor_shape,
-        distance_dest_device,
-        num_devices
-    );
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop) {
     ttnn::Shape tensor_shape = {1, 1, 32, 32}; // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(
-        tensor_shape,
-        distance_dest_device,
-        num_devices
-    );
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop) {
     ttnn::Shape tensor_shape = {1, 1, 32, 32}; // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(
-        tensor_shape,
-        distance_dest_device,
-        num_devices
-    );
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop) {
     ttnn::Shape tensor_shape = {1, 1, 32, 128}; // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(
-        tensor_shape,
-        distance_dest_device,
-        num_devices
-    );
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop) {
     ttnn::Shape tensor_shape = {1, 1, 128, 32}; // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(
-        tensor_shape,
-        distance_dest_device,
-        num_devices
-    );
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop) {
     ttnn::Shape tensor_shape = {1, 1, 64, 64}; // 16384 crashes... TBD
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(
-        tensor_shape,
-        distance_dest_device,
-        num_devices
-    );
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsPageTile_ThreeHop) {
     ttnn::Shape tensor_shape = {1, 1, 64, 16384};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(
-        tensor_shape,
-        distance_dest_device,
-        num_devices
-    );
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 
+TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_SingleHop_PersistentFabric) {
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    constexpr size_t distance_dest_device = 1;
+    constexpr size_t num_devices = 4;
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+}
 
+TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop_PersistentFabric) {
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    constexpr size_t distance_dest_device = 2;
+    constexpr size_t num_devices = 4;
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+}
+TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop_PersistentFabric) {
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};  // 16384 crashes... TBD
+    constexpr size_t distance_dest_device = 3;
+    constexpr size_t num_devices = 4;
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+}
+
+TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop_PersistentFabric) {
+    ttnn::Shape tensor_shape = {1, 1, 32, 128};  // 16384 crashes... TBD
+    constexpr size_t distance_dest_device = 1;
+    constexpr size_t num_devices = 4;
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+}
+TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop_PersistentFabric) {
+    ttnn::Shape tensor_shape = {1, 1, 128, 32};  // 16384 crashes... TBD
+    constexpr size_t distance_dest_device = 2;
+    constexpr size_t num_devices = 4;
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+}
+TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop_PersistentFabric) {
+    ttnn::Shape tensor_shape = {1, 1, 64, 64};  // 16384 crashes... TBD
+    constexpr size_t distance_dest_device = 3;
+    constexpr size_t num_devices = 4;
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+}
+TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsPageTile_ThreeHop_PersistentFabric) {
+    ttnn::Shape tensor_shape = {1, 1, 64, 16384};
+    constexpr size_t distance_dest_device = 3;
+    constexpr size_t num_devices = 4;
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+}
 
 bool RunPipelinedWorkersTest(
 
@@ -2365,4 +2880,87 @@ TEST(WorkerCclCommandProcessingKernels, DISABLED_ChainOfCommandProcessorsWithVar
             }
         }
     }}
+}
+
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include "ttnn/cpp/ttnn/operations/numpy/functions.hpp"
+#include "tt_metal/common/bfloat16.hpp"
+TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
+    // JUST MAKE SURE IT DOESN'T HANG - CORRECTNESS CHECKS ARE DONE IN PYTEST
+    // HERE WE JUST CHECK THE BASIC PLUMBING IS DONE
+    const size_t dim = 3;
+    const size_t num_links = 1;
+    constexpr auto layout = Layout::TILE;
+    // DEVICES setuip
+    T3000TestDevice test_fixture;
+    std::vector<Device*> devices = {
+        test_fixture.devices_.at(0),
+        test_fixture.devices_.at(1),
+        test_fixture.devices_.at(2),
+        test_fixture.devices_.at(3)};
+    const size_t num_devices = devices.size();
+    const ttnn::Shape input_shape = ttnn::Shape{1, 1, 32, 32 * num_devices};
+    const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    auto const logical_shape = input_shape.logical_shape();
+    const auto num_elems = logical_shape.volume();
+
+    // INPUT TENSOR setup
+    size_t page_size = tile_size(DataFormat::Float16);
+    std::vector<Tensor> device_input_tensors;
+    for (size_t i = 0; i < num_devices; i++) {
+        // host_input_tensors.push_back(ttnn::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f) ,
+        // {logical_shape[0],logical_shape[1],logical_shape[2],logical_shape[3]}, layout).to(devices[i]));
+        auto t = ttnn::numpy::arange<bfloat16>(0, num_elems, 1).reshape(input_shape).to(layout);
+        t.set_tensor_spec(TensorSpec(
+            logical_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
+
+        device_input_tensors.push_back(t.to(devices[i]));
+    }
+    // Need to make it a mesh tensor for use with the op
+    const Tensor input_mesh_tensor = ttnn::distributed::api::aggregate_as_tensor(device_input_tensors);
+
+    // FABRIC setup
+    const bool enable_persistent_fabric = true;
+
+    std::vector<Program> dummy_worker_programs;
+    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
+    std::optional<std::vector<Program>> fabric_programs;
+    std::vector<Program*> fabric_program_ptrs;
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
+    setup_test_with_persistent_fabric(
+        devices,
+        dummy_worker_programs,
+        subdevice_managers,
+        fabric_programs,
+        fabric_program_ptrs,
+        fabric_handle,
+        enable_persistent_fabric,
+        2);
+
+    auto output_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
+        input_mesh_tensor,
+        dim,
+        ttnn::operations::reduction::ReduceType::Sum,
+        operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        ttnn::ccl::Topology::Linear,
+        num_links,
+        subdevice_managers->worker_subdevice_id,
+        fabric_handle);
+
+    // wait for op completion
+    log_info(tt::LogTest, "Waiting for Op finish");
+    std::ranges::for_each(devices, [&](Device* d) {
+        tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
+    });
+    log_info(tt::LogTest, "Main op done");
+
+    log_info(tt::LogTest, "Fabric teardown");
+    persistent_fabric_teardown_sequence(
+        devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+
+    log_info(tt::LogTest, "Waiting for teardown completion");
+    for (auto d : devices) {
+        tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+    }
+    log_info(tt::LogTest, "Finished");
 }

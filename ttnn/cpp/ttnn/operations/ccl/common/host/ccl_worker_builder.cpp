@@ -21,6 +21,8 @@
 #include "tt_metal/tt_stl/overloaded.hpp"
 
 #include <optional>
+#include <variant>
+#include <type_traits>
 
 namespace ttnn {
 namespace ccl {
@@ -365,7 +367,24 @@ size_t generate_ccl_wait_value_command_args(
     return 1;
 }
 
-size_t generate_ccl_atomic_inc_command_args(
+size_t generate_ccl_raw_inline_write_command_args(
+    ttnn::ccl::cmd::CclCommandInlineReadWrite const& inline_rw_args, std::vector<uint32_t>& args_out) {
+    auto const arg_code = ttnn::ccl::cmd::CclCommandArgCode::SET_TARGET_VALUE;
+    ttnn::ccl::cmd::CclCommandArgHeader hdr;
+    hdr.code = arg_code;
+    hdr.inline_value0 = static_cast<uint8_t>(true);
+    hdr.inline_value1 = inline_rw_args.value;
+    args_out.push_back(hdr.to_uint32());
+    log_trace(
+        tt::LogOp,
+        "Emitting header only for for inline write field. header.code={}, .inline_val0={}, .inline_val1={}",
+        static_cast<int>(hdr.code),
+        hdr.inline_value0,
+        hdr.inline_value1);
+    return 1;
+}
+
+static size_t generate_ccl_atomic_inc_command_args(
     ttnn::ccl::cmd::CclCommandAtomicInc const& atomic_inc_args,
     std::vector<uint32_t>& args_out) {
     auto const arg_code = ttnn::ccl::cmd::CclCommandArgCode::SET_ATOMIC_INC_VALUE;
@@ -389,7 +408,7 @@ size_t generate_ccl_atomic_inc_command_args(
 /*
  * Returns the number of ccl command args added
  */
-size_t generate_ccl_address_info_command_args(
+static size_t generate_ccl_address_info_command_args(
     std::optional<std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs>> const& last_addr_type,
     std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs> const& current_addr_type_args,
     ttnn::ccl::cmd::SRC_DEST_TYPE src_dest_type,
@@ -583,6 +602,12 @@ void generate_ccl_command_stream_to_kernel_args(std::vector<ttnn::ccl::cmd::CclH
                     rt_args_out);
                 last_tensor_slice = current_tensor_slice;
             } break;
+
+            case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
+                num_ccl_command_args_added += generate_ccl_raw_inline_write_command_args(
+                    std::get<ttnn::ccl::cmd::CclCommandInlineReadWrite>(command.command_args),
+                    rt_args_out);
+                break;
 
             case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
                 num_ccl_command_args_added += generate_ccl_atomic_inc_command_args(
@@ -778,6 +803,7 @@ void generate_rt_args_from_low_level_host_ccl_commands(std::vector<ttnn::ccl::cm
 // }
 
 static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence const& commands, size_t tab_level = 0) {
+    using namespace ttnn::ccl;
     using namespace ttnn::ccl::cmd;
     size_t index = 0;
     for (auto const& c: commands) {
@@ -806,44 +832,43 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                 args);
         };
         auto get_cmd_args_str = [](std::stringstream& ss, CclCommandArgs const& args) {
-            ss << "not_printed";
-            // std::visit(
-            //     tt::stl::overloaded{
-            //         [&ss](CclCommandStreamTensorSlice const& a) {
-            //             ss << fmt::format(
-            //                 "(shape: (w:{},z:{},y:{},x:{}), slice_shape: (w:{},z:{},y:{},x:{}), slice_offset: "
-            //                 "(w:{},z:{},y:{},x:{}), worker_slice_shape: (w:{},z:{},y:{},x:{}), worker_slice_offset: "
-            //                 "(w:{},z:{},y:{},x:{}))",
-            //                 a.tensor_shape.w,
-            //                 a.tensor_shape.z,
-            //                 a.tensor_shape.y,
-            //                 a.tensor_shape.x,
-            //                 a.tensor_slice_shape.w,
-            //                 a.tensor_slice_shape.z,
-            //                 a.tensor_slice_shape.y,
-            //                 a.tensor_slice_shape.x,
-            //                 a.tensor_slice_offset.w,
-            //                 a.tensor_slice_offset.z,
-            //                 a.tensor_slice_offset.y,
-            //                 a.tensor_slice_offset.x,
-            //                 a.worker_slice_shape.w,
-            //                 a.worker_slice_shape.z,
-            //                 a.worker_slice_shape.y,
-            //                 a.worker_slice_shape.x,
-            //                 a.worker_slice_offset.w,
-            //                 a.worker_slice_offset.z,
-            //                 a.worker_slice_offset.y,
-            //                 a.worker_slice_offset.x);
-            //         },
-            //         [&ss](CclCommandAtomicInc const& a) {
-            //             ss << fmt::format("{val:{}, wrap: {})", a.value, a.wrap_value);
-            //         },
-            //         [&ss](CclCommandWaitValue const& a) { ss << fmt::format("(wait_value: {})", a.target_value); },
-            //         [&ss](CclCommandInlineReadWrite const& a) { ss << fmt::format("(value: {})", a.value); },
-            //         // [&ss](CclCommandReadWrite const& a) { ss << fmt::format("(size_bytes: {})", a.size_bytes); },
-            //         [&ss](auto const&&) { ss << "ERROR"; },
-            //     },
-            //     args);
+            std::visit(
+                tt::stl::overloaded{
+                    [&ss](CclCommandStreamTensorSlice const& a) {
+                        ss << fmt::format(
+                            "(shape: (w:{},z:{},y:{},x:{}), slice_shape: (w:{},z:{},y:{},x:{}), slice_offset: "
+                            "(w:{},z:{},y:{},x:{}), worker_slice_shape: (w:{},z:{},y:{},x:{}), worker_slice_offset: "
+                            "(w:{},z:{},y:{},x:{}))",
+                            a.tensor_shape.w,
+                            a.tensor_shape.z,
+                            a.tensor_shape.y,
+                            a.tensor_shape.x,
+                            a.tensor_slice_shape.w,
+                            a.tensor_slice_shape.z,
+                            a.tensor_slice_shape.y,
+                            a.tensor_slice_shape.x,
+                            a.tensor_slice_offset.w,
+                            a.tensor_slice_offset.z,
+                            a.tensor_slice_offset.y,
+                            a.tensor_slice_offset.x,
+                            a.worker_slice_shape.w,
+                            a.worker_slice_shape.z,
+                            a.worker_slice_shape.y,
+                            a.worker_slice_shape.x,
+                            a.worker_slice_offset.w,
+                            a.worker_slice_offset.z,
+                            a.worker_slice_offset.y,
+                            a.worker_slice_offset.x);
+                    },
+                    [&ss](CclCommandAtomicInc const& a) {
+                        ss << fmt::format("(val:{}, wrap: {})", a.value, a.wrap_value);
+                    },
+                    [&ss](CclCommandWaitValue const& a) { ss << fmt::format("(wait_value: {})", a.target_value); },
+                    [&ss](CclCommandInlineReadWrite const& a) { ss << fmt::format("(value: {})", a.value); },
+                    [&ss](CclCommandReadWrite const& a) { ss << fmt::format("(size_bytes: {})", a.size_bytes); },
+                    [&ss](auto const&&) { ss << "ERROR"; }
+                },
+                args);
         };
 
         auto get_core_desc_args_str = [](std::stringstream& ss, CclCommandCoreDescriptorArgs const& args) {
@@ -886,11 +911,11 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
         std::stringstream dest_attrs_ss;
         std::stringstream core_attrs_ss;
         std::stringstream fabric_attrs_ss;
-        get_cmd_args_str(cmd_attrs_ss, c.command_args);
         get_addr_args_str(src_attrs_ss, c.source_addr_args);
         get_addr_args_str(dest_attrs_ss, c.dest_addr_args);
         get_core_desc_args_str(core_attrs_ss, c.core_desc_args);
         get_fabric_transfer_args_str(fabric_attrs_ss, c.fabric_transfer_args);
+        get_cmd_args_str(cmd_attrs_ss, c.command_args);
 
         log_trace(tt::LogOp,"{}{}. SRC({})[{}] -> CMD({})[{}] -> DST({})[{}]; CORE({})[{}]; FABRIC({})[{}]",
             tabs_ss.str(),
@@ -1155,7 +1180,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
     }
     for (auto &info : edm_termination_infos) {
         if (info.distance == 0) {
-            log_info(tt::LogOp, "Adding local chip fabric teardown command for termination address {}", info.termination_addr);
+            log_info(tt::LogOp, "Adding local chip fabric teardown command for termination address {},", info.termination_addr);
             teardown_cmd_stream.push_back(
                 cmd::uops::local_chip_noc_absolute_address_semaphore_inc(
                     info.edm_noc_x,
@@ -1163,7 +1188,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
                     info.termination_addr,
                     1));
         } else {
-            log_info(tt::LogOp, "Adding remote chip fabric teardown command for termination address {}", info.termination_addr);
+            log_info(tt::LogOp, "Adding remote chip fabric teardown command for termination address {} of distance {}", info.termination_addr, info.distance);
             teardown_cmd_stream.push_back(
                 ttnn::ccl::cmd::uops::fabric_unicast_absolute_address_semaphore_inc(
                 ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{info.termination_addr},
