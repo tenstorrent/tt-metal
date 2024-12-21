@@ -194,6 +194,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 
+
 namespace operations {
 namespace ccl {
 

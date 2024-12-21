@@ -18,6 +18,8 @@ static constexpr size_t LAST_MCAST_DESTINATION = 1;
 
 
 void write_unicast_blocking(uint32_t local_address, uint64_t dest_address, uint32_t size_bytes) {
+    // TODO - PERF: noc_async_write<NOC_MAX_BURST_SIZE>
+    // Don't do it yet because we want to sweep perf on buffer size
     noc_async_write(local_address, dest_address, size_bytes);
     noc_async_writes_flushed();
 }
@@ -66,7 +68,8 @@ void print_pkt_header(volatile tt::fabric::PacketHeader *const packet_start) {
     auto const& header = *packet_start;
     DPRINT << "PKT: cmd_t:" << (uint32_t) packet_start->command_type <<
         ", csnd_t:" << (uint32_t) packet_start->chip_send_type <<
-        ", nsnd_t:" << (uint32_t) packet_start->noc_send_type << "\n";
+        ", nsnd_t:" << (uint32_t) packet_start->noc_send_type <<
+        ", src_chip:" << (uint32_t) packet_start->reserved2 << "\n";
     print_pkt_hdr_routing_fields(packet_start);
     print_pkt_header_noc_fields(packet_start);
 }
@@ -181,14 +184,14 @@ tt::fabric::SendStatus forward_payload_to_downstream_edm(
     tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface
     ) {
     DPRINT << "Fwding pkt to downstream\n";
-    // SHOULD BE ABLE TO ASSERT ON THIS SINCE WE CHECK FOR THIS IN THE CALLER
-    // TODO: PERF
+    // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
     bool safe_to_send = downstream_edm_interface.consumer_has_space();
     if (!safe_to_send) {
         return tt::fabric::SendStatus::NOT_SENT;
     }
 
-    // print_pkt_header(packet_header);
+    // This is a good place to print the packet header for debug if you are trying to inspect packets
+    // because it is before we start manipulating the header for forwarding
     update_packet_header_for_next_hop(packet_header);
 
     downstream_edm_interface.send_payload_blocking_from_address(
@@ -198,9 +201,6 @@ tt::fabric::SendStatus forward_payload_to_downstream_edm(
     return tt::fabric::SendStatus::SENT_PAYLOAD_AND_SYNC;
 }
 
-void execute_chip_multicast_to_local_chip(volatile tt::fabric::PacketHeader *const packet_start) {
-    ASSERT(false);
-}
 
 bool packet_must_be_consumed_locally(volatile tt::fabric::PacketHeader const& packet_header) {
     switch (packet_header.chip_send_type) {

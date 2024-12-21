@@ -13,7 +13,6 @@
 #include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
 #include "ttnn/operations/conv/conv_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
@@ -96,7 +95,6 @@ void py_module(py::module& module) {
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
     ccl::py_bind_all_gather(m_ccl);
     ccl::py_bind_reduce_scatter(m_ccl);
-    experimental::ccl::py_bind_reduce_scatter_async(m_ccl);
     ccl::py_bind_barrier(m_ccl);
 
     auto m_creation = module.def_submodule("creation", "creation operations");

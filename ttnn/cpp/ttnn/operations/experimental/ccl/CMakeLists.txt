@@ -11,6 +11,10 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce_scatter_async/device/reduce_scatter_async_program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce_scatter_async/reduce_scatter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce_scatter_async/reduce_scatter_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/all_gather_async.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/all_gather_async_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/device/all_gather_async_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/device/all_gather_async_program.cpp
     CACHE INTERNAL
     "CCL Experimental sources to reuse in ttnn build"
 )

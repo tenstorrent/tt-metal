@@ -21,7 +21,6 @@ void kernel_main() {
 
     size_t arg_idx = 0;
     for (size_t i = 0; i < num_signals_to_wait_for; ++i) {
-        // sem_addrs[i] = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
         sem_addrs[i] = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++)); // hack, we pass in the address instead of the semaphore id
         DPRINT << "DRAIN WAITING ON SEMAPHORE ADDR " << (uint32_t)sem_addrs[i] << " on core (" << (uint32_t)my_y[0] << ", " << (uint32_t)my_x[0] << ")\n";
         expected_sem_counts[i] = get_arg_val<uint32_t>(arg_idx++);
@@ -50,10 +49,6 @@ void kernel_main() {
         if (all_done) {
             break;
         }
-    }
-
-    for (size_t i = 0; i < 100; ++i) {
-        tt::fabric::nop();
     }
 
     DPRINT << "DONE RECEIVING SEMINCS. SHUTTING DOWN FABRIC\n";

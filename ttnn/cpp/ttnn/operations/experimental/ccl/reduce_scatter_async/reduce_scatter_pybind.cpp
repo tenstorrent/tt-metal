@@ -8,7 +8,6 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-// #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/types.hpp"
 
@@ -40,42 +39,19 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
-            py::arg("num_links") = std::nullopt},
-
-        ttnn::pybind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t dim,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               ttnn::operations::reduction::ReduceType math_op,
-               const std::optional<ttnn::MemoryConfig>& output_mem_config,
-               const ttnn::ccl::Topology topology,
-               const std::optional<size_t> num_links) -> ttnn::Tensor {
-                return self(input_tensor, dim, cluster_axis, mesh_device, math_op, output_mem_config, topology, num_links);
-            },
-            py::arg("input_tensor"),
-            py::arg("dim"),
-            py::arg("cluster_axis"),
-            py::arg("mesh_device"),
-            py::arg("math_op"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("num_links") = std::nullopt});
 }
 
 }  // namespace detail
 
-
 void py_bind_reduce_scatter_async(pybind11::module& module) {
-
     detail::bind_reduce_scatter(
         module,
         ttnn::reduce_scatter_async,
         R"doc(
 
-        Performs an reduce_scatter operation on multi-device :attr:`input_tensor` across all devices.
+        Performs an reduce_scatter operation on multi-device :attr:`input_tensor` across all devices.  This operation requires a persistent
+        fabric to be enabled in order to function.
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor
@@ -88,9 +64,7 @@ void py_bind_reduce_scatter_async(pybind11::module& module) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            num_workers (int, optional): Number of workers to use for the operation. Defaults to `None`.
-            num_buffers_per_channel (int, optional): Number of buffers per channel to use for the operation. Defaults to `None`.
-            desired_num_links (int, optional): Number of links to use for the reduce_scatter operation. Defaults to `None`. Note that this value will be ignored if there are fewer links available than requested.
+            num_links (int, optional): Number of links to use for the reduce_scatter operation. Defaults to `None`, which indicates to the operation that it should choose. Note that this value will be ignored if there are fewer links available than requested.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
 
         Returns:

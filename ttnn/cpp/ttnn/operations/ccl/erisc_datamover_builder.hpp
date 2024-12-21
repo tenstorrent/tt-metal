@@ -167,7 +167,7 @@ class FabricEriscDatamoverBuilder {
 
     void teardown_from_host(Device *d, tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
-   protected:
+//    protected:
    friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
     size_t my_noc_x = 0;
@@ -272,10 +272,10 @@ class EdmLineFabricOpInterface {
 
     void teardown_from_host(tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
-   private:
     // Device ID -> EDM Builders
     std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
     std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_backward_direction;
+   private:
 
     // Device ID -> link index
     std::unordered_map<size_t, size_t> next_forward_direction_edm_available;

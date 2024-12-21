@@ -121,7 +121,7 @@ struct PacketHeader {
     uint8_t reserved : 4;
 
     RoutingFields routing_fields;
-    uint16_t reserved2;
+    uint16_t reserved2; // can be tagged with src device for debug
     CommandFields command_fields;
 
     // Sort of hack to work-around DRAM read alignment issues that must be 32B aligned

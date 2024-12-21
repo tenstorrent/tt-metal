@@ -328,6 +328,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
     } else {
         log_trace(tt::LogOp, "Building connection to non-persistent fabric");
     }
+    TT_FATAL(sender_channel_0_buffer_index_semaphore_id != sender_channel_0_flow_control_semaphore_id, "Internal error - sender_channel_0_buffer_index_semaphore_id and sender_channel_0_flow_control_semaphore_id aliased eachother");
     return SenderWorkerAdapterSpec {
         this->my_noc_x,
         this->my_noc_y,
@@ -486,12 +487,13 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         if (!device_pairs[i].second.has_value()) {
             continue;
         }
-        log_info(tt::LogOp, "Device {} is connected to {} at index {}", local_device->id(), device_pairs[i].second.value()->id(), i);
+        log_trace(tt::LogOp, "Device {} is connected to {} at index {}", local_device->id(), device_pairs[i].second.value()->id(), i);
         auto &edm_builders = *edm_builders_maps[i];
 
         Device *remote_device = device_pairs[i].second.value();
         auto const connected_sockets = local_device->get_ethernet_sockets(remote_device->id());
 
+        TT_FATAL(edm_builders.size() == 0, "EDM builders already exist for this device");
         edm_builders.clear();
         for (const auto& core : local_device->get_ethernet_sockets(remote_device->id())) {
             if (!local_device->is_active_ethernet_core(core, true)) {
@@ -500,7 +502,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             if (edm_builders[local_device->id()].size() >= max_num_links) {
                 break;
             }
-            log_info(tt::LogOp, "DEBUG: build EDM: device: {}, &program: {}: core-logi(x={},y={})", local_device->id(), (void*)program, core.x, core.y);
+            log_trace(tt::LogOp, "DEBUG: build EDM: device: {}, &program: {}: core-logi(x={},y={})", local_device->id(), (void*)program, core.x, core.y);
             edm_builders[local_device->id()].push_back(
                 FabricEriscDatamoverBuilder::build(
                     local_device, *program, core,
@@ -534,17 +536,17 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 }
 
 SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(Device* device, Direction direction) {
-    TT_ASSERT((direction == FORWARD) ? edm_builders_forward_direction.find(device->id()) != edm_builders_forward_direction.end()
-                                     : edm_builders_backward_direction.find(device->id()) != edm_builders_backward_direction.end());
+    TT_FATAL((direction == FORWARD) ? edm_builders_forward_direction.find(device->id()) != edm_builders_forward_direction.end()
+                                     : edm_builders_backward_direction.find(device->id()) != edm_builders_backward_direction.end(), "Device {} not found in edm builders", device->id());
     auto& edm_builders = (direction == FORWARD) ? edm_builders_forward_direction.at(device->id())
                                                 : edm_builders_backward_direction.at(device->id());
     auto &link_count_map = (direction == FORWARD) ? next_forward_direction_edm_available : next_backward_direction_edm_available;
-    log_info(tt::LogOp, "EDM conecting in {} direction", direction == FORWARD ? "FORWARD" : "BACKWARD");
+    log_trace(tt::LogOp, "EDM conecting in {} direction", direction == FORWARD ? "FORWARD" : "BACKWARD");
     const auto next_link = link_count_map[device->id()];
     link_count_map[device->id()] = (next_link + 1) %  edm_builders.size();
 
-    TT_ASSERT(edm_builders.size() > 0);
-    TT_ASSERT(next_link < edm_builders.size());
+    TT_FATAL(edm_builders.size() > 0, "No EDM builders found for device {}", device->id());
+    TT_FATAL(next_link < edm_builders.size(), "Next link index {} is out of bounds for device {}", next_link, device->id());
     return edm_builders.at(next_link).build_connection_to_worker_channel();
 }
 

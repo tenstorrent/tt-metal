@@ -4,15 +4,10 @@
 
 #pragma once
 
-#include <memory>
 #include "sub_device/sub_device_types.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
 
 namespace ttnn {
 struct ReduceScatterAsync {
@@ -80,20 +75,17 @@ struct ReduceScatterAsync {
         attrs.emplace_back("num_links_preferred", num_links_preferred);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
-        // attrs.emplace_back("from_remote_sem", from_remote_sem);
-        // attrs.emplace_back("to_remote_sem", to_remote_sem);
 
         return attrs;
     }
 
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
-
 
 namespace ccl {
 namespace reduce_scatter_detail {
@@ -118,10 +110,10 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     GlobalSemaphore const& to_remote_sems,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 }
-}; // namespace ccl
+};  // namespace ccl
 
-namespace ccl{
-namespace reduce_scatter_detail{
+namespace ccl {
+namespace reduce_scatter_detail {
 ReduceScatterAsync create_reduce_scatter_struct(
     const Tensor& input_tensor,
     const ttnn::operations::binary::BinaryOpType binary_op_type,
@@ -136,12 +128,12 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::vector<GlobalSemaphore> const& to_remote_sems,
     std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
-} // namespace reduce_scatter_detail
-} // namespace ccl
+}  // namespace reduce_scatter_detail
+}  // namespace ccl
 
-namespace operations{
+namespace operations {
 namespace experimental {
-namespace ccl{
+namespace ccl {
 Tensor reduce_scatter(
     const Tensor& input_tensor,
     const int32_t dim,
@@ -152,18 +144,8 @@ Tensor reduce_scatter(
     std::unordered_map<chip_id_t, SubDeviceId> sub_device_id_map = {},                 // TODO make reference
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
 
-Tensor reduce_scatter(
-    const ttnn::Tensor &input_tensor,
-    const int32_t dim,
-    const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
-    const std::optional<ttnn::MemoryConfig>& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-    const std::optional<size_t> num_preferred_links = std::nullopt
-    );
-} // namespace ccl
-} // namespace experimental
-} // namespace operations
+}  // namespace ccl
+}  // namespace experimental
+}  // namespace operations
 
 }  // namespace ttnn

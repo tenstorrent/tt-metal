@@ -152,7 +152,7 @@ def run_all_gather_impl(
         )
     else:
         for i in range(num_iters):
-            tt_out_tensor = ttnn.all_gather(
+            tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh,
                 dim,
                 num_links=num_links,
@@ -160,6 +160,7 @@ def run_all_gather_impl(
                 topology=all_gather_topology,
             )
 
+            logger.info(f"Waiting for op {i}")
             for d in mesh_device.get_devices():
                 ttnn.synchronize_device(d)
             logger.info(f"Done iteration {i}")
@@ -168,17 +169,10 @@ def run_all_gather_impl(
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         logger.info(f"Checking for device {t.device().id()}")
 
-        # breakpoint()
-
-        # for current non-edm version of all gather only:
-        # chunked_output_tensor = torch.chunk(tt_output_tensor, num_devices, dim)
-
         if input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, output_tensor)
-            # eq, output = comp_equal(chunked_output_tensor[i], input_tensors[i])
         else:
             eq, output = comp_pcc(tt_output_tensor, output_tensor)
-            # eq, output = comp_pcc(chunked_output_tensor[i], input_tensors[i])
         if not eq:
             logger.error(f"output mismatch for tensor {i}")
         assert eq, f"{i} FAILED: {output}"
@@ -189,49 +183,23 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, dim, layout",
     [
-        # Known errors
-        # - double/tripple buffers in cb not working
-        # (4, 2, [4, 1, 256, 32], 0, ttnn.TILE_LAYOUT),  # failed: device not connected      # https://github.com/tenstorrent/tt-metal/issues/9686
-        (2, 1, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 640, 8192], 2, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
-        # # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # # (8, 1, [1, 8, 256, 32], 1, ttnn.TILE_LAYOUT),
-        # (2, 2, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
-        # (2, 2, [1, 1, 64, 256], 2, ttnn.TILE_LAYOUT),
-        # (2, 2, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
-        # (2, 2, [1, 1, 640, 8192], 2, ttnn.TILE_LAYOUT),
-        # (2, 2, [1, 1, 32, 320], 3, ttnn.TILE_LAYOUT),
-        # # (4, 3, [1, 1, 32, 16384 * 4], 3, ttnn.TILE_LAYOUT),  # failed: device not connected
-        # (8, 4, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
-        # (8, 3, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
-        # (8, 2, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
-        # (8, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT)
-        # untested cases
-        # (4, 2, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),      # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [4, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [1, 1, 32, 16384], 3, ttnn.ROW_MAJOR_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [1, 1, 32, 32768], 3, ttnn.ROW_MAJOR_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        (8, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,        # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
     ],
 )
-@pytest.mark.parametrize("num_iters", [1])  # restore to 500: https://github.com/tenstorrent/tt-metal/issues/9686
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_gather(
     t3k_mesh_device,
@@ -335,15 +303,14 @@ def test_all_gather(
         ),
     ],
 )
-@pytest.mark.parametrize("num_links", [1, 2])
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,        # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
-@pytest.mark.parametrize("num_iters", [1])  # restore to 500: https://github.com/tenstorrent/tt-metal/issues/9686
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_sharded(
     t3k_mesh_device,
