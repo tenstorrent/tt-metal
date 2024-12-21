@@ -61,6 +61,14 @@ ALWI void tilizeA_B_reduce_init(
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb)));
 }
+
+template<bool neginf_srcA = true, bool zero_srcA_reduce = false>
+ALWI void tilizeA_B_reduce_init_short(uint32_t icb0, uint32_t icb1_scalar, uint32_t block, uint32_t ocb = 16,
+uint32_t num_faces = 4, uint32_t face_r_dim = 16) {
+    UNPACK(( llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(icb0, icb1_scalar, block, num_faces, face_r_dim, 1) ));
+    MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
+    PACK(( llk_pack_init(ocb) ));
+}
 #endif
 
 /**
