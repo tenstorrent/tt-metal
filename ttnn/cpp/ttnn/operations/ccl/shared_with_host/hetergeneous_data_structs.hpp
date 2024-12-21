@@ -123,7 +123,7 @@ inline size_t flattened_index (const ttnn::ccl::Shape4D<uint32_t>& shape, const 
 
 // Increments the index into the input (global) tensor, while respecting the tensor slice, for wrapped worker slice
 // that is internal to the tensor slice.
-inline void advance_worker_global_page (
+[[nodiscard]] inline bool advance_worker_global_page (
     uint32_t &curr_page_idx,
     uint32_t &offset_into_worker_slice, // local to the worker chunk
     ttnn::ccl::Shape4D<uint32_t> const& offset_worker_slice, // local to the tensor slice
@@ -133,8 +133,7 @@ inline void advance_worker_global_page (
 
     ttnn::ccl::Shape4D<uint32_t> const &tensor_shape, // full tensor shape
 
-    const uint32_t stride,
-    bool &last_page_of_worker
+    const uint32_t stride
   ) {
 
     uint32_t prev_offset_into_worker_slice = offset_into_worker_slice;
@@ -147,19 +146,48 @@ inline void advance_worker_global_page (
     uint32_t curr_num_wrap_around = (flattened_offset_worker_slice + offset_into_worker_slice) / tensor_slice_shape.x;
     uint32_t num_wrap_around = curr_num_wrap_around - prev_num_wrap_around;
 
-    bool end_of_worker_slice_row = offset_into_worker_slice == worker_slice_shape.volume();//worker_slice_shape.x * worker_slice_shape.y;
-    if (end_of_worker_slice_row) {
-        offset_into_worker_slice = 0;
-        last_page_of_worker = true;
+    bool end_of_worker_slice_row = offset_into_worker_slice == worker_slice_shape.volume();
+    // Check for wrap around
+    if (num_wrap_around > 0) { // wrap around wrt to global tensor
+        curr_page_idx += num_wrap_around * (tensor_shape.x - tensor_slice_shape.x) + stride;
     } else {
-        // Check for wrap around
-        if (num_wrap_around > 0) { // wrap around wrt to global tensor
-            curr_page_idx += num_wrap_around * (tensor_shape.x - tensor_slice_shape.x) + stride;
-        } else {
-            curr_page_idx += stride;
-        }
+        curr_page_idx += stride;
     }
 
+    return end_of_worker_slice_row;
+}
+[[nodiscard]] inline bool advance_worker_global_page (
+    uint32_t &curr_page_idx,
+    uint32_t &offset_into_worker_slice, // local to the worker chunk
+    ttnn::ccl::Shape4D<uint32_t> const& offset_worker_slice, // local to the tensor slice
+
+    size_t const worker_slice_volume, // worker chunk shape
+    ttnn::ccl::Shape4D<uint32_t> const &tensor_slice_shape, // tensor slice shape (per device)
+
+    ttnn::ccl::Shape4D<uint32_t> const &tensor_shape, // full tensor shape
+
+    const uint32_t stride
+  ) {
+
+    uint32_t prev_offset_into_worker_slice = offset_into_worker_slice;
+    offset_into_worker_slice += stride;
+
+    uint32_t flattened_offset_worker_slice = flattened_index(tensor_slice_shape, offset_worker_slice);
+
+    // Calculate the number of wrap arounds (cast to uint32_t to **round down**)
+    uint32_t prev_num_wrap_around = (flattened_offset_worker_slice + prev_offset_into_worker_slice) / tensor_slice_shape.x;
+    uint32_t curr_num_wrap_around = (flattened_offset_worker_slice + offset_into_worker_slice) / tensor_slice_shape.x;
+    uint32_t num_wrap_around = curr_num_wrap_around - prev_num_wrap_around;
+
+    bool end_of_worker_slice_row = offset_into_worker_slice == worker_slice_volume;
+    // Check for wrap around
+    if (num_wrap_around > 0) { // wrap around wrt to global tensor
+        curr_page_idx += num_wrap_around * (tensor_shape.x - tensor_slice_shape.x) + stride;
+    } else {
+        curr_page_idx += stride;
+    }
+
+    return end_of_worker_slice_row;
 }
 
 }

@@ -1,0 +1,83 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
+
+namespace ttnn::ccl::cmd {
+
+// This file defines commands that are resolved on a per worker level. This is the lowest level of
+// command description (Intermediate Representation if you will) before being lowered directly to
+// Ccl Command Process KernelCommands
+
+struct CclHostLowLevelWorkerCommand {
+    ttnn::ccl::cmd::CclCommandCode command_code;
+    ttnn::ccl::cmd::CclCommandArgs command_args;
+
+    // semaphore ID derived address, absolute address, relative address
+    ttnn::ccl::cmd::CclCommandAddrType source_addr_type;
+    ttnn::ccl::cmd::CclCommandAddrArgs source_addr_args;
+
+    ttnn::ccl::cmd::CclCommandAddrType dest_addr_type;
+    ttnn::ccl::cmd::CclCommandAddrArgs dest_addr_args;
+
+    // resolved core-xy, rectangle (for mcast)
+    ttnn::ccl::cmd::CclCommandCoreDescriptorType core_desc_type;
+    ttnn::ccl::cmd::CclCommandCoreDescriptorArgs core_desc_args;
+
+    // unicast, mcast, local_only
+    ttnn::ccl::cmd::CclCommandDestType fabric_transfer_type;
+    ttnn::ccl::cmd::CclCommandDestArgs fabric_transfer_args;
+};
+
+using CclHostLowLevelCommandSequence = std::vector<CclHostLowLevelWorkerCommand>;
+
+namespace uops {
+
+[[nodiscard]] CclHostLowLevelWorkerCommand read_tensor_slice_to_cb_for_eventual_fabric_write(ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);
+[[nodiscard]] CclHostLowLevelWorkerCommand read_tensor_slice_to_cb(ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);
+[[nodiscard]] CclHostLowLevelWorkerCommand local_write_cb_to_tensor_slice(
+    ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id);
+[[nodiscard]] CclHostLowLevelWorkerCommand fabric_write_cb_to_tensor_slice(
+    ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id, std::variant<UnicastCommandDestArgs, MulticastCommandDestArgs> const& dest_args_variant);
+[[nodiscard]] CclHostLowLevelWorkerCommand local_semaphore_wait(size_t semaphore_id, size_t value);
+[[nodiscard]] CclHostLowLevelWorkerCommand local_chip_noc_semaphore_inc(size_t dest_noc0_x, size_t dest_noc0_y, size_t semaphore_id, size_t value);
+[[nodiscard]] CclHostLowLevelWorkerCommand local_core_semaphore_inc(size_t semaphore_id, size_t value);
+[[nodiscard]] CclHostLowLevelWorkerCommand local_chip_noc_absolute_address_semaphore_inc(
+    size_t dest_noc0_x,
+    size_t dest_noc0_y,
+    size_t bank_address,
+    size_t value);
+[[nodiscard]] CclHostLowLevelWorkerCommand fabric_multicast_semaphore_inc(
+    CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    CclCommandAtomicInc const& increment_args,
+    size_t dest_noc0_x,
+    size_t dest_noc0_y,
+    MulticastCommandDestArgs const& multicast_args);
+[[nodiscard]] CclHostLowLevelWorkerCommand fabric_unicast_semaphore_inc(
+    CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    CclCommandAtomicInc const& increment_args,
+    size_t dest_noc0_x,
+    size_t dest_noc0_y,
+    UnicastCommandDestArgs const& unicast_args);
+[[nodiscard]] CclHostLowLevelWorkerCommand fabric_unicast_semaphore_inc_mcast(
+    CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    CclCommandAtomicInc const& increment_args,
+    CclCommandCoreDescriptorTypeMcast const& dest_mcast_spec,
+    UnicastCommandDestArgs const& unicast_args);
+[[nodiscard]] CclHostLowLevelWorkerCommand local_chip_semaphore_inc_mcast(
+    CclCommandAddrSemaphoreId const& semaphore_dest_args,
+    CclCommandAtomicInc const& increment_args,
+    CclCommandCoreDescriptorTypeMcast const& dest_mcast_spec);
+[[nodiscard]] CclHostLowLevelWorkerCommand fabric_unicast_absolute_address_semaphore_inc(
+    CclCommandAddrAbsoluteAddress const& address_dest_args,
+    CclCommandAtomicInc const& increment_args,
+    size_t dest_noc0_x,
+    size_t dest_noc0_y,
+    UnicastCommandDestArgs const& unicast_args);
+
+}; // namespace uops
+}; // namespace ttnn::ccl::cmd

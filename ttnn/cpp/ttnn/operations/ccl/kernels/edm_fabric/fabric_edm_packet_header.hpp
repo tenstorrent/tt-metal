@@ -29,7 +29,7 @@ enum CommandType : uint8_t {
 // 1 bit
 enum ChipSendType : uint8_t {
     CHIP_UNICAST = 0,
-    CHIP_MULTICAST = 1
+    CHIP_MULTICAST = 1,
 };
 enum NocSendType : uint8_t {
     NOC_UNICAST = 0,

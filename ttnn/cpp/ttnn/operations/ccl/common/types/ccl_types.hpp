@@ -44,6 +44,9 @@ struct Shape4D {
     T& operator[](size_t index) {
         return *(&w + index);
     }
+    const T& operator[](size_t index) const {
+        return *(&w + index);
+    }
 
     constexpr std::size_t volume() const {
         return w * z * y * x;
