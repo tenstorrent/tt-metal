@@ -3902,10 +3902,6 @@ const std::vector<SubDeviceId> &Device::get_sub_device_ids() const {
     return this->active_sub_device_manager_->get_sub_device_ids();
 }
 
-DeviceAddr Device::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
-    return hal.get_dev_addr<T>(this->get_programmable_core_type(virtual_core), addr_type);
-}
-
 DeviceAddr Device::get_base_allocator_addr(const HalMemType &mem_type) const {
     const auto& allocator = this->get_initialized_allocator();
     return allocator::get_unreserved_base_address(*allocator, mem_type);

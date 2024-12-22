@@ -310,8 +310,8 @@ class Device {
     std::size_t num_program_cache_entries();
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const;
-
-    DeviceAddr get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
+    template <typename T = DeviceAddr>
+    T get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
     // Returns address where allocator starts allocating buffer
     DeviceAddr get_base_allocator_addr(const HalMemType &mem_type) const;
     DeviceAddr get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const;
@@ -356,11 +356,6 @@ class Device {
 
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const { return tunnels_from_mmio_; }
 
-    // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
-    friend class Buffer;
-    friend class Program;
-    friend class SystemMemoryManager;
-
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 
 private:
@@ -389,7 +384,7 @@ private:
     uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
-    uint8_t num_hw_cqs_;
+    uint8_t num_hw_cqs_ = 1;
 
     // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<HWCommandQueue>> hw_command_queues_;
@@ -440,6 +435,11 @@ inline HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virt
     }
 
     return programmable_core_type;
+}
+
+template <typename T>
+inline T Device::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
+    return hal.get_dev_addr<T>(this->get_programmable_core_type(virtual_core), addr_type);
 }
 
 // TODO: Find a better home for this function
