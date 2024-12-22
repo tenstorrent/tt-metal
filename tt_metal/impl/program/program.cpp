@@ -337,7 +337,9 @@ detail::Program_::Program_() :
     }
 
     program_configs_.resize(programmable_core_count);
-    program_config_sizes_.resize(programmable_core_count + 2);
+    program_config_sizes_.resize(programmable_core_count + 1);
+    // Always need one launch buffer msg for a program.
+    program_config_sizes_[programmable_core_count] = 1;
 }
 
 Program::Program() : pimpl_(std::make_unique<detail::Program_>()) {}
@@ -1501,9 +1503,6 @@ void detail::Program_::finalize(Device *device) {
                  "Program size ({}) too large for kernel config buffer ({}) on {}",
                  offset, max_size, magic_enum::enum_name(programmable_core_type));
     }
-
-    this->get_program_config_size(hal.get_programmable_core_type_count()) = runs_on_noc_multicast_only_cores();
-    this->get_program_config_size(hal.get_programmable_core_type_count() + 1) = runs_on_noc_unicast_only_cores();
 
     // The sem offsets cross programmable_core_types so must be set after the loop above
     this->set_launch_msg_sem_offsets();
