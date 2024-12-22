@@ -44,7 +44,7 @@ def run_bert_large_ff2_matmul_test(device, dtype, in0_mem_config, in1_mem_config
         B.flatten().tolist(),
         b_shape,
         dtype,
-        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
     ).to(device, in1_mem_config)
 
     if bias_mem_config is not None:

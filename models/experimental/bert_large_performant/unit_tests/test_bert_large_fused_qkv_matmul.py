@@ -76,7 +76,7 @@ def run_bert_large_fused_qkv_matmul_test(
 
     ref_bmm = torch.matmul(A, B)
     if bias_mem_config is not None:
-        ref_bmm = ref_bmm + BIAS
+        ref_bmm = ref_bmm + bias
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.debug(f"Passing={passing_pcc}")
     logger.debug(f"Output pcc={output_pcc}")

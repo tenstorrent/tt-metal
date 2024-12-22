@@ -175,26 +175,18 @@ def run_bert_large_bmm_test(
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
 
-    a_t = (
-        ttnn.Tensor(
-            A.flatten().tolist(),
-            a_shape,
-            in0_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in0_mem_config)
-    )
-    b_t = (
-        ttnn.Tensor(
-            B.flatten().tolist(),
-            b_shape,
-            in1_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in1_mem_config)
-    )
+    a_t = ttnn.Tensor(
+        A.flatten().tolist(),
+        a_shape,
+        in0_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in0_mem_config)
+    b_t = ttnn.Tensor(
+        B.flatten().tolist(),
+        b_shape,
+        in1_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in1_mem_config)
 
     t2 = bert_large_op(a_t, b_t, out_mem_config, out_dtype)
 

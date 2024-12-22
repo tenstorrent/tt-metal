@@ -64,7 +64,7 @@ def run_bert_large_ff1_matmul_test(
     if bias_mem_config is not None:
         bias_t = ttnn.Tensor(
             bias_padded.flatten().tolist(),
-            bias_padded_shape,
+            bias_pad_shape,
             dtype,
             ttnn.TILE_LAYOUT,
         ).to(device, bias_mem_config)
@@ -91,12 +91,11 @@ def run_bert_large_ff1_matmul_test(
     logger.debug(f"out is on: {t2.memory_config().buffer_type}")
 
     assert t2.shape.with_tile_padding() == [9, 1, 384, 4096]
-    tt_host_rm = t2.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     pyt_got_back_rm = ttnn.to_torch(t2)
 
     ref_bmm = torch.matmul(A, B)
     if bias_mem_config is not None:
-        ref_bmm = ref_bmm + BIAS
+        ref_bmm = ref_bmm + bias
     if fused_activation is not None:
         if fused_activation[0] == ttnn.UnaryOpType.GELU:
             ref_bmm = torch.nn.functional.gelu(ref_bmm)
