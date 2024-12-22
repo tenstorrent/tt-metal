@@ -1652,7 +1652,7 @@ uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_c
     // Semaphores across sub-devices are expected to have the same address
     TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = sub_device_ids[0].to_index();
-    uint32_t base_addr = device->using_fast_dispatch
+    uint32_t base_addr = device->using_fast_dispatch()
                              ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(
                                    programmable_core_type)
                              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
@@ -1674,7 +1674,7 @@ uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_co
     // Addresses are not the same across sub-devices
     TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = sub_device_ids[0].to_index();
-    uint32_t base_addr = device->using_fast_dispatch
+    uint32_t base_addr = device->using_fast_dispatch()
                              ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(
                                    programmable_core_type)
                              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
