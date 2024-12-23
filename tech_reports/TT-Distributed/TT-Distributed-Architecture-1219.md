@@ -4,6 +4,8 @@
 
 # TT-Metalium Distributed
 
+Authors: Joseph Chu (jchu@tenstorrent.com), Aditya Saigal (asaigal@tenstorrent.com)
+
 ## Architecture Specification
 
 Version 1.0
@@ -222,46 +224,34 @@ The code-block below displays a detailed representation of the MeshDevice class.
 
 ```cpp
 // Virtual Mesh Config exposed to users
-
 // Determines how physical devices are used
-
 struct MeshConfig {
+    // Requested dimensions of the mesh
+    MeshShape shape;
 
-// Requested dimensions of the mesh
-MeshShape shape;
+    // Offset into Logical Device Coordinate Space
+    MeshOffset offset;
 
-// Offset into Logical Device Coordinate Space
-MeshOffset offset;
-
-// TODO: consider whether this should be automatically inferred.
-// Interpret as e.g. {Ring, Line}
-MeshType type;
-
+    // TODO: consider whether this should be automatically inferred.
+    // Interpret as e.g. {Ring, Line}
+    MeshType type;
 };
 
 // Class exposing host and device dispatch state
-
 // Similar to the CommandQueue object in TT-Metal, however
-
 // this has additional functionality and allows users to
-
 // communicate with a cluster of Physical Devices
-
 struct MeshCommandQueue {
+    // Interfaces to dispatch to a single physical device in the Mesh
+    std::vector<UnicastCQInterface> unicast_dispatch_interfaces_;
 
-// Interfaces to dispatch to a single physical device in the Mesh
-
-std::vector<UnicastCQInterface> unicast\_dispatch\_interfaces\_;
-
-// NEW: Dispatch to Multiple Physical devices at once using TT-Fabric // broadcasts
-
-BroadcastCQInterface broadcast\_dispatch\_interfaces\_;
-
+    // NEW: Dispatch to Multiple Physical devices at once using TT-Fabric
+    // broadcasts
+    BroadcastCQInterface broadcast_dispatch_interfaces_;
 };
 
 // Virtual Mesh Manager: Hides implementation details
-
-class MeshDevice_ {
+class MeshDevice {
 
    // 1 Dispatch interface for Broadcast CQ
    // 1 Dispatch interface for Unicast CQ
@@ -275,7 +265,7 @@ class MeshDevice_ {
    std::vector<chip_id_t> ordered_physical_device_ids_ = {};
    uint8_t num_virtual_cqs_ = 1;
 
-   // ====== These functions are called when MeshDevice\_ is constructed ======
+   // ==== These functions are called when MeshDevice is constructed ====
 
    // Helper functions to initialize state on Host
    void initialize_tt_cluster(); // Initialize Drivers and Query Layer
@@ -390,8 +380,9 @@ From a functional perspective, the main difference between a CQ on a single devi
 
 VCQs are exposed as handles using the *CommandQueueHandle* data-structure. This is the interface that enables users to request a *CommandQueue* handle for both a single-device context and mesh-device context:
 
-CommandQueueHandle GetCommandQueue(DeviceHandle device, size\_t cq\_id);
-
+```cpp
+CommandQueueHandle GetCommandQueue(DeviceHandle device, size_t cq_id);
+```
 In a single-device context, a CommandQueueHandle is associated with a CQ tied to a physical device. In a MeshDevice context, a CommandQueueHandle is associated with a VCQ (VCQ0 / VCQ1) tied to a MeshDevice.
 
 ## 3.3 Memory Management: MeshBuffer and MeshAllocator
@@ -510,10 +501,10 @@ private:
     BufferAddress address_;
 
     // Aligned size
-    BufferSize size_in_bytes;
+    BufferSize size_in_bytes_;
 
     // Memory layout across the Virtual Mesh distributed address space
-    DistributedBufferConfig distributed_config;
+    DistributedBufferConfig distributed_config_;
 
 public:
     // DistributedBuffer construction leads to an allocation
@@ -618,19 +609,30 @@ Examples of compute that can be expressed using a MeshWorkload are provided in t
 
 The existing Program class allows users to configure all workload attributes across each core in a worker grid (on a single device) using the following Host APIs:
 
-KernelHandle CreateKernel(Program &program, const std::string &file\_name, const CoreRangeSet &core\_spec, const KernelConfig &config);
+```cpp
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const CoreRangeSet& core_spec,
+    const KernelConfig& config);
 
-uint32\_t CreateSemaphore(Program &program, const CoreRangeSet &core\_spec, uint32\_t initial\_value, CoreType core\_type);
+uint32_t CreateSemaphore(
+    Program& program,
+    const CoreRangeSet& core_spec,
+    uint32_t initial_value,
+    CoreType core_type);
 
-CBHandle CreateCircularBuffer(Program &program,
+CBHandle CreateCircularBuffer(
+    Program& program,
+    const CoreRangeSet& core_spec,
+    const CircularBufferConfig& config);
 
-const CoreRangeSet &core\_spec,
-
-const CircularBufferConfig &config);
-
-void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vector<CoreCoord> &core\_spec,
-
-const std::vector<std::vector<uint32\_t>> &runtime\_args);
+void SetRuntimeArgs(
+    const Program& program,
+    KernelHandle kernel,
+    const std::vector<CoreCoord>& core_spec,
+    const std::vector<std::vector<uint32_t>>& runtime_args);
+```
 
 The MeshWorkload class does not allow for this level of heterogeneity. **A user can only configure the programs that run inside the workload (a single device can run up to one program) and the Runtime Arguments associated with each device.** Individual program attributes, apart from Runtime Args, cannot be configured or mutated directly by the user, due to the hierarchical relationship between a Program and a MeshWorkload. A MeshWorkload with multiple programs can target different SubDevices within the Virtual Mesh. For a discussion on MeshWorkloads interfacing with the SubDevice infrastructure, please see [this section](#_3.4.5￼Integration_with_Sub-Device).
 
@@ -722,19 +724,29 @@ void EnqueueMeshWorkload(
     MeshWorkloadHandle mesh_workload,
     bool blocking
 );
-```
 
-// Utility API: Interpret a single-device program as a broadcastable/homogenous // MeshWorkload that will be enqueued to the entire Virtual Mesh. Using this API is // equivalent to adding a single program spanning the entire MeshDevice extent to a // MeshWorkload and then enqueueing that MeshWorkload
-
+// Utility API: Interpret a single-device program as a broadcastable/homogenous
+// MeshWorkload that will be enqueued to the entire Virtual Mesh. Using this API is
+// equivalent to adding a single program spanning the entire MeshDevice extent to a
+// MeshWorkload and then enqueueing that MeshWorkload
 void EnqueueMeshWorkload(
-
+CommandQueueHandle cq,
 CommandQueueHandle cq,
 
+    CommandQueueHandle cq,
+
+ProgramHandle program,
 ProgramHandle program,
 
+    ProgramHandle program,
+
+bool blocking
 bool blocking
 
+    bool blocking
+
 );
+```
 
 ### 3.4.4 Usage Examples
 
@@ -903,17 +915,16 @@ Events allow different dispatch data-paths (Command Queues) to synchronize with 
 
 In the single device context, the Event data-structure is primarily used for such synchronization along with the following APIs:
 
+```cpp
 // Record an event notification on a CQ tied to a specific device. Signals completion // of all previously enqueued work.
-
-void EnqueueRecordEvent(CommandQueue &cq, const std::shared\_ptr<Event> &event);
+void EnqueueRecordEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
 
 // Wait for an event notification on the specified CQ.
-
-void EnqueueWaitForEvent(CommandQueue &cq, const std::shared\_ptr<Event> &event);
+void EnqueueWaitForEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
 
 // Have Host wait until the CQ responsible for acknowledging an event has completed
-
-void EventSynchronize(const std::shared\_ptr<Event> &event);
+void EventSynchronize(const std::shared_ptr<Event> &event);
+```
 
 In this section, we introduce the MeshEvent data-structure, which will be used as the main synchronization primitive for workloads running on a VirtualMesh.
 
@@ -927,46 +938,51 @@ The following APIs will be added to TT-Metal runtime, to resolve the issue menti
 The APIs presented below, introducing the *MeshEvent* object, use analogs of these APIs to be more inline with upcoming changes in TT-Metal Runtime.
 
 ```cpp
-struct MeshEvent
-{
-    // Fully specify the (sub)Mesh this event will be recorded on, and the CQ // interface that will be used
+struct MeshEvent {
+    // Fully specify the (sub)Mesh this event will be recorded on, and the CQ
+    // interface that will be used
     CommandQueueHandle command_queue_handle;
 
-   // If mesh\_only == false, the event must be enqueued to the entire Virtual Mesh
+    // If mesh_only == false, the event must be enqueued to the entire Virtual Mesh
     LogicalDeviceRange device_range;
 
     // The ID assigned to this event by host
-    uint32_t event_id = -1;
+    uint32_t event_id = 0;
 
     // True if the Mesh will not notify host when this event is recorded.
     bool mesh_only = false;
 };
-```
 
-// Have the specified CQ on the specified device\_range record a "Mesh Local" Event. // When this command is processed by a CQ on each physical device, an event // notification will only be sent to other CQs on the device.
-
+// Have the specified CQ on the specified device_range record a "Mesh Local" Event.
+// When this command is processed by a CQ on each physical device, an event
+// notification will only be sent to other CQs on the device.
 // The event update will not be propagated to host.
+void EnqueueRecordMeshEvent(
+    CommandQueueHandle command_queue_handle,
+    const std::shared_ptr<MeshEvent> mesh_event,
+    LogicalDeviceRange& device_range = MaxDeviceRange);
 
-```cpp
-void EnqueueRecordMeshEvent(CommandQueueHandle command\_queue\_handle, const std::shared\_ptr<MeshEvent> mesh\_event, LogicalDeviceRange& device\_range = MaxDeviceRange);
+// Have the specified CQ on the device_range tied to the Event wait for a "Mesh Local" Event.
+// When this command is processed by a CQ on each physical device, it will lead
+// to a stall until the CQ responsible for recording the event signals completion.
+void EnqueueWaitForMeshEvent(const std::shared_ptr<MeshEvent> mesh_event, CommandQueueHandle command_queue_handle);
 
-// Have the specified CQ on the device\_range tied to the Event wait for a "Mesh Local" Event. When this command is processed by a CQ on each physical device, it will lead // to a stall until the CQ responsible for recording the event signals completion.
+// Have the specified CQ on the device_range record an event that propagates back to
+// host. When this command is processed by a CQ on each physical device, an
+// event notification will be sent to other CQs on the device and back to host through
+// the Event Notification queue.
+void EnqueueRecordMeshEventToHost(
+    CommandQueueHandle command_queue_handle,
+    std::shared_ptr<MeshEvent> mesh_event,
+    LogicalDeviceRange& device_range = MaxDeviceRange);
 
-void EnqueueWaitForMeshEvent(const std::shared\_ptr<MeshEvent> mesh\_event, CommandQueueHandle command\_queue\_handle);
+// Have host block until the specified event is acknowledged by the Virtual Mesh it is
+// meant to be recorded on.
+void MeshEventSynchronize(const std::shared_ptr<MeshEvent> event);
 
-// Have the specified CQ on the device\_range record an event that propagates back to // host. When this command is processed by a CQ on each physical device, an // event notification will be sent to other CQs on the device and back to host through // the Event Notification queue.
-
-void EnqueueRecordMeshEventToHost(CommandQueueHandle command\_queue\_handle, std::shared\_ptr<MeshEvent> mesh\_event,
-
-LogicalDeviceRange& device\_range = MaxDeviceRange);
-
-// Have host block until the specified event is acknowledged by the Virtual Mesh it is // meant to be recorded on.
-
-void MeshEventSynchronize(const std::shared\_ptr<MeshEvent> event);
-
-// Have host block until the specified CQ on the mesh has completed all enqueued // tasks. This calls EnqueueRecordMeshEventToHost and MeshEventSynchronize under the hood.
-
-void Finish(CommandQueueHandle command\_queue\_handle);
+// Have host block until the specified CQ on the mesh has completed all enqueued
+// tasks. This calls EnqueueRecordMeshEventToHost and MeshEventSynchronize under the hood.
+void Finish(CommandQueueHandle command_queue_handle);
 ```
 
 ## 3.6 MeshTrace: Overview and APIs
@@ -982,30 +998,21 @@ The MeshTrace object captures and stores all runtime information required to run
 The APIs required to interface with a MeshTrace are identical to their single device counterparts and are listed below.
 
 ```cpp
-
 // Start capturing a MeshTrace. Returns a handle to the MeshTrace
-
 // object currently being captured. Any Fast Dispatch commands on the
-
-// specified cq\_id between this call and end\_trace\_capture will be
-
+// specified cq_id between this call and end_trace_capture will be
 // captured and serialized to a MeshTrace buffer.
-
-uint32\_t BeginMeshTraceCapture(CommandQueueHandle cq);
+uint32_t BeginMeshTraceCapture(CommandQueueHandle cq);
 
 // Stop capturing the trace and serialize all Fast Dispatch commands
-
 // to a MeshBuffer.
-
-void EndMeshTraceCapture(CommandQueueHandle cq, const uint32\_t trace\_id);
+void EndMeshTraceCapture(CommandQueueHandle cq, const uint32_t trace_id);
 
 // Replay the specified trace through the specified CQ.
-
-void EnqueueMeshTrace(CommandQueueHandle cq, uint32\_t trace\_id, bool blocking);
+void EnqueueMeshTrace(CommandQueueHandle cq, uint32_t trace_id, bool blocking);
 
 // Destroy any metadata/buffers associated with this MeshTrace
-
-void ReleaseMeshTrace(std::shared\_ptr<MeshDevice> mesh\_device, uint32\_t trace\_id);
+void ReleaseMeshTrace(std::shared_ptr<MeshDevice> mesh_device, uint32_t trace_id);
 ```
 
 Host and device implementation details for the MeshTrace feature are provided in a later section.
@@ -1151,7 +1158,7 @@ The TT-Fabric architecture document describes an approach using a DRAM Spill Buf
 
 For each CQ Broadcast path, a dedicated CB and socket is reserved on the Packetizer. For each CB, the Packetizer is responsible for forwarding data to multiple *Mcast Prefetch\_d* modules in the grid (one per chip). Thus, the Packetizer must maintain credits for each *Mcast Prefetch\_d* and perform end-to-end handshakes with each one of them.
 
-A detailed view of a potential Packetizer implementation is displayed below. Other implementations are possible (ex: dedicated Packetizer per *Mcast Prefetch\_h),* though the fundamental mechanism remains unchanged)
+A detailed view of a potential Packetizer implementation is displayed below. Other implementations are possible (ex: dedicated Packetizer per *Mcast Prefetch\_h),* though the fundamental mechanism remains unchanged.
 
 In this example, the Packetizer is responsible for broadcasting data to five chips (with two *Mcast Prefetch\_d* modules each). Thus, it maintains two sets of five credits in the form of semaphores.
 
@@ -1461,6 +1468,7 @@ Below, we present the building blocks for the MeshTrace class and describe how a
 The following objects can be used to fully describe a MeshTrace, and how it runs on a MeshDevice.
 
 ```cpp
+
 // Low Level Data-Structure that specifies the total number of MeshWorkloads
 // running inside the MeshTrace, the total number of workers involved in the
 // MeshTrace (per device) and holds the actual Trace Data, that is written to
@@ -1479,53 +1487,42 @@ struct MeshTraceDescriptor {
     // Trace data per logical Device in a Mesh.
     unordered_set<LogicalDeviceCoord, vector<uint32_t>> trace_data_per_device;
 };
-```
 
-// This data structure ties a MeshTraceDescriptor (host side representation of a // trace) to a MeshBuffer: the distributed memory space where the trace is binarized
-
-```cpp
+// This data structure ties a MeshTraceDescriptor (host side representation of a
+// trace) to a MeshBuffer: the distributed memory space where the trace is binarized
 struct MeshTraceBuffer {
+    // The trace descriptor associated with a MeshTrace
+    std::shared_ptr<MeshTraceDescriptor> desc;
 
-// The trace descriptor associated with a MeshTrace
-
-std::shared\_ptr<MeshTraceDescriptor> desc;
-
-// The MeshBuffer this trace will be serialized to, before being run on a // MeshDevice
-
-std::shared\_ptr<MeshBuffer> mesh\_buffer;
-
+    // The MeshBuffer this trace will be serialized to, before being run on a
+    // MeshDevice
+    std::shared_ptr<MeshBuffer> mesh_buffer;
 };
 
-// Top level class exposing Mesh Trace IDs (unique per trace) and interfaces to create // and populate MeshTraceBuffer handles.
-
+// Top level class exposing Mesh Trace IDs (unique per trace) and interfaces to create
+// and populate MeshTraceBuffer handles.
 // Abstracts away lower-level details of constructing MeshBuffers.
-
 struct MeshTrace {
-
 private:
-
-// A unique ID assigned to each Trace
-
-static std::atomic<uint32\_t> global\_trace\_id;
+    // A unique ID assigned to each Trace
+    static std::atomic<uint32_t> global_trace_id;
 
 public:
-
-// Get global (unique) ID for trace
-
-static uint32\_t next\_id();
+    // Get global (unique) ID for trace
+    static uint32_t next_id();
 
 // Create a handle to an empty Trace Buffer, which needs to be populated
+// Create a handle to an empty Trace Buffer, which needs to be populated
 
-// with a MeshTraceDescriptor and a MeshBuffer, to get tied to a MeshDevice.
+    // Create a handle to an empty Trace Buffer, which needs to be populated
 
-static std::shared\_ptr<MeshTraceBuffer> create\_mesh\_buffer\_handle();
+    // with a MeshTraceDescriptor and a MeshBuffer, to get tied to a MeshDevice.
+    static std::shared_ptr<MeshTraceBuffer> create_mesh_buffer_handle();
 
-// Once the Trace Data per logical device has been captured in the // MeshTraceDescriptor corresponding to this MeshTraceBuffer,
-
-// it can be binarized to a MeshDevice through a Command Queue.
-
-static void populate\_mesh\_buffer(std::shared\_ptr<MeshTraceBuffer> trace\_buffer, uint8\_t cq\_id);
-
+    // Once the Trace Data per logical device has been captured in the
+    // MeshTraceDescriptor corresponding to this MeshTraceBuffer,
+    // it can be binarized to a MeshDevice through a Command Queue.
+    static void populate_mesh_buffer(std::shared_ptr<MeshTraceBuffer> trace_buffer, uint8_t cq_id);
 };
 ```
 
@@ -1533,24 +1530,19 @@ The functions listed below allow a MeshTrace to be captured, binarized and run/r
 
 ```cpp
 // Maps to BeginMeshTraceCapture
-
-uint32_t MeshDevice::begin\_trace\_capture(CommandQueueHandle cq\_handle);
+uint32_t MeshDevice::begin_trace_capture(CommandQueueHandle cq_handle);
 
 // Maps to EndMeshTraceCapture
-
-void MeshDevice::end\_trace(CommandQueueHandle cq\_handle, const uint32\_t tid);
+void MeshDevice::end_trace(CommandQueueHandle cq_handle, const uint32_t tid);
 
 // Maps to EnqueueMeshTrace
-
-void MeshDevice::replay\_trace(CommandQueueHandle cq\_handle, const uint32\_t tid, const bool blocking);
+void MeshDevice::replay_trace(CommandQueueHandle cq_handle, const uint32_t tid, const bool blocking);
 
 // Maps to ReleaseTrace
-
-void MeshDevice::release\_trace(const uint32\_t tid);
+void MeshDevice::release_trace(const uint32_t tid);
 
 // Get the underlying MeshTrace metadata corresponding to an ID.
-
-std::shared\_ptr<MeshTraceBuffer> MeshDevice::get\_trace(const uint32\_t tid);
+std::shared_ptr<MeshTraceBuffer> MeshDevice::get_trace(const uint32_t tid);
 ```
 
 ### 3.12.2 MeshTrace Capture and Execution
@@ -1732,10 +1724,10 @@ private:
     BufferAddress address_;
 
     // Aligned size
-    BufferSize size_in_bytes;
+    BufferSize size_in_bytes_;
 
     // Memory layout across the Virtual Mesh distributed address space
-    DistributedBufferConfig distributed_config;
+    DistributedBufferConfig distributed_config_;
 
 public:
     // DistributedBuffer construction leads to an allocation
@@ -1753,7 +1745,6 @@ A set of creation/destruction APIs are introduced:
 
 ```cpp
 // Distributed Buffer Creation and Management
-
 BufferHandle CreateDistributedBuffer(const DistributedBufferConfig& config);
 
 void DeallocateDistributedBuffer(BufferHandle buffer);
@@ -1872,7 +1863,7 @@ The data-structure and APIs exposing this functionality are presented below.
 struct DistributedEventPrimitive {
     // Internal container maintaining synchronization information at the Remote
     // Executor level
-    MeshEventHandle event_;
+    MeshEventHandle event;
 
     // Additional synchronization information:
     // True if the Executor Hosts will notify the controller host of event completion
@@ -1884,7 +1875,7 @@ struct DistributedEventPrimitive {
 // Wrapper that interfaces with the serialization layer
 struct DistributedEvent {
     // Internal container maintaining end to end synchronization information
-    DistributedEventPrimitiveHandle event_;
+    DistributedEventPrimitiveHandle event;
 
     // Accessor to underlying event object
     DistributedEventPrimitiveHandle get_event();
@@ -1954,6 +1945,7 @@ The DistributedTrace framework exposes the ability to trace workloads running ac
 
 The APIs for interfacing with a DistributedTrace object are nearly identical to their MeshTrace counterparts and are presented below.
 
+```cpp
 // Start capturing a DistributedTrace. Returns a handle to the DistributedTrace
 // object currently being captured. Any Fast Dispatch commands on the
 // specified cq_id between this call and EndDistributedTraceCapture will be
@@ -1969,6 +1961,7 @@ void EnqueueDistributedTrace(CommandQueueHandle cq, uint32_t trace_id, bool bloc
 
 // Destroy any metadata/buffers associated with this DistributedTrace
 void ReleaseDistributedTrace(std::shared_ptr<MeshDevice> mesh_device, uint32_t trace_id);
+```
 
 ##
 
@@ -2115,7 +2108,7 @@ This will be done with completion of Phase 1.
 
 For dispatching a SPMD-operation onto N-devices, this currently initiate a program compile on N device worker threads. There is also a program cache per-device. With the proposed changes, there will no longer be a worker thread pinned per device. TT-NN will interface directly with native mesh-level APIs that will orchestrate a single program compile that will be broadcast to devices across the entire mesh.
 
-The plan is to remove *launch\_op* entirely from TT-NN. Please see section “2.1 Virtualization Through TTNN” for more context and motivation. We currently implement the virtualization layer in TT-NN, and the asynchronous dispatch of host/device work relies on launch\_op to push the work onto executor threads. Instead, pushing work onto a mesh of devices involves enqueueing a MeshWorkload as the unit of compute for the mesh.
+The plan is to remove *launch_op* entirely from TT-NN. Please see section “2.1 Virtualization Through TTNN” for more context and motivation. We currently implement the virtualization layer in TT-NN, and the asynchronous dispatch of host/device work relies on launch_op to push the work onto executor threads. Instead, pushing work onto a mesh of devices involves enqueueing a MeshWorkload as the unit of compute for the mesh.
 
 This will be done with completion of Phase 1 and 3.
 
