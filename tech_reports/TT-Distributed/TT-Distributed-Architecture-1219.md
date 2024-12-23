@@ -1,7 +1,3 @@
-
-
-![](images/image000.png)
-
 # TT-Metalium Distributed
 
 Authors: Joseph Chu (jchu@tenstorrent.com), Aditya Saigal (asaigal@tenstorrent.com)
@@ -72,7 +68,7 @@ This infrastructure exposes a multi-chip system as a large virtual device with a
 
 ## 2.1 Virtualization through TTNN <a id="virtualization-through-ttnn"></a>
 
-TT-NN is a library that provides a Pytorch-like interface for executing compute on Tenstorrent accelerators. This interface is available and supported for single-process, single-host environments with operations that can be dispatched synchronously and asynchronously (through a single or multithreaded runtime environment) across a mesh of devices. See [Programming Mesh of Devices](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) for more information. TT-NN builds on top of TT-Metalium to provide a high-level interface in the form of operations and tensors in a neural network op library.
+TT-NN is a library that provides a Pytorch-like interface for executing compute on Tenstorrent accelerators. This interface is available and supported for single-process, single-host environments with operations that can be dispatched synchronously and asynchronously (through a single or multithreaded runtime environment) across a mesh of devices. See [Programming Mesh of Devices](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md) for more information. TT-NN builds on top of TT-Metalium to provide a high-level interface in the form of operations and tensors in a neural network op library.
 
 The table below displays the compute paradigms supported by TTNN.
 
@@ -1026,52 +1022,203 @@ DeviceHandle virtual_mesh_1 = CreateMeshDevice(mesh_config_1, 2 /* num_cqs */, D
 
 *Directly create raw handles to two Devices.*
 
+```cpp
+ DeviceHandle device_0 = CreateDevice(
+                                0, /* device_id */
+                                2, /* num_hw_cqs */
+                                DEFAULT_L1_SMALL_SIZE,
+                                DEFAULT_TRACE_REGION_SIZE);
+DeviceHandle device_1 = CreateDevice(
+                            1, /* device_id */
+                            2, /* num_hw_cqs */
+                            DEFAULT_L1_SMALL_SIZE,
+                            DEFAULT_TRACE_REGION_SIZE);
+```
 
 **Step 2: Get Handles to Dispatch Interfaces**
 
 *Obtain VCQ Handles to access each Virtual Mesh.*
 
-![](images/image022.png)*Obtain Command Queue Handles to access each Device.*
+```cpp
+CommandQueueHandle virtual_mesh_0_cq_0_handle = GetCommandQueue(virtual_mesh_0, 0);
+CommandQueueHandle virtual_mesh_0_cq_1_handle = GetCommandQueue(virtual_mesh_0, 1);
+CommandQueueHandle virtual_mesh_1_cq_0_handle = GetCommandQueue(virtual_mesh_1, 0);
+CommandQueueHandle virtual_mesh_1_cq_1_handle = GetCommandQueue(virtual_mesh_1, 1);
+```
 
-![](images/image023.png)
+*Obtain Command Queue Handles to access each Device.*
+
+```cpp
+CommandQueueHandle device_0_cq_0_handle = GetCommandQueue(device_0, 0);
+CommandQueueHandle device_0_cq_1_handle = GetCommandQueue(device_0, 0);
+CommandQueueHandle device_1_cq_0_handle = GetCommandQueue(device_1, 0);
+CommandQueueHandle device_1_cq_1_handle = GetCommandQueue(device_1, 0);
+```
 
 **Step 3: Specify how Buffers will be laid out across Local or Distributed Memory**
 
 *Use the ShardedBufferConfig to specify how Tensors will be sharded across the Virtual Mesh address space. Specify the per-device memory layout using the DeviceLocalLayoutConfig (buffers will be interleaved within each physical device).*
 
-![](images/image024.png)
+```cpp
+// Create DistributedBuffers that are sharded across devices and DRAM interleaved within the Device Local Address Space
+DeviceLocalLayoutConfig per_device_buffer_config {
+            .page_size = dram_buffer_size_per_device,
+            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+};
+
+// Specify how the DistributedBuffers live inside the memory exposed on both Virtual Mesh
+ShardedBufferConfig distributed_buffer_config_virtual_mesh_0 {
+    .mesh_device = virtual_mesh_0;
+    .buffer_type = BufferType::DRAM,
+    .global_tensor_shape = global_tensor_shape,
+    .distributed_shard_shape = device_shard_shape,
+    .global_buffer_size = distributed_buffer_size,
+    .device_shard_layout = per_device_buffer_config
+};
+
+ShardedBufferConfig distributed_buffer_config_virtual_mesh_1 {
+    .mesh_device = virtual_mesh_1;
+    .buffer_type = BufferType::DRAM,
+    .global_tensor_shape = global_tensor_shape,
+    .distributed_shard_shape = device_shard_shape,
+    .global_buffer_size = distributed_buffer_size,
+    .device_shard_layout = per_device_buffer_config
+};
+```
 
 *Use the InterleavedBufferConfig to specify how buffers will be interleaved across DRAM banks on each Device.*
 
-![](images/image025.png)
+```cpp
+// Specify how the buffers are laid out inside local memory across both devices
+InterleavedBufferConfig buffer_config_device_0 = {
+    .device = device_0,
+    .size = dram_buffer_size_per_device,
+    .page_size = dram_buffer_size_per_device,
+    .buffer_type = tt_metal::BufferType::DRAM
+};
+
+InterleavedBufferConfig buffer_config_device_1 = {
+    .device = device_1,
+    .size = dram_buffer_size_per_device,
+    .page_size = dram_buffer_size_per_device,
+    .buffer_type = tt_metal::BufferType::DRAM
+};
+```
 
 **Step 4: Create IO Buffers based on Config Attributes**
 
 *The first three buffers live in Distributed Memory mapped to virtual\_mesh\_0. The next three live in Distributed Memory mapped to virtual\_mesh\_1.*
 
-![](images/image026.png)
+```cpp
+//  ======== These Buffers live on Virtual Mesh 0 ========
+BufferHandle mul_src_0 = CreateDistributedBuffer(distributed_buffer_config_virtual_mesh_0);
+BufferHandle mul_src_1 = CreateDistributedBuffer(distributed_buffer_config_virtual_mesh_0);
+BufferHandle mul_dst = CreateDistributedBuffer(distributed_buffer_config_virtual_mesh_0);
+//  ======== These Buffers live on Virtual Mesh 1 ========
+BufferHandle add_src_0 = CreateDistributedBuffer(distributed_buffer_config_virtual_mesh_1);
+BufferHandle add_src_1 = CreateDistributedBuffer(distributed_buffer_config_virtual_mesh_1);
+BufferHandle add_dst = CreateDistributedBuffer(distributed_buffer_config_virtual_mesh_1);
+```
 
 *The first three buffers live in Local Memory mapped to device\_0. The next three live in Local Memory mapped to device \_1.*
 
-![](images/image027.png)
+```cpp
+//  ======== These Buffers live on Device 0 ========
+BufferHandle mul_src_0 = CreateBuffer(buffer_config_device_0);
+BufferHandle mul_src_1 = CreateBuffer(buffer_config_device_0);
+BufferHandle mul_dst = CreateBuffer(buffer_config_device_0);
+//  ======== These Buffers live on Device 1 ========
+BufferHandle add_src_0 = CreateBuffer(buffer_config_device_1);
+BufferHandle add_src_1 = CreateBuffer(buffer_config_device_1);
+BufferHandle add_dst = CreateBuffer(buffer_config_device_1);
+```
 
 **Step 5: Specify Compute (MeshWorkloads or Programs)**
 
 *Create separate MeshWorkloads to be deployed to each Virtual Mesh (these are simple wrappers around a regular Program). TODO: These diagrams need to be updated to return opaque handles.*
 
-![](images/image028.png)*Create separate Programs to be deployed on each Device.*
+```cpp
+std::shared_ptr<MeshWorkload> mul_mesh_workload = create_binary_mesh_workload(mul_src_0, mul_src_1, mul_dst, single_tile_size, num_tiles_per_device, BinaryOpType::MUL);
+std::shared_ptr<MeshWorkload> add_mesh_workload = create_binary_mesh_workload(add_src_0, add_src_1, add_dst, single_tile_size, num_tiles_per_device, BInaryOpType::ADD);
+```
 
-![](images/image029.png)
+*Create separate Programs to be deployed on each Device.*
+
+```cpp
+std::shared_ptr<Program> mul_program = create_binary_program(mul_src_0, mul_src_1, mul_dst, single_tile_size, num_tiles_per_device, BinaryOpType::MUL);
+std::shared_ptr<Program> add_program = create_binary_program(add_src_0, add_src_1, add_dst, single_tile_size, num_tiles_per_device, BInaryOpType::ADD);
+```
 
 **Step 6: Schedule Data-Movement and Compute through Dispatch Interfaces**
 
 *Write data to the input MeshBuffers, run a MeshWorkload and read outputs from Virtual Mesh 0. Use MeshEvents for synchronization. Write the output from Virtual Mesh 0 with additional data to Virtual Mesh 1, run compute and read outputs.*
 
-![](images/image030.png)
+```cpp
+// Data-Movement and Compute on Virtual Mesh 0. IO on CQ1, compute on CQ0. Use events to ensure ordering.
+std::shared_ptr<MeshEvent> virtual_mesh_0_write_event = std::make_shared<MeshEvent>();
+std::shared_ptr<MeshEvent> virtual_mesh_1_compute_event = std::make_shared<MeshEvent>();
+
+// Write inputs
+EnqueueWriteBuffer(virtual_mesh_0_cq_1_handle, mul_src_0, random_data_0);
+EnqueueWriteBuffer(virtual_mesh_0_cq_1_handle, mul_src_1, random_data_1);
+// Record that inputs were written
+EnqueueRecordMeshEvent(virtual_mesh_0_cq_1_handle, virtual_mesh_0_write_event);
+// Wait until inputs were written
+EnqueueWaitForMeshEvent(virtual_mesh_0_cq_0_handle, virtual_mesh_0_write_event);
+// Run compute
+EnqueueMeshWorkload(virtual_mesh_0_cq_0_handle, *mul_mesh_workload);
+// Record that compute was run and is completed
+EnqueueRecordMeshEvent(virtual_mesh_0_cq_0_handle, virtual_mesh_1_compute_event);
+// Wait until compute has completed
+EnqueueWaitForMeshEvent(virtual_mesh_0_cq_1_handle, virtual_mesh_1_compute_event);
+// Read outputs
+EnqueueReadBuffer(virtual_mesh_0_cq_1_handle, mul_dst, mul_readback_data);
+
+// Data-Movement and Compute on Virtual Mesh 1. IO and compute on CQ0. No need to use events to synchronize.
+// Write inputs
+EnqueueWriteBuffer(virtual_mesh_1_cq_0_handle, add_src_0, mul_readback_data);
+EnqueueWriteBuffer(virtual_mesh_1_cq_0_handle, add_src_1, random_data_2);
+// Run compute
+EnqueueMeshWorkload(virtual_mesh_1_cq_0_handle, *add_mesh_workload);
+// Read outputs
+EnqueueReadBuffer(virtual_mesh_1_cq_0_handle, add_dst, add_readback_data);
+
+CloseDevice(virtual_mesh_0);
+CloseDevice(virtual_mesh_1);
+```
 
 *Write data to the input Buffers, run a Program and read outputs from Device 0. Use Events for synchronization. Write the output from Device 0 with additional data to Device 1, run compute and read outputs.*
 
-![](images/image031.png)
+```cpp
+// Data-Movement and Compute on Device 0. IO on CQ1, compute on CQ0. Use events to ensure ordering.
+std::shared_ptr<Event> device_0_write_event = std::make_shared<Event>();
+std::shared_ptr<Event> device_0_compute_event = std::make_shared<Event>();
+
+// Write inputs
+EnqueueWriteBuffer(device_0_cq_1_handle, mul_src_0, random_data_0);
+EnqueueWriteBuffer(device_0_cq_1_handle, mul_src_1, random_data_1);
+// Record that inputs were written
+EnqueueRecordEvent(device_0_cq_1_handle, device_0_write_event);
+// Wait until inputs were written
+EnqueueWaitForEvent(device_0_cq_0_handle, device_0_write_event);
+// Run compute
+EnqueueProgram(device_0_cq_0_handle, mul_program);
+// Record that compute was run and is completed
+EnqueueRecordEvent(device_0_cq_0_handle, device_0_compute_event);
+// Wait until compute has completed
+EnqueueWaitForEvent(device_0_cq_1_handle, device_0_compute_event);
+// Read outputs
+EnqueueReadBuffer(device_0_cq_1_handle, mul_dst, mul_readback_data);
+
+// Data-Movement and Compute on Device 1. IO and compute on CQ0. No need to use events to synchronize.
+// Write inputs
+EnqueueWriteBuffer(device_1_cq_0_handle, add_src_0, mul_readback_data);
+EnqueueWriteBuffer(device_1_cq_0_handle, add_src_1, random_data_2);
+// Run compute
+EnqueueMeshWorkload(device_1_cq_0_handle, add_program);
+// Read outputs
+EnqueueReadBuffer(device_1_cq_0_handle, add_dst, add_readback_data);
+```
 
 ## 3.8 MeshCommandQueue: Data Movement to and from a TT-Mesh <a id="meshcommandqueue"></a>
 
