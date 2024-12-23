@@ -255,7 +255,7 @@ class TtTransformer(LightweightModule):
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()
-        tt_out = tt_out.view(B, S, -1)
+        tt_out = tt_out[:, :, :B, :].view(B, S, -1)
         return tt_out
 
     def ttnn_prefill_forward(
