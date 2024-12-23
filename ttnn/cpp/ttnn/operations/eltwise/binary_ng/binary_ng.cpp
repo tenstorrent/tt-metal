@@ -11,50 +11,98 @@ namespace ttnn::operations::binary_ng {
 template <BinaryOpType binary_op_type>
 Tensor BinaryNg<binary_op_type>::invoke(
     uint8_t queue_id,
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    const std::optional<const DataType> &output_dtype,
-    const std::optional<MemoryConfig> &memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
-    Tensor input_b = typecast_to(DataType::BFLOAT16, input_tensor_b);
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    auto input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
+    auto input_b = typecast_to(DataType::BFLOAT16, input_tensor_b);
 
     return ttnn::prim::binary_ng(
-        queue_id, input_a, input_b, binary_op_type, output_dtype, memory_config, optional_output_tensor);
+        queue_id,
+        input_a,
+        input_b,
+        binary_op_type,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryNg<binary_op_type>::invoke(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    const std::optional<const DataType> &output_dtype,
-    const std::optional<MemoryConfig> &memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(DefaultQueueId, input_tensor_a, input_tensor_b, output_dtype, memory_config, optional_output_tensor);
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    return invoke(
+        DefaultQueueId,
+        input_tensor_a,
+        input_tensor_b,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryNg<binary_op_type>::invoke(
     uint8_t queue_id,
-    const Tensor &input_tensor_a,
+    const Tensor& input_tensor_a,
     float scalar,
-    const std::optional<const DataType> &output_dtype,
-    const std::optional<MemoryConfig> &memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    auto input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
 
     return ttnn::prim::binary_ng(
-        queue_id, input_a, scalar, binary_op_type, output_dtype, memory_config, optional_output_tensor);
+        queue_id,
+        input_a,
+        scalar,
+        binary_op_type,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryNg<binary_op_type>::invoke(
-    const Tensor &input_tensor_a,
+    const Tensor& input_tensor_a,
     float scalar,
-    const std::optional<const DataType> &output_dtype,
-    const std::optional<MemoryConfig> &memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(DefaultQueueId, input_tensor_a, scalar, output_dtype, memory_config, optional_output_tensor);
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    return invoke(
+        DefaultQueueId,
+        input_tensor_a,
+        scalar,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
 }
 
 template struct BinaryNg<BinaryOpType::ADD>;
