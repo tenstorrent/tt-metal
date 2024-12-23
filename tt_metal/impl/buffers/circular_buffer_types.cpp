@@ -137,11 +137,11 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
             total_size,
             this->max_size_);
 #ifndef DEBUG
-        log_warning(
-            "Circular buffer size {} B exceeds allocated L1 buffer bank size of {} B. This may allow this circular "
-            "buffer to write outside the allocated buffer space.",
-            total_size,
-            this->max_size_);
+        // log_warning(
+        //     "Circular buffer size {} B exceeds allocated L1 buffer bank size of {} B. This may allow this circular "
+        //     "buffer to write outside the allocated buffer space.",
+        //     total_size,
+        //     this->max_size_);
         if (total_size > this->buffer_size_) {
             TT_THROW(
                 "Cannot set to globally allocated buffer. Circular buffer size {} B exceeds allocated L1 buffer "

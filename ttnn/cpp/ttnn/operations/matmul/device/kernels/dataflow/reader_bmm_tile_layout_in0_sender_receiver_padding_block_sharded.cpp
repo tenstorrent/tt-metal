@@ -8,6 +8,9 @@
 #include "hostdevcommon/common_values.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
+#include "tools/profiler/kernel_profiler.hpp"
+volatile uint32_t* dbg_dump_ncrisc = (volatile uint32_t*)0x15240;
+
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
     constexpr bool core_in_in0_receiver_mcast_grid = (bool)get_compile_time_arg_val(1);
@@ -132,6 +135,8 @@ void kernel_main() {
                     uint32_t block_id = block / num_blocks_per_shard;
                     // If used fused op, make block_id conform to ordering of tensor slices from all
                     // gather
+                    *(dbg_dump_ncrisc + 0) = block;
+
                     if constexpr (fuse_op) {
                         block_id = fused_op_receiver.align_to_slice_and_sync(block, sender_id);
                     }
@@ -151,6 +156,9 @@ void kernel_main() {
                         // Operand 0
                         uint32_t in0_tensor_local_l1_write_addr = get_write_ptr(cb_id_in0);
 
+                        *(dbg_dump_ncrisc + 1) = in0_tensor_local_l1_write_addr;
+                        *(dbg_dump_ncrisc + 2) = 0x00baba01;
+
                         if constexpr (extract_shard_sub_blocks) {
                             in0_tensor_read_addr = in0_tensor_local_l1_write_addr;
 
@@ -164,7 +172,7 @@ void kernel_main() {
                             }
 
                             in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
-
+                            *(dbg_dump_ncrisc + 2) = 0x04baba01;
                             noc_async_read_barrier();
                         } else {
                             in0_tensor_read_addr = in0_tensor_current_inner_dim_block_start_addr;
@@ -174,6 +182,9 @@ void kernel_main() {
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
+                        *(dbg_dump_ncrisc + 2) = 0x08baba01;
+                        *(dbg_dump_ncrisc + 3) = (uint32_t)in0_mcast_sender_semaphore_addr_ptr;
+                        *(dbg_dump_ncrisc + 4) = in0_mcast_num_dests;
                         if constexpr (core_in_in0_receiver_mcast_grid) {
                             // wait for every core in receiver grid EXCLUDING myself
                             noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests - 1);
@@ -182,6 +193,7 @@ void kernel_main() {
                             noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
                         }
                         noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
+                        *(dbg_dump_ncrisc + 2) = 0x0Cbaba01;
 
                         // Now we have the block in the CB address, we can mcast to dests!
                         uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_tensor_local_l1_write_addr;
@@ -221,6 +233,7 @@ void kernel_main() {
                             }
 
                             // We should also multicast the flag to destinations
+                            *(dbg_dump_ncrisc + 2) = 0x0Dbaba01;
                             if constexpr (in0_mcast_num_cores == 1) {
                                 // All work is done on one core (the current one).
                                 // noc_semaphore_set_multicast_loopback_src is a no-op in this case.
@@ -232,6 +245,7 @@ void kernel_main() {
                                     in0_mcast_receiver_semaphore_noc_addr,
                                     in0_mcast_num_cores);
                             }
+                            *(dbg_dump_ncrisc + 2) = 0x0Ebaba01;
                         } else {
                             // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all
                             // cores in receiver grid
@@ -242,12 +256,14 @@ void kernel_main() {
                                 in0_mcast_num_cores,
                                 true,
                                 true);
+                            *(dbg_dump_ncrisc + 2) = 0x0Dbaba01;
 
                             // We should also multicast the flag to destinations
                             noc_semaphore_set_multicast(
                                 in0_mcast_sender_semaphore_valid_addr,
                                 in0_mcast_receiver_semaphore_noc_addr,
                                 in0_mcast_num_cores);
+                            *(dbg_dump_ncrisc + 2) = 0x0Ebaba01;
                         }
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                         // same vc even though cmd bufs are different Also, this only works because we are setting VCs
@@ -270,6 +286,7 @@ void kernel_main() {
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                         noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
                     }
+                    *(dbg_dump_ncrisc + 2) = 0x0Fbaba01;
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
 
                     // If core does not produce output block work, free cb_id_in0 immediately.
@@ -286,4 +303,5 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+}
 }

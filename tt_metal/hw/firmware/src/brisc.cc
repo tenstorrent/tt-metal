@@ -194,6 +194,35 @@ void device_setup() {
     // FIXME MT: enable later
     // enable_power_management();
 
+    volatile uint32_t* dbg_dump = (volatile uint32_t*)0x15200;
+    *(dbg_dump + 1) = 0;
+    *(dbg_dump + 2) = 0;
+    *(dbg_dump + 3) = 0;
+    *(dbg_dump + 4) = 0;
+    *(dbg_dump + 5) = 0x99cbcb99;
+    *(dbg_dump + 6) = 0x99cbcb99;
+    *(dbg_dump + 7) = 0x99cbcb99;
+    *(dbg_dump + 8) = 0x99cbcb99;
+    *(dbg_dump + 9) = 0x99cbcb99;
+    *(dbg_dump + 10) = 0x99cbcb99;
+    *(dbg_dump + 11) = 0x99cbcb99;
+    *(dbg_dump + 12) = 0x99cbcb99;
+
+    volatile uint32_t* dbg_dump_ncrisc = (volatile uint32_t*)0x15240;
+    *(dbg_dump_ncrisc + 0) = 0x77deda77;
+    *(dbg_dump_ncrisc + 1) = 0;
+    *(dbg_dump_ncrisc + 2) = 0;
+    *(dbg_dump_ncrisc + 3) = 0;
+    *(dbg_dump_ncrisc + 4) = 0;
+    *(dbg_dump_ncrisc + 5) = 0x77cccc77;
+    *(dbg_dump_ncrisc + 6) = 0x77cccc77;
+    *(dbg_dump_ncrisc + 7) = 0x77cccc77;
+    *(dbg_dump_ncrisc + 8) = 0x77cccc77;
+    *(dbg_dump_ncrisc + 9) = 0x77cccc77;
+    *(dbg_dump_ncrisc + 10) = 0x77cccc77;
+    *(dbg_dump_ncrisc + 11) = 0x77cccc77;
+    *(dbg_dump_ncrisc + 12) = 0x77cccc77;
+
 #ifdef ARCH_BLACKHOLE
     // Disable DEST CG
     *((uint32_t volatile*)RISCV_DEBUG_REG_DEST_CG_CTRL) = 0;

@@ -11,16 +11,18 @@
 #include "llk_unpack_common_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+volatile uint32_t* dbg_dump = (volatile uint32_t*)0x15200;
+
 using namespace ckernel;
 
 // Apply delay on odd rows of tensix cores in case of matmul.
 // We do this so that not all cores start at once, therefore reducing the chance of di/dt problems.
 // MM_STAGGER_ODD_ROWS is an externally controlled define, set up in program compilation.
 inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
-#ifdef MM_STAGGER_ODD_ROWS
+#if MM_STAGGER_TYPE == 1  // first block stagger
     static bool stagger_applied = false;
     constexpr int stagger_operand = 1;
-    constexpr int stagger_delay_in_cycles = 12288;
+    constexpr int stagger_delay_in_cycles = MM_STAGGER_VALUE;
     if (stagger_applied == false && operand == stagger_operand) {
         stagger_applied = true;
         constexpr uint32_t noc_id = 0;
@@ -30,6 +32,34 @@ inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
         if (my_logical_y & 0x1) {
             wait(stagger_delay_in_cycles);
         }
+    }
+#elif MM_STAGGER_TYPE == 2  // every block stagger
+    constexpr int stagger_operand = 1;
+    constexpr int stagger_delay_in_cycles = MM_STAGGER_VALUE;
+    if (operand == stagger_operand) {
+        constexpr uint32_t noc_id = 0;
+        uint32_t noc_id_logical_reg = NOC_CFG_READ_REG(noc_id, NOC_ID_LOGICAL);
+        uint32_t my_logical_y = (noc_id_logical_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+        // Apply stagger on odd rows only
+        if (my_logical_y & 0x1) {
+            wait(stagger_delay_in_cycles);
+        }
+    }
+#elif MM_STAGGER_TYPE == 3  // hybrid stagger - apply stagger every 20th block
+    constexpr int stagger_operand = 1;
+    constexpr int stagger_delay_in_cycles = MM_STAGGER_VALUE;
+    static int stagger_counter = 0;
+    if (operand == stagger_operand) {
+        if ((stagger_counter % 20) == 0) {
+            constexpr uint32_t noc_id = 0;
+            uint32_t noc_id_logical_reg = NOC_CFG_READ_REG(noc_id, NOC_ID_LOGICAL);
+            uint32_t my_logical_y = (noc_id_logical_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+            // Apply stagger on odd rows only
+            if (my_logical_y & 0x1) {
+                wait(stagger_delay_in_cycles);
+            }
+        }
+        stagger_counter++;
     }
 #endif
 }
@@ -44,13 +74,40 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 
     std::uint16_t tiles_received;
 
+    if (operand == 0) {
+        *(dbg_dump + 3) = 0x00baba01;
+    } else {
+        *(dbg_dump + 4) = 0x00baba01;
+    }
+    *(dbg_dump + 5) = (uint32_t)get_local_cb_interface(input).fifo_rd_ptr;
+    *(dbg_dump + 6) = (uint32_t)get_local_cb_interface(input).fifo_size;
+    *(dbg_dump + 7) = (uint32_t)get_local_cb_interface(input).fifo_limit;
+    *(dbg_dump + 8) = (uint32_t)get_local_cb_interface(input).tiles_acked;
+    *(dbg_dump + 9) = (uint32_t)get_local_cb_interface(input).fifo_page_size;
+    *(dbg_dump + 10) = (uint32_t)tiles_received_ptr;
+
     uint16_t num_tiles_recv;
     do {
         tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
 
+    if (operand == 0) {
+        *(dbg_dump + 3) = 0x08baba01;
+    } else {
+        *(dbg_dump + 4) = 0x08baba01;
+    }
+
     apply_mm_stagger(operand);
+
+    if (operand == 0) {
+        uint block_id = *(dbg_dump + 1);
+        if (block_id == 0) {
+            uint iter_id = *(dbg_dump + 2);
+            *(dbg_dump + 2) = iter_id + 1;
+        }
+        *(dbg_dump + 1) = block_id + 1;
+    }
 }
 
 // Pop N tiles from the incoming stream
