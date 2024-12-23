@@ -23,15 +23,24 @@ inline void print_tile_rows(uint32_t cb_id, uint32_t rows = 32, uint32_t tile_id
     // UNPACK(( DPRINT << "++++++" << ENDL() ));
 }
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    UNPACK((DPRINT << "======" << ENDL()));
+    for (uint16_t r = 0; r < 32; ++r) {
+        SliceRange sr = SliceRange{.h0 = r, .h1 = (uint16_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        UNPACK((DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL()));
+    }
+    UNPACK((DPRINT << "++++++" << ENDL()));
+}
+
 inline void print_cb_details(uint32_t cb_id) {
     DPRINT << "cb_id " << cb_id << ": { "
-           << "size: " << cb_interface[cb_id].fifo_size << ", "
-           << "limit: " << cb_interface[cb_id].fifo_limit << ", "
-           << "page_size: " << cb_interface[cb_id].fifo_page_size << ", "
-           << "num_pages: " << cb_interface[cb_id].fifo_num_pages << ", "
-           << "rd_ptr: " << cb_interface[cb_id].fifo_rd_ptr << ", "
-           << "wr_ptr: " << cb_interface[cb_id].fifo_wr_ptr << ", "
-           << "wr_tile_ptr: " << cb_interface[cb_id].fifo_wr_tile_ptr << " }" << ENDL();
+           << "size: " << get_local_cb_interface(cb_id).fifo_size << ", "
+           << "limit: " << get_local_cb_interface(cb_id).fifo_limit << ", "
+           << "page_size: " << get_local_cb_interface(cb_id).fifo_page_size << ", "
+           << "num_pages: " << get_local_cb_interface(cb_id).fifo_num_pages << ", "
+           << "rd_ptr: " << get_local_cb_interface(cb_id).fifo_rd_ptr << ", "
+           << "wr_ptr: " << get_local_cb_interface(cb_id).fifo_wr_ptr << ", "
+           << "wr_tile_ptr: " << get_local_cb_interface(cb_id).fifo_wr_tile_ptr << " }" << ENDL();
 }
 #endif
 
