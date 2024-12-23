@@ -2,40 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
-import torch
-import random
+import os
 import ttnn
-import math
 import itertools
-
-from tests.sweep_framework.sweep_utils.utils import get_device_grid_size
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import (
-    gen_func_with_cast_tt,
-    _gen_reshape_args_from_volume,
-    _get_factors,
-)
-
-
-def divup(a, b):
-    return (a + b - 1) // b
-
-
-def roundup(a, b):
-    result = divup(a, b) * b
-    return result
-
-
-def divdown(a, b):
-    return (a - b - 1) // b
-
-
-def roundown(a, b):
-    result = divdown(a, b) * b
-    return result
-
-
-Y, X = get_device_grid_size()
+import random
+import math
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import _gen_reshape_args_from_volume
 
 
 def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
@@ -46,11 +18,10 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
     # ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     sharding_strategy_list = ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     shard_orientation_list = ["COL_MAJOR", "ROW_MAJOR"]
-    shard_height_mul_of_32_list = [False]
     spec_list = []
 
-    for sharding_strategy, shard_orientation, rank, layout, shard_height_mul_of_32 in itertools.product(
-        sharding_strategy_list, shard_orientation_list, [4, 3, 2], layouts, shard_height_mul_of_32_list
+    for sharding_strategy, shard_orientation, rank, layout in itertools.product(
+        sharding_strategy_list, shard_orientation_list, [4, 3, 2], layouts
     ):
         if sharding_strategy == "tensor_wh":
             tensor_hw_as_shard_shape = True
@@ -151,7 +122,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                     "shard_orientation": shard_orientation,
                     "tensor_hw_as_shard_shape": tensor_hw_as_shard_shape,
                     "input_layout": layout,
-                    "shard_height_mul_of_32": shard_height_mul_of_32,
+                    "shard_height_mul_of_32": False,
                 }
             )
 
@@ -160,13 +131,13 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
 
 def parse_sharding_spec(input_spec):
     input_shape = input_spec["input_shape"]
-    x = input_spec["X"]
-    y = input_spec["Y"]
+    X = input_spec["X"]
+    Y = input_spec["Y"]
     sharding_strategy = input_spec["sharding_strategy"]
     shard_orientation = input_spec["shard_orientation"]
     tensor_hw_as_shard_shape = input_spec["tensor_hw_as_shard_shape"]
     input_layout = input_spec["input_layout"]
-    shard_height_mul_of_32 = input_spec.get("shard_height_mul_of_32", False)
+    shard_height_mul_of_32 = input_spec["shard_height_mul_of_32"]
 
     if sharding_strategy == "HEIGHT":
         sharding_strategy = ttnn.ShardStrategy.HEIGHT
@@ -187,7 +158,7 @@ def parse_sharding_spec(input_spec):
 
     return (
         input_shape,
-        ttnn.CoreGrid(y=y, x=x),
+        ttnn.CoreGrid(y=Y, x=X),
         sharding_strategy,
         shard_orientation,
         tensor_hw_as_shard_shape,
@@ -215,4 +186,4 @@ def invalidate_vector_sharding(input_spec):
     ):
         return True, "Physical size <width, height> must be a multuple of page size <1, width>"
 
-    return False, ""
+    return False, None

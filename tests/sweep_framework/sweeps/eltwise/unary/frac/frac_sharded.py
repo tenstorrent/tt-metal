@@ -95,6 +95,7 @@ def run(
         strategy=sharding_strategy,
         orientation=shard_orientation,
         use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
+        tile_layout=shard_height_mul_of_32,
     )
 
     input_tensor_a = ttnn.from_torch(
