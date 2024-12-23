@@ -24,9 +24,9 @@ void kernel_main() {
     uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     // in1 sync args
-    const uint32_t in1_sync_leader_noc_x = get_arg_val<uint32_t>(4);
-    const uint32_t in1_sync_leader_noc_y = get_arg_val<uint32_t>(5);
-    const uint32_t in1_sync_wait_time = get_arg_val<uint32_t>(6);
+    const uint32_t in1_sync_leader_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_sync_leader_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_sync_wait_time = get_arg_val<uint32_t>(rt_args_idx++);
 
     // padding args (WRITER)
     const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(rt_args_idx++);
@@ -59,30 +59,34 @@ void kernel_main() {
     // in1 mcast args
     uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
     uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(6));
+
+    // in1 sync args
+    uint32_t in1_sync_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(7));
+    uint32_t in1_sync_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
+
     // batch args
-    constexpr uint32_t batch = get_compile_time_arg_val(7);
+    constexpr uint32_t batch = get_compile_time_arg_val(9);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(8);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(10);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(12);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(13);
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(10);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(11);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(12);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(13);
+    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(14);
+    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(15);
 
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(15);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(16);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(16);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(17);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(18);
 
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(17);  // if 0
-    // Don't need batch; same as batch from READER args
+    constexpr uint32_t MtNt = get_compile_time_arg_val(19);  // if 0
 
 #ifdef FUSE_BIAS
     // in3 block args
-    constexpr uint32_t in3_block_w = get_compile_time_arg_val(18);
+    constexpr uint32_t in3_block_w = get_compile_time_arg_val(20);
 
     constexpr uint32_t cb_id_in3 = 3;
 #endif

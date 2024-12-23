@@ -74,34 +74,39 @@ void kernel_main() {
     uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
     constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(14);
     constexpr uint32_t in1_mcast_num_cores = get_compile_time_arg_val(15);
+    // in1 sync args
+    uint32_t in1_sync_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    uint32_t in1_sync_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
+    constexpr uint32_t in1_sync_num_dests = get_compile_time_arg_val(18);
+    constexpr uint32_t in1_sync_num_cores = get_compile_time_arg_val(19);
     // batch args
-    constexpr uint32_t KtNt = get_compile_time_arg_val(16);
-    constexpr uint32_t batch = get_compile_time_arg_val(17);
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(18);
+    constexpr uint32_t KtNt = get_compile_time_arg_val(20);
+    constexpr uint32_t batch = get_compile_time_arg_val(21);
+    constexpr uint32_t bcast_B = get_compile_time_arg_val(22);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(19);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(20);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(21);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(22);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(23);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(24);
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(23);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(24);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(25);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(26);
+    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(27);
+    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(28);
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(25);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(26);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(27);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(29);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(30);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(31);
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(28);  // if 0
+    constexpr uint32_t MtNt = get_compile_time_arg_val(32);  // if 0
     // Don't need batch; same as batch from READER args
 
 #ifdef FUSE_BIAS
     // in3 mcast args
-    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);           // 25
+    const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);  // 26
 
-    constexpr bool in3_is_dram = get_compile_time_arg_val(29) == 1;
-    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(30);
+    constexpr bool in3_is_dram = get_compile_time_arg_val(33) == 1;
+    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(34);
 
     constexpr uint32_t cb_id_in3 = 3;
     constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
@@ -123,7 +128,7 @@ void kernel_main() {
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
 #endif
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(31);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(35);
 
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
@@ -549,4 +554,6 @@ void kernel_main() {
         cb_id_out0,
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
+
+    DPRINT << "In1ReceiverSenderPadding kernel end" << ENDL();
 }

@@ -8,7 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 
 #include "tools/profiler/kernel_profiler.hpp"
-volatile uint32_t* dbg_dump_ncrisc = (volatile uint32_t*)0x15240;
+// volatile uint32_t* dbg_dump_ncrisc = (volatile uint32_t*)0x15240;
 
 void kernel_main() {
     // in0 mcast args
@@ -56,7 +56,7 @@ void kernel_main() {
                         // *(dbg_dump_ncrisc+6) = (uint32_t)in0_mcast_receiver_semaphore_addr_ptr;
                         // *(dbg_dump_ncrisc+7) = block;
                         // *(dbg_dump_ncrisc+8) = 0x0Cbaba01;
-                        // noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
+                        noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
                         // *(dbg_dump_ncrisc+8) = 0x0Cbaba02;
 
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
