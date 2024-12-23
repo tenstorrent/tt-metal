@@ -277,5 +277,10 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 
 void add_stagger_defines_if_needed(
     const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
+void add_mm_throttle_defines_if_needed(
+    const tt::ARCH arch, MathFidelity fidelity, std::map<string, string>& mm_kernel_defines);
+void add_precision_defines_if_needed(const tt::ARCH arch, std::map<string, string>& mm_kernel_defines);
+void add_dram_skip_defines_if_needed(const tt::ARCH arch, std::map<string, string>& mm_in1_sender_writer_defines);
+bool should_sync_after_in1_dram(const tt::ARCH arch);
 
 }  // namespace bmm_op_utils

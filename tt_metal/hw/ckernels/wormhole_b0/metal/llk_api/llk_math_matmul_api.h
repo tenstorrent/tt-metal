@@ -25,10 +25,20 @@ inline void llk_math_matmul_init(
     // 16x32. We should remove this flag in the furture and add impl for 8x32 input tile shape
     const bool partial_face = 0;
 
+#ifdef QUARTER_LOFI
+    const std::uint32_t in0_tile_r_dim = 16;
+#else
     const std::uint32_t in0_tile_r_dim = get_operand_tile_r_dim(in0_id);
+#endif
+
     const std::uint32_t in0_tile_c_dim = get_operand_tile_c_dim(in0_id);
     const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
+
+#if defined QUARTER_LOFI || defined HALF_LOFI
+    const std::uint32_t in1_tile_c_dim = 16;
+#else
     const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
+#endif
 
     _llk_math_matmul_init_<NUM_FIDELITY_PHASES, DstTileFaceLayout::RowMajor>(
         in0_tile_r_dim,

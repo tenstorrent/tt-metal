@@ -6,6 +6,10 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "debug/dprint.h"
+#include "ckernel.h"
+
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     // READER
@@ -18,6 +22,11 @@ void kernel_main() {
     // out tensor args
     const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+
+    // in1 sync args
+    const uint32_t in1_sync_leader_noc_x = get_arg_val<uint32_t>(4);
+    const uint32_t in1_sync_leader_noc_y = get_arg_val<uint32_t>(5);
+    const uint32_t in1_sync_wait_time = get_arg_val<uint32_t>(6);
 
     // padding args (WRITER)
     const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(rt_args_idx++);
@@ -78,6 +87,15 @@ void kernel_main() {
     constexpr uint32_t cb_id_in3 = 3;
 #endif
 
+#ifdef SYNC_AFTER_IN1_DRAM
+    volatile tt_l1_ptr uint32_t* in1_sync_receiver_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_sync_receiver_semaphore_addr);
+    *(in1_sync_receiver_semaphore_addr_ptr) = VALID;
+
+    const uint64_t in1_sync_sender_semaphore_addr_counter =
+        get_noc_addr(in1_sync_leader_noc_x, in1_sync_leader_noc_y, in1_sync_sender_semaphore_addr);
+#endif
+
     // WRITER
 
     constexpr uint32_t cb_id_in1 = 1;
@@ -112,16 +130,29 @@ void kernel_main() {
                     // Operand 1
                     cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
-                    // Set in1 semaphore value to INVALID
-                    noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
+                    {
+                        DeviceZoneScopedN("IN1_REC_WRI_PADD");
 
-                    // Atomic increment source core counter
-                    noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
+                        // Set in1 semaphore value to INVALID
+                        noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+                        // Atomic increment source core counter
+                        noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
 
-                    cb_push_back(cb_id_in1, in1_block_num_tiles);
+                        // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
+                        noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+
+#ifdef SYNC_AFTER_IN1_DRAM
+                        // Sync cores after all of them receive current in1 block
+                        noc_semaphore_set(in1_sync_receiver_semaphore_addr_ptr, INVALID);
+                        noc_semaphore_inc(in1_sync_sender_semaphore_addr_counter, 1);
+                        noc_semaphore_wait(in1_sync_receiver_semaphore_addr_ptr, VALID);
+
+                        ckernel::wait(in1_sync_wait_time);
+#endif
+
+                        cb_push_back(cb_id_in1, in1_block_num_tiles);
+                    }
                 }
 
 #ifdef FUSE_BIAS
