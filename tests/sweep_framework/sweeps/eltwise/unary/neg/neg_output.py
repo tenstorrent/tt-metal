@@ -83,7 +83,7 @@ def run(
         dtype=input_a_dtype,
         layout=input_a_layout,
         device=device,
-        memory_config=out_tensor_memory_config,
+        memory_config=output_memory_config,
     )
 
     start_time = start_measuring_time()
