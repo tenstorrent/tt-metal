@@ -130,20 +130,19 @@ RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
     {
-        uint32_t width_alignment = 1;
         if (memory_config.shard_spec.has_value()) {
             const auto& shard_spec = memory_config.shard_spec.value();
-            if (shard_spec.physical_shard_shape.has_value()) {
-                return Alignment(shard_spec.physical_shard_shape.value());
+            if (shard_spec.mode == ShardMode::LOGICAL) {
+                return shard_spec.physical_shard_shape.has_value() ? Alignment(shard_spec.physical_shard_shape.value())
+                                                                   : Alignment({shard_spec.shape[1]});
             }
+            // TODO: Investigate why we need guard against HEIGHT_SHARDED and merge logic with LOGICAL sharding
             if (shard_spec.mode == ShardMode::PHYSICAL &&
                 memory_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                const auto& physical_shard_shape = shard_spec.shape;
-                const auto physical_shard_width = physical_shard_shape[1];
-                width_alignment = physical_shard_width;
+                return Alignment({shard_spec.shape[1]});
             }
         }
-        return Alignment({width_alignment});
+        return Alignment({1});
     }
 }
 

@@ -64,6 +64,7 @@ def run_conv_transpose2d(
     has_bias=True,
     shard_layout=None,
     auto_shard=False,
+    mirror_kernel=True,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -89,6 +90,11 @@ def run_conv_transpose2d(
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
     )
+    if not mirror_kernel:
+        torch_flipped_weights = torch.flip(torch_weight_tensor, [2, 3])
+        tt_weight_tensor = ttnn.from_torch(
+            torch_flipped_weights, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
     tt_bias_tensor = None
     if has_bias:
         tt_bias_tensor = ttnn.from_torch(
@@ -144,6 +150,7 @@ def run_conv_transpose2d(
         conv_config=conv_config,
         compute_config=compute_config,
         groups=groups,
+        mirror_kernel=mirror_kernel,
         return_output_dim=True,
         return_weights_and_bias=True,
     )
@@ -204,6 +211,7 @@ def run_conv_transpose2d(
         ttnn.bfloat16,
     ],
 )
+@pytest.mark.parametrize("mirror_kernel", [True, False])
 def test_simple_conv_t2d(
     device,
     use_program_cache,
@@ -224,6 +232,7 @@ def test_simple_conv_t2d(
     out_pad_w,
     config,
     shard_layout,
+    mirror_kernel,
 ):
     if device.core_grid.y != 8:
         pytest.skip("Needs 8x8 Grid")
@@ -248,4 +257,5 @@ def test_simple_conv_t2d(
         config_override=config,
         shard_layout=shard_layout,
         auto_shard=True,
+        mirror_kernel=mirror_kernel,
     )

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
 
 namespace ttnn {
 namespace ccl {

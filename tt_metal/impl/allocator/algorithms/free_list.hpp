@@ -36,7 +36,7 @@ public:
 
     Statistics get_statistics() const;
 
-    void dump_blocks(std::ofstream& out) const;
+    void dump_blocks(std::ostream& out) const;
 
     void shrink_size(DeviceAddr shrink_size, bool bottom_up = true);
 
@@ -66,7 +66,7 @@ private:
         boost::local_shared_ptr<Block> next_free = nullptr;
     };
 
-    void dump_block(const boost::local_shared_ptr<Block>& block, std::ofstream& out) const;
+    void dump_block(const boost::local_shared_ptr<Block>& block, std::ostream& out) const;
 
     bool is_allocated(const boost::local_shared_ptr<Block>& block) const;
 
