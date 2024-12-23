@@ -3,14 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "tt_metal/common/assert.hpp"
+
+#include <ranges>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <magic_enum/magic_enum.hpp>
 
 template <>
 struct fmt::formatter<ttnn::operations::binary_ng::Lowercase> : fmt::formatter<std::string_view> {
-    auto format(ttnn::operations::binary_ng::Lowercase const& value, fmt::format_context& ctx) const {
+    auto format(const ttnn::operations::binary_ng::Lowercase& value, fmt::format_context& ctx) const {
         auto out = ctx.out();
         for (char c : value.view) {
             *out++ = std::tolower(static_cast<unsigned char>(c));
@@ -117,9 +122,6 @@ std::string get_kernel_file_path(KernelName kernel_name) {
     }
 }
 
-constexpr OpConfig::SfpuConfig NezConfig("nez_tile_init", "nez_tile(i)");
-constexpr OpConfig::SfpuConfig GtzConfig("gtz_tile_init", "gtz_tile(i)");
-
 OpConfig::OpConfig(BinaryOpType binary_op_type) {
     fpu_binary_op = FpuBinaryOp::SUB;
     switch (binary_op_type) {
@@ -127,80 +129,80 @@ OpConfig::OpConfig(BinaryOpType binary_op_type) {
         case BinaryOpType::SUB: break;
         case BinaryOpType::MUL: fpu_binary_op = FpuBinaryOp::MUL; break;
         case BinaryOpType::DIV:
-            preprocess_b = SfpuConfig("recip_tile_init", "recip_tile(i)", "compute_kernel_api/eltwise_unary/recip.h");
+            process_rhs = unary::UnaryOpType::RECIP;
             fpu_binary_op = FpuBinaryOp::MUL;
             break;
-        case BinaryOpType::GT: postprocess = GtzConfig; break;
-        case BinaryOpType::LT: postprocess = SfpuConfig("ltz_tile_init", "ltz_tile(i)"); break;
-        case BinaryOpType::GTE: postprocess = SfpuConfig("gez_tile_init", "gez_tile(i)"); break;
-        case BinaryOpType::LTE: postprocess = SfpuConfig("lez_tile_init", "lez_tile(i)"); break;
-        case BinaryOpType::EQ: postprocess = SfpuConfig("eqz_tile_init", "eqz_tile(i)"); break;
-        case BinaryOpType::NE: postprocess = NezConfig; break;
-        case BinaryOpType::SQUARED_DIFFERENCE: postprocess = SfpuConfig("square_tile_init", "square_tile(i)"); break;
+        case BinaryOpType::GT: postprocess = unary::UnaryOpType::GTZ; break;
+        case BinaryOpType::LT: postprocess = unary::UnaryOpType::LTZ; break;
+        case BinaryOpType::GTE: postprocess = unary::UnaryOpType::GEZ; break;
+        case BinaryOpType::LTE: postprocess = unary::UnaryOpType::LEZ; break;
+        case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
+        case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
+        case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
         case BinaryOpType::BIAS_GELU:
             fpu_binary_op = FpuBinaryOp::ADD;
-            preprocess_a =
-                SfpuConfig("gelu_tile_init<false>", "gelu_tile<false>(i)", "compute_kernel_api/eltwise_unary/gelu.h");
+            process_lhs = unary::UnaryOpType::GELU;
             break;
         case BinaryOpType::LOGICAL_AND:
             fpu_binary_op = FpuBinaryOp::MUL;
-            postprocess = NezConfig;
+            postprocess = unary::UnaryOpType::NEZ;
             break;
         case BinaryOpType::LOGICAL_OR:
             fpu_binary_op = FpuBinaryOp::ADD;
-            preprocess_a = NezConfig;
-            preprocess_b = NezConfig;
-            postprocess = GtzConfig;
+            process_lhs = unary::UnaryOpType::NEZ;
+            process_rhs = unary::UnaryOpType::NEZ;
+            postprocess = unary::UnaryOpType::GTZ;
             break;
         case BinaryOpType::LOGICAL_XOR:
-            preprocess_a = NezConfig;
-            preprocess_b = NezConfig;
-            postprocess = NezConfig;
+            process_lhs = unary::UnaryOpType::NEZ;
+            process_rhs = unary::UnaryOpType::NEZ;
+            postprocess = unary::UnaryOpType::NEZ;
             break;
         case BinaryOpType::LDEXP:
             fpu_binary_op = FpuBinaryOp::MUL;
-            preprocess_b = SfpuConfig("exp2_tile_init", "exp2_tile(i)");
+            process_rhs = unary::UnaryOpType::EXP2;
             break;
         case BinaryOpType::LOGADDEXP:
             fpu_binary_op = FpuBinaryOp::ADD;
-            preprocess_a =
-                SfpuConfig("exp_tile_init<false>", "exp_tile<false>(i)", "compute_kernel_api/eltwise_unary/exp.h");
-            preprocess_b = preprocess_a;
-            postprocess = SfpuConfig("log_tile_init", "log_tile(i)");
+            process_lhs = unary::UnaryOpType::EXP;
+            process_rhs = unary::UnaryOpType::EXP;
+            postprocess = unary::UnaryOpType::LOG;
             break;
         case BinaryOpType::LOGADDEXP2:
             fpu_binary_op = FpuBinaryOp::ADD;
-            preprocess_a = SfpuConfig("exp2_tile_init", "exp2_tile(i)");
-            preprocess_b = preprocess_a;
-            postprocess = SfpuConfig("log_with_base_tile_init", "log_with_base_tile(i, 0x3dc5u);");
+            process_lhs = unary::UnaryOpType::EXP2;
+            process_rhs = unary::UnaryOpType::EXP2;
+            postprocess = unary::UnaryOpType::LOG2;
             break;
-        default: __builtin_unreachable();
+        default: TT_THROW("Unsupported binary op");
     }
-}
-
-std::map<std::string, std::string> OpConfig::SfpuConfig::as_defines(std::string_view prefix) const {
-    if (init.empty()) {
-        return {};
-    }
-
-    std::map<std::string, std::string> defines;
-    defines[fmt::format("{}_INIT", prefix)] = init;
-    defines[fmt::format("{}_APPLY(i)", prefix)] = apply;
-    defines[fmt::format("{}_INCLUDE", prefix)] = include;
-    return defines;
 }
 
 std::map<std::string, std::string> OpConfig::as_defines() const {
     std::map<std::string, std::string> defines;
-    defines.merge(preprocess_a.as_defines("PREPROCESS_A"));
-    defines.merge(preprocess_b.as_defines("PREPROCESS_B"));
-    defines.merge(postprocess.as_defines("POSTPROCESS"));
 
     auto binary_op_str = magic_enum::enum_name(fpu_binary_op);
     defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
     defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
 
     return defines;
+}
+
+void add_activation_defines(
+    std::map<std::string, std::string>& defines,
+    tt::stl::Span<const unary::UnaryOpType> activations,
+    std::string_view operand) {
+    defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = fmt::format(
+        "{}",
+        fmt::join(
+            activations | std::views::transform([](auto& a) {
+                return fmt::format("PROCESS_ACTIVATION({}, i)", magic_enum::enum_name(a));
+            }),
+            ";"));
+
+    for (auto& a : activations) {
+        unary::utils::update_macro_defines(a, defines);
+    }
 }
 
 }  // namespace ttnn::operations::binary_ng

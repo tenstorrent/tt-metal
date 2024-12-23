@@ -71,4 +71,6 @@ bool is_parametrized_type(T val) {
     return false;
 }
 
+void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
+
 }  // namespace ttnn::operations::unary::utils
