@@ -895,3 +895,15 @@ class LlamaGenerator:
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         return page_table[:, :num_blocks]
+
+    ## Destructor (used to delete ttnn trace if exists)
+
+    def __del__(self):
+        if hasattr(self, "trace_id"):
+            ttnn.release_trace(self.mesh_device, self.trace_id)
+
+        if hasattr(self, "trace_id_text"):
+            ttnn.release_trace(self.mesh_device, self.trace_id_text)
+
+        if hasattr(super(LlamaGenerator, self), "__del__"):
+            super().__del__()
