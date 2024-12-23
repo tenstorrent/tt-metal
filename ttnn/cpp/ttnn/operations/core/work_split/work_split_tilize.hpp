@@ -152,11 +152,17 @@ struct FullRep {
     BlockRep pad;
     uint32_t times_total;
 
-    FullRep(uint32_t n_rows, uint32_t n_pads, uint32_t times, uint32_t pads_mul, uint32_t times_total) :
-        rep{n_rows / 32, n_rows % 32, n_pads / 32, times},
-        pad{0, 0, (n_rows + n_pads) * pads_mul / 32, 1},
+    FullRep(
+        uint32_t n_rows,
+        uint32_t n_pads,
+        uint32_t times,
+        uint32_t pads_mul,
+        uint32_t times_total,
+        uint32_t tile_height) :
+        rep{n_rows / tile_height, n_rows % tile_height, n_pads / tile_height, times},
+        pad{0, 0, (n_rows + n_pads) * pads_mul / tile_height, 1},
         times_total(times_total) {
-        TT_FATAL((n_rows + n_pads) % 32 == 0 && "total rows must be divisible by 32", "Error");
+        TT_FATAL((n_rows + n_pads) % tile_height == 0 && "total rows must be divisible by {}", "Error", tile_height);
     }
 
     std::vector<BlockRep> to_block_reps() const {
@@ -182,7 +188,8 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     uint32_t num_cores,
     uint32_t blocks_per_core,
     bool has_cliff,
-    uint32_t nblocks_per_core_cliff) {
+    uint32_t nblocks_per_core_cliff,
+    uint32_t tile_height) {
     TT_FATAL(
         logical_shape.rank() >= 2,
         "Only tensors >=2D, tensors are supported. Shape: {}",
@@ -197,7 +204,7 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     auto padding_y = logical_shape.rank() >= 2 ? padding[padding.get_normalized_index(-2)].back : 0;
 
     // total work is a full rep followed by a padding.
-    auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w).to_block_reps();
+    auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w, tile_height).to_block_reps();
     std::deque<BlockRep> total_work(full_rep_blocks.begin(), full_rep_blocks.end());
     total_work.emplace_back(0, 0, (input_y + padding_y) * (input_z + padding_z) * padding_w, 1);
 
