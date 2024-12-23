@@ -252,4 +252,5 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config):
     ttnn_c = ttnn.experimental.add(ttnn_a, ttnn_b)
     c = ttnn.to_torch(ttnn_c).reshape((-1))
 
+
     assert c.tolist() == c_golden
