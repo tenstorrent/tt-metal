@@ -221,15 +221,15 @@ def run_conv(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    tt_output_tensor = ttnn.reshape(
-        tt_output_tensor,
-        [
-            1,
-            1,
-            tt_output_tensor.shape[0] * tt_output_tensor.shape[1] * tt_output_tensor.shape[2],
-            tt_output_tensor.shape[3],
-        ],
-    )
+    #     tt_output_tensor = ttnn.reshape(
+    #         tt_output_tensor,
+    #         [
+    #             1,
+    #             1,
+    #             tt_output_tensor.shape[0] * tt_output_tensor.shape[1] * tt_output_tensor.shape[2],
+    #             tt_output_tensor.shape[3],
+    #         ],
+    #     )
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
     # torch_output_tensor is in row major layout and NHWC shape
@@ -1112,8 +1112,8 @@ def test_conv_mem_config_wh(
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
 
-    if batch_size == 16:
-        pytest.skip("Error. Need to discuss this with Infra team")
+    # if batch_size == 16:
+    pytest.skip("Error. Need to discuss this with Infra team")
 
     use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
     run_conv(

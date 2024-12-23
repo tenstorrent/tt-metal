@@ -230,11 +230,11 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
             if (this->use_non_tile_height) {
                 num_cores = this->parallelization_config.num_cores_nhw;
                 uint32_t total_height = tt::tt_metal::compute_volume(output_shape) / output_shape[-1];
-                std::cout << "num_cores = " << num_cores << "   " << total_height << "    " << this->parallelization_config.per_core_out_matrix_height << std::endl;
+                // std::cout << "num_cores = " << num_cores << "   " << total_height << "    " << this->parallelization_config.per_core_out_matrix_height << std::endl;
                 shard_shape = {optimized_conv_op_utils::div_up(total_height, num_cores), output_shape[-1]};
             }else{
                 num_cores =  tt::div_up(total_height_tiles,  tt::div_up(this->parallelization_config.per_core_out_matrix_height, TILE_HEIGHT));
-                std::cout << "num_cores = " << num_cores << "   " << total_height_tiles << "    " << this->parallelization_config.per_core_out_matrix_height << std::endl;
+                // std::cout << "num_cores = " << num_cores << "   " << total_height_tiles << "    " << this->parallelization_config.per_core_out_matrix_height << std::endl;
                 CoreRangeSet shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, this->parallelization_config.grid_size, true);
 
                 shard_shape = {
@@ -243,17 +243,16 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
                         TILE_HEIGHT,
                     output_shape[-1]};
             }
-            CoreRangeSet shard_grid =
-                tt::tt_metal::num_cores_to_corerangeset(num_cores, this->parallelization_config.grid_size, true);
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
+            CoreRangeSet shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, this->parallelization_config.grid_size, true);
+            auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, false, ShardMode::LOGICAL};
             auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
-            std::cout << "output_shape -> " << output_shape << std::endl;
+            // std::cout << "output_shape -> " << output_shape << std::endl;
             // auto ss = output_shape.without_padding();
             // std::cout << "ss = " << ss << std::endl;
             SimpleShape output_shape_({output_shape[0], output_shape[1], output_shape[2], output_shape[3]});
-            std::cout << "output_shape_ = " << output_shape_ << std::endl;
-            std::cout << "mem_config " << mem_config << "output_layout = " << (int)output_layout << std::endl;
+            // std::cout << "output_shape_ = " << output_shape_ << std::endl;
+            // std::cout << "mem_config " << mem_config << "output_layout = " << (int)output_layout << std::endl;
             TensorSpec output_spec(output_shape_, TensorLayout(this->dtype, PageConfig(output_layout), mem_config));
             return {output_spec};
         } else if(this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -262,25 +261,30 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
                 tt::div_up(this->parallelization_config.per_core_out_matrix_height, TILE_HEIGHT) * TILE_HEIGHT,
                 tt::div_up(this->parallelization_config.per_core_out_matrix_width, TILE_WIDTH) * TILE_WIDTH};
             auto shard_grid = this->memory_config.shard_spec.value().grid;
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};
-            std::cout << "shard_sape -> " << shard_shape[0] << "   " << shard_shape[1] << std::endl;
+            auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation, false, ShardMode::LOGICAL};
+            // std::cout << "shard_sape -> " << shard_shape[0] << "   " << shard_shape[1] << std::endl;
             auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
             // auto ss = output_shape.without_padding();
             SimpleShape output_shape_({output_shape[0], output_shape[1], output_shape[2], output_shape[3]});
             TensorSpec output_spec(output_shape_, TensorLayout(this->dtype, PageConfig(output_layout), mem_config));
-            std::cout << "output_shape_ = " << output_shape_ << std::endl;
-            std::cout << "mem_config " << mem_config << "output_layout = " << (int)output_layout << std::endl;
+            // std::cout << "output_shape_ = " << output_shape_ << std::endl;
+            // std::cout << "mem_config " << mem_config << "output_layout = " << (int)output_layout << std::endl;
             return {output_spec};
             //return {create_device_tensor(output_spec, input_tensor.device())};
 
         } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            std::cout << "testing block sharded" << std::endl;
+            // std::cout << "testing block sharded" << std::endl;
             //auto ss = output_shape.without_padding();
             SimpleShape output_shape_({output_shape[0], output_shape[1], output_shape[2], output_shape[3]});
-            TensorSpec output_spec(output_shape_, TensorLayout(this->dtype, PageConfig(output_layout), this->memory_config));
-            std::cout << "output_shape_ = " << output_shape_ << std::endl;
-            std::cout << "mem_config " << this->memory_config << "output_layout = " << (int)output_layout << std::endl;
+            auto shard_spec = this->memory_config.shard_spec.value();
+            auto new_shard_shec= ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation, false, ShardMode::LOGICAL);
+            //this->memory_config.shard_spec = new_shard_shec;
+            auto mem_config = this->memory_config;
+            mem_config.shard_spec = new_shard_shec;
+            TensorSpec output_spec(output_shape_, TensorLayout(this->dtype, PageConfig(output_layout), mem_config));
+            // std::cout << "output_shape_ = " << output_shape_ << std::endl;
+            // std::cout << "mem_config " << this->memory_config << "output_layout = " << (int)output_layout << std::endl;
             return {output_spec};
             //return {create_device_tensor(output_spec, input_tensor.device())};
         } else {

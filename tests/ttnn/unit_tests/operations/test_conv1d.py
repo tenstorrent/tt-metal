@@ -129,15 +129,6 @@ def run_conv(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    tt_output_tensor = ttnn.reshape(
-        tt_output_tensor,
-        [
-            1,
-            1,
-            batch_size * out_length,
-            output_channels,
-        ],
-    )
     torch_output_tensor = torch.Tensor(ttnn.to_torch(tt_output_tensor))
 
     # torch_output_tensor is in row major layout and NLC shape

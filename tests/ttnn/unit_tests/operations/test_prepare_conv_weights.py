@@ -325,15 +325,6 @@ def test_prepare_bias(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    tt_output_tensor = ttnn.reshape(
-        tt_output_tensor,
-        [
-            1,
-            1,
-            tt_output_tensor.shape[0] * tt_output_tensor.shape[1] * tt_output_tensor.shape[2],
-            tt_output_tensor.shape[3],
-        ],
-    )
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
