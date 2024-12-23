@@ -56,6 +56,10 @@ const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigB
                 this->reservation_[idx].addr = addr;
                 break;
             }
+            if (free_index == alloc_index) {
+                this->reservation_[idx].addr = this->base_addrs_[idx];
+                break;
+            }
             TT_ASSERT(size <= this->end_addrs_[idx] - this->base_addrs_[idx]);
 
             // alloc_index may be ahead or behind free_index
@@ -137,6 +141,9 @@ void WorkerConfigBufferMgr::free(uint32_t free_up_to_sync_count) {
 void WorkerConfigBufferMgr::alloc(uint32_t when_freeable_sync_count) {
     size_t num_buffer_types = this->reservation_.size();
     for (uint32_t idx = 0; idx < num_buffer_types; idx++) {
+        if (this->reservation_[idx].size == 0) {
+            continue;
+        }
         uint32_t alloc_index = this->alloc_index_[idx];
 
         this->entries_[alloc_index][idx].addr = this->reservation_[idx].addr;
@@ -183,6 +190,26 @@ void WorkerConfigBufferMgr::mark_completely_full(uint32_t sync) {
         alloc_entry.addr = this->end_addrs_[idx];
         alloc_entry.size = 0;
         alloc_entry.sync_count = 0xbabababa;  // debug
+    }
+}
+
+void WorkerConfigBufferMgr::PrintStatus() {
+    size_t num_buffer_types = this->reservation_.size();
+    for (size_t i = 0; i < num_buffer_types; i++) {
+        fprintf(stderr, "Buffer type %zu\n", i);
+        log_info(tt::LogTest, "Buffer type {}", i);
+
+        size_t free_index = this->alloc_index_[i];
+        while (free_index != this->alloc_index_[i]) {
+            auto& entry = this->entries_[free_index][i];
+            log_info(
+                tt::LogTest, "Free index {} has values {} {} {}", free_index, entry.addr, entry.size, entry.sync_count);
+
+            free_index = (free_index + 1) % this->entries_.size();
+        }
+        auto& entry = this->entries_[free_index][i];
+        log_info(
+            tt::LogTest, "Alloc index {} has values {} {} {}", free_index, entry.addr, entry.size, entry.sync_count);
     }
 }
 
