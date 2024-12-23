@@ -66,7 +66,8 @@ using DeviceAddr = std::uint64_t;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
-//  of a given progammable core to start FW
+// of a given progammable core to start FW.
+// fw_launch_addr_value will be a jump instruction to FW or the address of FW
 struct HalJitBuildConfig {
     DeviceAddr fw_base_addr;
     DeviceAddr local_init_addr;
