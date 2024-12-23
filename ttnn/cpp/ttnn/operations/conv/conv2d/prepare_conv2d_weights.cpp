@@ -329,7 +329,7 @@ ttnn::Tensor prepare_conv_weights(
         false,
         false
     ));
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
+    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
     const uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     const uint32_t output_width =
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
@@ -415,12 +415,13 @@ ttnn::Tensor prepare_conv_bias(
 
     TT_FATAL(!ttnn::is_tensor_on_device_or_multidevice(bias_tensor), "Error: bias tensor must be on host for preparation.");
 
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
+    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+
+    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
     const uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     const uint32_t output_width =
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
 
-    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(init_device_compute_kernel_config(
         device->arch(),
         std::nullopt,
