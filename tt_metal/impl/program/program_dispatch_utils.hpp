@@ -83,7 +83,6 @@ void assemble_device_commands(
 void reserve_space_in_kernel_config_buffer(
     WorkerConfigBufferMgr& config_buffer_mgr,
     const std::vector<uint32_t>& program_config_sizes,
-    bool kernel_binary_always_stored_in_ringbuffer,
     ProgramBinaryStatus program_binary_status,
     uint32_t num_program_workers,
     uint32_t expected_num_workers_completed,

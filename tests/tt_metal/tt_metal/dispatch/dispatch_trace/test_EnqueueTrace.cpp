@@ -678,6 +678,7 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
             kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
             this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
         }
+        program.set_runtime_id(i);
 
         EnqueueProgram(this->device_->command_queue(), program, false);
     }

@@ -517,15 +517,14 @@ void EnqueueProgramCommand::process() {
     program_utils::reserve_space_in_kernel_config_buffer(
         this->config_buffer_mgr,
         program.get_program_config_sizes(),
-        program.kernel_binary_always_stored_in_ringbuffer(),
         program.get_program_binary_status(device->id()),
         num_workers,
         this->expected_num_workers_completed,
         dispatch_metadata);
 
-    // Remove launch buffer from config addrs, since it's not a real core.
+    // Remove launch buffers from config addrs, since they're not real cores.
     const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs{
-        dispatch_metadata.kernel_config_addrs.data(), dispatch_metadata.kernel_config_addrs.size() - 1};
+        dispatch_metadata.kernel_config_addrs.data(), dispatch_metadata.kernel_config_addrs.size() - 2};
 
     RecordProgramRun(program);
 
@@ -1952,6 +1951,9 @@ void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
         // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
         // previous launch message.
         this->config_buffer_mgr[i].init_add_buffer(0, launch_msg_buffer_num_entries - 1);
+
+        // There's no ring buffer for active ethernet binaries, so keep track of them separately.
+        this->config_buffer_mgr[i].init_add_buffer(0, 1);
     }
 }
 
