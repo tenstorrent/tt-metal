@@ -20,6 +20,7 @@
 #include "dev_msgs.h"
 #include "device/device_handle.hpp"
 #include "llrt/hal.hpp"
+#include "program_command_sequence.hpp"
 #include "tt_metal/command_queue.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
@@ -242,9 +243,7 @@ void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand&
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
     const CoreCoord virtual_core =
         this->buffer.device()->virtual_core_from_logical_core(this->core, this->buffer.core_type());
-    bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
-        flush_prefetch,
         0,
         this->device->get_noc_unicast_encoding(this->noc_index, virtual_core),
         this->bank_base_address,
@@ -287,11 +286,11 @@ void EnqueueWriteShardedBufferCommand::add_buffer_data(HugepageDeviceCommand& co
 void EnqueueWriteBufferCommand::process() {
     uint32_t num_worker_counters = this->sub_device_ids.size();
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-
-    uint32_t cmd_sequence_sizeB =
-        CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + (CQ_DISPATCH_CMD_WRITE_PAGED or
-                                         // CQ_DISPATCH_CMD_WRITE_LINEAR)
-        data_size_bytes;
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB = align(
+        sizeof(CQPrefetchCmd) + // CQ_PREFETCH_CMD_RELAY_INLINE
+        sizeof(CQDispatchCmd) + // CQ_DISPATCH_CMD_WRITE_PAGED or CQ_DISPATCH_CMD_WRITE_LINEAR
+        data_size_bytes, pcie_alignment);
     if (this->issue_wait) {
         cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE * num_worker_counters;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
     }
@@ -389,7 +388,7 @@ void EnqueueProgramCommand::assemble_stall_commands(ProgramCommandSequence& prog
             CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_STALL
 
-        program_command_sequence.stall_command_sequence =
+        program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx] =
             HostMemDeviceCommand(uncached_cmd_sequence_sizeB);
 
         // Wait for Noc Write Barrier
@@ -397,16 +396,16 @@ void EnqueueProgramCommand::assemble_stall_commands(ProgramCommandSequence& prog
         // Wait Noc Write Barrier, wait for binaries to be written to worker cores
         // Stall to allow binaries to commit to DRAM first
         // TODO: this can be removed for all but the first program run
-        program_command_sequence.stall_command_sequence.add_dispatch_wait_with_prefetch_stall(
+        program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx].add_dispatch_wait_with_prefetch_stall(
             true, this->dispatch_message_addr, this->expected_num_workers_completed);
     } else {
         // Wait command so previous program finishes
         uint32_t cached_cmd_sequence_sizeB =
             CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
 
-        program_command_sequence.stall_command_sequence =
+        program_command_sequence.stall_command_sequences[CachedStallSequenceIdx] =
             HostMemDeviceCommand(cached_cmd_sequence_sizeB);
-        program_command_sequence.stall_command_sequence.add_dispatch_wait(
+        program_command_sequence.stall_command_sequences[CachedStallSequenceIdx].add_dispatch_wait(
             false, this->dispatch_message_addr, this->expected_num_workers_completed);
     }
 }
@@ -949,7 +948,10 @@ void EnqueueProgramCommand::assemble_device_commands(
     const uint32_t max_length_per_sub_cmd = dispatch_constants::get(this->dispatch_core_type).scratch_db_size() / 2;
     const uint32_t max_paged_length_per_sub_cmd =
         max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
-    const auto &kernels_buffer = program.get_kernels_buffer();
+    if (program_transfer_info.kernel_bins.size()) {
+        TT_FATAL(program.get_kernels_buffer(this->device).get(), "Expected Kernel Binary Buffer to be allocated for program.");
+    }
+    const auto kernels_buffer = program.get_kernels_buffer(this->device);
     for (const auto& [cores, num_mcast_dests, kg_transfer_info] : program_transfer_info.kernel_bins) {
         bool write_linear;
         uint32_t noc_encoding;
@@ -969,8 +971,8 @@ void EnqueueProgramCommand::assemble_device_commands(
             if (write_linear) {
                 kernel_bins_unicast_cmds.emplace_back(2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE);
                 cmd_sequence_sizeB += 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-                kernel_bins_unicast_cmds.back().add_dispatch_write_linear(
-                    false,            // flush_prefetch
+                constexpr bool flush_prefetch = false;
+                kernel_bins_unicast_cmds.back().add_dispatch_write_linear<flush_prefetch>(
                     num_mcast_dests,  // num_mcast_dests
                     noc_encoding,     // noc_xy_addr
                     kg_transfer_info.dst_base_addrs[kernel_idx],
@@ -1422,9 +1424,9 @@ void EnqueueProgramCommand::write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence, bool stall_first, bool stall_before_program) {
     TT_ASSERT(!(stall_first && stall_before_program));
     uint32_t preamble_fetch_size_bytes = program_command_sequence.preamble_command_sequence.size_bytes();
-
+    auto& curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
     uint32_t stall_fetch_size_bytes =
-        (stall_first || stall_before_program) ? program_command_sequence.stall_command_sequence.size_bytes() : 0;
+        (stall_first || stall_before_program) ? program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes() : 0;
 
     uint32_t runtime_args_fetch_size_bytes = program_command_sequence.runtime_args_fetch_size_bytes;
 
@@ -1451,7 +1453,7 @@ void EnqueueProgramCommand::write_program_command_sequence(
         if (stall_first) {
             // Must stall before writing runtime args
             this->manager.cq_write(
-                program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes, write_ptr);
             write_ptr += stall_fetch_size_bytes;
         }
 
@@ -1469,7 +1471,7 @@ void EnqueueProgramCommand::write_program_command_sequence(
 
             // Didn't stall before kernel config data, stall before remaining commands
             this->manager.cq_write(
-                program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes, write_ptr);
             write_ptr += stall_fetch_size_bytes;
 
             this->manager.cq_write(program_command_sequence_data, program_rem_fetch_size_bytes, write_ptr);
@@ -1499,7 +1501,7 @@ void EnqueueProgramCommand::write_program_command_sequence(
             this->manager.issue_queue_reserve(stall_fetch_size_bytes, this->command_queue_id);
             write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
             this->manager.cq_write(
-                program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes, write_ptr);
             this->manager.issue_queue_push_back(stall_fetch_size_bytes, this->command_queue_id);
             // One fetch queue entry for just the wait and stall, very inefficient
             this->manager.fetch_queue_reserve_back(this->command_queue_id);
@@ -1535,7 +1537,7 @@ void EnqueueProgramCommand::write_program_command_sequence(
             this->manager.issue_queue_reserve(stall_fetch_size_bytes, this->command_queue_id);
             write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
             this->manager.cq_write(
-                program_command_sequence.stall_command_sequence.data(), stall_fetch_size_bytes, write_ptr);
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes, write_ptr);
             this->manager.issue_queue_push_back(stall_fetch_size_bytes, this->command_queue_id);
             // One fetch queue entry for just the wait and stall, very inefficient
             this->manager.fetch_queue_reserve_back(this->command_queue_id);
@@ -1588,14 +1590,21 @@ void EnqueueProgramCommand::process() {
         reservation = this->config_buffer_mgr.reserve(program.get_program_config_sizes());
     }
 
-    // Cache is only usable if caching is enabled and program is finalized
-    // If cache has a program entry but the program is not finalized, then the cache is stale
-    // Currently this is mapped by device, but will be mapped by multiple values in the future
+    // Access the program command cache
     auto& cached_program_command_sequences = program.get_cached_program_command_sequences();
-    uint64_t command_hash = this->device->id();
+    // Start constructing the cache entry, using the build_key
+    uint64_t command_hash = device->build_key();
+    if (not hal.is_coordinate_virtualization_enabled()) {
+        // When coordinate virtualization is not enabled, explicitly encode the device
+        // id into the command hash, to always assert on programs being reused across devices.
+        command_hash = (command_hash << 32) | (device->id());
+    }
+    bool is_cached = program.is_cached(); // Program is cached, its is assocated command stream was previously generated
     auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
-    bool is_cached = program.is_cached() && cached_cmd_iter != cached_program_command_sequences.end();
-    if (!is_cached) {
+    // Is the program was cached, the current command_hash, must match the one generated when the program was cached
+    // Finalizing the program multiple times/Regenerating program cache state is not currently supported
+    TT_FATAL((not is_cached) or cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
+    if (program.get_program_binary_status(device->id()) == ProgramBinaryStatus::InFlight) {
         // assemble_stall_commands is hardcoded to always wait for everything for now.
         this->config_buffer_mgr.free(this->expected_num_workers_completed);
     } else {
@@ -1626,6 +1635,7 @@ void EnqueueProgramCommand::process() {
         ProgramCommandSequence program_command_sequence;
         this->assemble_preamble_commands(program_command_sequence, kernel_config_addrs);
         this->assemble_stall_commands(program_command_sequence, true);
+        program_command_sequence.current_stall_seq_idx = UncachedStallSequenceIdx;
         // Runtime Args Command Sequence
         this->assemble_runtime_args_commands(program_command_sequence);
 
@@ -1641,6 +1651,7 @@ void EnqueueProgramCommand::process() {
         this->assemble_stall_commands(program_command_sequence, false);
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
         program.set_cached();
+        program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
     } else {
         static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
         static constexpr uint32_t tensix_l1_write_offset_offset =
@@ -1649,8 +1660,14 @@ void EnqueueProgramCommand::process() {
             (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
 
         auto& cached_program_command_sequence = cached_cmd_iter->second;
-
-        cached_program_command_sequence.stall_command_sequence.update_cmd_sequence(
+        if (program.get_program_binary_status(device->id()) != ProgramBinaryStatus::Committed) {
+            cached_program_command_sequence.current_stall_seq_idx = UncachedStallSequenceIdx;
+            program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
+        } else {
+            cached_program_command_sequence.current_stall_seq_idx = CachedStallSequenceIdx;
+        }
+        auto& curr_stall_seq_idx = cached_program_command_sequence.current_stall_seq_idx;
+        cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
             wait_count_offset, &sync_count, sizeof(uint32_t));
 
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
@@ -1997,7 +2014,7 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
     std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
     this->completion_queue_thread = std::move(completion_queue_thread);
     // Set the affinity of the completion queue reader.
-    set_device_thread_affinity(this->completion_queue_thread, device->completion_queue_reader_core);
+    set_device_thread_affinity(this->completion_queue_thread, device->get_completion_queue_reader_core());
 
     for (uint32_t i = 0; i < dispatch_constants::DISPATCH_MESSAGE_ENTRIES; i++) {
         this->expected_num_workers_completed[i] = 0;
@@ -2489,12 +2506,15 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     if (not program.is_finalized()) {
         program.finalize(device);
-        TT_FATAL(!this->manager.get_bypass_mode(), "Tracing should only be used when programs have been cached");
-        if (const auto &kernels_buffer = program.get_kernels_buffer()) {
-            // Only stall for used sub-devices
+    }
+    if (program.get_program_binary_status(device->id()) == ProgramBinaryStatus::NotSent) {
+        // Write program binaries to device
+        program.allocate_kernel_bin_buf_on_device(device);
+        if (program.get_program_transfer_info().binary_data.size()) {
             this->enqueue_write_buffer(
-                *kernels_buffer, program.get_program_transfer_info().binary_data.data(), false, sub_device_ids);
+                *program.get_kernels_buffer(device), program.get_program_transfer_info().binary_data.data(), false, sub_device_ids);
         }
+        program.set_program_binary_status(device->id(), ProgramBinaryStatus::InFlight);
     }
 
     program.set_last_used_command_queue_for_testing(this);
@@ -2502,7 +2522,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
 #ifdef DEBUG
     if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
-        if (const auto &buffer = program.get_kernels_buffer()) {
+        if (const auto buffer = program.get_kernels_buffer(device)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
             this->enqueue_read_buffer(*buffer, read_data.data(), true, sub_device_ids);
             TT_FATAL(
@@ -2561,7 +2581,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
 #ifdef DEBUG
     if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
-        if (const auto& buffer = program.get_kernels_buffer()) {
+        if (const auto buffer = program.get_kernels_buffer(device)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
             this->enqueue_read_buffer(*buffer, read_data.data(), true, sub_device_ids);
             TT_FATAL(

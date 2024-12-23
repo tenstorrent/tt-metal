@@ -61,15 +61,9 @@ consteval inline DataType convert_to_data_type() {
     }
 }
 
-inline bool is_floating_point(DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16:
-        case DataType::FLOAT32:
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return true;
-        default: return false;
-    }
-}
+bool is_floating_point(DataType dtype);
+
+bool is_block_float(DataType dtype);
 
 enum class StorageType {
     OWNED,
@@ -279,12 +273,6 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
 bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
 bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
-
-void dump_memory_config(std::ostream &output_stream, const MemoryConfig &memory_config);
-void dump_memory_config(const std::string &file_name, const MemoryConfig &memory_config);
-
-MemoryConfig load_memory_config(std::ifstream &input_stream);
-MemoryConfig load_memory_config(const std::string &file_name);
 
 using OwnedBuffer = std::variant<
     owned_buffer::Buffer<uint8_t>,

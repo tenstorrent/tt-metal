@@ -215,19 +215,10 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
         "Error");
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;
-    uint32_t tile_size_bytes = tile_size(cb_data_format);
-    uint32_t shard_shape_num_tiles = tt::div_up(shard_shape[0] * shard_shape[1], TILE_HEIGHT * TILE_WIDTH);
-    uint32_t total_size_bytes = 0;
-    uint32_t page_size_bytes = 0;
-    if ((shard_shape[0] * shard_shape[1]) % (TILE_HEIGHT * TILE_WIDTH) == 0) {
-        uint32_t tile_size_bytes = tile_size(cb_data_format);
-        total_size_bytes = shard_shape_num_tiles * tile_size_bytes;
-        page_size_bytes = tile_size_bytes;
-    } else {
-        uint32_t datum_size_bytes = datum_size(cb_data_format);
-        total_size_bytes = shard_shape[0] * shard_shape[1] * datum_size_bytes;
-        page_size_bytes = shard_shape[1] * datum_size_bytes;
-    }
+
+    uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
+    uint32_t page_size_bytes = input.buffer()->aligned_page_size();
+
     CircularBufferConfig src_cb_sharded_config =
         CircularBufferConfig(total_size_bytes, {{src_cb_sharded, cb_data_format}})
             .set_page_size(src_cb_sharded, page_size_bytes);
@@ -242,6 +233,7 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
 
     auto input_buffer_address = input.buffer()->address();
     auto output_buffer_address = output.buffer()->address();
+
     TT_FATAL(
         output_buffer_address > input_buffer_address,
         "Expected output buffer to be allocated at a higher address than input buffer");

@@ -654,12 +654,18 @@ template std::vector<bfloat16> Tensor::to_vector<bfloat16>() const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>() const;
 template std::vector<int32_t> Tensor::to_vector<int32_t>() const;
 
-Tensor Tensor::to(Device* target_device, const MemoryConfig& mem_config,uint8_t cq_id,
+Tensor Tensor::to(
+    Device* target_device,
+    const MemoryConfig& mem_config,
+    uint8_t cq_id,
     const std::vector<SubDeviceId>& sub_device_ids) const {
     return tensor_ops::tensor_to(*this, target_device, mem_config, cq_id, sub_device_ids);
 }
 
-Tensor Tensor::to(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config,uint8_t cq_id,
+Tensor Tensor::to(
+    distributed::MeshDevice* mesh_device,
+    const MemoryConfig& mem_config,
+    uint8_t cq_id,
     const std::vector<SubDeviceId>& sub_device_ids) const {
     std::vector<Device*> workers_to_use = ttnn::distributed::get_mapped_devices(*this, *mesh_device);
     return tensor_ops::tensor_to(*this, workers_to_use, mem_config, cq_id, sub_device_ids);
@@ -987,7 +993,8 @@ void write_tensor(
                 "Error");
             std::visit(
                 tt::stl::overloaded{
-                    [worker, worker_index, cq_id, &async_safe_tensor, sub_device_ids](const DeviceStorage& device_storage) {
+                    [worker, worker_index, cq_id, &async_safe_tensor, sub_device_ids](
+                        const DeviceStorage& device_storage) {
                         // Copying from host to a single device.
                         void* host_data = std::visit(
                             tt::stl::overloaded{
@@ -1014,7 +1021,8 @@ void write_tensor(
                             /*blocking=*/false,
                             sub_device_ids);
                     },
-                    [worker, worker_index, cq_id, &async_safe_tensor, sub_device_ids](const MultiDeviceStorage& device_storage) {
+                    [worker, worker_index, cq_id, &async_safe_tensor, sub_device_ids](
+                        const MultiDeviceStorage& device_storage) {
                         // Copying from host to multi-device.
                         TT_ASSERT(
                             std::holds_alternative<MultiDeviceHostStorage>(async_safe_tensor.get_storage()),

@@ -272,10 +272,12 @@ class Device {
     void init_command_queue_host();
     void init_command_queue_device();
     void initialize_synchronous_sw_cmd_queue();
-    void configure_kernel_variant(Program& program, const string& path, const std::vector<uint32_t>& compile_args, CoreCoord kernel_core, CoreCoord kernel_virtual_core,
+    void configure_kernel_variant(Program& program, const string& path, const std::vector<uint32_t>& compile_args, CoreCoord kernel_core, CoreCoord Kernel_virtual_core,
                                   CoreType dispatch_core_type, CoreCoord upstream_virtual_core, CoreCoord downstream_virtual_core, CoreCoord downstream_slave_virtual_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false, bool send_to_brisc = false, bool force_watcher_no_inline = false);
     void compile_command_queue_programs();
+    void compile_command_queue_programs_new();
     void configure_command_queue_programs();
+    void configure_command_queue_programs_new();
     void clear_l1_state();
     void get_associated_dispatch_virtual_cores(
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
@@ -290,84 +292,29 @@ class Device {
     bool can_use_passthrough_scheduling() const;
     template<typename F>
     void push_work(F&& work, bool blocking = false) {
-        this->work_executor.push_work(std::forward<F>(work), blocking);
+        this->work_executor_.push_work(std::forward<F>(work), blocking);
     }
     void synchronize();
     void set_worker_mode(const WorkExecutorMode& mode);
     void enable_async(bool enable);
-    WorkExecutorMode get_worker_mode() { return work_executor.get_worker_mode(); }
-    void set_worker_queue_mode(const WorkerQueueMode& mode) { this->work_executor.set_worker_queue_mode(mode); }
-    WorkerQueueMode get_worker_queue_mode() { return this->work_executor.get_worker_queue_mode(); }
-    // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
-    friend class Buffer;
-    friend class Program;
-    friend class SystemMemoryManager;
+    WorkExecutorMode get_worker_mode() { return work_executor_.get_worker_mode(); }
+    void set_worker_queue_mode(const WorkerQueueMode& mode) { this->work_executor_.set_worker_queue_mode(mode); }
+    WorkerQueueMode get_worker_queue_mode() { return this->work_executor_.get_worker_queue_mode(); }
 
-    static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
-    chip_id_t id_;
-    uint32_t build_key_;
-    // Leaving here for compatibility with current reacharounds
-    // TODO: Replace with get_initialized_allocator()
-    Allocator * allocator_ = nullptr;
-    bool initialized_ = false;
-    std::map<uint32_t, std::map<chip_id_t, std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>>>> tunnel_device_dispatch_workers_;
-    std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
-
-    JitBuildEnv build_env_;
-    JitBuildStateSet firmware_build_states_;
-    JitBuildStateSet kernel_build_states_;
-    std::vector<std::vector<std::pair<int, int>>> build_state_indices_;
-
-    std::set<CoreCoord> compute_cores_;
-    std::set<CoreCoord> storage_only_cores_;
-    std::set<CoreCoord> ethernet_cores_;
-    std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
-    // SystemMemoryManager is the interface to the hardware command queue
-    std::vector<std::unique_ptr<HWCommandQueue>> hw_command_queues_;
-    std::vector<std::unique_ptr<CommandQueue>> sw_command_queues_;
-    // Work Executor for this device - can asynchronously process host side work for
-    // all tasks scheduled on this device
-    WorkExecutor work_executor;
-    uint32_t worker_thread_core;
-    uint32_t completion_queue_reader_core;
-    std::unique_ptr<SystemMemoryManager> sysmem_manager_;
-    uint8_t num_hw_cqs_;
-
-    std::vector<std::unique_ptr<Program>> command_queue_programs;
-    bool using_fast_dispatch;
-    program_cache::detail::ProgramCache program_cache;
+    void update_dispatch_cores_for_multi_cq_eth_dispatch();
 
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
-    void enable_program_cache() {
-        log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
-        this->synchronize();
-        program_cache.enable();
-    }
-    void disable_and_clear_program_cache() {
-        log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
-        this->synchronize();
-        if (this->program_cache.is_enabled()) {
-            program_cache.disable();
-        }
-        program_cache.clear();
-    }
-    std::size_t num_program_cache_entries() {
-        this->synchronize();
-        return program_cache.num_entries();
-    }
-
-    uint32_t trace_buffers_size = 0;
-    void update_dispatch_cores_for_multi_cq_eth_dispatch();
+    void enable_program_cache();
+    void disable_and_clear_program_cache();
+    std::size_t num_program_cache_entries();
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const;
     template <typename T = DeviceAddr>
     T get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
     // Returns address where allocator starts allocating buffer
-    template <typename T = DeviceAddr>
-    T get_base_allocator_addr(const HalMemType &mem_type) const;
-    template <typename T = DeviceAddr>
-    T get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const;
+    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type) const;
+    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const;
 
     template <typename CoreRangeContainer>
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
@@ -394,12 +341,65 @@ class Device {
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
     std::optional<SubDeviceId> get_fabric_sub_device_id() const;
 
-   private:
+    program_cache::detail::ProgramCache& get_program_cache() { return program_cache_; }
+
+    std::set<CoreCoord> get_compute_cores() const { return compute_cores_; }
+
+    uint32_t get_completion_queue_reader_core() const { return completion_queue_reader_core_; }
+
+    bool is_worker_queue_empty() const { return work_executor_.worker_queue.empty(); }
+
+    uint32_t get_trace_buffers_size() const { return trace_buffers_size_; }
+    void set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
+
+    bool using_fast_dispatch() const { return using_fast_dispatch_; }
+
+    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const { return tunnels_from_mmio_; }
+
+    static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
+
+private:
     void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
     SubDeviceManagerId get_next_sub_device_manager_id();
     void reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceManager>& sub_device_manager);
     void MarkAllocationsUnsafe();
     void MarkAllocationsSafe();
+
+    chip_id_t id_;
+    uint32_t build_key_ = 0;
+    std::map<uint32_t, std::map<chip_id_t, std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>>>> tunnel_device_dispatch_workers_;
+    std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
+
+    // Leaving here for compatibility with current reacharounds
+    // TODO: Replace with get_initialized_allocator()
+    Allocator * allocator_ = nullptr;
+    bool initialized_ = false;
+
+    std::vector<std::unique_ptr<Program>> command_queue_programs_;
+    bool using_fast_dispatch_ = false;
+
+    // Work Executor for this device - can asynchronously process host side work for
+    // all tasks scheduled on this device
+    WorkExecutor work_executor_;
+    uint32_t worker_thread_core_ = 0;
+    uint32_t completion_queue_reader_core_ = 0;
+    std::unique_ptr<SystemMemoryManager> sysmem_manager_;
+    uint8_t num_hw_cqs_ = 1;
+
+    // SystemMemoryManager is the interface to the hardware command queue
+    std::vector<std::unique_ptr<HWCommandQueue>> hw_command_queues_;
+    std::vector<std::unique_ptr<CommandQueue>> sw_command_queues_;
+
+    JitBuildEnv build_env_;
+    JitBuildStateSet firmware_build_states_;
+    JitBuildStateSet kernel_build_states_;
+    std::vector<std::vector<std::pair<int, int>>> build_state_indices_;
+
+    std::set<CoreCoord> compute_cores_;
+    std::set<CoreCoord> storage_only_cores_;
+    std::set<CoreCoord> ethernet_cores_;
+    std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
+
     std::map<std::string, std::string> device_kernel_defines_;
 
     std::unordered_map<SubDeviceManagerId, std::unique_ptr<detail::SubDeviceManager>> sub_device_managers_;
@@ -413,6 +413,10 @@ class Device {
     std::vector<int32_t> l1_bank_offset_map_;
     std::vector<uint16_t> dram_bank_to_noc_xy_;
     std::vector<uint16_t> l1_bank_to_noc_xy_;
+
+    program_cache::detail::ProgramCache program_cache_;
+
+    uint32_t trace_buffers_size_ = 0;
 };
 
 }  // namespace v0
@@ -436,18 +440,6 @@ inline HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virt
 template <typename T>
 inline T Device::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
     return hal.get_dev_addr<T>(this->get_programmable_core_type(virtual_core), addr_type);
-}
-
-template <typename T>
-inline T Device::get_base_allocator_addr(const HalMemType &mem_type) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_unreserved_base_address(*allocator, mem_type);
-}
-
-template <typename T>
-inline T Device::get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::get_unreserved_base_address(*allocator, mem_type);
 }
 
 // TODO: Find a better home for this function
