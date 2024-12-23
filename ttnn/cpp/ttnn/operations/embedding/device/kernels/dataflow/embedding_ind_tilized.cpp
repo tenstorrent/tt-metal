@@ -13,6 +13,7 @@ void kernel_main() {
     const std::uint32_t num_rows = get_arg_val<uint32_t>(4);
 
     const std::uint32_t curr_col = get_arg_val<uint32_t>(5);
+    const std::uint32_t starting_index = get_arg_val<uint32_t>(6);
 
 #define in_is_dram get_compile_time_arg_val(0) == 1
 #define in_stick_size_is_power_of_two get_compile_time_arg_val(1) == 1
@@ -103,26 +104,26 @@ void kernel_main() {
         // DPRINT << "Token: " << token << ENDL();
 
         // if (!printed) {
-        //     for (int r_f = 0; r_f < 2; r_f++) {
-        //         for (int i = 0; i < 105; i++) {
+        //     for (uint32_t r_f = 0; r_f < 2; r_f++) {
+        //         for (uint32_t i = 0; i < 105; i++) {
         //             DPRINT << "_";
         //         }
         //         DPRINT << ENDL();
         //         uint32_t r_f_offset = r_f * 2 * face_size * face_size;
-        //         for (int r = 0; r < face_size; r++) {
+        //         for (uint32_t r = 0; r < face_size; r++) {
         //             uint32_t r_offset = r * face_size;
         //             DPRINT << "[";
-        //             for (int i = 0; i < face_size; i++) {
+        //             for (uint32_t i = 0; i < face_size; i++) {
         //                 DPRINT << input_l1_ptr[i + r_f_offset + r_offset] << ", ";
         //             }
         //             DPRINT << "] | ";
         //             DPRINT << "[";
-        //             for (int i = 0; i < face_size; i++) {
+        //             for (uint32_t i = 0; i < face_size; i++) {
         //                 DPRINT << input_l1_ptr[i + r_f_offset + r_offset + (face_size * face_size)] << ", ";
         //             }
         //             DPRINT << "]" << ENDL();
         //         }
-        //         for (int i = 0; i < 105; i++) {
+        //         for (uint32_t i = 0; i < 105; i++) {
         //             DPRINT << "_";
         //         }
         //         DPRINT << ENDL();
@@ -167,7 +168,7 @@ void kernel_main() {
 
     uint32_t curr_tile = tile_offset;
     uint32_t offset = face_offset;
-    uint32_t index = 0;
+    uint32_t index = starting_index;
     bool read_indices = true;
     uint32_t col_offset = curr_col;
     uint32_t tiles_per_row = (row_length + tile_height - 1) / tile_height;
@@ -189,7 +190,7 @@ void kernel_main() {
         read_block(index, weight_stick_size, offset);
         index++;
         col_offset++;
-        if (index == face_size) {
+        if (index == face_size || col_offset == row_length) {
             // DPRINT << "Read 16, offset: " << offset << ENDL();
             index = 0;
             uint32_t face = offset / (face_size * face_size);
@@ -201,7 +202,11 @@ void kernel_main() {
                     offset = 0;
                 } else {
                     curr_tile -= (tiles_per_row - 1);
-                    offset -= face_size * (face_size - 1);
+                    if (offset < 256) {
+                        offset += face_size;
+                    } else {
+                        offset -= face_size * (face_size - 1);
+                    }
                 }
             } else if (face % 2 == 0) {
                 offset += face_size * face_size;

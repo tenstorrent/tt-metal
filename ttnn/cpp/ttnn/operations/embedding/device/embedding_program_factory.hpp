@@ -583,6 +583,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     constexpr uint32_t alignment = 32;
     constexpr uint32_t tile_size = 32;
     constexpr uint32_t face_size = 16;
+    constexpr uint32_t face_volume = face_size * face_size;
 
     auto num_embedding_dims = weights.get_legacy_shape()[-1];
 
@@ -703,6 +704,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
+        (std::uint32_t)0,
     };
     if (embeddings_type == EmbeddingsType::PADDED) {
         reader_runtime_args.push_back(pad_token.value());
@@ -715,20 +717,24 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
+        col_offset = weight_offset % num_cols;
+        row = weight_offset / num_cols;
 
         uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
-        uint32_t r_f_offset = ((row % tile_size) / face_size) * 2 * face_size * face_size + row * face_size;
-        uint32_t c_f_offset = ((col_offset % tile_size) / face_size) * face_size * face_size;
+        uint32_t r_f_offset = ((row % tile_size) / face_size) * 2 * face_volume + (row % face_size) * face_size;
+        // Offset by one face size if we are in the right half of the tile + where we are in the row
+        uint32_t c_f_offset = ((col_offset % tile_size) / face_size) * face_volume;
         uint32_t face_offset = r_f_offset + c_f_offset;
         uint32_t curr_tile = (row / tile_size) * tiles_per_tile_row + (col_offset / tile_size);
 
         // Reader
         {
-            reader_runtime_args[2] = curr_tile;  // What tile we on I think
+            reader_runtime_args[2] = curr_tile;
             // reader_runtime_args[3] = round_down(col_offset % num_cols, tile_size) * input_element_size_bytes;
             reader_runtime_args[3] = face_offset;
             reader_runtime_args[4] = local_num_blocks;
-            reader_runtime_args[5] = col_offset;  // index offset, what index in the tile?
+            reader_runtime_args[5] = col_offset;
+            reader_runtime_args[6] = (col_offset % face_size);  // starting col in the face row
             tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         }
 
@@ -739,12 +745,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
             tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 
-        col_offset += local_num_blocks;
         weight_offset += local_num_blocks;
-        if (col_offset >= num_cols) {
-            col_offset -= num_cols;
-            row++;
-        }
     }
 
     auto override_runtime_args_callback = [num_cores_x, num_cores_y, reader_kernel_id, writer_kernel_id, cores, device](
