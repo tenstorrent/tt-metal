@@ -32,10 +32,10 @@ class TtSegformerDWConv:
 
     def __call__(
         self,
+        device,
         hidden_states: ttnn.Tensor,
         height: int,
         width: int,
-        device,
     ):
         if len(hidden_states.shape) == 3:
             batch_size, seq_len, num_channels = hidden_states.shape

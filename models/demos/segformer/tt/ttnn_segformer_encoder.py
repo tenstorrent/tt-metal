@@ -10,6 +10,7 @@ from models.demos.segformer.tt.ttnn_segformer_layer import TtSegformerLayer
 from typing import Optional, Tuple, Union
 
 from dataclasses import dataclass
+import math
 
 
 @dataclass
@@ -74,13 +75,14 @@ class TtSegformerEncoder:
 
     def __call__(
         self,
+        device,
         pixel_values: ttnn.Tensor,
         output_attentions: Optional[bool] = False,
         output_hidden_states: Optional[bool] = False,
         return_dict: Optional[bool] = True,
         parameters=None,
     ) -> Union[Tuple, TtBaseModelOutput]:
-        device = pixel_values.device()
+        # device = pixel_values.device()
         all_hidden_states = () if output_hidden_states else None
         all_hidden_states_unfolded = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
@@ -91,19 +93,22 @@ class TtSegformerEncoder:
         for idx, x in enumerate(zip(self.patch_embeddings, self.block)):
             embedding_layer, block_layer = x[0], x[1]
             # first, obtain patch embeddings
-            hidden_states, height, width = embedding_layer(
+            # hidden_states, height, width = embedding_layer(
+            hidden_states = embedding_layer(
+                device,
                 pixel_values=hidden_states,
                 parameters=parameters[f"patch_embeddings"][idx],
             )
+            height = width = int(math.sqrt(hidden_states.shape[-2]))
 
             # second, send embeddings through blocks
             for i, blk in enumerate(block_layer):
                 layer_outputs = blk(
+                    device,
                     hidden_states,
                     height,
                     width,
                     parameters["block"][idx][i],
-                    device=device,
                     output_attentions=output_attentions,
                 )
                 hidden_states = layer_outputs[0]
