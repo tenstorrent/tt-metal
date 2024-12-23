@@ -118,7 +118,6 @@ void MAIN {
 
     uint32_t interm_reduction_chunks = window_size_hw / max_rows_for_reduction;
     cb_wait_front(in_scalar_cb_id, 1);
-    // cb_wait_front(interm_reduction_cb_id, 1);
     cb_reserve_back(out_cb_id, 1);
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
         for (uint32_t b_i = 0; b_i < in_nblocks_c; b_i++) {
@@ -177,7 +176,6 @@ void MAIN {
     }
     cb_push_back(out_cb_id, 1);
     cb_pop_front(in_scalar_cb_id, 1);
-    // cb_pop_front(interm_reduction_cb_id, 1);
 }
 
 }  // namespace NAMESPACE

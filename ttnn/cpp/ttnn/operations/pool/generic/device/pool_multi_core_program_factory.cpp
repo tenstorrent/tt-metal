@@ -106,7 +106,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         nblocks);
 
     // CBs
-    uint32_t multi_buffering_factor = 1;
+    uint32_t multi_buffering_factor = 2;
 
     uint32_t split_reader = 1;
 
@@ -196,9 +196,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_tiled_cb_id = tt::CBIndex::c_24;  // tiled input
     uint32_t in_tiled_cb_pagesize = tile_size(in_df);
     uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * nblocks;
-    if (is_wide_reduction) {
-        // in_tiled_cb_npages = ceil_multiple_of(in_tiled_cb_npages, MAX_TILES_PER_REDUCTION);
-    }
     CircularBufferConfig in_tiled_cb_config =
         CircularBufferConfig(in_tiled_cb_npages * in_tiled_cb_pagesize, {{in_tiled_cb_id, in_df}})
             .set_page_size(in_tiled_cb_id, in_tiled_cb_pagesize);
@@ -206,7 +203,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_tiled_cb_id, in_tiled_cb_pagesize, in_tiled_cb_npages);
 
     // output of reduce == writer to write
-    uint32_t out_cb_id = tt::CB::c_out0;  // output rows in RM
+    uint32_t out_cb_id = tt::CBIndex::c_16;  // output rows in RM
     // after reduction
     uint32_t out_cb_pagesize =
         tt::constants::TILE_WIDTH * out_nbytes;  // there is just one row of channels after each reduction (or 1 block

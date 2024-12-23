@@ -23,25 +23,16 @@ inline void print_tile_rows(uint32_t cb_id, uint32_t rows = 32, uint32_t tile_id
     // UNPACK(( DPRINT << "++++++" << ENDL() ));
 }
 
-// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-//     UNPACK(( DPRINT << "======" << ENDL() ));
-//     for (uint16_t r = 0; r < 32; ++ r) {
-//         SliceRange sr = SliceRange{.h0 = r, .h1 = (uint16_t)(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-//         UNPACK(( DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL() ));
-//     }
-//     UNPACK(( DPRINT << "++++++" << ENDL() ));
-// }
-
-// inline void print_cb_details(uint32_t cb_id) {
-//     DPRINT << "cb_id " << cb_id << ": { "
-//             << "size: " << cb_interface[cb_id].fifo_size << ", "
-//             << "limit: " << cb_interface[cb_id].fifo_limit << ", "
-//             << "page_size: " << cb_interface[cb_id].fifo_page_size << ", "
-//             << "num_pages: " << cb_interface[cb_id].fifo_num_pages << ", "
-//             << "rd_ptr: " << cb_interface[cb_id].fifo_rd_ptr << ", "
-//             << "wr_ptr: " << cb_interface[cb_id].fifo_wr_ptr << ", "
-//             << "wr_tile_ptr: " << cb_interface[cb_id].fifo_wr_tile_ptr << " }" << ENDL();
-// }
+inline void print_cb_details(uint32_t cb_id) {
+    DPRINT << "cb_id " << cb_id << ": { "
+           << "size: " << cb_interface[cb_id].fifo_size << ", "
+           << "limit: " << cb_interface[cb_id].fifo_limit << ", "
+           << "page_size: " << cb_interface[cb_id].fifo_page_size << ", "
+           << "num_pages: " << cb_interface[cb_id].fifo_num_pages << ", "
+           << "rd_ptr: " << cb_interface[cb_id].fifo_rd_ptr << ", "
+           << "wr_ptr: " << cb_interface[cb_id].fifo_wr_ptr << ", "
+           << "wr_tile_ptr: " << cb_interface[cb_id].fifo_wr_tile_ptr << " }" << ENDL();
+}
 #endif
 
 uint16_t minus_inf = 63487;
@@ -104,10 +95,10 @@ void MAIN {
     constexpr uint32_t in_c = get_compile_time_arg_val(14);
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(15);
 
-    constexpr uint32_t in_cb_id = tt::CB::c_in0;  // and tt::CB::c_in1 for split reader
-    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
-    constexpr uint32_t in_tiled_cb_id = tt::CB::c_intermed0;
-    constexpr uint32_t out_cb_id = tt::CB::c_out0;
+    constexpr uint32_t in_cb_id = tt::CBIndex::c_0;  // and tt::CB::c_in1 for split reader
+    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
+    constexpr uint32_t in_tiled_cb_id = tt::CBIndex::c_24;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");

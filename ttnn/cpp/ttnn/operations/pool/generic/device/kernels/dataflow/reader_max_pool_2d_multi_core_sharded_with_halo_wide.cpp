@@ -6,7 +6,7 @@
 #include <cstring>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 1
+#define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -97,20 +97,14 @@ void kernel_main() {
 
     uint16_t minus_inf = 63487;
 
-    /* if (reader_id == 0) {
-        print_pages(in_l1_read_base_addr, in_nbytes_c / 2, 28);
-    } */
-
     uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
     while (counter < reader_nindices) {
         uint16_t top_left_local_index = reader_indices_ptr[counter++];
-        // DPRINT << "top_left_local_index: " << top_left_local_index << ENDL();
         for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
             uint32_t read_bytes = MAX_ELE_PER_REDUCTION;
             if (c_i == in_nblocks_c - 1) {
-                read_bytes =
-                    in_nbytes_c - c_i * MAX_ELE_PER_REDUCTION;  // do we need this?  still seems to work without it
+                read_bytes = in_nbytes_c - c_i * MAX_ELE_PER_REDUCTION;
             }
             cb_reserve_back(in_cb_id, npages_to_reserve);
             uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
@@ -123,25 +117,14 @@ void kernel_main() {
                         in_l1_read_base_addr +
                         (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);  // 2 bytes, max 8 tiles
                     noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
-                    /* if (reader_id == 0) {
-                        DPRINT << "read_offset: " << read_offset - in_l1_read_base_addr << ENDL();
-                        print_pages(read_offset, read_bytes / 2, 1);
-                    } */
                     out_l1_write_addr += MAX_ELE_PER_REDUCTION;
                 }
             }
             noc_async_read_barrier();
-            /* if (reader_id == 0) {
-                print_pages(out_l1_write_addr_base, MAX_ELE_PER_REDUCTION / 2, 9);
-            } */
             cb_push_back(in_cb_id, npages_to_reserve);
         }
         if (split_reader) {
             counter++;  // interleave the indices
         }
     }
-
-    /* if (reader_id == 0) {
-        print_pages(in_l1_read_base_addr, in_nbytes_c / 2, 28);
-    } */
 }  // kernel_main()
