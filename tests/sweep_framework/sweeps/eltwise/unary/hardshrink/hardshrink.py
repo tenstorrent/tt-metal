@@ -7,7 +7,7 @@ from functools import partial
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
+from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -19,11 +19,20 @@ from models.utility_functions import torch_random
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
-        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
-        + gen_shapes([32, 32], [256, 256], [32, 32], 16),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 16)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 16),
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 16)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 16),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
@@ -34,7 +43,7 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Row Major layout is not supported"
     return False, None
 
@@ -46,7 +55,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_shape,
     input_a_dtype,
-    input_a_layout,
+    input_layout,
     input_a_memory_config,
     output_memory_config,
     *,
@@ -54,11 +63,14 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        input_shape = sanitize_shape_rm(input_shape)
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(0, 100)
+    scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(0, 100).item()
 
     golden_function = ttnn.get_golden_function(ttnn.hardshrink)
     torch_output_tensor = golden_function(torch_input_tensor_a, lambd=scalar)
@@ -66,14 +78,15 @@ def run(
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
-        layout=input_a_layout,
+        layout=input_layout,
         device=device,
         memory_config=input_a_memory_config,
     )
 
     start_time = start_measuring_time()
     output_tensor = ttnn.hardshrink(input_tensor_a, lambd=scalar, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
+
+    output_tensor = ttnn.to_torch(output_tensor)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
