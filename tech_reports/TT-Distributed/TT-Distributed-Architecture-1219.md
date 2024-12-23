@@ -10,55 +10,55 @@ Authors: Joseph Chu (jchu@tenstorrent.com), Aditya Saigal (asaigal@tenstorrent.c
 
 Version 1.0
 
-[1. Overview](#_Toc1392934561)
+[1. Overview](#overview)
 
-[2. Background and Project Motivation](#_Toc1466097734)
-  - [2.1 Virtualization through TTNN](#_Toc663984498)
-  - [2.2 Project Motivation and Design](#_Toc1458378397)
-  - [2.3 Dependencies with External Efforts](#_Toc1363782627)
+[2. Background and Project Motivation](#background)
+  - [2.1 Virtualization through TTNN](#virtualization-through-ttnn)
+  - [2.2 Project Motivation and Design](#motivation)
+  - [2.3 Dependencies with External Efforts](#dependencies)
 
-[3. TT-Mesh](#_Toc177088390)
-  - [3.1 MeshDevice: Overview and Associated Data-Structures](#_Toc969925554)
-    - [3.1.1 Terminology](#_Toc410467006)
-    - [3.1.2 Constraints and Properties of a Virtual Mesh](#_Toc2122239373)
-    - [3.1.3 MeshDevice Abstraction](#_Toc111491822)
-    - [3.1.4 Data Structures](#_Toc838075552)
-    - [3.1.5 Lightweight and Consistent APIs](#_Toc628866900)
-  - [3.2 Virtual Command Queues](#_Toc2059368394)
-  - [3.3 Memory Management: MeshBuffer and MeshAllocator](#_Toc863321128)
-  - [3.4 MeshWorkload: Overview, Data-Structures and APIs](#_Toc955478168)
-  - [3.5 MeshEvent: Data-Structure and APIs](#_Toc845636860)
-  - [3.6 MeshTrace: Overview and APIs](#_Toc1824586731)
-  - [3.7 End to End Programming Example](#_Toc473095880)
-  - [3.8 MeshCommandQueue: Data Movement to and from a TT-Mesh](#_Toc1381544355)
-  - [3.9 Host Runtime Design: Conservative Multithreading](#_Toc2122480323)
-  - [3.10 MeshWorkload: Implementation Details](#_Toc913431928)
-  - [3.11 MeshEvents: Implementation Details](#_Toc980725382)
-  - [3.12 MeshTrace Implementation Details](#_Toc982296932)
-  - [3.13 Summary: Dependencies, APIs and Data-Structures on Host](#_Toc1732962911)
+[3. TT-Mesh](#tt-mesh)
+  - [3.1 MeshDevice: Overview and Associated Data-Structures](#meshdevice)
+    - [3.1.1 Terminology](#meshdevice-terminology)
+    - [3.1.2 Constraints and Properties of a Virtual Mesh](#meshdevice-constraints)
+    - [3.1.3 MeshDevice Abstraction](#meshdevice-abstraction)
+    - [3.1.4 Data Structures](#meshdevice-data-structures)
+    - [3.1.5 Lightweight and Consistent APIs](#meshdevice-lightweight-and-consistent-apis)
+  - [3.2 Virtual Command Queues](#virtual-command-queues)
+  - [3.3 Memory Management: MeshBuffer and MeshAllocator](#meshbuffer)
+  - [3.4 MeshWorkload: Overview, Data-Structures and APIs](#meshworkload)
+  - [3.5 MeshEvent: Data-Structure and APIs](#meshevent)
+  - [3.6 MeshTrace: Overview and APIs](#meshtrace)
+  - [3.7 End to End Programming Example](#tt-mesh-end-to-end)
+  - [3.8 MeshCommandQueue: Data Movement to and from a TT-Mesh](#meshcommandqueue)
+  - [3.9 Host Runtime Design: Conservative Multithreading](#mesh-host-runtime-design)
+  - [3.10 MeshWorkload: Implementation Details](#meshworkload-details)
+  - [3.11 MeshEvents: Implementation Details](#meshevent-details)
+  - [3.12 MeshTrace Implementation Details](#meshtrace-details)
+  - [3.13 Summary: Dependencies, APIs and Data-Structures on Host](#tt-mesh-summary)
 
-[4. TT-Distributed](#_Toc1990927081)
-  - [4.1 Offline System Descriptor: Caching UMD Queries](#_Toc206340355)
-  - [4.2 Distributed Device](#_Toc393871242)
-  - [4.3 DistributedBuffer](#_Toc1841278050)
-  - [4.4 DistributedWorkload: Overview, Data-Structures and APIs](#_Toc722589924)
-  - [4.5 DistributedEvents: Overview, Data-Structures and APIs](#_Toc874667547)
-  - [4.6 DistributedTrace: Overview and APIs](#_Toc1075480896)
-  - [4.7 Command Serialization](#_Toc1821955366)
-  - [4.8 Network Transport](#_Toc1617973142)
+[4. TT-Distributed](#tt-distributed)
+  - [4.1 Offline System Descriptor: Caching UMD Queries](#offline-system-descriptor)
+  - [4.2 DistributedDevice](#distributed-device)
+  - [4.3 DistributedBuffer](#distributed-buffer)
+  - [4.4 DistributedWorkload: Overview, Data-Structures and APIs](#distributed-workload)
+  - [4.5 DistributedEvents: Overview, Data-Structures and APIs](#distributed-events)
+  - [4.6 DistributedTrace: Overview and APIs](#distributed-trace)
+  - [4.7 Command Serialization](#command-serialization)
+  - [4.8 Network Transport](#network-transport)
 
-[5. TT-NN Integration](#_Toc544952931)
-  - [5.1 TT-Mesh/TT-Distributed Interoperability Layer](#_Toc1134203649)
+[5. TT-NN Integration](#tt-nn-integration)
+  - [5.1 TT-Mesh/TT-Distributed Interoperability Layer](#tt-mesh-tt-distributed-interoperability)
 
-[Appendix](#_Toc1122889266)
- - [Appendix A: Existing Runtime Architecture Overview](#_Toc786358640)
-    - [A.1 Current State of Metal Runtime](#_Toc1552149651)
-    - [A.2 A More Modular Approach to Metal Runtime](#_Toc1731330590)
-    - [A.4 Distributed Metal Runtime Using Existing Components and Virtualization](#_Toc516766762)
- - [Appendix B: UMD](#_Toc1085294907)
-     - [Appendix B.1: UMD Queries](#_Toc372413671)
+[Appendix](#appendix)
+ - [Appendix A: Existing Runtime Architecture Overview](#appendix-a)
+    - [A.1 Current State of Metal Runtime](#appendix-a-current-state-of-runtime)
+    - [A.2 A More Modular Approach to Metal Runtime](#appendix-a-more-modular-approach)
+    - [A.4 Distributed Metal Runtime Using Existing Components and Virtualization](#appendix-a-distributed-metal-runtime-using-existing-components-and-virtualization)
+ - [Appendix B: UMD](#appendix-b)
+     - [Appendix B.1: UMD Queries](#appendix-b-umd-queries)
 
-# Overview
+# Overview <a id="overview"></a>
 
 This document presents a specification for **TT-Mesh** and **TT-Distributed**, Tenstorrent’s scale-up and scale-out infrastructure to natively support workloads on multiple Tenstorrent hardware accelerators, potentially spanning multiple host servers.
 
@@ -68,9 +68,9 @@ This infrastructure exposes a multi-chip system as a large virtual device with a
 
 ![A diagram of a computer Description automatically generated](images/image001.png)
 
-# 2. Background and Project Motivation
+# 2. Background and Project Motivation <a id="background"></a>
 
-## 2.1 Virtualization through TTNN
+## 2.1 Virtualization through TTNN <a id="virtualization-through-ttnn"></a>
 
 TT-NN is a library that provides a Pytorch-like interface for executing compute on Tenstorrent accelerators. This interface is available and supported for single-process, single-host environments with operations that can be dispatched synchronously and asynchronously (through a single or multithreaded runtime environment) across a mesh of devices. See [Programming Mesh of Devices](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) for more information. TT-NN builds on top of TT-Metalium to provide a high-level interface in the form of operations and tensors in a neural network op library.
 
@@ -98,7 +98,7 @@ As shown in the diagram below, for a system with 64 devices (a TGG Cluster), hos
 
 This problem will get worse for larger clusters. Thus, the existing virtualization infrastructure is not a viable solution for scale-out.
 
-## 2.2 Project Motivation and Design
+## 2.2 Project Motivation and Design <a id="motivation"></a>
 
 The diagram above presents a motivating case for moving the virtualization lower in the software stack. Virtualization at the TT-NN layer and multi-threaded dispatch does not scale and is unable to virtualize across different servers. The motivation and scope of the problem to solve are the following:
 
@@ -137,7 +137,7 @@ The **TT-Distributed** infrastructure introduces DistributedDevice, DistributedB
 
 ![](images/image009.png)
 
-## 2.3 Dependencies with External Efforts
+## 2.3 Dependencies with External Efforts <a id="dependencies"></a>
 
 This effort is heavily entangled with several on-going and scheduled efforts on the Runtime Infrastructure Roadmap.
 
@@ -151,15 +151,15 @@ A list of the dependencies, and components they block is provided below. A detai
 | Modular Dispatch Management Infrastructure | Finalized MeshDevice and DistributedDevice Implementation using a dedicated Control Plane.  MeshDevice Dispatch integration with TT-Fabric (**V1.2**) |
 | TT-Fabric: Generic Routing over Ethernet | Broadcast based Dispatch (**V1.2**) |
 
-# 3. TT-Mesh
+# 3. TT-Mesh <a id="tt-mesh"></a>
 
 This section describes TT-Mesh, Tenstorrent’s scale-up software infrastructure for natively extending the single device programming model to a physical mesh of devices, connected to a single host.
 
 We start by describing the main components of this infrastructure, data-structures, associated APIs and how these components map to physical resources.
 
-## 3.1 MeshDevice: Overview and Associated Data-Structures
+## 3.1 MeshDevice: Overview and Associated Data-Structures <a id="meshdevice"></a>
 
-### 3.1.1 Terminology:
+### 3.1.1 Terminology: <a id="meshdevice-terminology"></a>
 
 We define a "**Physical Mesh**” as the largest fully-connected uniform mesh (all pairs of chip-to-chip interconnects with same number of ethernet links) of TT-Devices physically connected over ethernet. The diagram shows a T3000 (4x2) Physical Mesh (convention: *RxC*).
 
@@ -173,7 +173,7 @@ The following diagram shows how a Virtual Mesh can span multiple hosts, as long 
 
 ![](images/image012.png)
 
-### 3.1.2 Constraints and Properties of a Virtual Mesh
+### 3.1.2 Constraints and Properties of a Virtual Mesh <a id="meshdevice-constraints"></a>
 
 A Virtual Mesh has the following properties:
 
@@ -182,7 +182,7 @@ A Virtual Mesh has the following properties:
 * **SubDevice Uniformity**: An existing feature in TT-Metalium is a SubDevice. A device can be partitioned into SubDevices where each SubDevice is provisioned a set of cores. Each SubDevice can have independent program execution. In the context of a Virtual Mesh, it shall only contain a single SubDevice Manager.
 * **Device-Like API Contract**: A Virtual Mesh will have an explicit Device-Like API contract imposed on it. Existing APIs that interact with a Device will be able to interface with a single MeshDevice handle. Individual physical devices encapsulated in a Virtual Mesh will not be exposed.
 
-### 3.1.3 MeshDevice Abstraction
+### 3.1.3 MeshDevice Abstraction <a id="meshdevice-abstraction"></a>
 
 TT-Mesh layer exposes this Virtual Mesh as the **MeshDevice** class abstraction. Conceptually MeshDevice can be thought of as a single virtual device which virtualizes over a mesh of connected physical devices. The devices contained in the mesh are mapped into a 2D logical device mesh.
 
@@ -208,7 +208,7 @@ For a detailed diagram of the fully decoupled MeshDevice class and its interacti
 
 In the sections below, we present a high-level implementation of the finalized MeshDevice class, with all dependencies resolved. The purpose of these sections is not to list each MeshDevice API, but rather to provide a skeleton of the data-structures and APIs associated with this class.
 
-### 3.1.3 Data Structures
+### 3.1.3 Data Structures <a id="meshdevice-data-structures"></a>
 
 **The data-structures presented in this section require several dependencies to be resolved. They will be delivered as part of V1.2.**
 
@@ -326,7 +326,7 @@ For example:
 
 For more details, please see [this section](#_4.14_￼Summary:_Dependencies,).
 
-### 3.1.3 Lightweight and Consistent APIs
+### 3.1.3 Lightweight and Consistent APIs <a id="meshdevice-lightweight-and-consistent-apis"></a>
 
 **These API abstractions will be delivered as part of V1.**
 
@@ -356,7 +356,7 @@ DeviceHandle CreateMeshDevice(MeshConfig config, v1::DeviceOptions opts);
 
 User APIs accepting the DeviceHandle object will be portable across the TT-Metal and TT-Mesh domains. Examples of these APIs and how they interface with additional Runtime data structures are provided in the remainder of this document.
 
-## 3.2 Virtual Command Queues
+## 3.2 Virtual Command Queues <a id="virtual-command-queues"></a>
 
 **The data-structures and API abstractions in this section will be delivered as part of V1.**
 
@@ -379,7 +379,7 @@ CommandQueueHandle GetCommandQueue(DeviceHandle device, size_t cq_id);
 ```
 In a single-device context, a CommandQueueHandle is associated with a CQ tied to a physical device. In a MeshDevice context, a CommandQueueHandle is associated with a VCQ (VCQ0 / VCQ1) tied to a MeshDevice.
 
-## 3.3 Memory Management: MeshBuffer and MeshAllocator
+## 3.3 Memory Management: MeshBuffer and MeshAllocator <a id="meshbuffer"></a>
 
 **All APIs discussed in this section will be required for V1.**
 
@@ -572,7 +572,7 @@ The APIs presented above expose the ability to interface with a buffer over the 
 * Reading a shard from a single physical device post an All-Gather across the Virtual Mesh. Post All-Gather, each shard contains a full representation of the data, and hence can be read individually
 * Reading a shard from the final stage of a Pipeline Parallel Workload
 
-## 3.4 MeshWorkload: Overview, Data-Structures and APIs
+## 3.4 MeshWorkload: Overview, Data-Structures and APIs <a id="meshworkload"></a>
 
 The MeshWorkload object is the main unit of compute on a Virtual Mesh. This class allows users to directly run homogenous or heterogenous compute, by programming each core on each device in a Mesh through a single data-structure.
 
@@ -889,7 +889,7 @@ The diagram above illustrates vanilla Program Dispatch on a single device (Progr
 
 Thus, the MeshWorkload and Virtual Mesh concepts extend the asynchronous compute model exposed by Programs and SubDevices to a cluster of Physical Devices.
 
-## 3.5 MeshEvent: Data-Structure and APIs
+## 3.5 MeshEvent: Data-Structure and APIs <a id="meshevent"></a>
 
 **All APIs discussed in this section will be required for V1.**
 
@@ -967,7 +967,7 @@ void MeshEventSynchronize(const std::shared_ptr<MeshEvent> event);
 void Finish(CommandQueueHandle command_queue_handle);
 ```
 
-## 3.6 MeshTrace: Overview and APIs
+## 3.6 MeshTrace: Overview and APIs <a id="meshtrace"></a>
 
 **All APIs discussed in this section will be required for V1.**
 
@@ -999,7 +999,7 @@ void ReleaseMeshTrace(std::shared_ptr<MeshDevice> mesh_device, uint32_t trace_id
 
 Host and device implementation details for the MeshTrace feature are provided in a later section.
 
-## 3.7 End to End Programming Example
+## 3.7 End to End Programming Example <a id="tt-mesh-end-to-end"></a>
 
 This section provides background regarding a [programming example](https://github.com/tenstorrent/tt-metal/blob/6ecfc8e115025b4428bf0aa51895c43116ed7d54/tt_metal/programming_examples/distributed/distributed_eltwise_binary.cpp) using TT-Mesh APIs and compares it with an [equivalent example](https://github.com/tenstorrent/tt-metal/blob/6ecfc8e115025b4428bf0aa51895c43116ed7d54/tt_metal/programming_examples/distributed/tt_metal_eltwise_binary.cpp) using TT-Metal APIs.
 
@@ -1073,7 +1073,7 @@ DeviceHandle virtual_mesh_1 = CreateMeshDevice(mesh_config_1, 2 /* num_cqs */, D
 
 ![](images/image031.png)
 
-## 3.8 MeshCommandQueue: Data Movement to and from a TT-Mesh
+## 3.8 MeshCommandQueue: Data Movement to and from a TT-Mesh <a id="meshcommandqueue"></a>
 
 **Note: The Broadcast CQ Relies on the following TT-Fabric features:**
 
@@ -1311,7 +1311,7 @@ Microbenchmarks will be used to determine the best broadcast topology for differ
 
 **Sections on core/resource assignment and unsupported Mesh Topologies will be added once additional TT-Fabric details are ironed out.**
 
-## 3.9 Host Runtime Design: Conservative Multithreading
+## 3.9 Host Runtime Design: Conservative Multithreading <a id="mesh-host-runtime-design"></a>
 
 **Functionality Discussed in this section will be introduced in V1.1, as a set of optimizations. V1 will be single threaded.**
 
@@ -1355,7 +1355,7 @@ A high-level description of this design is provided in the diagram below.
 
 The number of threads made available in the thread-pool will be determined based on micro-benchmarking and the host CPU specs.
 
-## 3.10 MeshWorkload: Implementation Details
+## 3.10 MeshWorkload: Implementation Details <a id="meshworkload-details"></a>
 
 **V1 will provide a single-threaded implementation.**
 
@@ -1389,7 +1389,7 @@ This mechanism can be extended to MeshWorkload level, where Distributed Host run
 
 The command cache will only be used if the TTNN Program Cache is enabled.
 
-## 3.11 MeshEvents: Implementation Details
+## 3.11 MeshEvents: Implementation Details <a id="meshevents-details"></a>
 
 ### 3.11.1 Event Notification Table Implementation
 
@@ -1433,7 +1433,7 @@ An example of this is shown in the diagram below.
 
 Here, Host will wait for an acknowledgement for event\_id = 3, if it calls *EventSynchronize* after the third timestep. Local Command Queues on SubGrid 0 and SubGrid 1 will wait for at least event\_id = 1 and event\_id = 2 to be recorded, respectively.
 
-## 3.12 MeshTrace Implementation Details
+## 3.12 MeshTrace Implementation Details <a id="meshtrace-details"></a>
 
 Below, we present the building blocks for the MeshTrace class and describe how a MeshTrace can be setup/run from both a Host and Device perspective.
 
@@ -1578,7 +1578,7 @@ If Counter Based Ordering on the Dispatchers is used, additional functionality m
 
 Since MeshWorkload execution requires Go Signals to be broadcasted on sub-grids in a Virtual Mesh that may not be running programs, the per-device Trace Buffers will never be empty. At minimum, they will contain commands to broadcast Go Signals to the worker grid, for the entirety of the Trace.
 
-## 3.13 Summary: Dependencies, APIs and Data-Structures on Host
+## 3.13 Summary: Dependencies, APIs and Data-Structures on Host <a id="tt-mesh-summary"></a>
 
 The diagram below provides a high-level summary of the data-structures and APIs exposed by the TT-Mesh layer. Additionally, we capture dependencies across data-structures.
 
@@ -1590,13 +1590,13 @@ For example:
 
 ![](images/image037.png)
 
-# 4. TT-Distributed
+# 4. TT-Distributed <a id="tt-distributed"></a>
 
 TT-Distributed is the proposed solution for interfacing with a mesh of accelerators spanning multiple host systems.
 
 ![](images/image038.png)
 
-## 4.2. Offline System Descriptor: Caching UMD Queries
+## 4.2. Offline System Descriptor: Caching UMD Queries <a id="offline-system-descriptor"></a>
 
 TT-Metal exposes several APIs to query physical device state through the tt\_cluster interface during runtime. Additionally, setting up the local or distributed session requires the ability to query system parameters, not directly exposed to users, through tt\_cluster.
 
@@ -1622,7 +1622,7 @@ An example of the required dataflow is presented below.
 
 ![](images/image039.png)
 
-## 4.2 Distributed Device
+## 4.2 DistributedDevice <a id="distributed-device"></a>
 
 This section describes the design for DistributedDevice, an abstraction that virtualizes over a mesh of physically connected devices that can span multiple host servers. The DistributedDevice maintains the same programming model and API contract as MeshDevice while extending capabilities across multiple hosts.
 
@@ -1686,7 +1686,7 @@ DeviceHandle CreateDistributedDevice(
     DistributedDeviceConfig config, v1::DeviceOptions opts);
 ```
 
-## 4.3 DistributedBuffer
+## 4.3 DistributedBuffer <a id="distributed-buffer"></a>
 
 This section describes the design for DistributedBuffer, a logical device buffer hierarchically composed of shards and pages of data that span multiple remote hosts interfacing with device mesh. This extends MeshBuffer containing pages which are distributed across remote host device mesh.
 
@@ -1738,7 +1738,7 @@ There are a few Distributed Data Loader strategies that can be implemented to lo
 
 The above example shows how a distributed data loader would work. An 8x8 DistributedDevice is instantiated and the controller requests a weight tensor of [256,160] to be loaded from local file store. Host Controller issues a remote request to each of the Remote Executor to load its corresponding shard of data into local host RAM and then forwarded on as a local EnqueueMeshBuffer with a MeshDevice Device Handle for interfacing with its local accelerator mesh.
 
-## 4.4 DistributedWorkload: Overview, Data-Structures and APIs
+## 4.4 DistributedWorkload: Overview, Data-Structures and APIs <a id="distributed-workload"></a>
 
 This section introduces the DistributedWorkload primitive, which allows compute to be spawned on a Virtual Mesh directly through the Controller Host. This object exposes the same programming model and APIs as the MeshWorkload primitive.
 
@@ -1821,7 +1821,7 @@ void EnqueueDistributedWorkload(
     bool blocking);
 ```
 
-## 4.5 DistributedEvents: Overview, Data-Structures and APIs
+## 4.5 DistributedEvents: Overview, Data-Structures and APIs <a id="distributed-events"></a>
 
 Extending the concept of a MeshEvent to a Controller Host requires the introduction of the DistributedEvent primitive. This is the main synchronization mechanism for distributed workloads and expands the functionality of a MeshEvent. In particular, this primitive and its associated APIs can be used for (in order of increasing latency):
 
@@ -1916,7 +1916,7 @@ void DistributedEventSynchronizeOnController(shared_ptr<DistributedEvent> event)
 void Finish(CommandQueueHandle command_queue_handle);
 ```
 
-## 4.6 DistributedTrace: Overview and APIs
+## 4.6 DistributedTrace: Overview and APIs <a id="distributed-trace"></a>
 
 The DistributedTrace framework exposes the ability to trace workloads running across multiple hosts. The metadata associated with the traced workload will exist in memory distributed across the entire Virtual Mesh mapped to the controller, through the DistributedBuffer class.
 
@@ -1942,7 +1942,7 @@ void ReleaseDistributedTrace(std::shared_ptr<MeshDevice> mesh_device, uint32_t t
 
 ##
 
-## 4.7 Command Serialization
+## 4.7 Command Serialization <a id="command-serialization"></a>
 
 This layer captures the serialization framework/protocol used to binarize the commands enqueued into the Virtual Command Queue. The controller interfaces with a virtual mesh and gets lowered into messages that need to get transmitted to each of the RemoteExecutors managing its local mesh of accelerators.
 
@@ -1963,7 +1963,7 @@ enum class Command {
 };
 ```
 
-## 4.8 Network Transport
+## 4.8 Network Transport <a id="network-transport"></a>
 
 The “Network Transport” layer defines the mechanism for sending serialized commands to remote hosts.
 
@@ -2050,7 +2050,7 @@ Similarly on the reverse path, a reader thread interfaces with an RPC Sender Thr
    2. Initial target will focus on bringing up support for this model end-to-end
    3. We target a RemoteExecutor per remote host that
 
-# 5. TT-NN Integration
+# 5. TT-NN Integration <a id="tt-nn-integration"></a>
 
 The scope of work involved in TT-NN involves mapping directly to TT-Mesh and TT-Distributed. TT-NN users are mostly transparent to changes underneath the API.
 
@@ -2068,7 +2068,7 @@ The diagram below shows the different stages of integration:
 
 While integration work is ongoing, there is also feature-work and bug fixes that require support for tt-train and tt-mlir teams. The category of work involves Python/C++ API parity in TT-NN for multi-device and outstanding feature support.
 
-## 5.1. TT-Mesh/TT-Distributed Interoperability Layer
+## 5.1. TT-Mesh/TT-Distributed Interoperability Layer <a id="tt-mesh-tt-distributed-interoperability"></a>
 
 ### 5.1.1 What Changes?
 
@@ -2110,11 +2110,11 @@ Minimal impact. Model writers can largely be transparent to these changes from a
 
 Please leave further questions/comments feedback as review comments here.
 
-# Appendix
+# Appendix <a id="appendix"></a>
 
-## Appendix A: Existing Runtime Architecture Overview
+## Appendix A: Existing Runtime Architecture Overview <a id="appendix-a"></a>
 
-### A.1 Current State of Metal Runtime
+### A.1 Current State of Metal Runtime <a id="appendix-a-current-state-of-runtime"></a>
 
 We present the current components of the Metal Runtime Software stack, and their interactions, in the diagram below. *Note: The arrows in this diagram do not display dataflow, rather, dependencies between components*.
 
@@ -2128,7 +2128,7 @@ This diagram does not display Host Runtime infrastructure used by layers of the 
 
 **TODO: Describe how device init and management is done today and explain limitations of JIT Build that cause it to be inside a device + why we want to move it outside.**
 
-### A.2 A More Modular Approach to Metal Runtime
+### A.2 A More Modular Approach to Metal Runtime <a id="appendix-a-more-modular-approach"></a>
 
 In the diagram below, we present a modified architecture for Metal Runtime that places initialization and management modules in a dedicated Control Plane. The JIT Build module, responsible for generating Kernel and Firmware binaries; is similarly a dedicated service that can be used to compile device firmware, Dispatch (and TT-Fabric) kernels and user kernels (embedded in a program). This is similar to the tt\_cluster and UMD layers that get independently initialized and can be used by Device objects to interact with TT-Devices.
 
@@ -2143,7 +2143,7 @@ Thus, a Distributed Runtime interfacing with a mesh of devices requires a virtua
 
 **TODO: Add section on how device class can request control plane to initialize and manage FW based on system level specifications. How this can be extended to setup different FW for the distributed entry point.**
 
-### A.4 Distributed Metal Runtime Using Existing Components and Virtualization
+### A.4 Distributed Metal Runtime Using Existing Components and Virtualization <a id="appendix-a-distributed-metal-runtime-using-existing-components-and-virtualization"></a>
 
 Extending the architecture described in section 1.2, the diagram below describes a Distributed Runtime framework with data structures that can span multiple physical TT-Devices.
 
@@ -2153,9 +2153,9 @@ The goal is to abstract all physical device attributes (physical device/core coo
 
 The sections below describe the architecture of each Distributed/Mesh runtime object, as well as a distributed dispatch layer.
 
-## Appendix B: UMD
+## Appendix B: UMD <a id="appendix-b"></a>
 
-### Appendix B.1: UMD Queries
+### Appendix B.1: UMD Queries <a id="appendix-b-umd-queries"></a>
 
 ```cpp
 // ================= These APIs use Predefined Configuration Files =================
