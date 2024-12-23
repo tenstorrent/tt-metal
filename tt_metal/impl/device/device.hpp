@@ -61,16 +61,7 @@ inline namespace v0 {
 
 // A physical PCIexpress Tenstorrent device
 class Device {
-   private:
-    static_assert(detail::SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES, "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
-    static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
-
-    CoreCoord physical_worker_core_from_logical_core(const CoreCoord &logical_core) const;
-    CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
-    CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
-    CoreCoord virtual_core_from_physical_core(const CoreCoord &physical_coord, const CoreType& core_type) const;
-
-   public:
+public:
     // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(
@@ -102,68 +93,54 @@ class Device {
 
     bool is_initialized() const { return this->initialized_; }
 
+    // Next group methods is proxying a call to Cluster
+    // Some methods can be replaced with ::get_soc_description
+    // dram_size_perf_channel is only used in tests
+    // dram_grid_size is only used in a test and reshard
     int num_dram_channels() const;
-
     uint32_t l1_size_per_core() const;
     uint32_t dram_size_per_channel() const;
-
     CoreCoord grid_size() const;
-
     CoreCoord logical_grid_size() const;
-
-    CoreCoord compute_with_storage_grid_size() const;
-
     CoreCoord dram_grid_size() const;
-
     CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const;
     // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
     CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const;
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const;
+
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment();
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const;
-
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
 
     // Ethernet API
     CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const;
-
-    std::unordered_set<chip_id_t> get_ethernet_connected_device_ids() const {
-        return tt::Cluster::instance().get_ethernet_connected_device_ids(this->id_);
-    }
-
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const;
-
-    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const;
-
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const;
-
+    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const;
+    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const;
+    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const;
+
+    CoreCoord compute_with_storage_grid_size() const;
 
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const;
 
-    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const {
-        return tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(this->id_, eth_core));
-    }
-
-    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const {
-        return tt::Cluster::instance().get_ethernet_sockets(this->id_, connected_chip_id);
-    }
-
-    bool is_mmio_capable() const {
-        return tt::Cluster::instance().get_associated_mmio_device(this->id_) == this->id_;
-    }
-
-    void setup_tunnel_for_remote_devices();
-
-    void update_workers_build_settings(std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> &device_worker_variants);
+    bool is_mmio_capable() const;
 
     uint32_t num_sub_devices() const;
+
+    // Next group of methods is proxying a call to Allocator
+    const std::unique_ptr<Allocator> &get_initialized_allocator() const;
+    const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const;
+
+    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type) const;
+    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const;
 
     uint32_t num_banks(const BufferType &buffer_type) const;
     uint32_t num_banks(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
@@ -175,9 +152,6 @@ class Device {
 
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const;
-
-    const std::unique_ptr<Allocator> &get_initialized_allocator() const;
-    const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const;
 
     int32_t bank_offset(BufferType buffer_type, uint32_t bank_id) const;
     int32_t bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const;
@@ -199,25 +173,11 @@ class Device {
     uint32_t get_allocator_alignment() const;
     uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const;
 
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const;
+
     size_t get_l1_small_size() const;
     size_t get_l1_small_size(SubDeviceId sub_device_id) const;
-
-    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;
-    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const;
-
-    // Set of logical storage only core coordinates
-    const std::set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }
-
-    // Set of logical dispatch core coordinates
-
-    // Set of logical ethernet core coordinates
-    // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
-    // core.y represents different channels along one <x>
-    const std::set<CoreCoord> &ethernet_cores() const { return this->ethernet_cores_; }
-
-
-    uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const;
-    uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const;
 
     const std::unordered_set<Buffer *> &get_allocated_buffers() const;
     const std::unordered_set<Buffer *> &get_allocated_buffers(SubDeviceId sub_device_id) const;
@@ -225,8 +185,18 @@ class Device {
     void deallocate_buffers();
     void deallocate_buffers(SubDeviceId sub_device_id);
 
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const;
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const;
+    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;
+    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const;
+
+    // Set of logical ethernet core coordinates
+    // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
+    // core.y represents different channels along one <x>
+    const std::set<CoreCoord> &ethernet_cores() const { return this->ethernet_cores_; }
+
+    const std::set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }
+
+    uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const;
+    uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const;
 
     // machine epsilon
     float sfpu_eps() const;
@@ -237,13 +207,15 @@ class Device {
     // machine inf
     float sfpu_inf() const;
 
-    void generate_device_bank_to_noc_tables();
     const JitBuildEnv& build_env() const { return this->build_env_; }
+    // review: only used in tests
     const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const;
     const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const;
     const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const;
+    // review: used in kernel.cpp. should device build it?
     const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const;
     const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const;
+
     SystemMemoryManager& sysmem_manager() { return *sysmem_manager_; }
     HWCommandQueue& hw_command_queue(size_t cq_id = 0);
     CommandQueue& command_queue(size_t cq_id = 0);
@@ -257,67 +229,58 @@ class Device {
 
     bool using_slow_dispatch() const;
 
+    // Next cluster of methods could be private but they are actively used by DevicePool to maintain device lifecycle
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false);
-    void initialize_cluster();
-    std::unique_ptr<Allocator> initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
-    void initialize_build();
-    void initialize_device_kernel_defines();
     void build_firmware();
-    void initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core);
-    void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
     void reset_cores();
     void initialize_and_launch_firmware();
     void init_command_queue_host();
     void init_command_queue_device();
     void initialize_synchronous_sw_cmd_queue();
+    void update_dispatch_cores_for_multi_cq_eth_dispatch();
+
+    // review: 17 arguments, wtf
+    // only relies on device id, relies more on cluster
     void configure_kernel_variant(Program& program, const string& path, const std::vector<uint32_t>& compile_args, CoreCoord kernel_core, CoreCoord Kernel_virtual_core,
                                   CoreType dispatch_core_type, CoreCoord upstream_virtual_core, CoreCoord downstream_virtual_core, CoreCoord downstream_slave_virtual_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false, bool send_to_brisc = false, bool force_watcher_no_inline = false);
-    void compile_command_queue_programs();
-    void compile_command_queue_programs_new();
-    void configure_command_queue_programs();
-    void configure_command_queue_programs_new();
-    void clear_l1_state();
-    void get_associated_dispatch_virtual_cores(
-        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
-        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &other_dispatch_cores);
-    std::pair<int, int> build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const;
 
     // Puts device into reset
     bool close();
     friend bool CloseDevice(Device *device);
 
     // APIs to access this device's work executor
+    // Only used in Buffer
     bool can_use_passthrough_scheduling() const;
+
     template<typename F>
     void push_work(F&& work, bool blocking = false) {
         this->work_executor_.push_work(std::forward<F>(work), blocking);
     }
     void synchronize();
-    void set_worker_mode(const WorkExecutorMode& mode);
+
     void enable_async(bool enable);
     WorkExecutorMode get_worker_mode() { return work_executor_.get_worker_mode(); }
     void set_worker_queue_mode(const WorkerQueueMode& mode) { this->work_executor_.set_worker_queue_mode(mode); }
     WorkerQueueMode get_worker_queue_mode() { return this->work_executor_.get_worker_queue_mode(); }
 
-    void update_dispatch_cores_for_multi_cq_eth_dispatch();
-
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache();
     void disable_and_clear_program_cache();
+    program_cache::detail::ProgramCache& get_program_cache() { return program_cache_; }
+    //todo: delete, users can ask ProgramCache directly
     std::size_t num_program_cache_entries();
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const;
+
     template <typename T = DeviceAddr>
     T get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
-    // Returns address where allocator starts allocating buffer
-    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type) const;
-    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const;
 
-    template <typename CoreRangeContainer>
-    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
+    // only used by program
+    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type);
+
     bool dispatch_s_enabled() const;
     bool distributed_dispatcher() const;
     NOC dispatch_go_signal_noc() const;
@@ -341,29 +304,67 @@ class Device {
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
     std::optional<SubDeviceId> get_fabric_sub_device_id() const;
 
-    program_cache::detail::ProgramCache& get_program_cache() { return program_cache_; }
-
+    // review: only used by transpose and matmul
     std::set<CoreCoord> get_compute_cores() const { return compute_cores_; }
 
+    // review: has only 1 usage in command queue
     uint32_t get_completion_queue_reader_core() const { return completion_queue_reader_core_; }
 
+    // review: single use in tt_metal.cpp
     bool is_worker_queue_empty() const { return work_executor_.worker_queue.empty(); }
 
+    // review: only used in trace/trace_buffer, not used by device itself
     uint32_t get_trace_buffers_size() const { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
 
     bool using_fast_dispatch() const { return using_fast_dispatch_; }
 
+    // review: single use in device_pool
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const { return tunnels_from_mmio_; }
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 
 private:
+    static_assert(detail::SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES, "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
+    static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
+
+    void initialize_cluster();
+    std::unique_ptr<Allocator> initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+    void initialize_build();
+    void initialize_device_kernel_defines();
+    void initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core);
+    void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
+
     void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
+
+    void compile_command_queue_programs();
+    void compile_command_queue_programs_new();
+    void configure_command_queue_programs();
+    void configure_command_queue_programs_new();
+    void clear_l1_state();
+    void get_associated_dispatch_virtual_cores(
+        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
+        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &other_dispatch_cores);
+    std::pair<int, int> build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const;
+
+    void set_worker_mode(const WorkExecutorMode& mode);
+
+    void generate_device_bank_to_noc_tables();
+
+    void setup_tunnel_for_remote_devices();
+
+    void update_workers_build_settings(std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> &device_worker_variants);
+
     SubDeviceManagerId get_next_sub_device_manager_id();
     void reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceManager>& sub_device_manager);
-    void MarkAllocationsUnsafe();
-    void MarkAllocationsSafe();
+
+    void mark_allocations_unsafe();
+    void mark_allocations_safe();
+
+    CoreCoord physical_worker_core_from_logical_core(const CoreCoord &logical_core) const;
+    CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
+    CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
+    CoreCoord virtual_core_from_physical_core(const CoreCoord &physical_coord, const CoreType& core_type) const;
 
     chip_id_t id_;
     uint32_t build_key_ = 0;
@@ -372,7 +373,7 @@ private:
 
     // Leaving here for compatibility with current reacharounds
     // TODO: Replace with get_initialized_allocator()
-    Allocator * allocator_ = nullptr;
+    Allocator* allocator_ = nullptr;
     bool initialized_ = false;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
@@ -421,41 +422,9 @@ private:
 
 }  // namespace v0
 
-inline HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_core) const {
-
-    HalProgrammableCoreType programmable_core_type = HalProgrammableCoreType::TENSIX;
-    if (tt::Cluster::instance().is_ethernet_core(virtual_core, this->id_)) {
-        // Eth pcores have a different address, but only active ones.
-        CoreCoord logical_core = this->logical_core_from_ethernet_core(virtual_core);
-        if (this->is_active_ethernet_core(logical_core)) {
-            programmable_core_type = HalProgrammableCoreType::ACTIVE_ETH;
-        } else {
-            programmable_core_type = HalProgrammableCoreType::IDLE_ETH;
-        }
-    }
-
-    return programmable_core_type;
-}
-
 template <typename T>
 inline T Device::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
     return hal.get_dev_addr<T>(this->get_programmable_core_type(virtual_core), addr_type);
-}
-
-// TODO: Find a better home for this function
-template <typename CoreRangeContainer>
-std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type) {
-    // This API extracts all the pairs of noc multicast encodings given a set of core ranges
-    std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
-    dst_noc_multicast_info.reserve(ranges.size());
-    for (const CoreRange& core_range : ranges) {
-        CoreCoord virtual_start = this->virtual_core_from_logical_core(core_range.start_coord, core_type);
-        CoreCoord virtual_end = this->virtual_core_from_logical_core(core_range.end_coord, core_type);
-
-        uint32_t num_receivers = core_range.size();
-        dst_noc_multicast_info.push_back(std::make_pair(CoreRange(virtual_start, virtual_end), num_receivers));
-    }
-    return dst_noc_multicast_info;
 }
 
 }  // namespace tt_metal
