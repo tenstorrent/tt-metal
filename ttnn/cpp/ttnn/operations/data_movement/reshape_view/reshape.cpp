@@ -367,10 +367,11 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     }
     if (shape.logical_shape().volume() != tensor.get_logical_volume()) {
         // This is completely incorrect but it is due to issue 15137 or issue 15558
+        const auto& tile = tensor.tensor_spec().tile();
         bool tile_tensor_view_reshape_possible =
             (layout == ttnn::Layout::TILE and shape.with_tile_padding().rank() >= 2 and
-             shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0 and
-             shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0 and
+             shape.with_tile_padding()[-2] % tile.get_height() == 0 and
+             shape.with_tile_padding()[-1] % tile.get_width() == 0 and
              tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]);
 
         if (tile_tensor_view_reshape_possible) {
