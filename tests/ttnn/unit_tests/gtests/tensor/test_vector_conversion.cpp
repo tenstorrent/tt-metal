@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
+#include "common/bfloat16.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -44,24 +45,15 @@ TensorSpec get_tensor_spec(const ttnn::SimpleShape& shape, DataType dtype, Layou
 }
 
 template <typename T>
-std::vector<T> arange(int64_t start, int64_t end, int64_t step) {
+std::vector<T> arange(int64_t start, int64_t end, int64_t step, std::optional<int64_t> cap = std::nullopt) {
     std::vector<T> result;
     for (int el : xt::arange<int64_t>(start, end, step)) {
+        int capped_el = cap ? el % *cap : el;
         if constexpr (std::is_same_v<T, ::bfloat16>) {
-            result.push_back(T(static_cast<float>(el)));
+            result.push_back(T(static_cast<float>(capped_el)));
         } else {
-            result.push_back(static_cast<T>(el));
+            result.push_back(static_cast<T>(capped_el));
         }
-    }
-    return result;
-}
-
-// Creates a vector with alternating ones and zeros.
-std::vector<float> ones_and_zeros(int total_size) {
-    std::vector<float> result;
-    result.reserve(total_size);
-    for (int i = 0; i < total_size; ++i) {
-        result.push_back(i % 2 == 0 ? 0.0f : 1.0f);
     }
     return result;
 }
@@ -133,34 +125,35 @@ TEST(FloatVectorConversionTest, RoundtripBfloat16) {
 class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType> {};
 
 TEST_P(BlockFloatVectorConversionTest, InvalidLayout) {
-    ttnn::SimpleShape shape{128, 128};
+    ttnn::SimpleShape shape{32, 32};
+    // Block float types are only supported in TILE layout.
     EXPECT_ANY_THROW(
         Tensor::from_vector(std::vector<float>(shape.volume()), get_tensor_spec(shape, GetParam(), Layout::ROW_MAJOR)));
 }
 
 TEST_P(BlockFloatVectorConversionTest, Roundtrip) {
-    ttnn::SimpleShape shape{128, 128};
-    std::vector<float> input = ones_and_zeros(shape.volume());
+    ttnn::SimpleShape shape{32, 32};
+    std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
     auto output = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE)).to_vector<float>();
-    EXPECT_THAT(output, Pointwise(Eq(), input));
+    EXPECT_THAT(output, Pointwise(FloatNear(4.0f), input));
 }
 
 TEST_P(BlockFloatVectorConversionTest, RoundtripWithPadding) {
     ttnn::SimpleShape shape{14, 47};
-    std::vector<float> input = ones_and_zeros(shape.volume());
+    std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
     auto output = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
 
     EXPECT_THAT(output.get_logical_shape(), ShapeIs(14, 47));
     EXPECT_THAT(output.get_padded_shape(), ShapeIs(32, 64));
 
-    EXPECT_THAT(output.to_vector<float>(), Pointwise(Eq(), input));
+    EXPECT_THAT(output.to_vector<float>(), Pointwise(FloatNear(4.0f), input));
 }
 
 TEST_P(BlockFloatVectorConversionTest, RoundtripWithPaddingAndCustomTile) {
     ttnn::SimpleShape shape{14, 47};
-    std::vector<float> input = ones_and_zeros(shape.volume());
+    std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
     TensorSpec spec(shape, TensorLayout(GetParam(), PageConfig(Layout::TILE, Tile({16, 16})), MemoryConfig{}));
     auto output = Tensor::from_vector(input, spec);
@@ -168,7 +161,7 @@ TEST_P(BlockFloatVectorConversionTest, RoundtripWithPaddingAndCustomTile) {
     EXPECT_THAT(output.get_logical_shape(), ShapeIs(14, 47));
     EXPECT_THAT(output.get_padded_shape(), ShapeIs(16, 48));
 
-    EXPECT_THAT(output.to_vector<float>(), Pointwise(Eq(), input));
+    EXPECT_THAT(output.to_vector<float>(), Pointwise(FloatNear(4.0f), input));
 }
 
 INSTANTIATE_TEST_SUITE_P(
