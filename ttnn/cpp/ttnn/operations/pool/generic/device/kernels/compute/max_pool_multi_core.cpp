@@ -9,7 +9,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "tt_metal/hw/inc/debug/dprint_tensix.h"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -17,21 +17,8 @@
 inline void print_tile_rows(uint32_t cb_id, uint32_t rows = 32, uint32_t tile_id = 0, bool untilize = false) {
     // UNPACK(( DPRINT << "======" << ENDL() ));
     for (uint16_t r = 0; r < rows; ++r) {
-        UNPACK(
-            (DPRINT << (uint)r << " :: "
-                    << TileSlice(
-                           cb_id,
-                           tile_id,
-                           SliceRange{
-                               .h0 = (uint8_t)r,
-                               .h1 = (uint8_t)(r + 1),
-                               .hs = (uint8_t)1,
-                               .w0 = (uint8_t)0,
-                               .w1 = (uint8_t)32,
-                               .ws = (uint8_t)1},
-                           true,
-                           untilize)
-                    << ENDL()));
+        SliceRange sr = SliceRange{.h0 = r, .h1 = (uint16_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        UNPACK((DPRINT << (uint)r << " :: " << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL()));
     }
     // UNPACK(( DPRINT << "++++++" << ENDL() ));
 }
@@ -92,18 +79,12 @@ inline void reduce_h_fused(
     for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
         reduce_tile_math(c_i, num_faces_in_tile /* reduce 1 or 2 faces */);
     }
-    // if (curr_in_cb_id != in_cb_id) {
-    // dprint_tensix_dest_reg(0);
-    //}
     cb_pop_front(curr_in_cb_id, 1);
     tile_regs_wait();
     tile_regs_commit();
     pack_untilize_dst<num_output_tiles>(
         out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
-    // if (curr_in_cb_id != in_cb_id) {
-    //     print_tile_rows(out_cb_id, 32, 0, false);
-    // }
     cb_push_back(out_cb_id, num_output_tiles);
 }
 
@@ -146,27 +127,13 @@ void MAIN {
     for (uint32_t i = 0; i < nsticks_per_core; ++i) {
         for (uint32_t b_i = 0; b_i < in_nblocks_c; ++b_i) {
             if (b_i == in_nblocks_c - 1 && partial_iter_output_tiles > 0) {
-                // tilize_uninit(in_cb_id, out_cb_id);
                 pack_untilize_uninit(out_cb_id);
-                /* tilizeA_B_reduce_init_short(in_cb_id,
-                                            in_scalar_cb_id,
-                                            partial_iter_output_tiles,
-                                            out_cb_id,
-                                            num_faces_in_tile,
-                                            window_size_hw); */
                 pack_untilize_dst_init_short<partial_iter_output_tiles>(
                     out_cb_id, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
                 reduce_h_fused<partial_iter_output_tiles, is_partial_tile, split_reader, window_size_hw>(
                     in_cb_id, in_scalar_cb_id, i, out_cb_id);
             } else {
-                // tilize_uninit(in_cb_id, out_cb_id);
                 pack_untilize_uninit(out_cb_id);
-                /* tilizeA_B_reduce_init_short(in_cb_id,
-                                            in_scalar_cb_id,
-                                            max_tiles_per_iter,
-                                            out_cb_id,
-                                            num_faces_in_tile,
-                                            window_size_hw); */
                 pack_untilize_dst_init_short<max_tiles_per_iter>(
                     out_cb_id, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
                 reduce_h_fused<max_tiles_per_iter, is_partial_tile, split_reader, window_size_hw>(

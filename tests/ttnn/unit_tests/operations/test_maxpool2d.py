@@ -133,7 +133,7 @@ def run_max_pool(
 
     ## construct the tensor in NCHW shape
     act = torch.randn(act_shape, dtype=torch.bfloat16)
-    # act = torch.empty(act_shape, dtype=torch.bfloat16)
+    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
     # for n in range(act_shape[0]):
     #     for c in range(act_shape[1]):
     #         for h in range(act_shape[2]):
@@ -279,7 +279,7 @@ def run_max_pool(
             # [64, 16, 528, 80],  ## oom
             # [128, 16, 528, 80], ## oom
             # [256, 16, 528, 80], ## oom
-            # wide for vgg
+            ## wide for vgg
             [1, 256, 56, 56],
             [1, 512, 28, 28],
             [1, 512, 14, 14],
