@@ -2089,8 +2089,79 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors.at(0);
             const auto& output = output_tensors.at(0);
+
+            auto& input_tensor = input_tensors.at(0);
+
+            auto& final_output_tensor = output_tensors.at(0);
+            auto& input_tensor_from_remote_forward_direction = output_tensors.at(1);
+            auto& input_tensor_from_remote_backward_direction = output_tensors.at(2);
+            std::array<const Tensor*, 2> input_tensor_from_remote = {
+                &input_tensor_from_remote_forward_direction, &input_tensor_from_remote_backward_direction};
+            auto& partial_output_tensor_forward_direction = output_tensors.at(3);
+            auto& partial_output_tensor_backward_direction = output_tensors.at(4);
+            std::array<const Tensor*, 2> partial_output_tensor = {
+                &partial_output_tensor_forward_direction, &partial_output_tensor_backward_direction};
+
             auto& worker_reader_runtime_args_by_core = GetRuntimeArgs(program, kernel_ids.reader);
             auto& worker_writer_runtime_args_by_core = GetRuntimeArgs(program, kernel_ids.writer);
+            if (topology_config.is_at_end_of_line()) {
+
+                for (size_t i = 0; i < worker_cores.final_reducers_vec.size(); i++) {
+                    auto core = worker_cores.final_reducers_vec[i];
+                    auto &worker_reader_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
+                    worker_reader_runtime_args.at(0) = partial_output_tensor[LineDirection::FORWARD]->buffer()->address();;
+                    worker_reader_runtime_args.at(1) = partial_output_tensor[LineDirection::BACKWARD]->buffer()->address();;
+
+                    auto& worker_writer_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
+                    worker_writer_runtime_args.at(0) = final_output_tensor.buffer()->address();;
+                }
+                for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
+                    bool is_start_of_line = topology_config.is_first_device_in_line(direction);
+                    for (size_t i = 0; i < worker_cores.partial_reducers_vec[direction].size(); i++) {
+                        auto core = worker_cores.partial_reducers_vec[direction][i];
+                        auto &worker_reader_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
+                        worker_reader_runtime_args.at(0) = input_tensor.buffer()->address();
+                        if (is_start_of_line) {
+                            worker_reader_runtime_args.at(1) = input_tensor_from_remote.at(direction)->buffer()->address();
+                        }
+
+                        auto& worker_writer_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
+                        if (is_start_of_line) {
+                            worker_writer_runtime_args.at(0) = input_tensor_from_remote[direction]->buffer()->address();;
+                        } else {
+                            worker_writer_runtime_args.at(0) = final_output_tensor.buffer()->address();;
+                        }
+                    }
+                }
+            } else {
+                for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
+                    for (size_t i = 0; i < worker_cores.partial_reducers_vec[direction].size(); i++) {
+                        auto core = worker_cores.partial_reducers_vec[LineDirection::FORWARD][i];
+                        auto &worker_reader_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
+                        auto& worker_writer_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
+                        worker_reader_runtime_args.at(0) = input_tensor.buffer()->address();
+                        worker_reader_runtime_args.at(1) = input_tensor_from_remote[direction]->buffer()->address();
+
+                        // input_tensor_from_remote and remote output partial result tensor share the same addresses
+                        // because the input from remote of one chip is the partial result remote output of another
+                        worker_writer_runtime_args.at(0) = input_tensor_from_remote[direction]->buffer()->address();
+                        worker_writer_runtime_args.at(1) = partial_output_tensor[direction]->buffer()->address();
+                    }
+                }
+
+                for (size_t i = 0; i < worker_cores.final_reducers_vec.size(); i++) {
+                    auto core = worker_cores.final_reducers_vec[i];
+                    auto &worker_reader_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
+
+                    worker_reader_runtime_args.at(0) = partial_output_tensor[LineDirection::FORWARD]->buffer()->address();
+                    worker_reader_runtime_args.at(1) = partial_output_tensor[LineDirection::BACKWARD]->buffer()->address();
+
+                    auto& worker_writer_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
+                    worker_writer_runtime_args.at(0) = final_output_tensor.buffer()->address();
+                }
+            }
+
+
         };
 
     log_trace(tt::LogOp, "Done program factory");
