@@ -279,7 +279,7 @@ def run_conv2d_short_sweep(
         if has_bias:
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
-        tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
         conv_config = ttnn.Conv2dConfig()
 
     start_time = start_measuring_time()
@@ -359,7 +359,7 @@ def run_conv1d_short_sweep(
     if has_bias:
         tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
 
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.Conv1d(
