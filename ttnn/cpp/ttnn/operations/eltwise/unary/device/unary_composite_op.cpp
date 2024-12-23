@@ -515,13 +515,11 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     } else if (min.value() > max.value()) {
         return full_like(a, max.value());
     }
-    const Tensor h_const = full_like(a, max.value());
-    Tensor a_max = ttnn::minimum(a, h_const, output_memory_config);
+    Tensor a_max = ttnn::minimum(a, max.value(), output_memory_config);
     if (min.value() == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        const Tensor l_const = full_like(a, min.value());
-        return ttnn::maximum(a_max, l_const, output_memory_config);
+        return ttnn::maximum(a_max, min.value(), output_memory_config);
     }
 }
 
