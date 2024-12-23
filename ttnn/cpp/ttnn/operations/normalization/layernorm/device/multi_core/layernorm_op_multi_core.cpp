@@ -555,7 +555,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool mcast_1d = M == block_h;
     bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = shard_spec.grid.bounding_box();
-    CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
+    CoreCoord grid_size = {bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1};
+    std::optional<CoreCoord> grid_offset = std::nullopt;
+    if (bbox.start_coord.x != 0 || bbox.start_coord.y != 0) {
+        grid_offset = bbox.start_coord;
+    }
     if (mcast_1d) {
         num_blocks = shard_spec.num_cores();
     } else if (row_wise) {
@@ -568,7 +572,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool use_two_stage_reduce = false;
     if (mcast_1d) {
         // only do this for row/col dim are full length
-        if (row_wise && grid_size.x == device->compute_with_storage_grid_size().x &&
+        if (row_wise && grid_size.x <= device->compute_with_storage_grid_size().x &&
             grid_size.y > 1) {  // row major and multiple rows
             use_two_stage_reduce = true;
         } else if (
@@ -844,6 +848,31 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             num_cores_x_mcast = 1;
             num_cores_y_mcast = num_cores_y;
         }
+    }
+    auto applyStartOffset = [](const CoreRangeSet& input_set, const CoreCoord& grid_offset) -> CoreRangeSet {
+        if (input_set.empty()) {
+            return input_set;
+        }
+
+        std::vector<CoreRange> new_ranges;
+        new_ranges.reserve(input_set.size());
+
+        for (const CoreRange& range : input_set.ranges()) {
+            CoreCoord new_start = {range.start_coord.x + grid_offset.x, range.start_coord.y + grid_offset.y};
+            CoreCoord new_end = {range.end_coord.x + grid_offset.x, range.end_coord.y + grid_offset.y};
+            new_ranges.emplace_back(new_start, new_end);
+        }
+
+        return CoreRangeSet(std::move(new_ranges));
+    };
+    if (grid_offset.has_value()) {
+        start_core = {start_core.x + grid_offset.value().x, start_core.y + grid_offset.value().y};
+        sender_cores = {
+            {sender_cores.start_coord.x + start_core.x, sender_cores.start_coord.y + start_core.y},
+            {sender_cores.end_coord.x + start_core.x, sender_cores.end_coord.y + start_core.y}};
+        all_to_all_cores = applyStartOffset(all_to_all_cores, grid_offset.value());
+        all_to_all_workers_except_sender = applyStartOffset(all_to_all_workers_except_sender, grid_offset.value());
+        not_all_to_all_workers = applyStartOffset(not_all_to_all_workers, grid_offset.value());
     }
     // Mcast args
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -1304,7 +1333,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     } else {
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
     }
-    const auto& cores = grid_to_cores(all_cores.num_cores(), num_cores_x, num_cores_y, row_wise);
+    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise = row_wise);
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
@@ -1328,11 +1357,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::vector<uint32_t> in0_mcast_noc_y;
     in0_mcast_noc_x.reserve(num_cores_x);
     in0_mcast_noc_y.reserve(num_cores_y);
-    for (uint32_t core_idx_x = 0; core_idx_x < num_cores_x; ++core_idx_x) {
-        in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+    CoreCoord core_start_offset = grid_offset.value_or(CoreCoord{0, 0});
+    for (uint32_t core_idx_x = core_start_offset.x; core_idx_x < num_cores_x + core_start_offset.x; ++core_idx_x) {
+        in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, core_start_offset.y}).x);
     }
-    for (uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
-        in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+    for (uint32_t core_idx_y = core_start_offset.y; core_idx_y < num_cores_y + core_start_offset.y; ++core_idx_y) {
+        in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, core_idx_y}).y);
     }
 
     uint32_t last_core_width_index = 0;
