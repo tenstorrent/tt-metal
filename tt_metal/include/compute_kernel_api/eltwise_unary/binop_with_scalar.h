@@ -54,6 +54,25 @@ ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst, param1)));
 }
 
+ALWI void add_unary_int32_tile(uint32_t idst, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_int32<APPROX, ADD_UNARY>(idst, param1)));
+}
+
+ALWI void sub_unary_int32_tile(uint32_t idst, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_int32<APPROX, SUB_UNARY>(idst, param1)));
+}
+
+ALWI void mul_unary_int32_tile(uint32_t idst, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_int32<APPROX, MUL_UNARY>(idst, param1)));
+}
+
+ALWI void div_unary_int32_tile(uint32_t idst, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_int32<APPROX, DIV_UNARY>(idst, param1)));
+}
+
+ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_int32<APPROX, RSUB_UNARY>(idst, param1)));
+}
 /**
  * Please refer to documentation for any_init.
  */

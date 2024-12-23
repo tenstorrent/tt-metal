@@ -463,10 +463,20 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
     T param,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = unary_op_type;
+
+    if (input_tensor.get_dtype() == DataType::INT32) {
+        if (unary_op_type == UnaryOpType::ADD_UNARY_SFPU) {
+            op_type = UnaryOpType::ADD_UNARY_INT32_SFPU;
+        }
+        if (unary_op_type == UnaryOpType::MUL_UNARY_SFPU) {
+            op_type = UnaryOpType::MUL_UNARY_INT32_SFPU;
+        }
+    }
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {UnaryWithParam(unary_op_type, static_cast<float>(param))},
+        {UnaryWithParam(op_type, static_cast<float>(param))},
         memory_config,
         optional_output_tensor);
 }
@@ -478,10 +488,19 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = unary_op_type;
+    if (input_tensor.get_dtype() == DataType::INT32) {
+        if (unary_op_type == UnaryOpType::ADD_UNARY_SFPU) {
+            op_type = UnaryOpType::ADD_UNARY_INT32_SFPU;
+        }
+        if (unary_op_type == UnaryOpType::MUL_UNARY_SFPU) {
+            op_type = UnaryOpType::MUL_UNARY_INT32_SFPU;
+        }
+    }
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {UnaryWithParam(unary_op_type, static_cast<float>(param))},
+        {UnaryWithParam(op_type, static_cast<float>(param))},
         memory_config,
         optional_output_tensor);
 }
@@ -492,10 +511,20 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
     T param,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = unary_op_type;
+    if (input_tensor.get_dtype() == DataType::INT32) {
+        if (unary_op_type == UnaryOpType::ADD_UNARY_SFPU) {
+            op_type = UnaryOpType::ADD_UNARY_INT32_SFPU;
+        }
+        if (unary_op_type == UnaryOpType::MUL_UNARY_SFPU) {
+            op_type = UnaryOpType::MUL_UNARY_INT32_SFPU;
+        }
+    }
+
     return detail::unary_impl(
         DefaultQueueId,
         input_tensor,
-        {UnaryWithParam(unary_op_type, static_cast<float>(param))},
+        {UnaryWithParam(op_type, static_cast<float>(param))},
         memory_config,
         optional_output_tensor);
 }
@@ -506,10 +535,20 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = unary_op_type;
+    if (input_tensor.get_dtype() == DataType::INT32) {
+        if (unary_op_type == UnaryOpType::ADD_UNARY_SFPU) {
+            op_type = UnaryOpType::ADD_UNARY_INT32_SFPU;
+        }
+        if (unary_op_type == UnaryOpType::MUL_UNARY_SFPU) {
+            op_type = UnaryOpType::MUL_UNARY_INT32_SFPU;
+        }
+    }
+
     return detail::unary_impl(
         DefaultQueueId,
         input_tensor,
-        {UnaryWithParam(unary_op_type, static_cast<float>(param))},
+        {UnaryWithParam(op_type, static_cast<float>(param))},
         memory_config,
         optional_output_tensor);
 }
@@ -517,6 +556,8 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
 // Explicit template instantiation
 template struct SymmetricBinop<UnaryOpType::ADD_UNARY_SFPU>;
 template struct SymmetricBinop<UnaryOpType::MUL_UNARY_SFPU>;
+template struct SymmetricBinop<UnaryOpType::ADD_UNARY_INT32_SFPU>;
+template struct SymmetricBinop<UnaryOpType::MUL_UNARY_INT32_SFPU>;
 
 template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type>
 Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
@@ -525,10 +566,19 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     float param,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = unary_op_type;
+    if (input_tensor.get_dtype() == DataType::INT32) {
+        if (unary_op_type == UnaryOpType::SUB_UNARY_SFPU) {
+            op_type = UnaryOpType::SUB_UNARY_INT32_SFPU;
+        }
+        if (unary_op_type == UnaryOpType::DIV_UNARY_SFPU) {
+            op_type = UnaryOpType::DIV_UNARY_INT32_SFPU;
+        }
+    }
     return detail::unary_impl(
         queue_id,
         input_tensor,
-        {UnaryWithParam(unary_op_type, static_cast<float>(param))},
+        {UnaryWithParam(op_type, static_cast<float>(param))},
         memory_config,
         optional_output_tensor);
 }
@@ -540,6 +590,18 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    // UnaryOpType rev_op_type = unary_op_rev_type;
+    // if (input_tensor.get_dtype() == DataType::INT32) {
+    //     if (unary_op_rev_type == UnaryOpType::RSUB)
+    //     {
+    //         rev_op_type = UnaryOpType::RSUB_UNARY_INT32_SFPU;
+    //     }
+    //     if (unary_op_rev_type == UnaryOpType::RDIV)
+    //     {
+    //         rev_op_type = UnaryOpType::RDIV_UNARY_INT32_SFPU;
+    //     }
+    // }
+
     return detail::unary_impl(
         queue_id,
         input_tensor,
@@ -554,10 +616,19 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     float param,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = unary_op_type;
+    if (input_tensor.get_dtype() == DataType::INT32) {
+        if (unary_op_type == UnaryOpType::SUB_UNARY_SFPU) {
+            op_type = UnaryOpType::SUB_UNARY_INT32_SFPU;
+        }
+        if (unary_op_type == UnaryOpType::DIV_UNARY_SFPU) {
+            op_type = UnaryOpType::DIV_UNARY_INT32_SFPU;
+        }
+    }
     return detail::unary_impl(
         DefaultQueueId,
         input_tensor,
-        {UnaryWithParam(unary_op_type, static_cast<float>(param))},
+        {UnaryWithParam(op_type, static_cast<float>(param))},
         memory_config,
         optional_output_tensor);
 }
@@ -568,6 +639,18 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    // UnaryOpType rev_op_type = unary_op_rev_type;
+    // if (input_tensor.get_dtype() == DataType::INT32) {
+    //     if (unary_op_rev_type == UnaryOpType::RSUB)
+    //     {
+    //         rev_op_type = UnaryOpType::RSUB_UNARY_INT32_SFPU;
+    //     }
+    //     if (unary_op_rev_type == UnaryOpType::RDIV)
+    //     {
+    //         rev_op_type = UnaryOpType::RDIV_UNARY_INT32_SFPU;
+    //     }
+    // }
+
     return detail::unary_impl(
         DefaultQueueId,
         input_tensor,
@@ -578,5 +661,7 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
 
 template struct AsymmetricBinop<UnaryOpType::SUB_UNARY_SFPU, UnaryOpType::RSUB>;
 template struct AsymmetricBinop<UnaryOpType::DIV_UNARY_SFPU, UnaryOpType::RDIV>;
+template struct AsymmetricBinop<UnaryOpType::SUB_UNARY_INT32_SFPU, UnaryOpType::RSUB>;
+template struct AsymmetricBinop<UnaryOpType::DIV_UNARY_INT32_SFPU, UnaryOpType::RDIV>;
 
 }  // namespace ttnn::operations::unary

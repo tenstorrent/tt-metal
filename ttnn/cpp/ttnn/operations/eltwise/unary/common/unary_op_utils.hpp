@@ -52,6 +52,10 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
         case UnaryOpType::DIV_UNARY_SFPU:
+        case UnaryOpType::ADD_UNARY_INT32_SFPU:
+        case UnaryOpType::SUB_UNARY_INT32_SFPU:
+        case UnaryOpType::MUL_UNARY_INT32_SFPU:
+        case UnaryOpType::DIV_UNARY_INT32_SFPU:
         case UnaryOpType::UNARY_NE:
         case UnaryOpType::UNARY_GT:
         case UnaryOpType::UNARY_LT:

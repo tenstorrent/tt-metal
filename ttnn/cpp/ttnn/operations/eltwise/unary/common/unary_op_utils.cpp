@@ -46,7 +46,11 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
-        case UnaryOpType::DIV_UNARY_SFPU: defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1"; break;
+        case UnaryOpType::DIV_UNARY_SFPU:
+        case UnaryOpType::ADD_UNARY_INT32_SFPU:
+        case UnaryOpType::SUB_UNARY_INT32_SFPU:
+        case UnaryOpType::MUL_UNARY_INT32_SFPU:
+        case UnaryOpType::DIV_UNARY_INT32_SFPU: defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1"; break;
         case UnaryOpType::IDENTITY:
         case UnaryOpType::IDENTITY_UINT32: defines["SFPU_OP_IDENTITY_INCLUDE"] = "1"; break;
         case UnaryOpType::FLOOR:
@@ -187,25 +191,50 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 "rsub_tile_init();", fmt::format("rsub_tile({}, {}u);", idst, Converter::to_hex(param0))};
             break;
+        // case UnaryOpType::RSUB_INT32:
+        //     op_init_and_name = {
+        //         "rsub_tile_init();", fmt::format("rsub_unary_int32_tile({}, {}u);", idst,
+        //         Converter::to_hex(param0))};
+        //     break;
         case UnaryOpType::SUB_UNARY_SFPU:
             op_init_and_name = {
                 "binop_with_scalar_tile_init();",
                 fmt::format("sub_unary_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
+        case UnaryOpType::SUB_UNARY_INT32_SFPU:
+            op_init_and_name = {
+                "binop_with_scalar_tile_init();",
+                fmt::format("sub_unary_int32_tile({}, {}u);", idst, Converter::to_hex(param0))};
             break;
         case UnaryOpType::ADD_UNARY_SFPU:
             op_init_and_name = {
                 "binop_with_scalar_tile_init();",
                 fmt::format("add_unary_tile({}, {}u);", idst, Converter::to_hex(param0))};
             break;
+        case UnaryOpType::ADD_UNARY_INT32_SFPU:
+            op_init_and_name = {
+                "binop_with_scalar_tile_init();",
+                fmt::format("add_unary_int32_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
         case UnaryOpType::MUL_UNARY_SFPU:
             op_init_and_name = {
                 "binop_with_scalar_tile_init();",
                 fmt::format("mul_unary_tile({}, {}u);", idst, Converter::to_hex(param0))};
             break;
+        case UnaryOpType::MUL_UNARY_INT32_SFPU:
+            op_init_and_name = {
+                "binop_with_scalar_tile_init();",
+                fmt::format("mul_unary_int32_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
         case UnaryOpType::DIV_UNARY_SFPU:
             op_init_and_name = {
                 "binop_with_scalar_tile_init();",
                 fmt::format("div_unary_tile({}, {}u);", idst, Converter::to_hex(1.0f / param0))};
+            break;
+        case UnaryOpType::DIV_UNARY_INT32_SFPU:
+            op_init_and_name = {
+                "binop_with_scalar_tile_init();",
+                fmt::format("div_unary_int32_tile({}, {}u);", idst, Converter::to_hex(1.0f / param0))};
             break;
         case UnaryOpType::UNARY_NE:
             op_init_and_name = {

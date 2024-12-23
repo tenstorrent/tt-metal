@@ -17,5 +17,14 @@ union Converter {
     }
 };
 
+union ConverterInt {
+    int d;
+    uint32_t u;
+    static int to_int(uint32_t _v) {
+        ConverterInt c{};
+        c.u = _v;
+        return c.d;
+    }
+};
 }  // namespace sfpu
 }  // namespace ckernel
