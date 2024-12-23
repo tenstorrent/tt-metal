@@ -710,8 +710,18 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool> shard_or_reshard_
                     ttnn::to_layout(input_tensor, Layout::TILE, std::nullopt, std::nullopt, input_tensor.device());
             }
             if (!auto_shard_mm) {
-                auto resharded_input_tensor =
-                    ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config, std::nullopt);
+                ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
+                if (!input_tensor.is_sharded()) {
+                    // In case we need to run Interleaved2Sharded switch fron physical sharding
+                    // to logical sharding, in order to get smaller allocation size of sharded buffer.
+                    input_tensor_sharded_memory_config_to_layout.shard_spec = ShardSpec(
+                        input_tensor_sharded_memory_config.shard_spec.value().grid,
+                        input_tensor_sharded_memory_config.shard_spec.value().shape,
+                        input_tensor_sharded_memory_config.shard_spec.value().shape,
+                        input_tensor_sharded_memory_config.shard_spec.value().orientation);
+                }
+                Tensor resharded_input_tensor =
+                    ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt);
                 if (conv_config.deallocate_activation) {
                     input_tensor.deallocate(/*force*/ true);
                     resharded_input_tensor = ttnn::move(resharded_input_tensor);
