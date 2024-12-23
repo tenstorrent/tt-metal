@@ -33,6 +33,7 @@ binary_fns = {
     "div",
     "bias_gelu",
 }
+
 activation_fns = {
     "EXP": torch.exp,
     "GELU": torch.nn.functional.gelu,
