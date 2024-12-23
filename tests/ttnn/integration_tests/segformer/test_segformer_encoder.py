@@ -133,10 +133,7 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
         )
     else:
         torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-        torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, 13, 0, 0, 0, 0, 0, 0))
         N, H, W, C = torch_input_tensor.shape
-        torch_input_tensor = torch.reshape(torch_input_tensor, (N, 1, H * W, C))
-
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
