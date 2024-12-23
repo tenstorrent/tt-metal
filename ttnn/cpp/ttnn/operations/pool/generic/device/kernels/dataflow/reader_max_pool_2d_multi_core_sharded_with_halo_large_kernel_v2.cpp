@@ -49,7 +49,7 @@ void kernel_main() {
 
     const int32_t pad_w = get_compile_time_arg_val(3);
 
-    // channel size in bytes
+    // channel size in bytes, multiple of 32
     const uint32_t in_nbytes_c = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels
@@ -72,20 +72,21 @@ void kernel_main() {
 
     constexpr uint32_t TILE_SIZE = 32 * 32;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-    constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
+    constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;
     constexpr uint32_t ROW_HW = 64;
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CBIndex::c_1 : tt::CBIndex::c_0;
-    constexpr uint32_t in_shard_cb_id = tt::CBIndex::c_2;  // local input shard
-    constexpr uint32_t in_reader_indices_cb_id = tt::CBIndex::c_3;
-    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
-    constexpr uint32_t interm_reduction_cb_id = tt::CBIndex::c_25;
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CB::c_in1 : tt::CB::c_in0;
+    constexpr uint32_t in_shard_cb_id = tt::CB::c_in2;  // local input shard
+    constexpr uint32_t in_reader_indices_cb_id = tt::CB::c_in3;
+    constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
+    constexpr uint32_t interm_reduction_cb_id = tt::CB::c_intermed1;
 
     // minus infinity for bfp16
     uint16_t minus_inf = 63487;
     // Reduce scalar = 1
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
+        // cb_reserve_back(interm_reduction_cb_id, 1);
 
         uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
         // fill interm buffer with minus_inf
@@ -93,6 +94,7 @@ void kernel_main() {
         // fill 1 row w/ scalar
         fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
         cb_push_back(in_scalar_cb_id, 1);
+        // cb_push_back(interm_reduction_cb_id, 1);
     }
 
     uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
@@ -102,6 +104,7 @@ void kernel_main() {
 
     uint32_t in_w_padded = in_w + 2 * pad_w + ceil_pad_w;
 
+    uint32_t npages_to_reserve = 1;
     uint32_t read_bytes = in_nbytes_c;
     if (in_nbytes_c > MAX_ELE_PER_REDUCTION) {
         read_bytes = MAX_ELE_PER_REDUCTION;  // for now, pow of 2 channels are only supported.
@@ -113,10 +116,9 @@ void kernel_main() {
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             uint16_t top_left_local_index = reader_indices_ptr[counter];
             uint32_t processed_rows = 0;
-            cb_reserve_back(in_cb_id, 1);
+            cb_reserve_back(in_cb_id, npages_to_reserve);
             uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
             uint32_t out_l1_write_addr = out_l1_write_addr_base;
-            // fill interm buffer with minus_inf if we have only one chunk
             if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
                 fill_with_val(out_l1_write_addr, in_cb_sz, minus_inf);
             }
@@ -130,8 +132,8 @@ void kernel_main() {
                     processed_rows++;
                     if ((processed_rows % max_rows_for_reduction) == 0) {
                         noc_async_read_barrier();
-                        cb_push_back(in_cb_id, 1);
-                        cb_reserve_back(in_cb_id, 1);
+                        cb_push_back(in_cb_id, npages_to_reserve);
+                        cb_reserve_back(in_cb_id, npages_to_reserve);
                         out_l1_write_addr_base = get_write_ptr(in_cb_id);
                         out_l1_write_addr = out_l1_write_addr_base;
                         // If next is last chunk, fill whole buffer with -inf.
@@ -143,7 +145,7 @@ void kernel_main() {
             }
             if (remaining_elems) {
                 noc_async_read_barrier();
-                cb_push_back(in_cb_id, 1);
+                cb_push_back(in_cb_id, npages_to_reserve);
             }
         }
         counter++;

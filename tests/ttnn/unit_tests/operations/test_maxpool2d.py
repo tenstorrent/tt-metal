@@ -52,6 +52,18 @@ def run_max_pool(
     cores_y = device.core_grid.y
     max_cores = cores_x * cores_y
 
+    # temporarily skip non-8 tile multiple wide reductions with large kernels
+    if kernel_h > 4:
+        if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
+            if in_c > 256 and in_c % 256 != 0:
+                pytest.skip("Wide reductions with large kernels requires input channels to be multiple of 8 tiles")
+        if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            if (in_c / max_cores) > 256 and (in_c / max_cores) % 256 != 0:
+                pytest.skip("Wide reductions with large kernels requires input channels to be multiple of 8 tiles")
+        if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+            if (in_c / cores_x) > 256 and (in_c / cores_x) % 256 != 0:
+                pytest.skip("Wide reductions with large kernels requires input channels to be multiple of 8 tiles")
+
     if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
         if in_c % 16 != 0:
             pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
@@ -121,6 +133,12 @@ def run_max_pool(
 
     ## construct the tensor in NCHW shape
     act = torch.randn(act_shape, dtype=torch.bfloat16)
+    # act = torch.empty(act_shape, dtype=torch.bfloat16)
+    # for n in range(act_shape[0]):
+    #     for c in range(act_shape[1]):
+    #         for h in range(act_shape[2]):
+    #             for w in range(act_shape[3]):
+    #                 act[n, c, h, w] = h * in_w + w
     # act = torch.zeros(act_shape, dtype=torch.bfloat16)
     # for n in range(act_shape[0]):
     #     for c in range(act_shape[1]):
@@ -137,8 +155,6 @@ def run_max_pool(
     act_reshaped = act_permuted.reshape(act_shape)
 
     if dtype == ttnn.bfloat8_b:
-        if (in_h * in_w) % 32 != 0:
-            pytest.skip("For BFP8_B datatype, input height * width should be multiple of 32")
         if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED and (in_c / max_cores) % 32 != 0:
             pytest.skip("For BFP8_B datatype, input channels / max_cores should be multiple of 32")
         if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED and (in_c / cores_x) % 32 != 0:
@@ -240,34 +256,34 @@ def run_max_pool(
             [4, 64, 112, 112],
             [8, 64, 112, 112],
             [16, 64, 112, 112],
-            # [20, 64, 112, 112],   ## oom
-            ## hpr shapes
+            [20, 64, 112, 112],  ## oom
+            # hpr shapes
             [8, 32, 132, 20],
             [16, 32, 132, 20],
             [32, 32, 132, 20],
             [64, 32, 132, 20],
             [128, 32, 132, 20],
-            # [256, 32, 132, 20],   ## oom
+            [256, 32, 132, 20],  ## oom
             [8, 32, 264, 40],
             [16, 32, 264, 40],
             [32, 32, 264, 40],
-            # [64, 32, 264, 40],    ## oom
-            # [128, 32, 264, 40],   ## oom
-            # [256, 32, 264, 40],   ## oom
+            [64, 32, 264, 40],  ## oom
+            [128, 32, 264, 40],  ## oom
+            [256, 32, 264, 40],  ## oom
             [4, 16, 1056, 160],
-            # [8, 16, 1056, 160],     ## oom
-            # [16, 16, 1056, 160],    ## oom
-            # [32, 16, 1056, 160],    ## oom
-            # [64, 16, 1056, 160],    ## oom
-            # [128, 16, 1056, 160],   ## oom
-            # [256, 16, 1056, 160],   ## oom
+            [8, 16, 1056, 160],  ## oom
+            [16, 16, 1056, 160],  ## oom
+            [32, 16, 1056, 160],  ## oom
+            [64, 16, 1056, 160],  ## oom
+            [128, 16, 1056, 160],  ## oom
+            [256, 16, 1056, 160],  ## oom
             [8, 16, 528, 80],
             [16, 16, 528, 80],
-            # [32, 16, 528, 80],  ## oom
-            # [64, 16, 528, 80],  ## oom
-            # [128, 16, 528, 80], ## oom
-            # [256, 16, 528, 80], ## oom
-            ## wide for vgg
+            [32, 16, 528, 80],  ## oom
+            [64, 16, 528, 80],  ## oom
+            [128, 16, 528, 80],  ## oom
+            [256, 16, 528, 80],  ## oom
+            # wide for vgg
             [1, 256, 56, 56],
             [1, 512, 28, 28],
             [1, 512, 14, 14],
@@ -275,6 +291,10 @@ def run_max_pool(
             [1, 512, 10, 10],
             [1, 96, 112, 112],
             [1, 192, 132, 20],
+            # wide non-8 multiple tests
+            [1, 384, 16, 16],
+            [1, 576, 16, 8],
+            [1, 800, 8, 8],
         )
     ),
 )
@@ -350,6 +370,10 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
             # wide yolo kernel
             [1, 32768, 10, 10],
             [1, 6144, 6, 6],
+            # wide non-8 multiple tests
+            [1, 24576, 16, 16],
+            [1, 36864, 16, 8],
+            [1, 51200, 8, 8],
         )
     ),
 )
@@ -455,6 +479,10 @@ def test_run_max_pool_width_shard(
             [1, 4096, 10, 10],
             [1, 768, 56, 56],
             [1, 1280, 8, 6],
+            # wide non-8 multiple tests
+            [1, 3072, 16, 16],
+            [1, 4608, 16, 8],
+            [1, 6400, 8, 8],
         )
     ),
 )
@@ -754,8 +782,6 @@ def test_pool_core_nondivis(
     act_reshaped = act_permuted.reshape(act_shape)
 
     if dtype == ttnn.bfloat8_b:
-        if (in_h * in_w) % 32 != 0:
-            pytest.skip("For BFP8_B datatype, input height * width should be multiple of 32")
         ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
     else:
         ttact = ttnn.from_torch(act_reshaped, dtype)

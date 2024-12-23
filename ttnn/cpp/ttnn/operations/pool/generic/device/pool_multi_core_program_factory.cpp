@@ -106,7 +106,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         nblocks);
 
     // CBs
-    uint32_t multi_buffering_factor = 2;
+    uint32_t multi_buffering_factor = 1;
 
     uint32_t split_reader = 1;
 
@@ -158,16 +158,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                 ? (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
                 : input_shape[3] / num_shards_c * kernel_size_hw_padded;
         if (is_wide_reduction) {
-            in_nblocks_c = in_ntiles_c / MAX_TILES_PER_REDUCTION;
+            TT_FATAL(
+                in_ntiles_c % MAX_TILES_PER_REDUCTION == 0,
+                "for large kernels, wide reductions currently need to be a multiple of MAX_TILES_PER_REDUCTION");
+            in_nblocks_c = std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION);
         }
     } else {
         if (is_wide_reduction) {
             in_cb_sz = MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * kernel_size_hw_padded;
-            TT_FATAL(
-                in_ntiles_c % MAX_TILES_PER_REDUCTION == 0,
-                "input channels should be multiple of {} tiles. General case TODO.",
-                MAX_TILES_PER_REDUCTION);
-            in_nblocks_c = in_ntiles_c / MAX_TILES_PER_REDUCTION;
+            in_nblocks_c = std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION);
         } else {
             in_cb_sz = input_shape[3] / num_shards_c * kernel_size_hw_padded;
         }
@@ -197,6 +196,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_tiled_cb_id = tt::CBIndex::c_24;  // tiled input
     uint32_t in_tiled_cb_pagesize = tile_size(in_df);
     uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * nblocks;
+    if (is_wide_reduction) {
+        // in_tiled_cb_npages = ceil_multiple_of(in_tiled_cb_npages, MAX_TILES_PER_REDUCTION);
+    }
     CircularBufferConfig in_tiled_cb_config =
         CircularBufferConfig(in_tiled_cb_npages * in_tiled_cb_pagesize, {{in_tiled_cb_id, in_df}})
             .set_page_size(in_tiled_cb_id, in_tiled_cb_pagesize);
@@ -204,12 +206,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_tiled_cb_id, in_tiled_cb_pagesize, in_tiled_cb_npages);
 
     // output of reduce == writer to write
-    uint32_t out_cb_id = tt::CBIndex::c_16;  // output rows in RM
+    uint32_t out_cb_id = tt::CB::c_out0;  // output rows in RM
     // after reduction
-    uint32_t out_cb_pagesize = output.shard_spec().value().shape[1] * out_nbytes /
-                               in_nblocks_c;  // there is just one row of channels after each reduction (or 1 block of c
-                                              // if its greater than 8 tiles)
-    uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_nblocks_c;
+    uint32_t out_cb_pagesize =
+        tt::constants::TILE_WIDTH * out_nbytes;  // there is just one row of channels after each reduction (or 1 block
+                                                 // of c if its greater than 8 tiles)
+    uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_ntiles_c;
+
     CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
                                              .set_page_size(out_cb_id, out_cb_pagesize)
                                              .set_globally_allocated_address(*output.buffer());
