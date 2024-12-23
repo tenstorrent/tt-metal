@@ -78,14 +78,14 @@ HalCoreInfoType create_idle_eth_mem_map() {
             case 0: {
                 fw_base = MEM_IERISC_FIRMWARE_BASE;
                 local_init = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                fw_launch = 0xFFB14000;
+                fw_launch = IERISC_RESET_PC;
                 fw_launch_value = fw_base;
             }
             break;
             case 1: {
                 fw_base = MEM_SLAVE_IERISC_FIRMWARE_BASE;
                 local_init = MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                fw_launch = 0xFFB14008;
+                fw_launch = SLAVE_IERISC_RESET_PC;
                 fw_launch_value = fw_base;
             }
             break;

@@ -71,7 +71,7 @@ void Hal::initialize_bh() {
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
-            (addr== 0xFFB14000 || addr == 0xFFB14008));  // used to program start addr for eth FW
+            (addr == IERISC_RESET_PC || addr == SLAVE_IERISC_RESET_PC));  // used to program start addr for eth FW
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
