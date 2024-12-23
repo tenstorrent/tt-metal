@@ -54,8 +54,8 @@ class TtSegformerMLP:
     def __init__(self):
         super().__init__()
 
-    def __call__(self, hidden_states: ttnn.Tensor, parameters):
-        device = hidden_states.device()
+    def __call__(self, device, hidden_states: ttnn.Tensor, parameters):
+        # device = hidden_states.device()
 
         mm_f_x_strategy = ttnn.ShardStrategy.HEIGHT
         mm_f_x_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
