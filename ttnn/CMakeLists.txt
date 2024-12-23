@@ -715,7 +715,20 @@ endfunction()
 set(PRECOMPILED_HEADER_TARGET "")
 
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
-    add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
+    if(ENABLE_TTNN_SHARED_SUBLIBS)
+        add_library(${SUBLIBRARY_NAME} SHARED ${ARGN})
+        install(
+            TARGETS
+                ${SUBLIBRARY_NAME}
+            LIBRARY
+                DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE
+                DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                COMPONENT tt_build_artifacts
+        )
+    else()
+        add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
+    endif()
     if(WITH_PYTHON_BINDINGS)
         target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
     else()
