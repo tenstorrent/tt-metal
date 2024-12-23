@@ -15,21 +15,30 @@ class TtSegformerOverlapPatchEmbeddings:
 
     def __call__(
         self,
+        device,
         pixel_values: ttnn.Tensor,
         parameters,
     ):
-        device = pixel_values.device()
+        # device = pixel_values.device()
 
-        if pixel_values.shape[-1] == 3:
-            pixel_values_rm = ttnn.from_device(pixel_values)
-            pixel_values_rm = ttnn.to_layout(pixel_values_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
-        else:
-            pixel_values_rm = pixel_values
+        # print(pixel_values)
 
-        embeddings, input_height, input_width = self.proj(device, pixel_values_rm)
+        # if pixel_values.shape[-1] == 3:
+        #     pixel_values_rm = ttnn.from_device(pixel_values)
+        #     pixel_values_rm = ttnn.to_layout(pixel_values_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # else:
+        #     pixel_values_rm = pixel_values
+        # pixel_values_rm = pixel_values
+
+        # print(pixel_values_rm)
+
+        # embeddings, input_height, input_width = self.proj(device, pixel_values)
+        embeddings = self.proj(device, pixel_values)
         embeddings = ttnn.to_memory_config(embeddings, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(pixel_values)
-        embeddings = ttnn.reallocate(embeddings)
+
+        # needed only if input is on L1 nor DRAM
+        # ttnn.deallocate(pixel_values)
+        # embeddings = ttnn.reallocate(embeddings)
 
         embeddings = ttnn.layer_norm(
             embeddings,
@@ -41,4 +50,4 @@ class TtSegformerOverlapPatchEmbeddings:
             ),
         )
 
-        return embeddings, input_height, input_width
+        return embeddings  # , input_height, input_width
