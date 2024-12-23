@@ -39,7 +39,7 @@ namespace tt_metal {
 
 Device::Device(
     chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal, uint32_t worker_core, uint32_t completion_queue_reader_core) :
-    id_(device_id), worker_thread_core(worker_core), completion_queue_reader_core(completion_queue_reader_core), work_executor(worker_core, device_id) {
+    id_(device_id), worker_thread_core_(worker_core), completion_queue_reader_core_(completion_queue_reader_core), work_executor_(worker_core, device_id) {
     ZoneScoped;
     tunnel_device_dispatch_workers_ = {};
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
@@ -2233,11 +2233,11 @@ void Device::compile_command_queue_programs_new() {
     auto mmio_command_queue_program_ptr = std::make_unique<Program>();
     if (this->is_mmio_capable()) {
         auto command_queue_program_ptr = create_and_compile_cq_program(this);
-        this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
+        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
         this->setup_tunnel_for_remote_devices();
     } else {
         auto command_queue_program_ptr = create_and_compile_cq_program(this);
-        this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
+        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
     }
 }
 
@@ -2462,7 +2462,7 @@ void Device::compile_command_queue_programs() {
             }
         }
         detail::CompileProgram(this, *command_queue_program_ptr, /*fd_bootloader_mode=*/true);
-        this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
+        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
         this->setup_tunnel_for_remote_devices();
     } else {
         chip_id_t device_id = this->id();
@@ -2784,10 +2784,10 @@ void Device::compile_command_queue_programs() {
         );
 
         detail::CompileProgram(this, *command_queue_program_ptr, /*fd_bootloader_mode=*/true);
-        this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
+        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
         if (first_tunnel_stop) {
             detail::CompileProgram(mmio_device, *mmio_command_queue_program_ptr, /*fd_bootloader_mode=*/true);
-            this->command_queue_programs.push_back(std::move(mmio_command_queue_program_ptr));
+            this->command_queue_programs_.push_back(std::move(mmio_command_queue_program_ptr));
         }
     }
 }
@@ -2800,9 +2800,9 @@ void Device::configure_command_queue_programs_new() {
     std::vector<uint32_t> zero = {0x0}; // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers;
     uint32_t cq_size = this->sysmem_manager().get_cq_size();
-    TT_ASSERT(this->command_queue_programs.size() == 1);
+    TT_ASSERT(this->command_queue_programs_.size() == 1);
 
-    Program& command_queue_program = *this->command_queue_programs[0];
+    Program& command_queue_program = *this->command_queue_programs_[0];
     uint8_t num_hw_cqs = this->num_hw_cqs();
 
     // Reset host-side command queue pointers for all channels controlled by this mmio device
@@ -2852,15 +2852,15 @@ void Device::configure_command_queue_programs() {
     uint32_t cq_size = this->sysmem_manager().get_cq_size();
 
     if (this->is_mmio_capable()) {
-        TT_ASSERT(this->command_queue_programs.size() == 1);
+        TT_ASSERT(this->command_queue_programs_.size() == 1);
     } else {
         uint32_t program_size = tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1 ? 2 : 1;
         if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init())
             program_size = 1;
-        TT_ASSERT(this->command_queue_programs.size() == program_size);
+        TT_ASSERT(this->command_queue_programs_.size() == program_size);
     }
 
-    Program& command_queue_program = *this->command_queue_programs[0];
+    Program& command_queue_program = *this->command_queue_programs_[0];
     uint8_t num_hw_cqs = this->num_hw_cqs();
 
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
@@ -2957,7 +2957,7 @@ void Device::configure_command_queue_programs() {
     if (device_id != mmio_device_id && !llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
         if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
             //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.
-            Program& mmio_command_queue_program = *this->command_queue_programs[1];
+            Program& mmio_command_queue_program = *this->command_queue_programs_[1];
             mmio_command_queue_program.finalize(mmio_device);
             detail::ConfigureDeviceWithProgram(mmio_device, mmio_command_queue_program, true);
             tt::Cluster::instance().l1_barrier(mmio_device_id);
@@ -2978,7 +2978,7 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
 }
 
 void Device::init_command_queue_host() {
-    using_fast_dispatch = true;
+    using_fast_dispatch_ = true;
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
@@ -3007,19 +3007,19 @@ void Device::init_command_queue_device() {
     }
 
     if (this->is_mmio_capable()) {
-        TT_ASSERT(this->command_queue_programs.size() == 1);
+        TT_ASSERT(this->command_queue_programs_.size() == 1);
     } else {
         uint32_t program_size = tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1 ? 2 : 1;
         if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init())
             program_size = 1;
-        TT_ASSERT(this->command_queue_programs.size() == program_size);
+        TT_ASSERT(this->command_queue_programs_.size() == program_size);
     }
     if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
         this->configure_command_queue_programs_new();
     } else {
         this->configure_command_queue_programs();
     }
-    Program& command_queue_program = *this->command_queue_programs[0];
+    Program& command_queue_program = *this->command_queue_programs_[0];
 
     // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
@@ -3038,7 +3038,7 @@ void Device::init_command_queue_device() {
         if (tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1) {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
             Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
-            Program& mmio_command_queue_program = *this->command_queue_programs[1];
+            Program& mmio_command_queue_program = *this->command_queue_programs_[1];
             std::vector<std::vector<CoreCoord>>logical_cores = mmio_command_queue_program.logical_cores();
             for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
                 const auto& logical_dispatch_cores = logical_cores[index];
@@ -3071,10 +3071,10 @@ void Device::initialize_synchronous_sw_cmd_queue() {
 
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
     ZoneScoped;
-    log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
+    log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
-    this->using_fast_dispatch = false;
+    this->using_fast_dispatch_ = false;
     this->num_hw_cqs_ = num_hw_cqs;
     constexpr uint32_t harvesting_map_bits = 12;
     constexpr uint32_t num_hw_cq_bits = 8;
@@ -3108,7 +3108,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
         return true;
 
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
-    this->work_executor.initialize();
+    this->work_executor_.initialize();
     this->initialized_ = true;
 
     return true;
@@ -3127,7 +3127,7 @@ bool Device::close() {
         hw_command_queue->terminate();
     }
 
-    this->work_executor.reset();
+    this->work_executor_.reset();
     tt_metal::detail::DumpDeviceProfileResults(this, true);
 
     this->active_sub_device_manager_ = nullptr;
@@ -3183,7 +3183,7 @@ bool Device::close() {
     this->storage_only_cores_.clear();
     this->ethernet_cores_.clear();
     this->disable_and_clear_program_cache();
-    this->command_queue_programs.clear();
+    this->command_queue_programs_.clear();
     this->sw_command_queues_.clear();
     this->hw_command_queues_.clear();
     this->sysmem_manager_.reset();
@@ -3646,22 +3646,22 @@ HWCommandQueue& Device::hw_command_queue(size_t cq_id) {
 }
 
 CommandQueue &Device::command_queue(size_t cq_id) {
-    detail::DispatchStateCheck(using_fast_dispatch);
+    detail::DispatchStateCheck(using_fast_dispatch_);
     TT_FATAL( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *sw_command_queues_[cq_id];
 }
 
 bool Device::can_use_passthrough_scheduling() const {
-    return this->work_executor.use_passthrough();
+    return this->work_executor_.use_passthrough();
 }
 
 void Device::synchronize() {
-    this->work_executor.synchronize();
+    this->work_executor_.synchronize();
 }
 
 void Device::set_worker_mode(const WorkExecutorMode& mode) {
-    this->work_executor.set_worker_mode(mode);
+    this->work_executor_.set_worker_mode(mode);
 }
 
 void Device::enable_async(bool enable) {
@@ -3672,14 +3672,14 @@ void Device::enable_async(bool enable) {
     // This is required for checking if a call is made from an application thread or a worker thread.
     // See InWorkerThread().
     if (enable) {
-        tt::DevicePool::instance().register_worker_thread_for_device(tt::DevicePool::instance().get_handle(this), this->work_executor.get_worker_thread_id());
+        tt::DevicePool::instance().register_worker_thread_for_device(tt::DevicePool::instance().get_handle(this), this->work_executor_.get_worker_thread_id());
     } else {
         tt::DevicePool::instance().unregister_worker_thread_for_device(tt::DevicePool::instance().get_handle(this));
     }
 }
 
 bool Device::using_slow_dispatch() const {
-    return not (this->using_fast_dispatch);
+    return not (this->using_fast_dispatch_);
 }
 
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
@@ -3723,13 +3723,31 @@ void Device::release_trace(const uint32_t tid) {
     this->active_sub_device_manager_->release_trace(tid);
 
     // Only enable allocations once all captured traces are released
-    if (this->trace_buffers_size == 0) {
+    if (this->trace_buffers_size_ == 0) {
         this->MarkAllocationsSafe();
     }
 }
 
 std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {
     return this->active_sub_device_manager_->get_trace(tid);
+}
+
+void Device::enable_program_cache() {
+    log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
+    this->synchronize();
+    program_cache_.enable();
+}
+void Device::disable_and_clear_program_cache() {
+    log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
+    this->synchronize();
+    if (this->program_cache_.is_enabled()) {
+        program_cache_.disable();
+    }
+    program_cache_.clear();
+}
+std::size_t Device::num_program_cache_entries() {
+    this->synchronize();
+    return program_cache_.num_entries();
 }
 
 void Device::MarkAllocationsUnsafe() {
@@ -3882,6 +3900,16 @@ void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id)
 
 const std::vector<SubDeviceId> &Device::get_sub_device_ids() const {
     return this->active_sub_device_manager_->get_sub_device_ids();
+}
+
+DeviceAddr Device::get_base_allocator_addr(const HalMemType &mem_type) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::get_unreserved_base_address(*allocator, mem_type);
+}
+
+DeviceAddr Device::get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::get_unreserved_base_address(*allocator, mem_type);
 }
 
 std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment() {

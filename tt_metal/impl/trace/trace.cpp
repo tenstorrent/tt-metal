@@ -83,12 +83,13 @@ void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffe
     if (numel_padding > 0) {
         trace_data.resize(trace_data.size() + numel_padding, 0 /*padding value*/);
     }
-    cq.device()->trace_buffers_size += padded_size;
+    const auto current_trace_buffers_size = cq.device()->get_trace_buffers_size();
+    cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
     auto trace_region_size = cq.device()->get_initialized_allocator()->config.trace_region_size;
     TT_FATAL(
-        cq.device()->trace_buffers_size <= trace_region_size,
+        cq.device()->get_trace_buffers_size() <= trace_region_size,
         "Creating trace buffers of size {}B on device {}, but only {}B is allocated for trace region.",
-        cq.device()->trace_buffers_size,
+        cq.device()->get_trace_buffers_size(),
         cq.device()->id(),
         trace_region_size);
     // Commit trace to device DRAM

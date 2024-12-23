@@ -37,24 +37,25 @@ DeviceInfo get_device_info(const Device& device) {
     DeviceInfo info{};
     const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device.id());
     const auto descriptor = tt::get_core_descriptor_config(device.id(), device.num_hw_cqs(), dispatch_core_config);
+    const auto& device_allocator = device.get_initialized_allocator();
     info.num_y_cores = device.logical_grid_size().y;
     info.num_x_cores = device.logical_grid_size().x;
     info.num_y_compute_cores = descriptor.compute_grid_size.y;
     info.num_x_compute_cores = descriptor.compute_grid_size.x;
-    info.worker_l1_size = device.allocator_->config.worker_l1_size;
+    info.worker_l1_size = device_allocator->config.worker_l1_size;
     info.l1_num_banks = device.num_banks(BufferType::L1);
     info.l1_bank_size = device.bank_size(BufferType::L1);
-    info.address_at_first_l1_bank = device.allocator_->l1_manager.bank_offset(0);
+    info.address_at_first_l1_bank = device_allocator->l1_manager.bank_offset(0);
     info.address_at_first_l1_cb_buffer = device.get_base_allocator_addr(HalMemType::L1);
-    info.num_banks_per_storage_core = device.allocator_->config.worker_l1_size / info.l1_bank_size;
+    info.num_banks_per_storage_core = device_allocator->config.worker_l1_size / info.l1_bank_size;
     info.num_storage_cores = descriptor.relative_storage_cores.size();
     info.num_compute_cores = descriptor.relative_compute_cores.size();
-    info.total_l1_memory = (info.num_storage_cores + info.num_compute_cores) * device.allocator_->config.worker_l1_size;
+    info.total_l1_memory = (info.num_storage_cores + info.num_compute_cores) * device_allocator->config.worker_l1_size;
     info.total_l1_for_interleaved_buffers =
         (info.num_storage_cores + info.num_compute_cores + (info.num_banks_per_storage_core * info.num_storage_cores)) *
         info.l1_bank_size;
     info.total_l1_for_sharded_buffers = info.num_compute_cores * info.l1_bank_size;
-    info.cb_limit = device.allocator_->config.worker_l1_size - device.get_base_allocator_addr(HalMemType::L1);
+    info.cb_limit = device_allocator->config.worker_l1_size - device.get_base_allocator_addr(HalMemType::L1);
     return info;
 }
 

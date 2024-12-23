@@ -238,7 +238,7 @@ template <DeviceOperationConcept device_operation_t>
 void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
 
-    auto& program_cache = device->program_cache;
+    auto& program_cache = device->get_program_cache();
 
     auto program_hash = 0;
     bool program_cache_hit = false;

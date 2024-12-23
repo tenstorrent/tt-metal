@@ -484,7 +484,7 @@ void DevicePool::close_devices(const std::vector<Device*>& devices) {
             continue;
         }
         auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
-        auto tunnels_from_mmio = mmio_dev_handle->tunnels_from_mmio_;
+        auto tunnels_from_mmio = mmio_dev_handle->get_tunnels_from_mmio();
         // iterate over all tunnels origination from this mmio device
         for (auto t : tunnels_from_mmio) {
             // iterate over all tunneled devices (tunnel stops) in this tunnel
