@@ -23,6 +23,8 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
+
 #include "tt_metal/distributed/mesh_device.hpp"
 #include "tt_metal/distributed/mesh_device_view.hpp"
 
@@ -1696,10 +1698,12 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
     TwoInputReaderKernelWriteMode test_writeback_mode) {
     auto logical_shape = tensor_shape.logical_shape();
     auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
-    Tensor input_tensor0 = ttnn::arange(0, num_elems, 1, DataType::UINT32).reshape(tensor_shape).to(layout);
-    Tensor input_tensor1 = ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32).reshape(tensor_shape).to(layout);
-    Tensor output_tensor0 = ttnn::ones(tensor_shape, DataType::UINT32, layout).reshape(tensor_shape);
-    Tensor output_tensor1 = ttnn::ones(tensor_shape, DataType::UINT32, layout).reshape(tensor_shape);
+    Tensor input_tensor0 =
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+    Tensor input_tensor1 =
+        ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+    Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
+    Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     input_tensor0.set_tensor_spec(TensorSpec(
         logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
     input_tensor1.set_tensor_spec(TensorSpec(
@@ -2002,10 +2006,14 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
     MemoryConfig const out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
 
     auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
-    Tensor input_tensor0 = ttnn::arange(0, num_elems, 1, DataType::UINT32).reshape(tensor_shape).to(layout);
-    Tensor input_tensor1 = ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32).reshape(tensor_shape).to(layout);
-    Tensor output_tensor0 = ttnn::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
-    Tensor output_tensor1 = ttnn::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
+    Tensor input_tensor0 =
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+    Tensor input_tensor1 =
+        ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+    Tensor output_tensor0 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
+    Tensor output_tensor1 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
 
     input_tensor0.set_tensor_spec(TensorSpec(
         logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
@@ -2073,10 +2081,14 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
     MemoryConfig const out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
 
     auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
-    Tensor input_tensor0 = ttnn::arange(0, num_elems, 1, DataType::UINT32).reshape(tensor_shape).to(layout);
-    Tensor input_tensor1 = ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32).reshape(tensor_shape).to(layout);
-    Tensor output_tensor0 = ttnn::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
-    Tensor output_tensor1 = ttnn::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
+    Tensor input_tensor0 =
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+    Tensor input_tensor1 =
+        ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+    Tensor output_tensor0 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
+    Tensor output_tensor1 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
 
     input_tensor0.set_tensor_spec(TensorSpec(
         logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
@@ -2148,10 +2160,14 @@ void RunFabricMcastFullTensorPropagateTest(
     MemoryConfig const out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
 
     auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
-    Tensor input_tensor1 = ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32).reshape(tensor_shape).to(layout);
-    Tensor input_tensor0 = ttnn::arange(0, num_elems, 1, DataType::UINT32).reshape(tensor_shape).to(layout);
-    Tensor output_tensor1 = ttnn::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
-    Tensor output_tensor0 = ttnn::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape);
+    Tensor input_tensor1 =
+        ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+    Tensor input_tensor0 =
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+    Tensor output_tensor1 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
+    Tensor output_tensor0 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
     input_tensor0.set_tensor_spec(TensorSpec(
         logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
     input_tensor1.set_tensor_spec(TensorSpec(
@@ -2374,9 +2390,11 @@ bool RunPipelinedWorkersTest(
     host_tensors.reserve(num_tensors);
     device_tensors.reserve(num_tensors);
     auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
-    host_tensors.push_back(ttnn::arange(0, num_elems, 1, DataType::UINT32).reshape(tensor_shape).to(layout));
+    host_tensors.push_back(
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout));
     for (size_t i = 1; i < num_tensors; ++i) {
-        host_tensors.push_back(ttnn::ones(tensor_shape.value, DataType::UINT32, layout).reshape(tensor_shape));
+        host_tensors.push_back(
+            ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape));
     }
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
@@ -2890,7 +2908,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     for (size_t i = 0; i < num_devices; i++) {
         // host_input_tensors.push_back(ttnn::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f) ,
         // {logical_shape[0],logical_shape[1],logical_shape[2],logical_shape[3]}, layout).to(devices[i]));
-        auto t = ttnn::arange(0, num_elems, 1, DataType::BFLOAT16).reshape(input_shape).to(layout);
+        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to(layout);
         t.set_tensor_spec(TensorSpec(
             logical_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
@@ -2982,7 +3000,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     size_t page_size = tile_size(DataFormat::Float16);
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
-        auto t = ttnn::arange(0, num_elems, 1).reshape(input_shape).to(layout);
+        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to(layout);
         t.set_tensor_spec(TensorSpec(
             logical_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
