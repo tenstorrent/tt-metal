@@ -207,15 +207,15 @@ Size TensorLayout::get_physical_shard_shape() const {
     auto compute_physical_shard_shape_for_logical_mode = [&]() -> Size {
         // TODO: If physical_shard_shape is provided, alignment_ == physical_shard_shape is guaranteed (should we store
         // physical_shard_shape instead?)
-        if (shard_spec.physical_shard_shape.has_value()) {
-            const auto& physical_shard_shape = shard_spec.physical_shard_shape.value();
-            TT_FATAL(
-                physical_shard_shape[0] == alignment_[-2] and physical_shard_shape[1] == alignment_[-1],
-                "Alignment {} must be same as physical shard shape {} provided in shard spec!",
-                alignment_,
-                physical_shard_shape);
-            return physical_shard_shape;
-        }
+        // if (shard_spec.physical_shard_shape.has_value()) {
+        //     const auto& physical_shard_shape = shard_spec.physical_shard_shape.value();
+        //     TT_FATAL(
+        //         physical_shard_shape[0] == alignment_[-2] and physical_shard_shape[1] == alignment_[-1],
+        //         "Alignment {} must be same as physical shard shape {} provided in shard spec!",
+        //         alignment_,
+        //         physical_shard_shape);
+        //     return physical_shard_shape;
+        // }
 
         const auto& logical_shard_shape = Size(shard_spec.shape);
         // TODO: Alignment is guaranteed to be rank 2 or less if tensor is sharded (remove validate?)

@@ -25,7 +25,7 @@ struct Conv2dConfig {
     string activation = "";
     uint32_t input_channels_alignment = 32;
     bool deallocate_activation = false;
-    bool reallocate_halo_output = false;
+    bool reallocate_halo_output = true;
     uint32_t act_block_h_override = 0; // This argument is ignored when shard_layout == WIDTH_SHARDED.
     uint32_t act_block_w_div = 1; // Amount by which the maximum possible act_block_width is divided. Max act_block_w = in_channels / (total_num_cores * TILE_WIDTH);
                                   // Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
