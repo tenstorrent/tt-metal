@@ -236,7 +236,7 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  * |-----------------------|------------------------------------|-----------------------|-------------|----------|
  * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
  */
-#define get_compile_time_arg_vals(arg_idx) KERNEL_COMPILE_TIME_ARGS[arg_idx]
+#define kernel_compile_time_args(arg_idx) KERNEL_COMPILE_TIME_ARGS[arg_idx]
 
 FORCE_INLINE
 constexpr static std::int32_t GET_TILE_SIZE(uint format) {

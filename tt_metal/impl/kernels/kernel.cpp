@@ -146,12 +146,6 @@ void Kernel::process_compile_time_args(const std::function<void(int i, uint32_t 
     }
 }
 
-void Kernel::process_compile_time_args_combined(const std::function<void(uint32_t value)> callback) const {
-    for (int i = 0; i < 1; i++) {
-        callback(this->compile_time_args_[i]);
-    }
-}
-
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }
 
 uint8_t EthernetKernel::expected_num_binaries() const { return 1; }

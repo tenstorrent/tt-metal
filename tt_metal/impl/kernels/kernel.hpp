@@ -78,6 +78,7 @@ class Kernel : public JitBuildSettings {
     std::vector<ll_api::memory const*> const& binaries(uint32_t build_key) const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
+    uint32_t compile_time_args(size_t index) const { return compile_time_args_[index]; }
 
     const std::set<CoreCoord> &cores_with_runtime_args() const { return core_with_runtime_args_; }
 
@@ -122,7 +123,6 @@ class Kernel : public JitBuildSettings {
     void add_defines(const std::map<std::string, std::string>& defines);
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
     void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const override;
-    void process_compile_time_args_combined(const std::function<void (uint32_t value)>) const override;
 
     bool is_idle_eth() const;
 

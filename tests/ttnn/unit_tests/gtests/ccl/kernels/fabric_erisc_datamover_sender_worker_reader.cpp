@@ -10,8 +10,8 @@
 void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t num_pages_to_read_total = get_compile_time_arg_val(1);
-    constexpr auto num_pages_to_read_total_vals0 = get_compile_time_arg_vals(0);
-    constexpr auto num_pages_to_read_total_vals1 = get_compile_time_arg_vals(1);
+    constexpr auto num_pages_to_read_total_vals0 = kernel_compile_time_args(0);
+    constexpr auto num_pages_to_read_total_vals1 = kernel_compile_time_args(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t pages_per_edm_buffer = 1;
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;

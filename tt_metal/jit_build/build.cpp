@@ -583,12 +583,14 @@ void JitBuildState::compile_one(
             defines += "-DKERNEL_COMPILE_TIME_ARG_" + to_string(i) + "=" + to_string(value) + " ";
         });
 
-        // settings->process_compile_time_args_combined(
-        //     [&defines](uint32_t value) { defines += "-DKERNEL_COMPILE_TIME_ARGS=\\(int[]\\){2,7,23,33,12,76} "; });
-
-        // settings->process_compile_time_args_combined(
-        //     [&defines](uint32_t value) { defines += "-DKERNEL_COMPILE_TIME_ARGS=\\(int[]\\){" + to_string(value) + "}
-        //     "; });
+        std::stringstream args;
+        for (size_t i = 0; i < static_cast<const Kernel*>(settings)->compile_time_args().size(); i++) {
+            if (i != 0) {
+                args << ",";
+            }
+            args << static_cast<const Kernel*>(settings)->compile_time_args(i);
+        }
+        defines += "-DKERNEL_COMPILE_TIME_ARGS=\\(int[]\\){" + args.str() + "} ";
     }
 
     string cmd;
