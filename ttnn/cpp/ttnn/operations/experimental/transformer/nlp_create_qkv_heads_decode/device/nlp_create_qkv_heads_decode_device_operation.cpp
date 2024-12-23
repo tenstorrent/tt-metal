@@ -135,7 +135,16 @@ operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_prog
     auto& output_tensor = output_tensors.at(0);
 
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    return  multi_core_nlp_create_qkv_heads_decode(input_tensor, this->num_q_heads, this->num_kv_heads, this->head_dim, this->overlap_qk_coregrid, output_tensors, compute_with_storage_grid_size);
+    return multi_core_nlp_create_qkv_heads_decode(
+        input_tensor,
+        this->num_q_heads,
+        this->num_kv_heads,
+        this->head_dim,
+        this->overlap_qk_coregrid,
+        this->batch_offset,
+        this->slice_size,
+        output_tensors,
+        compute_with_storage_grid_size);
 }
 
 }  // namespace ttnn::operations::experimental::transformer

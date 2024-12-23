@@ -202,6 +202,8 @@ def run_test_create_min_width_shard(
     n_local_kv_heads,
     head_dim,
     overlap_coregrid,
+    batch_offset=None,
+    slice_size=None,
 ):
     ## Split Heads
     if not overlap_coregrid and batch >= 32:
@@ -256,19 +258,31 @@ def run_test_create_min_width_shard(
         num_kv_heads=n_local_kv_heads,
         memory_config=HEIGHT_SHARDED_MEMCFG,
         overlap_qk_coregrid=overlap_coregrid,
+        batch_offset=batch_offset,
+        slice_size=slice_size,
     )
     logger.info(f"q_heads_tt: {q_heads_tt.shape}, {q_heads_tt.memory_config()}")
     logger.info(f"k_heads_tt: {k_heads_tt.shape}, {k_heads_tt.memory_config()}")
     logger.info(f"v_heads_tt: {v_heads_tt.shape}, {v_heads_tt.memory_config()}")
 
     # torch operation
-    q_heads_torch = proj_output[:, :, :, : head_dim * n_local_heads].view(seq_len, batch, n_local_heads, head_dim)
-    k_heads_torch = proj_output[:, :, :, head_dim * n_local_heads : head_dim * (n_local_heads + n_local_kv_heads)].view(
-        seq_len, batch, n_local_kv_heads, head_dim
+    if batch_offset is None and slice_size is None:
+        batch_offset = 0
+        slice_size = batch
+    else:
+        batch = slice_size
+    q_heads_torch = proj_output[:, :, batch_offset : batch_offset + slice_size, : head_dim * n_local_heads].view(
+        seq_len, batch, n_local_heads, head_dim
     )
-    v_heads_torch = proj_output[:, :, :, head_dim * (n_local_heads + n_local_kv_heads) :].view(
-        seq_len, batch, n_local_kv_heads, head_dim
-    )
+    k_heads_torch = proj_output[
+        :,
+        :,
+        batch_offset : batch_offset + slice_size,
+        head_dim * n_local_heads : head_dim * (n_local_heads + n_local_kv_heads),
+    ].view(seq_len, batch, n_local_kv_heads, head_dim)
+    v_heads_torch = proj_output[
+        :, :, batch_offset : batch_offset + slice_size, head_dim * (n_local_heads + n_local_kv_heads) :
+    ].view(seq_len, batch, n_local_kv_heads, head_dim)
 
     # compare
     q_heads_tt_cpu = ttnn.to_torch(q_heads_tt)
@@ -314,6 +328,44 @@ def test_create_min_width_shard(
             n_local_kv_heads,
             head_dim,
             overlap_coregrid,
+        )
+    assert device.num_program_cache_entries() == 1, "Only one Op program cache should exist"
+
+
+@skip_for_blackhole("Requires eth connected devices to run, see #12349")
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("batch", (32,))
+@pytest.mark.parametrize(
+    "n_local_heads, n_local_kv_heads, head_dim",
+    ((8, 1, 128),),
+)
+@pytest.mark.parametrize("overlap_coregrid", (True,))
+@pytest.mark.parametrize("batch_offset", (0, 8, 16, 24))
+@pytest.mark.parametrize("slice_size", (8,))
+def test_create_heads_with_slice(
+    batch,
+    n_local_heads,
+    n_local_kv_heads,
+    head_dim,
+    device,
+    overlap_coregrid,
+    batch_offset,
+    slice_size,
+    use_program_cache,
+):
+    torch.manual_seed(0)
+
+    for i in range(3):
+        # multiple loops to test program caching
+        run_test_create_min_width_shard(
+            device,
+            batch,
+            n_local_heads,
+            n_local_kv_heads,
+            head_dim,
+            overlap_coregrid,
+            batch_offset,
+            slice_size,
         )
     assert device.num_program_cache_entries() == 1, "Only one Op program cache should exist"
 
