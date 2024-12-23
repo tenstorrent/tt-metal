@@ -11,17 +11,42 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-    operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Tensor &input_tensor, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool overlap_qk_coregrid, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size);
-    operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_interleaved_input(const Tensor &input_tensor, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size);
-    operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input(const Tensor &input_tensor, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool overlap_qk_coregrid, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
+    const Tensor& input_tensor,
+    const uint32_t num_q_heads,
+    const uint32_t num_kv_heads,
+    const uint32_t head_dim,
+    const bool overlap_qk_coregrid,
+    std::optional<const uint32_t> batch_offset,
+    std::optional<const uint32_t> slice_size,
+    std::vector<Tensor>& output,
+    CoreCoord compute_with_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_interleaved_input(
+    const Tensor& input_tensor,
+    const uint32_t num_q_heads,
+    const uint32_t num_kv_heads,
+    const uint32_t head_dim,
+    std::vector<Tensor>& output,
+    CoreCoord compute_with_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input(
+    const Tensor& input_tensor,
+    const uint32_t num_q_heads,
+    const uint32_t num_kv_heads,
+    const uint32_t head_dim,
+    const bool overlap_qk_coregrid,
+    std::optional<const uint32_t> batch_offset,
+    std::optional<const uint32_t> slice_size,
+    std::vector<Tensor>& output,
+    CoreCoord compute_with_storage_grid_size);
 
-
-    struct NLPCreateHeadsDecodeDeviceOperation {
-        const uint32_t num_q_heads;
-        const uint32_t num_kv_heads;
-        const uint32_t head_dim;
-        const bool overlap_qk_coregrid;
-        MemoryConfig output_mem_config;
+struct NLPCreateHeadsDecodeDeviceOperation {
+    const uint32_t num_q_heads;
+    const uint32_t num_kv_heads;
+    const uint32_t head_dim;
+    const bool overlap_qk_coregrid;
+    const std::optional<const uint32_t> batch_offset;
+    const std::optional<const uint32_t> slice_size;
+    MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
