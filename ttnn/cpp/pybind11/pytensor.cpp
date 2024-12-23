@@ -409,7 +409,8 @@ Tensor convert_python_tensor_to_tt_tensor(
         if (data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
             TT_FATAL(
                 !optional_layout.has_value() or *optional_layout == Layout::TILE,
-                "Tile layout is required for cannot be specified for tensor of type bfloat8_b or bfloat4_b.");
+                "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
+                *optional_layout);
             return Layout::TILE;
         } else {
             return optional_layout.value_or(Layout::ROW_MAJOR);
