@@ -50,19 +50,13 @@ Version 1.0
 [5. TT-NN Integration](#_Toc544952931)
   - [5.1 TT-Mesh/TT-Distributed Interoperability Layer](#_Toc1134203649)
 
-[Appendix 35](#_Toc1122889266)
-
-[Appendix A: Existing Runtime Architecture Overview 35](#_Toc786358640)
-
-[A.1 Current State of Metal Runtime 35](#_Toc1552149651)
-
-[A.2 A More Modular Approach to Metal Runtime 35](#_Toc1731330590)
-
-[A.4 Distributed Metal Runtime Using Existing Components and Virtualization 35](#_Toc516766762)
-
-[Appendix B: UMD 35](#_Toc1085294907)
-
-[Appendix B.1: UMD Queries 35](#_Toc372413671)
+[Appendix](#_Toc1122889266)
+ - [Appendix A: Existing Runtime Architecture Overview](#_Toc786358640)
+    - [A.1 Current State of Metal Runtime](#_Toc1552149651)
+    - [A.2 A More Modular Approach to Metal Runtime](#_Toc1731330590)
+    - [A.4 Distributed Metal Runtime Using Existing Components and Virtualization](#_Toc516766762)
+ - [Appendix B: UMD](#_Toc1085294907)
+     - [Appendix B.1: UMD Queries](#_Toc372413671)
 
 # Overview
 
@@ -730,21 +724,9 @@ void EnqueueMeshWorkload(
 // equivalent to adding a single program spanning the entire MeshDevice extent to a
 // MeshWorkload and then enqueueing that MeshWorkload
 void EnqueueMeshWorkload(
-CommandQueueHandle cq,
-CommandQueueHandle cq,
-
     CommandQueueHandle cq,
-
-ProgramHandle program,
-ProgramHandle program,
-
     ProgramHandle program,
-
-bool blocking
-bool blocking
-
     bool blocking
-
 );
 ```
 
@@ -1176,7 +1158,7 @@ The diagrams below display Depacketizers along a Broadcast path writing to their
 
 ![](images/image024.png)
 
-## 3.8.3 Integrating the Mcast Prefetcher with Existing Unicast CQs
+### 3.8.3 Integrating the Mcast Prefetcher with Existing Unicast CQs
 
 The diagram below displays how the broadcast datapath can be integrated with the existing Fast Dispatch Unicast Data paths on the Mcast Receiver chips. Each Dispatcher corresponds to a Command Queue, and each Command Queue has two Prefetchers.
 
@@ -1231,7 +1213,7 @@ A positive side-effect of this approach is that the Dispatch\_s core will be wri
 
 Synchronization on Dispatch\_s may eventually be required, if we choose to offload work apart for the Go Signal handling to this module. This is TBD.
 
-## 3.8.6 High Level View of the Forward Path
+### 3.8.6 High Level View of the Forward Path
 
 The diagram below displays the placement of all components required to integrate Fast Dispatch Broadcasts with existing infrastructure.
 
@@ -1239,7 +1221,7 @@ The diagram below displays the placement of all components required to integrate
 
 As shown before, certain components (such as the Packetizers and the *Mcast Prefetch\_h*)can be coalesced into single components, however this diagram displays every resource that’s needed to service two CQs and support broadcasts. For simplicity, we show TT-Fabric as a general interconnect, servicing all chip-to-chip transactions.
 
-## 3.8.7 Reverse Path: Light-Weight Event Synchronization
+### 3.8.7 Reverse Path: Light-Weight Event Synchronization
 
 Given *n* CQs in a Virtual Mesh, a Completion Queue is instantiated for each CQ. A device can write data or events back to host through its dedicated Completion Queues. TT-Metal Runtime currently spawns *n Completion Queue Reader Threads*. These threads are responsible for reading workload outputs and performing Host -> Device synchronization, by polling on events.
 
@@ -1255,7 +1237,7 @@ The second approach relies on event counters across devices being aggregated on 
 
 Through either approach, the number of threads required for synchronization scales with the number of Virtual Meshes and not the number of devices, reducing load on host.
 
-## 3.8.7.1 Synchronization through the Event Notification Table
+#### 3.8.7.1 Synchronization through the Event Notification Table
 
 This approach does not require additional firmware to be initialized on any of the devices. Instead, Dispatch\_h modules, assigned to each physical device, write event synchronization metadata to a constant offset in the Event Notification Table. This data structure is instantiated inside the Host/Device shared memory space.
 
@@ -1269,7 +1251,7 @@ The main benefit this approach provides is single threaded synchronization witho
 
 ![](images/image027.png)
 
-## 3.8.7.2 Event Aggregation on Device: Event Notification Queue
+#### 3.8.7.2 Event Aggregation on Device: Event Notification Queue
 
 This approach requires a dedicated dispatch core assigned to an Aggregator module, which writes events directly into the Event Notification Queue, instantiated inside the Host/Device shared memory space. The primary purpose of this module is to wait for notifications from each chip in the Virtual Mesh and notify host of completion through a single signal. The implementation details for the Aggregator are presented downstream
 
@@ -1291,17 +1273,17 @@ The main drawbacks of this approach are:
 * Additional latency on device (extra hops + on device handshaking, as shown in the implementation section)
 * A complex implementation
 
-## 3.8.8 Configuring Broadcast Firmware and Broadcast Grids
+### 3.8.8 Configuring Broadcast Firmware and Broadcast Grids
 
 This section discusses the steps required to setup TT-Fabric Broadcast paths from the sender to receiver devices. Additionally, we discuss different configurations for low latency transactions.
 
-### 3.8.8.1 Broadcast Firmware
+#### 3.8.8.1 Broadcast Firmware
 
 When a user specifies a Virtual Mesh configuration, Host loads firmware for all components involved in a broadcast (*Mcast Prefetch\_h, Mcast Prefetch\_d, Packetizer and Depacketizer*) to the physical devices in the mesh on dedicated RISCV cores. Additionally, firmware for the Aggregate Dispatch\_h cores is also loaded to device, along with associated TT-Fabric components.
 
 Firmware setup consists of opening Mcast sockets along each broadcast path, setting up local credits + data-structures and performing initial handshakes across each broadcast path.
 
-### 3.8.8.2 Broadcast Grids
+#### 3.8.8.2 Broadcast Grids
 
 Different topologies can be used for the Broadcast Grid. These are discussed here, along with their tradeoffs.
 
@@ -1343,7 +1325,7 @@ It is also critical to ensure that a Host CPU is not continuously overloaded by 
 
 This section provides a description of the existing Host Runtime Stack, its limitations and an alternative.
 
-## 3.9.1 Existing Design
+### 3.9.1 Existing Design
 
 The existing Host Runtime Architecture consists of the TTNN and TT-Metal Runtime layers, which construct and submit Host API calls and Fast Dispatch Commands to lower layers of the stack, respectively.
 
@@ -1357,7 +1339,7 @@ This approach is problematic for scaling out across multiple devices. As was sho
 
 Optimizations such as thread pinning only help to an extent. Once Runtime spawns more threads than the number of CPU cores, Host dispatch and data movement likely becomes a bottleneck.
 
-## 3.9.2 Proposed Design
+### 3.9.2 Proposed Design
 
 Given that units of compute are dispatched at a Virtual Mesh level, through the MeshWorkload, the number of threads required on Host can be relaxed -> linearly scaling the number of Dispatch Threads with the number of physical devices is no longer required.
 
@@ -1381,7 +1363,7 @@ The number of threads made available in the thread-pool will be determined based
 
 **V1.2 will provide a multi-threaded implementation using TT-Fabric Broadcasts.**
 
-## 3.11.1 Instantiating Binaries for Physical Devices in Distributed Memory
+### 3.11.1 Instantiating Binaries for Physical Devices in Distributed Memory
 
 For heterogenous MeshWorkloads, the kernel binary size can vary across devices, since each physical device may be running different individual programs. To ensure that memory allocations are in lock-step across the Virtual Mesh and that kernel binaries fit on each device, Host Runtime is responsible for allocating a MeshBuffer that is correctly sized.
 
@@ -1389,7 +1371,7 @@ The Kernel Binary Buffer size is computed as: *max(kb\_size\_sub\_grid\_0, ... k
 
 When writing binaries to the Virtual Mesh, host runtime must also layout the binary data correctly based on whether the MeshBuffer being written to is replicated or sharded across devices. For cases where the MeshBuffer is sharded, appropriate padding must be inserted on host data.
 
-## 3.10.2 Broadcasting MeshWorkload Configurations
+### 3.10.2 Broadcasting MeshWorkload Configurations
 
 **As mentioned above, the Broadcast CQ relies on TT-Fabric broadcasts. Until this feature is available, Runtime Infrastructure will fake broadcast functionality through loops on host.** **These loops will be single threaded for V1 and multi-threaded for V1.2.** Data-paths and APIs for lowering a MeshWorkload will be identical with or without TT-Fabric Broadcast functionality. The main difference is that: until TT-Fabric Broadcasts are supported, host runtime will track program config per sub-grid in a data-structure instead of assembling and storing Broadcast headers as part of the program command sequence (decoded by the Prefetch\_h modules).
 
@@ -1399,7 +1381,7 @@ A basic set of steps that will be taken to get the entire MeshWorkload lowered t
 
 ![](images/image033.png)
 
-## 3.10.3 Host Side Caching
+### 3.10.3 Host Side Caching
 
 The existing TT-Metal Host Runtime infrastructure maintains a cache of the finalized Fast Dispatch commands for each program. Command entries in the cache are indexed per physical device (this will no longer be the case once runtime switches to virtual coordinates, since the Fast Dispatch command stream will be identical across devices).
 
@@ -1407,9 +1389,9 @@ This mechanism can be extended to MeshWorkload level, where Distributed Host run
 
 The command cache will only be used if the TTNN Program Cache is enabled.
 
-3.11 MeshEvents: Implementation Details
+## 3.11 MeshEvents: Implementation Details
 
-3.11.1 Event Notification Table Implementation
+### 3.11.1 Event Notification Table Implementation
 
 **This will very likely be the first implementation and will be included in V1.**
 
@@ -1421,7 +1403,7 @@ This is presented in the diagram below.
 
 ![](images/image034.png)
 
-3.11.2 Event Notification Queue and Aggregator Module Implementation
+### 3.11.2 Event Notification Queue and Aggregator Module Implementation
 
 **This will very likely be an optimization explored for V1.2.**
 
@@ -1439,7 +1421,7 @@ The Dispatch\_h modules that the Aggregator needs to handshake with for each eve
 
 The exact implementation will be based on micro-benchmarking.
 
-3.11.3 Non-Consecutive Event IDs Seen on Host
+### 3.11.3 Non-Consecutive Event IDs Seen on Host
 
 *EnqueueRecordMeshEventToHost* and *EnqueueRecordMeshEvent* assign an event-id to the MeshEvent object before forwarding it to be acknowledged by a CQ. The id is generated by a MeshEventManager object assigned to the entire Virtual Mesh. The manager increments the event id after each query. If events are recorded on different sub-grids in the Virtual Mesh, the corresponding event ids on each grid can be non-consecutive but will be in order. This is expected behavior and should not be problematic. Similar behavior is seen in Metal Runtime today, since the same EventManager is shared across multiple Command Queues on a device.
 
@@ -1468,7 +1450,6 @@ Below, we present the building blocks for the MeshTrace class and describe how a
 The following objects can be used to fully describe a MeshTrace, and how it runs on a MeshDevice.
 
 ```cpp
-
 // Low Level Data-Structure that specifies the total number of MeshWorkloads
 // running inside the MeshTrace, the total number of workers involved in the
 // MeshTrace (per device) and holds the actual Trace Data, that is written to
@@ -1511,11 +1492,7 @@ public:
     // Get global (unique) ID for trace
     static uint32_t next_id();
 
-// Create a handle to an empty Trace Buffer, which needs to be populated
-// Create a handle to an empty Trace Buffer, which needs to be populated
-
     // Create a handle to an empty Trace Buffer, which needs to be populated
-
     // with a MeshTraceDescriptor and a MeshBuffer, to get tied to a MeshDevice.
     static std::shared_ptr<MeshTraceBuffer> create_mesh_buffer_handle();
 
@@ -1547,7 +1524,7 @@ std::shared_ptr<MeshTraceBuffer> MeshDevice::get_trace(const uint32_t tid);
 
 ### 3.12.2 MeshTrace Capture and Execution
 
-### 3.12.2.1 Capture
+#### 3.12.2.1 Capture
 
 A MeshTrace can consist of a combination of homogenous and heterogeneous MeshWorkloads across the entire MeshDevice -> captured commands can be identical across the Virtual Mesh for certain sections of the trace and completely heterogenous for others, depending on the nature of the captured MeshWorkloads.
 
@@ -1563,7 +1540,7 @@ Depending on the nature of the MeshTrace, it must be sent to a single *Sharded* 
 
 For the Sharded case in particular, Host must also ensure that the size of the per-device shards (and thus the total size of the MeshBuffer + DistributedShardSpec) accounts for the largest individual MeshTrace “shard”.
 
-### 3.12.2.2 Execution and Dispatch Considerations
+#### 3.12.2.2 Execution and Dispatch Considerations
 
 From a user perspective, a specific MeshTrace is executed on a specific MeshDevice, through a CQ when *mesh\_device.replay\_trace(cq\_id, tid)* is called.
 
@@ -2000,7 +1977,6 @@ ZeroMQ:
 
 ![](images/image041.png)
 
-* Simple but low-level library that
 
 Ray:
 
@@ -2018,17 +1994,17 @@ Components corresponding to the forward path (Controller Main Thread -> Physical
 
 ![](images/image042.png)
 
-## 4.8.1 Message Passing
+### 4.8.1 Message Passing
 
 Message passing between threads on the same host is done through a queue. Host to Host communication is managed by the RPC Sender and Receiver threads interfacing with the networking stack.
 
 In this example, ØMQ Publisher and Subscriber sockets are used, which support broadcasting messages across receivers. For cases where identical data-movement or compute requests need to be sent to multiple Remote Executors, broadcast functionality is useful. Depending on how the Virtual to Physical Resolution layer is implemented (resolution on Controller vs Receiver), messages across hosts may always be broadcasted, or may be a mix of broadcasts and unicasts.
 
-## 4.8.2 Main Thread on the Controller
+### 4.8.2 Main Thread on the Controller
 
 TT-Distributed users communicate directly with the main thread running on the Controller Host. This is where users submit allocation, compute and data-movement requests. For the prototype, the main thread only populates Host state, i.e. it is responsible for creating MeshWorkload objects and performing memory allocations. Device state is configured on the Event-Loop Thread running on the Remote Executors.
 
-## 4.8.2.1 Distributed Allocator
+#### 4.8.2.1 Distributed Allocator
 
 The main thread interfaces directly with a Distributed Allocator, managing memory state across physical devices and remote executors in the Virtual Mesh. In this configuration, this allocator is used for all allocations performed in the User-Space: explicit DistributedBuffer or Tensor allocations requested by the user. The Controller is not exposed to memory used for data-paths that perform allocations implicitly (lowering workloads or traces to the physical devices). This memory is managed directly on the Remote Executors. Thus, a user can explicitly configure distributed memory regions to be accessible to the Controller vs the Remote Executors.
 
@@ -2039,7 +2015,7 @@ Alternate configurations allowing all memory regions to be managed on the Contro
 * **All memory regions managed on the Controller (Executors submit requests):** Remote Executor sends an allocation request to the Controller when performing allocations for Kernel Binaries. Requires a dedicated handler on the Controller to service allocation requests from the Remote Executors.
 * **All memory regions managed by the Controller:** Dispatch Command generation + compilation done on the Controller. Thus, the controller manages memory exposed to users and to Runtime data-paths (ex: buffer allocations for Kernel Binaries). The Remote Executors are only responsible for copying pre-assembled Dispatch Commands onto the physical devices they manage.
 
-## 4.8.2.2 Synchronization and Event Handling on the Controller
+#### 4.8.2.2 Synchronization and Event Handling on the Controller
 
 Dedicated reader threads are used for event-handling and synchronization on the Controller Hosts. Functionally, these are identical to the *Completion Queue Reader* threads described in the TT-Mesh section.
 
@@ -2047,7 +2023,7 @@ To issue a blocking operation, the Main Thread on the controller will wait on an
 
 The Executors themselves send notifications through their local *Completion Queue* Readers when event completions are notified by the physical devices. This is done through the RPC Sender Threads on the Executors communicating with the Receiver on the Controller. The Receiver acts as a proxy for the Executors and updates an Event Notification Table/Queue directly on the controller. Once all event entries have been updated, the *Reader* on the Controller unblocks the Main Thread.
 
-## 4.8.3 TT-Mesh Runtime Threads on the Remote-Executors
+### 4.8.3 TT-Mesh Runtime Threads on the Remote-Executors
 
 Remote-Executor hosts accept commands from the Controller and communicate directly with the accelerator-grid. Depending on the distribution of work between the Controller and Executors, it may be necessary to setup a multi-threaded pipeline on the latter. Executors may need to compile Programs, assemble dispatch commands, and perform TMs, all of which are CPU bound operations.
 
@@ -2059,7 +2035,7 @@ Similarly on the reverse path, a reader thread interfaces with an RPC Sender Thr
 
 **The exact configuration of threads on the Remote Executors will be determined based on micro-benchmarking. The description above assumes that all pipeline stages are in different threads.**
 
-### 4.9 Design Prototype and Scope
+## 4.9 Design Prototype and Scope
 
 1. **Program Compile:**
    1. Offline program compilation feature is pending for Q4’24, so we cannot fully serialize on the controller side. The current scope pushes the work of program/kernel compile to the RemoteExecutor.
@@ -2179,7 +2155,7 @@ The sections below describe the architecture of each Distributed/Mesh runtime ob
 
 ## Appendix B: UMD
 
-## Appendix B.1: UMD Queries
+### Appendix B.1: UMD Queries
 
 ```cpp
 // ================= These APIs use Predefined Configuration Files =================
