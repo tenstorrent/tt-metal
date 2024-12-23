@@ -45,17 +45,8 @@ def generate_attn_mask(N, C, W, dev, offs, dtype, mem_config):
     nc_tiles = [((top_row if i % 2 else neg_top_row) + zero_rows) for i in range(NC)]
     nc_tiles_pt = torch.Tensor(nc_tiles).reshape(N, C, 32, W)
     valtorch = torch.Tensor([(top_row if i % 2 else neg_top_row) for i in range(NC)]).reshape(N, C, 1, W)
-    val = (
-        ttnn.Tensor(
-            nc_tiles_pt,
-            dtype,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            dev,
-            mem_config,
-        )
-    )
+    val = ttnn.Tensor(nc_tiles_pt, dtype, dev, ttnn.TILE_LAYOUT, mem_config)
+
     # print("Attn mask=", valtorch)
     return valtorch, val
 
@@ -70,17 +61,7 @@ def run_softmax_tests(dev, test_id, batch, dtype, in0_mem_config):
     for N, C, H, W in test_dims:
         x = torch.randn((N, C, H, W)) * 2.0 - 1.0
 
-        t0 = (
-            ttnn.Tensor(
-                x,
-                dtype,
-            )
-            .to(ttnn.TILE_LAYOUT)
-            .to(
-                dev,
-                in0_mem_config,
-            )
-        )
+        t0 = ttnn.Tensor(x, dtype, dev, ttnn.TILE_LAYOUT, in0_mem_config)
 
         if test_id == 0:
             logger.info("Running scale_mask_softmax")
@@ -95,7 +76,7 @@ def run_softmax_tests(dev, test_id, batch, dtype, in0_mem_config):
         else:
             assert False
 
-        tt_unt = t1_fused.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        tt_unt = ttnn.to_torch(t1_fused)
 
         passing = is_close(tt_unt, ref_sm, rtol=5e-2, atol=5e-2)
         assert passing, "is_close check failed"

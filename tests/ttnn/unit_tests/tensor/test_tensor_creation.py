@@ -38,6 +38,9 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 def test_tensor_creation(shape, tt_dtype, layout, device):
     torch.manual_seed(0)
 
+    if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("{} is only valid for ttnn.TILE_LAYOUT!".format(tt_dtype))
+
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
     if dtype in {torch.uint8, torch.int16, torch.int32}:
