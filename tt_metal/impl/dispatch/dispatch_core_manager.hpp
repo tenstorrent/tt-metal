@@ -22,35 +22,6 @@ namespace tt::tt_metal {
 // One core dispatches commands to worker cores on the device `dispatcher`
 // The `remote_x` cores are used for remote fast dispatch and receive / transmit fast dispatch packets from ethernet cores
 
-struct dispatch_worker_build_settings_t{
-    std::string kernel_file;
-    std::string dispatch_s_kernel_file;
-    std::vector<uint32_t> compile_args;
-    std::vector<tt_cxy_pair> upstream_cores;
-    std::vector<tt_cxy_pair> downstream_cores;
-    tt_cxy_pair worker_virtual_core;
-    tt_cxy_pair eth_partner_virtual_core;
-    CoreType dispatch_core_type;
-    uint32_t command_queue_start_addr;
-    uint32_t issue_queue_start_addr;
-    uint32_t issue_queue_size;
-    uint32_t completion_queue_start_addr;
-    uint32_t completion_queue_size;
-    std::vector<uint32_t> semaphores;
-    uint32_t producer_semaphore_id;
-    uint32_t consumer_semaphore_id;
-    uint32_t consumer_slave_semaphore_id;
-    tt_cxy_pair dispatch_s_logical_core;
-    tt_cxy_pair dispatch_s_physical_core;
-    uint32_t cb_start_address;
-    uint32_t cb_size_bytes;
-    uint32_t cb_log_page_size;
-    uint32_t cb_pages;
-    uint32_t tunnel_stop;
-    uint32_t num_compute_cores;
-    uint32_t vc_count;
-};
-
 // std::optional is used to determine whether core has been assigned
 // tt_cxy_pair is used over CoreCoord to denote location because remote device command queue interface cores are on the associated MMIO device
 struct dispatch_core_placement_t {

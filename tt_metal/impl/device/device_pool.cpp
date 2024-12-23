@@ -334,9 +334,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
-        populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
-    }
+    populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     for (const auto& device_id : devices_to_activate) {
         if (not this->is_device_active(device_id)) {
             this->activate_device(device_id);

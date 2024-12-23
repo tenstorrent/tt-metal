@@ -231,9 +231,6 @@ public:
     void initialize_synchronous_sw_cmd_queue();
     void update_dispatch_cores_for_multi_cq_eth_dispatch();
 
-    void configure_kernel_variant(Program& program, const string& path, const std::vector<uint32_t>& compile_args, CoreCoord kernel_core, CoreCoord Kernel_virtual_core,
-                                  CoreType dispatch_core_type, CoreCoord upstream_virtual_core, CoreCoord downstream_virtual_core, CoreCoord downstream_slave_virtual_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false, bool send_to_brisc = false, bool force_watcher_no_inline = false);
-
     // Puts device into reset
     bool close();
     friend bool CloseDevice(Device *device);
@@ -309,9 +306,7 @@ private:
     void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
     void compile_command_queue_programs();
-    void compile_command_queue_programs_new();
     void configure_command_queue_programs();
-    void configure_command_queue_programs_new();
     void clear_l1_state();
     void get_associated_dispatch_virtual_cores(
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
@@ -321,10 +316,6 @@ private:
     void set_worker_mode(const WorkExecutorMode& mode);
 
     void generate_device_bank_to_noc_tables();
-
-    void setup_tunnel_for_remote_devices();
-
-    void update_workers_build_settings(std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> &device_worker_variants);
 
     SubDeviceManagerId get_next_sub_device_manager_id();
     void reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceManager>& sub_device_manager);
@@ -339,7 +330,6 @@ private:
 
     chip_id_t id_;
     uint32_t build_key_ = 0;
-    std::map<uint32_t, std::map<chip_id_t, std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>>>> tunnel_device_dispatch_workers_;
     std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
 
     // Leaving here for compatibility with current reacharounds
