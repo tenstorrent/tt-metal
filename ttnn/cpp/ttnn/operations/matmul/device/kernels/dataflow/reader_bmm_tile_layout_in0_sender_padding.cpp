@@ -9,7 +9,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 #include "tools/profiler/kernel_profiler.hpp"
-volatile uint32_t* dbg_dump_ncrisc = (volatile uint32_t*)0x15240;
+// volatile uint32_t* dbg_dump_ncrisc = (volatile uint32_t*)0x15240;
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;

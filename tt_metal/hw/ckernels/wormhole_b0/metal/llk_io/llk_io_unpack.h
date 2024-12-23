@@ -11,7 +11,7 @@
 #include "llk_unpack_common_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-volatile uint32_t* dbg_dump = (volatile uint32_t*)0x15200;
+// volatile uint32_t* dbg_dump = (volatile uint32_t*)0x15200;
 
 using namespace ckernel;
 
@@ -74,17 +74,17 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 
     std::uint16_t tiles_received;
 
-    if (operand == 0) {
-        *(dbg_dump + 3) = 0x00baba01;
-    } else {
-        *(dbg_dump + 4) = 0x00baba01;
-    }
-    *(dbg_dump + 5) = (uint32_t)get_local_cb_interface(input).fifo_rd_ptr;
-    *(dbg_dump + 6) = (uint32_t)get_local_cb_interface(input).fifo_size;
-    *(dbg_dump + 7) = (uint32_t)get_local_cb_interface(input).fifo_limit;
-    *(dbg_dump + 8) = (uint32_t)get_local_cb_interface(input).tiles_acked;
-    *(dbg_dump + 9) = (uint32_t)get_local_cb_interface(input).fifo_page_size;
-    *(dbg_dump + 10) = (uint32_t)tiles_received_ptr;
+    // if (operand == 0) {
+    //     *(dbg_dump + 3) = 0x00baba01;
+    // } else {
+    //     *(dbg_dump + 4) = 0x00baba01;
+    // }
+    // *(dbg_dump + 5) = (uint32_t)get_local_cb_interface(input).fifo_rd_ptr;
+    // *(dbg_dump + 6) = (uint32_t)get_local_cb_interface(input).fifo_size;
+    // *(dbg_dump + 7) = (uint32_t)get_local_cb_interface(input).fifo_limit;
+    // *(dbg_dump + 8) = (uint32_t)get_local_cb_interface(input).tiles_acked;
+    // *(dbg_dump + 9) = (uint32_t)get_local_cb_interface(input).fifo_page_size;
+    // *(dbg_dump + 10) = (uint32_t)tiles_received_ptr;
 
     uint16_t num_tiles_recv;
     do {
@@ -92,22 +92,22 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
         num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
 
-    if (operand == 0) {
-        *(dbg_dump + 3) = 0x08baba01;
-    } else {
-        *(dbg_dump + 4) = 0x08baba01;
-    }
+    // if (operand == 0) {
+    //     *(dbg_dump + 3) = 0x08baba01;
+    // } else {
+    //     *(dbg_dump + 4) = 0x08baba01;
+    // }
 
     apply_mm_stagger(operand);
 
-    if (operand == 0) {
-        uint block_id = *(dbg_dump + 1);
-        if (block_id == 0) {
-            uint iter_id = *(dbg_dump + 2);
-            *(dbg_dump + 2) = iter_id + 1;
-        }
-        *(dbg_dump + 1) = block_id + 1;
-    }
+    // if (operand == 0) {
+    //     uint block_id = *(dbg_dump + 1);
+    //     if (block_id == 0) {
+    //         uint iter_id = *(dbg_dump + 2);
+    //         *(dbg_dump + 2) = iter_id + 1;
+    //     }
+    //     *(dbg_dump + 1) = block_id + 1;
+    // }
 }
 
 // Pop N tiles from the incoming stream
