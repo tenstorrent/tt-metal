@@ -220,8 +220,8 @@ void DispatchKernel::GenerateDependentConfigs() {
         TT_ASSERT(downstream_kernels_.size() == 1);
         auto prefetch_h_kernel = dynamic_cast<PrefetchKernel*>(downstream_kernels_[0]);
         TT_ASSERT(prefetch_h_kernel);
-        dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE_ADJUSTED;
-        dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE_ADJUSTED;
+        dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;
+        dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal.noc_xy_encoding(
             prefetch_h_kernel->GetVirtualCore().x, prefetch_h_kernel->GetVirtualCore().y);
         dependent_config_.prefetch_h_local_downstream_sem_addr =

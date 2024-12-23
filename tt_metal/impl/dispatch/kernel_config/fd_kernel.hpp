@@ -8,8 +8,6 @@
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
-// TODO: Just to make match with previous implementation, remove later
-#define UNUSED_LOGICAL_CORE_ADJUSTED tt_cxy_pair(servicing_device_id_, 0, 0)
 #define UNUSED_SEM_ID 0
 
 typedef struct {
