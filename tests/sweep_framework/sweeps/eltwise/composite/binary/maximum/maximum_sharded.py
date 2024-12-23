@@ -17,7 +17,6 @@ from tests.sweep_framework.sweep_utils.sharding_utils import (
     invalidate_vector_sharding,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
@@ -35,6 +34,7 @@ parameters = {
     "nightly": {
         "input_spec": gen_sharded_spec_unary(16, layouts=["TILE_LAYOUT"]),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
 
@@ -48,7 +48,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
     if input_layout == "ROW_MAJOR_LAYOUT":
         return True, "Input to eltwise binary must be tilized"
-    if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+    if input_layout == "ROW_MAJOR_LAYOUT" and (
+        test_vector["input_a_dtype"] == ttnn.bfloat8_b or test_vector["input_b_dtype"] == ttnn.bfloat8_b
+    ):
         return True, "bfloat8_b is only supported on tiled layout"
     if sharding_invalidated:
         return sharding_invalidated, output_str
@@ -63,6 +65,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_spec,
     input_a_dtype,
+    input_b_dtype,
     *,
     device,
 ) -> list:
@@ -85,10 +88,12 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.maximum)
-    torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
+    golden_function = ttnn.get_golden_function(ttnn.minimum)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,
@@ -106,9 +111,16 @@ def run(
         device=device,
         memory_config=sharded_config,
     )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=input_b_dtype,
+        layout=input_layout,
+        device=device,
+        memory_config=sharded_config,
+    )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.maximum(input_tensor_a, scalar.item(), memory_config=sharded_config)
+    output_tensor = ttnn.minimum(input_tensor_a, input_tensor_b, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 

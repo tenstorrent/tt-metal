@@ -350,11 +350,13 @@ on:
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
+          - eltwise.composite.binary.minimum.minimum_sharded
           - eltwise.composite.binary.minimum.minimum_unary
           - eltwise.composite.binary.minimum.minimum_unary_sharded
           - eltwise.composite.binary.minimum.minimum_pytorch2
           - eltwise.composite.binary.minimum.minimum_forge
           - eltwise.composite.binary.maximum.maximum
+          - eltwise.composite.binary.maximum.maximum_sharded
           - eltwise.composite.binary.maximum.maximum_unary
           - eltwise.composite.binary.maximum.maximum_unary_sharded
           - eltwise.composite.binary.maximum.maximum_pytorch2

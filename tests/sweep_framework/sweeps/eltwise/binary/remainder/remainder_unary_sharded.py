@@ -11,9 +11,12 @@ import random
 import ttnn
 import math
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
-from tests.sweep_framework.sweep_utils.sharding_utils import gen_sharded_spec_unary, parse_sharding_spec
+from tests.sweep_framework.sweep_utils.sharding_utils import (
+    gen_sharded_spec_unary,
+    parse_sharding_spec,
+    invalidate_vector_sharding,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
@@ -48,18 +51,15 @@ def mesh_device_fixture():
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    input_shape, X, Y, sharding_strategy, _, _, input_layout = test_vector["input_spec"].values()
-    pre_sharded_height = math.prod(input_shape[:-1])
-    pre_sharded_width = input_shape[-1]
+    input_layout = test_vector["input_spec"]["input_layout"]
+    sharding_invalidated, output_str = invalidate_vector_sharding(test_vector["input_spec"])
 
     if test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "Input_tensor_a doesn't support bfloat8_b"
-
-    if input_layout == "ROW_MAJOR_LAYOUT" and (input_shape[-1] % input_shape[-2] != 0):
-        return True, "Physical size <width, height> must be a multuple of page size <1, width>"
-
     if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is only supported on tiled layout"
+    if sharding_invalidated:
+        return sharding_invalidated, output_str
 
     return False, None
 
@@ -85,6 +85,7 @@ def run(
         shard_orientation,
         tensor_hw_as_shard_shape,
         input_layout,
+        shard_height_mul_of_32,
     ) = parse_sharding_spec(input_spec)
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -108,6 +109,7 @@ def run(
         strategy=sharding_strategy,
         orientation=shard_orientation,
         use_height_and_width_as_shard_shape=tensor_hw_as_shard_shape,
+        tile_layout=shard_height_mul_of_32,
     )
 
     input_tensor_a = ttnn.from_torch(
