@@ -5,6 +5,8 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -19,10 +21,54 @@ ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor) {
         while (rank > 4) {
             squeezed = ttnn::squeeze(squeezed, 0);
             rank = squeezed.get_shape().rank();
+            printf("rank: %zu\n", rank);
         }
         return squeezed;
     }
 };
+
+ttnn::Shape squeeze_output_shape(ttnn::Shape output_shape) {
+    if (output_shape.rank() > 4) {
+        std::array<uint32_t, 4> output_shape_4d;
+        output_shape_4d[0] = 1;
+        int extra_rank = output_shape.rank() - 4;
+        for (int i = extra_rank; i >= 0; i--) {
+            output_shape_4d[0] *= output_shape[i];
+        }
+        output_shape_4d[1] = output_shape[1 + extra_rank];
+        output_shape_4d[2] = output_shape[2 + extra_rank];
+        output_shape_4d[3] = output_shape[3 + extra_rank];
+        return ttnn::Shape(output_shape_4d);
+    }
+    return output_shape;
+}
+
+ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
+    auto shape = tensor.get_shape();
+    auto rank = shape.rank();
+    if (shape.rank() < 4) {
+        TT_THROW("Tensor has to be of rank larger than 4!");
+    }
+    if (rank == 4) {
+        return tensor;
+    }
+    printf("shape[0]: %u\n", shape[0]);
+    int i = 0;
+    if (shape[i] == 1) {
+        auto squeezed = tensor;
+        while (rank > 4 && shape[i] == 1) {
+            squeezed = ttnn::squeeze(squeezed, 0);
+            rank = squeezed.get_shape().rank();
+            printf("rank: %zu\n", rank);
+            i++;
+        }
+        if (rank <= 4) {
+            return squeezed;
+        }
+        return ttnn::reshape(squeezed, squeeze_output_shape(shape));
+    }
+    return ttnn::reshape(tensor, squeeze_output_shape(shape));
+}
 
 ttnn::Tensor pad_to_tile_vol(
     uint8_t queue_id,

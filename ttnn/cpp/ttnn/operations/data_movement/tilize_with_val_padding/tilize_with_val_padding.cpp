@@ -52,15 +52,15 @@ MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeValArgs {
             *original_shape = input_tensor.get_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_to_le_4D(input_tensor);
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
             const auto tile = output.get_tensor_spec().tile();
             uint32_t tile_height = tile.get_height();
             uint32_t tile_width = tile.get_width();
-            auto unsqueezed_tensor =
-                ttnn::reshape(output, update_original_shape(*original_shape, tile_height, tile_width));
+            auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
+            // ttnn::reshape(output, update_original_shape(*original_shape, tile_height, tile_width));
             return unsqueezed_tensor;
         },
         .operation = std::move(base_tilize)});
