@@ -1016,18 +1016,18 @@ Below, we include snippets from both the TT-Mesh and TT-Metal examples to illust
 MeshConfig mesh_config_0 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 0}, .type=mesh_type};
 MeshConfig mesh_config_1 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 4}, .type=mesh_type};
 
-DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_0, 2 /* num_cqs */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1 /* num_command_queues */);
-DeviceHandle virtual_mesh_1 = CreateMeshDevice(mesh_config_1, 2 /* num_cqs */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1 /* num_command_queues */);
+DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1 /* num_command_queues */);
+DeviceHandle virtual_mesh_1 = CreateMeshDevice(mesh_config_1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1 /* num_command_queues */);
 ```
 
 *Directly create raw handles to two Devices.*
 
 ```cpp
- DeviceHandle device_0 = CreateDevice(
-                                0, /* device_id */
-                                2, /* num_hw_cqs */
-                                DEFAULT_L1_SMALL_SIZE,
-                                DEFAULT_TRACE_REGION_SIZE);
+DeviceHandle device_0 = CreateDevice(
+                            0, /* device_id */
+                            2, /* num_hw_cqs */
+                            DEFAULT_L1_SMALL_SIZE,
+                            DEFAULT_TRACE_REGION_SIZE);
 DeviceHandle device_1 = CreateDevice(
                             1, /* device_id */
                             2, /* num_hw_cqs */
@@ -1070,7 +1070,7 @@ DeviceLocalLayoutConfig per_device_buffer_config {
 ShardedBufferConfig distributed_buffer_config_virtual_mesh_0 {
     .mesh_device = virtual_mesh_0;
     .buffer_type = BufferType::DRAM,
-    .global_tensor_shape = global_tensor_shape,
+    .global_buffer_shape = global_buffer_shape,
     .distributed_shard_shape = device_shard_shape,
     .global_buffer_size = distributed_buffer_size,
     .device_shard_layout = per_device_buffer_config
@@ -1079,7 +1079,7 @@ ShardedBufferConfig distributed_buffer_config_virtual_mesh_0 {
 ShardedBufferConfig distributed_buffer_config_virtual_mesh_1 {
     .mesh_device = virtual_mesh_1;
     .buffer_type = BufferType::DRAM,
-    .global_tensor_shape = global_tensor_shape,
+    .global_buffer_shape = global_buffer_shape,
     .distributed_shard_shape = device_shard_shape,
     .global_buffer_size = distributed_buffer_size,
     .device_shard_layout = per_device_buffer_config
