@@ -27,7 +27,6 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_abs_int32() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        constexpr uint dst_tile_size = 64;
         TT_SFPLOAD(1, 4, 3, 0);
         TTI_SFPABS(0, 1, 0, 0);
         TTI_SFPSTORE(0, 4, 3, 0);
