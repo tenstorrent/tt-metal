@@ -126,13 +126,15 @@ std::vector<ttnn::ccl::v2::TensorSlice> split_tensor_slice_across_workers_wrappe
         return worker_slice;
     };
 
-    const auto worker_slices_view =
-        compute_evenly_split_sizes(num_pages, num_workers) |
-        std::views::transform([to_cmd_tensor](auto size_offset) { return to_cmd_tensor(size_offset); });
-
+    const auto evenly_split_sizes = compute_evenly_split_sizes(num_pages, num_workers);
     std::vector<ttnn::ccl::v2::TensorSlice> worker_slices;
     worker_slices.reserve(num_workers);
-    std::ranges::copy(worker_slices_view, std::back_inserter(worker_slices));
+    std::transform(
+        evenly_split_sizes.begin(),
+        evenly_split_sizes.end(),
+        std::back_inserter(worker_slices),
+        [to_cmd_tensor](auto size_offset) { return to_cmd_tensor(size_offset); });
+
     TT_FATAL(
         worker_slices.size() == num_workers, "Expected {} worker slices but got {}", num_workers, worker_slices.size());
     return worker_slices;
@@ -161,11 +163,14 @@ std::vector<ttnn::ccl::v2::TensorSlice> compute_page_aligned_slices(
         return cmd_tensor;
     };
 
-    const auto tensor_slices_view =
-        compute_evenly_split_sizes(input_tensor_shape_in_tiles[split_dim], num_slices) |
-        std::views::transform([to_cmd_tensor](auto size_offset) { return to_cmd_tensor(size_offset); });
+    const auto evenly_split_sizes = compute_evenly_split_sizes(input_tensor_shape_in_tiles[split_dim], num_slices);
+    tensor_slices.reserve(evenly_split_sizes.size());
+    std::transform(
+        evenly_split_sizes.begin(),
+        evenly_split_sizes.end(),
+        std::back_inserter(tensor_slices),
+        [to_cmd_tensor](auto size_offset) { return to_cmd_tensor(size_offset); });
 
-    std::ranges::copy(tensor_slices_view, std::back_inserter(tensor_slices));
     TT_FATAL(
         tensor_slices.size() == num_slices, "Expected {} tensor slices but got {}", num_slices, tensor_slices.size());
 
