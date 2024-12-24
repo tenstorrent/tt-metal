@@ -168,9 +168,9 @@ void set_or_update_runtime_arguments(
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
 
-    const auto ashape = a.get_padded_shape();
-    const auto bshape = b.has_value() ? b->get_padded_shape() : SimpleShape{1, 1};
-    const auto cshape = c.get_padded_shape();
+    const auto ashape = a.padded_shape();
+    const auto bshape = b.has_value() ? b->padded_shape() : SimpleShape{1, 1};
+    const auto cshape = c.padded_shape();
 
     const auto [aN, aC, aHt, aWt] = extract_shape_dims(a);
     const auto [bN, bC, bHt, bWt] = b.has_value() ? extract_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u};
