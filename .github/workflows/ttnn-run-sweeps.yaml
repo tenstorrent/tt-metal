@@ -62,6 +62,7 @@ on:
           - eltwise.unary.elu.elu_pytorch2
           - eltwise.unary.erfc.erfc
           - eltwise.unary.exp.exp
+          - eltwise.unary.exp.exp_sharded
           - eltwise.unary.exp.exp_forge
           - eltwise.unary.exp.exp_pytorch2
           - eltwise.unary.exp2.exp2
