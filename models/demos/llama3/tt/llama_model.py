@@ -110,9 +110,8 @@ class TtTransformer(LightweightModule):
 
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
-        dims = (None, -1) if self.args.is_galaxy else (None, None)
+        dims = (None, None)  # replicate
         mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.args.cluster_shape)
-
         tokens = ttnn.from_torch(
             tokens,
             device=self.mesh_device,
