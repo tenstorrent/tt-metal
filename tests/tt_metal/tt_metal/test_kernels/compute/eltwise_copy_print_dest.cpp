@@ -36,6 +36,8 @@ void MAIN {
         cb_push_back(tt::CBIndex::c_16, 1);
     }
 
+    dprint_tensix_alu_config();
+
     release_dst();
 }
 }  // namespace NAMESPACE

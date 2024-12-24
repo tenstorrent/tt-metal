@@ -284,3 +284,19 @@ TEST_F(DPrintFixture, TensixTestDestPrintFloat32RemapAndSwizzle) {
         [&](DPrintFixture* fixture, Device* device) { reader_datacopy_writer(fixture, device, test_config); },
         this->devices_[0]);
 }
+
+TEST_F(DPrintFixture, CustomTest) {
+    // Setup test configuration
+    DestPrintTestConfig test_config = {
+        .num_tiles = 2,
+        .data_format = tt::DataFormat::Float16_b,
+        .core = CoreCoord(0, 0),
+        .reader_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+        .writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+        .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_print_dest.cpp"};
+
+    // Run the test on the device
+    this->RunTestOnDevice(
+        [&](DPrintFixture* fixture, Device* device) { reader_datacopy_writer(fixture, device, test_config); },
+        this->devices_[0]);
+}
