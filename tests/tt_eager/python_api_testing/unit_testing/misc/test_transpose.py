@@ -672,7 +672,7 @@ def test_transpose_2D(dtype, shape, layout, device):
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, 0, 1)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.99)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
 @pytest.mark.parametrize(
@@ -817,7 +817,7 @@ def test_transpose_former_failures(config, memory_config, device):
     )
     tt_output = ttnn.transpose(tt_input, config[1][0], config[1][1])
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.99)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
 @pytest.mark.parametrize(
