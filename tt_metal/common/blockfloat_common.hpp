@@ -13,6 +13,7 @@
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
+#include "tt_metal/tt_stl/span.hpp"
 
 inline uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {
     TT_ASSERT(vec.size() == 16);
@@ -288,7 +289,7 @@ inline uint32_t create_packed_bfp_packed_as_u32(
 
 template <tt::DataFormat BfpFormat>
 inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
-    const std::vector<float>& fp32_vec,
+    tt::stl::Span<const float> fp32_vec,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
@@ -344,7 +345,7 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
                         } else {
                             data_index = fp32_element_index++;
                         }
-                        float float_num = fp32_vec.at(data_index);
+                        float float_num = fp32_vec[data_index];
                         uint32_t uint32_num = *reinterpret_cast<uint32_t*>(&float_num);
                         single_row.push_back(uint32_num);
                     }
