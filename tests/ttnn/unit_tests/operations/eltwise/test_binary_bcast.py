@@ -160,3 +160,39 @@ def test_01_volume_tensors(device, data, memory_config):
     c = ttnn.to_torch(ttnn_c).reshape((-1))
 
     assert c.tolist() == c_golden
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        # (torch.Size([5, 3, 32, 32]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([1, 3, 64, 64]), torch.Size([5, 3, 64, 64])),  # batch bcast
+        # (torch.Size([5, 3, 32, 64]), torch.Size([5, 3, 32, 64])),
+        # (torch.Size([5, 3, 64, 32]), torch.Size([5, 3, 64, 32])),
+        # (torch.Size([5,3,1,1]), torch.Size([5,3,1,1])),																									                # (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128])),
+        # (torch.Size([5, 3, 64, 32]), torch.Size([5, 3, 1, 32])),																									                # (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128])),
+        # (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.experimental.sub,
+    ],
+)
+def test_binary_ng(input_shapes, ttnn_fn, device):
+    a_shape, b_shape = input_shapes
+    a_pt = torch.rand(a_shape).bfloat16()
+    b_pt = torch.rand(b_shape).bfloat16()
+
+    a_tt = ttnn.from_torch(a_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    b_tt = ttnn.from_torch(b_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    cq_id = 0
+    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id)
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+    out_pt = golden_fn(a_pt, b_pt)
+    # print(ttnn.to_torch(out_tt))
+    # print(out_pt)
+    # comp_pass = compare_pcc([out_tt], [out_pt])
+    comp_pass = ttnn.pearson_correlation_coefficient(out_pt, out_tt)
+    assert comp_pass >= 0.99988
