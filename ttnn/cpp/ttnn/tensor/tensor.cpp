@@ -624,26 +624,16 @@ Tensor Tensor::from_span<float>(
             TT_FATAL(
                 spec.tensor_layout().get_layout() == Layout::TILE,
                 "Tile layout is required for BFLOAT8_B and BFLOAT4_B");
+
+            // TODO: Implement `encode_tensor_data` in terms of a Span, avoid tilizing the data, as pack_fp32_vec_as_*
+            // support row-major input.
             const auto& tile = spec.tensor_layout().get_page_config().get_tile();
-
-            // Create an intermediate tensor on CPU to perform padding and data packing.
-            Tensor fp32_tensor = create_owned_tensor_from_row_major_data(
-                std::vector<float>(buffer.begin(), buffer.end()),
-                TensorSpec(
-                    spec.logical_shape(),
-                    TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR, tile), MemoryConfig{})));
-            if (spec.logical_shape() != spec.padded_shape()) {
-                fp32_tensor =
-                    tensor_ops::tensor_pad(fp32_tensor, spec.padded_shape(), ttnn::SimpleShape{0, 0, 0, 0}, 0);
-            }
-
-            std::vector<float> padded_row_major_data = owned_buffer::get_as<float>(fp32_tensor).get();
+            auto physical_data =
+                tensor_impl::encode_tensor_data(std::vector<float>(buffer.begin(), buffer.end()), spec);
             std::vector<uint32_t> packed_block_floats =
                 spec.data_type() == DataType::BFLOAT8_B
-                    ? pack_fp32_vec_as_bfp8_tiles(
-                          padded_row_major_data, /*row_major_input=*/true, /*is_exp_a=*/false, tile)
-                    : pack_fp32_vec_as_bfp4_tiles(
-                          padded_row_major_data, /*row_major_input=*/true, /*is_exp_a=*/false, tile);
+                    ? pack_fp32_vec_as_bfp8_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
+                    : pack_fp32_vec_as_bfp4_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
 
             Tensor tensor(OwnedStorage{owned_buffer::create(std::move(packed_block_floats))}, spec);
             if (device.has_value()) {
@@ -683,22 +673,12 @@ std::vector<float> Tensor::to_vector<float>() const {
                 owned_buffer::get_as<std::uint32_t>(std::get<OwnedStorage>(cpu_tensor.storage()).buffer).get();
             std::vector<float> unpacked_data =
                 cpu_tensor.get_tensor_spec().data_type() == DataType::BFLOAT8_B
-                    ? unpack_bfp8_tiles_into_float_vec(packed_data, /*row_major_output=*/true, /*is_exp_a=*/false, tile)
+                    ? unpack_bfp8_tiles_into_float_vec(
+                          packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
                     : unpack_bfp4_tiles_into_float_vec(
-                          packed_data, /*row_major_output=*/true, /*is_exp_a=*/false, tile);
+                          packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
 
-            Tensor fp32_cpu_tensor = create_owned_tensor_from_row_major_data(
-                std::move(unpacked_data),
-                TensorSpec(
-                    cpu_tensor.get_shape().padded_shape(),
-                    TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR, tile), MemoryConfig{})));
-
-            if (cpu_tensor.get_shape().logical_shape() != cpu_tensor.get_shape().padded_shape()) {
-                fp32_cpu_tensor = tensor_ops::tensor_unpad(
-                    fp32_cpu_tensor, ttnn::SimpleShape{0, 0, 0, 0}, cpu_tensor.get_shape().logical_shape());
-            }
-
-            return owned_buffer::get_as<float>(std::get<OwnedStorage>(fp32_cpu_tensor.storage()).buffer).get();
+            return tensor_impl::decode_tensor_data(unpacked_data, cpu_tensor.tensor_spec());
         }
         default: {
             TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.get_dtype());
