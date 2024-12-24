@@ -3261,7 +3261,6 @@ CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) con
     return this->core_type_from_physical_core(virtual_coord);
 }
 
-
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
@@ -3316,6 +3315,7 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
     }
     return eth_cores;
 }
+
 CoreCoord Device::virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const {
     return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->id_, logical_coord, core_type);
 }
@@ -3691,7 +3691,11 @@ void Device::enable_async(bool enable) {
 }
 
 bool Device::using_slow_dispatch() const {
-    return not (this->using_fast_dispatch_);
+    return !using_fast_dispatch();
+}
+
+bool Device::using_fast_dispatch() const {
+    return using_fast_dispatch_;
 }
 
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
@@ -3977,24 +3981,22 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
 }
 
 HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_core) const {
-
-    HalProgrammableCoreType programmable_core_type = HalProgrammableCoreType::TENSIX;
-    if (tt::Cluster::instance().is_ethernet_core(virtual_core, this->id_)) {
-        // Eth pcores have a different address, but only active ones.
-        CoreCoord logical_core = this->logical_core_from_ethernet_core(virtual_core);
-        if (this->is_active_ethernet_core(logical_core)) {
-            programmable_core_type = HalProgrammableCoreType::ACTIVE_ETH;
-        } else {
-            programmable_core_type = HalProgrammableCoreType::IDLE_ETH;
-        }
+    if (!tt::Cluster::instance().is_ethernet_core(virtual_core, this->id_)) {
+        return HalProgrammableCoreType::TENSIX;
     }
 
-    return programmable_core_type;
+    // Eth pcores have a different address, but only active ones.
+    CoreCoord logical_core = this->logical_core_from_ethernet_core(virtual_core);
+    if (this->is_active_ethernet_core(logical_core)) {
+        return HalProgrammableCoreType::ACTIVE_ETH;
+    }
+
+    return HalProgrammableCoreType::IDLE_ETH;
 }
 
 // TODO: Find a better home for this function
+// Extracts all the pairs of noc multicast encodings given a set of core ranges
 std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) {
-    // This API extracts all the pairs of noc multicast encodings given a set of core ranges
     std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
     dst_noc_multicast_info.reserve(ranges.size());
     for (const CoreRange& core_range : ranges) {

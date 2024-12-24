@@ -93,10 +93,6 @@ public:
 
     bool is_initialized() const { return this->initialized_; }
 
-    // Next group methods is proxying a call to Cluster
-    // Some methods can be replaced with ::get_soc_description
-    // dram_size_perf_channel is only used in tests
-    // dram_grid_size is only used in a test and reshard
     int num_dram_channels() const;
     uint32_t l1_size_per_core() const;
     uint32_t dram_size_per_channel() const;
@@ -104,6 +100,7 @@ public:
     CoreCoord logical_grid_size() const;
     CoreCoord dram_grid_size() const;
     CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const;
+
     // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
     CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const;
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
@@ -131,11 +128,6 @@ public:
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const;
 
-    bool is_mmio_capable() const;
-
-    uint32_t num_sub_devices() const;
-
-    // Next group of methods is proxying a call to Allocator
     const std::unique_ptr<Allocator> &get_initialized_allocator() const;
     const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const;
 
@@ -162,10 +154,8 @@ public:
     const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel) const;
     const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const;
 
-    const std::vector<uint32_t> &bank_ids_from_logical_core(
-        BufferType buffer_type, const CoreCoord &logical_core) const;
-    const std::vector<uint32_t> &bank_ids_from_logical_core(
-        BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const;
+    const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core) const;
+    const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const;
 
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
@@ -208,11 +198,9 @@ public:
     float sfpu_inf() const;
 
     const JitBuildEnv& build_env() const { return this->build_env_; }
-    // review: only used in tests
     const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const;
     const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const;
     const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const;
-    // review: used in kernel.cpp. should device build it?
     const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const;
     const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const;
 
@@ -226,10 +214,12 @@ public:
     void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking);
     void release_trace(const uint32_t tid);
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid);
+    uint32_t get_trace_buffers_size() const { return trace_buffers_size_; }
+    void set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
 
     bool using_slow_dispatch() const;
+    bool using_fast_dispatch() const;
 
-    // Next cluster of methods could be private but they are actively used by DevicePool to maintain device lifecycle
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false);
@@ -241,8 +231,6 @@ public:
     void initialize_synchronous_sw_cmd_queue();
     void update_dispatch_cores_for_multi_cq_eth_dispatch();
 
-    // review: 17 arguments, wtf
-    // only relies on device id, relies more on cluster
     void configure_kernel_variant(Program& program, const string& path, const std::vector<uint32_t>& compile_args, CoreCoord kernel_core, CoreCoord Kernel_virtual_core,
                                   CoreType dispatch_core_type, CoreCoord upstream_virtual_core, CoreCoord downstream_virtual_core, CoreCoord downstream_slave_virtual_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false, bool send_to_brisc = false, bool force_watcher_no_inline = false);
 
@@ -250,27 +238,24 @@ public:
     bool close();
     friend bool CloseDevice(Device *device);
 
-    // APIs to access this device's work executor
-    // Only used in Buffer
+    void enable_async(bool enable);
+    void synchronize();
+    WorkExecutorMode get_worker_mode() { return work_executor_.get_worker_mode(); }
+    void set_worker_queue_mode(const WorkerQueueMode& mode) { this->work_executor_.set_worker_queue_mode(mode); }
+    WorkerQueueMode get_worker_queue_mode() { return this->work_executor_.get_worker_queue_mode(); }
+    bool is_worker_queue_empty() const { return work_executor_.worker_queue.empty(); }
     bool can_use_passthrough_scheduling() const;
 
     template<typename F>
     void push_work(F&& work, bool blocking = false) {
         this->work_executor_.push_work(std::forward<F>(work), blocking);
     }
-    void synchronize();
-
-    void enable_async(bool enable);
-    WorkExecutorMode get_worker_mode() { return work_executor_.get_worker_mode(); }
-    void set_worker_queue_mode(const WorkerQueueMode& mode) { this->work_executor_.set_worker_queue_mode(mode); }
-    WorkerQueueMode get_worker_queue_mode() { return this->work_executor_.get_worker_queue_mode(); }
 
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache();
     void disable_and_clear_program_cache();
     program_cache::detail::ProgramCache& get_program_cache() { return program_cache_; }
-    //todo: delete, users can ask ProgramCache directly
     std::size_t num_program_cache_entries();
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const;
@@ -278,7 +263,6 @@ public:
     template <typename T = DeviceAddr>
     T get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
 
-    // only used by program
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type);
 
     bool dispatch_s_enabled() const;
@@ -290,36 +274,23 @@ public:
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
     uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
 
-    LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id);
-
     SubDeviceManagerId get_active_sub_device_manager_id() const;
     SubDeviceManagerId get_default_sub_device_manager_id() const;
     SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
+    void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
     void clear_loaded_sub_device_manager();
-    void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
+    LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id);
     const std::vector<SubDeviceId> &get_sub_device_ids() const;
+    uint32_t num_sub_devices() const;
 
     // TODO #15944: Temporary api until migration to actual fabric is complete
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
     std::optional<SubDeviceId> get_fabric_sub_device_id() const;
 
-    // review: only used by transpose and matmul
-    std::set<CoreCoord> get_compute_cores() const { return compute_cores_; }
-
-    // review: has only 1 usage in command queue
     uint32_t get_completion_queue_reader_core() const { return completion_queue_reader_core_; }
 
-    // review: single use in tt_metal.cpp
-    bool is_worker_queue_empty() const { return work_executor_.worker_queue.empty(); }
-
-    // review: only used in trace/trace_buffer, not used by device itself
-    uint32_t get_trace_buffers_size() const { return trace_buffers_size_; }
-    void set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
-
-    bool using_fast_dispatch() const { return using_fast_dispatch_; }
-
-    // review: single use in device_pool
+    bool is_mmio_capable() const;
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const { return tunnels_from_mmio_; }
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
