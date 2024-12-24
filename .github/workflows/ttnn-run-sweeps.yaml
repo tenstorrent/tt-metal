@@ -87,6 +87,7 @@ on:
           - eltwise.unary.exp.exp_output
           - eltwise.unary.exp2.exp2
           - eltwise.unary.exp2.exp2_sharded
+          - eltwise.unary.exp2.exp2_output
           - eltwise.unary.expm1.expm1
           - eltwise.unary.expm1.expm1_sharded
           - eltwise.unary.tanh.tanh
