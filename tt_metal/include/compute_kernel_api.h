@@ -220,10 +220,25 @@ ALWI void abs_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs<APPROX
  */
 ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init<APPROX>())); }
 
+#ifndef ARCH_GRAYSKULL
 /**
- * Please refer to documentation for any_init.
+ * Performs element-wise computation of absolute value on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Note: This version of the function is for int32 datatype
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid
+ * Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
+ * less than the size of the DST register buffer | True     |
  */
 ALWI void abs_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs_int32<APPROX>(idst))); }
+#endif
 
 /**
  * Will store in the output of the compute core the signum of the tile.
