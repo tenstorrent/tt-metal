@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
@@ -56,6 +60,7 @@ TEST(StrongTypeHandleTest, MoveOnlyType) {
 
     MoveOnlyHandle to = std::move(from);
 
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_THAT(*from, IsNull());
     EXPECT_EQ(**to, 42);
 }
