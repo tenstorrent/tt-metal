@@ -90,6 +90,7 @@ on:
           - eltwise.unary.exp2.exp2_output
           - eltwise.unary.expm1.expm1
           - eltwise.unary.expm1.expm1_sharded
+          - eltwise.unary.expm1.expm1_output
           - eltwise.unary.tanh.tanh
           - eltwise.unary.tanh.tanh_pytorch2
           - eltwise.unary.tanh.tanh_forge
