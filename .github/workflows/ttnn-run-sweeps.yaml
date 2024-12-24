@@ -99,6 +99,7 @@ on:
           - eltwise.unary.relu6.relu6
           - eltwise.unary.log.log
           - eltwise.unary.log.log_sharded
+          - eltwise.unary.log.log_output
           - eltwise.unary.log.log_pytorch2
           - eltwise.unary.log.log_forge
           - eltwise.unary.log1p.log1p
