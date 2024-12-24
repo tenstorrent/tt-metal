@@ -78,7 +78,7 @@ class Kernel : public JitBuildSettings {
     std::vector<ll_api::memory const*> const& binaries(uint32_t build_key) const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
-    uint32_t compile_time_args(size_t index) const { return compile_time_args_[index]; }
+    uint32_t compile_time_arg(size_t index) const { return compile_time_args_[index]; }
 
     const std::set<CoreCoord> &cores_with_runtime_args() const { return core_with_runtime_args_; }
 

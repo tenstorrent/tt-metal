@@ -588,7 +588,7 @@ void JitBuildState::compile_one(
             if (i != 0) {
                 args << ",";
             }
-            args << static_cast<const Kernel*>(settings)->compile_time_args(i);
+            args << static_cast<const Kernel*>(settings)->compile_time_arg(i);
         }
         defines += "-DKERNEL_COMPILE_TIME_ARGS=\\(int[]\\){" + args.str() + "} ";
     }
