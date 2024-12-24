@@ -28,18 +28,18 @@ void kernel_main() {
 
     uint32_t reader_idx = 0;
     if constexpr (!is_reader) {
-        /* For each input stick there are 4 entries in config cb {core_coords.x, core_coords.y, stick_offset(in
-         * input_cb), 0(padding)} so multiply input image_row_begin with (4 * scale_h) */
-        reader_idx = (4 * scale_h) * image_row_begin;
+        /* For each input stick there are 2 entries in config cb {{core_coords.x, core_coords.y}, stick_offset(in
+         * input_cb)} so multiply input image_row_begin with (2 * scale_h) */
+        reader_idx = (2 * scale_h) * image_row_begin;
     }
     cb_reserve_back(out_cb_id, out_nsticks_per_core);
 
     for (uint32_t row_begin = image_row_begin; row_begin < image_row_end; ++row_begin) {
         for (uint32_t sh = 0; sh < scale_h; sh++) {
-            uint16_t corex = config_data[reader_idx++];
-            uint16_t corey = config_data[reader_idx++];
+            uint16_t cores = config_data[reader_idx++];
+            uint16_t corey = cores & 0xFF;
+            uint16_t corex = cores >> 8;
             uint16_t offset = config_data[reader_idx++];
-            reader_idx++;
             uint64_t src_remote_addr = get_noc_addr(corex, corey, l1_read_addr + offset * stick_nbytes);
             // replicate stick scale_w times.
             for (uint32_t sw = 0; sw < scale_w; sw++) {

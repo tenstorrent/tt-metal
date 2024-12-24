@@ -92,30 +92,31 @@ static Tensor create_config_tensor(
                 core_coords = device->worker_core_from_logical_core(
                     CoreCoord(logical_core_to_stick_map[j] % ncores_x, logical_core_to_stick_map[j] / ncores_x));
             }
-            config_vector.push_back(core_coords.x);
-            config_vector.push_back(core_coords.y);
+            // Combine the x and y coordinates of the core into a single 16-bit value.
+            // The x coordinate is shifted left by 8 bits and added to the y coordinate.
+            uint16_t cores = (core_coords.x << 8) + core_coords.y;
+            config_vector.push_back(cores);
             config_vector.push_back(logical_core_to_stick_map[j + 2]);
-            config_vector.push_back(0);
         }
     } else {
         for (size_t i = 0; i < ncores_x; i++) {
             for (size_t j = 0; j < logical_core_to_stick_map.size(); j += logical_core_to_stick_map_entry_size) {
                 core_coords = device->worker_core_from_logical_core(CoreCoord(i, logical_core_to_stick_map[j]));
-                config_vector.push_back(core_coords.x);
-                config_vector.push_back(core_coords.y);
+                // Combine the x and y coordinates of the core into a single 16-bit value.
+                // The x coordinate is shifted left by 8 bits and added to the y coordinate.
+                uint16_t cores = (core_coords.x << 8) + core_coords.y;
+                config_vector.push_back(cores);
                 config_vector.push_back(logical_core_to_stick_map[j + 2]);
-                config_vector.push_back(0);
             }
         }
     }
-    /* Each entry in config_vector contains 4 elements:
-     * {core_coords.x, core_coords.y, stick_offset(in input_cb), 0(padding)}
+    /* Each entry in config_vector contains 2 elements:
+     * {{core_coords.x, core_coords.y}, stick_offset(in input_cb)}
      * - core_coords.x: X coordinate of the core
      * - core_coords.y: Y coordinate of the core
      * - stick_offset: Offset within the input circular buffer
-     * - padding: Always set to 0 for alignment purposes
      */
-    const uint32_t config_buffer_entry_size = 4;
+    const uint32_t config_buffer_entry_size = 2;
     uint32_t elems_per_core = config_buffer_entry_size * scale_factor_h * input_nsticks_per_core;
     Shape config_shape({config_vector.size() / elems_per_core, elems_per_core});
     auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
