@@ -13,6 +13,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -89,19 +90,26 @@ Tensor ProdOperation::invoke(
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
+    const size_t size = input_a.get_legacy_shape().size();
+    // FIXME: all the prod code is based on 4D tensors, so we need to convert the input tensor to 4D.
+    // TODO: We need to handle the case where the input tensor is not 4D.
+    auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a);
     if (all_dimensions) {
-        return prod_all(input_a, output_mem_config);
+        return prod_all(input_tensor_4d, output_mem_config);
     }
-    TT_FATAL(dim >= -4 && dim <= 3, "Dimension out of range (expected to be in range of [-4, 3]");
-    TT_FATAL(input_a.get_shape().rank() == 4, "As of now, Prod op only supports 4D tensors");
-    Tensor temp = input_a;
+    TT_FATAL(
+        size && dim >= -static_cast<int>(size) && dim <= size - 1,
+        "Dimension out of range (expected to be in range of [-{}, {}]",
+        size,
+        size - 1);
+    Tensor temp = input_tensor_4d;
     // Permute for dim 2,3
     if (dim == 2 || dim == -2) {
         ttnn::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
-        temp = ttnn::permute(input_a, permute_dims, output_mem_config);
+        temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
     } else if (dim == 3 || dim == -1) {
         ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
-        temp = ttnn::permute(input_a, permute_dims, output_mem_config);
+        temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
     }
     Tensor result = prod_nc(temp, dim, output_mem_config);
     // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
