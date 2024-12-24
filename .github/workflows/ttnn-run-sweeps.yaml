@@ -84,6 +84,7 @@ on:
           - eltwise.unary.exp.exp_sharded
           - eltwise.unary.exp.exp_forge
           - eltwise.unary.exp.exp_pytorch2
+          - eltwise.unary.exp.exp_output
           - eltwise.unary.exp2.exp2
           - eltwise.unary.exp2.exp2_sharded
           - eltwise.unary.expm1.expm1
