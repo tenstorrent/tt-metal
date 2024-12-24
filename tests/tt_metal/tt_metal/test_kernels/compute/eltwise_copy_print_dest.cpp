@@ -36,7 +36,10 @@ void MAIN {
         cb_push_back(tt::CBIndex::c_16, 1);
     }
 
-    dprint_tensix_alu_config();
+    // CONFIG REGISTER DPRINT
+    //dprint_tensix_alu_config();
+    //dprint_tensix_unpack_tile_descriptor();
+    dprint_tensix_unpack_config();
 
     release_dst();
 }

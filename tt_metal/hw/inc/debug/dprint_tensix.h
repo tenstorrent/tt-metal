@@ -205,7 +205,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         DPRINT << name << " = " << HEX() << field_value << "; ";                                \
     }
 
-// Print content of the register field by field.
+// Print content of the register field by field. Issue: No ENDL.
 inline void dprint_tensix_alu_config(){
         uint32_t reg_val = dbg_read_cfgreg(ckernel::dbg_cfgreg::HW_CFG_0, ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32);
         DPRINT << "RND_MODE: ";                                                           
@@ -226,4 +226,17 @@ inline void dprint_tensix_alu_config(){
         DPRINT_TENSIX_ALU_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_SFPU_Fp32_enabled, "SFPU_Fp32_enabled");   
         DPRINT_TENSIX_ALU_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_INT8_math_enabled, "INT8_math_enabled");   
         DPRINT << ENDL();  
+}
+
+inline void dprint_tensix_unpack_tile_descriptor(){
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+
+    DPRINT << HEX() << cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] << ENDL();
+}
+
+inline void dprint_tensix_unpack_config(){
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+
+    DPRINT << HEX() << cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] << ENDL();
 }
