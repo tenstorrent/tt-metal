@@ -153,12 +153,12 @@ class TtLlamaModelForGeneration:
         # Run TT model
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
         if read_from_device:
-            logits = self.read_forward_trace(tt_logits, unpadded_batch=batch)
+            logits = self.read_decode_output(tt_logits, unpadded_batch=batch)
             return logits
         else:
             return tt_logits
 
-    def read_forward_trace(self, tt_logits, unpadded_batch=None):
+    def read_decode_output(self, tt_logits, unpadded_batch=None):
         updated_tt_logits = ttnn.from_device(tt_logits)
 
         logits = self._process_logits(updated_tt_logits)
@@ -169,34 +169,71 @@ class TtLlamaModelForGeneration:
 
         return logits
 
-    def decode_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
+    def decode_forward(
+        self,
+        tokens: torch.Tensor,
+        start_pos: int,
+        page_table=None,
+        kv_cache=None,
+        enable_trace=False,
+        read_from_device=True,
+    ):
         batch = tokens.shape[0]
 
-        # Get inputs on device
-        tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.tt_model.prepare_device_inputs_decode(
-            tokens, start_pos, mode="decode", page_table=page_table
-        )
+        if not enable_trace:
+            # Get inputs on device
+            tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.tt_model.prepare_device_inputs_decode(
+                tokens, start_pos, mode="decode", page_table=page_table
+            )
 
-        tt_logits = self.tt_model(
-            tt_inp_emb,
-            rot_mat,
+            tt_logits = self.tt_model(
+                tt_inp_emb,
+                rot_mat,
+                start_pos,
+                cache_idxs=cache_idxs_tt,
+                page_table=tt_page_table,
+                kv_cache=kv_cache,
+                mode="decode",
+            )
+        else:
+            tt_logits = self._easy_trace(tokens, start_pos, page_table, kv_cache)
+
+        if read_from_device:
+            return self.read_decode_output(tt_logits, unpadded_batch=batch)
+        else:
+            return tt_logits
+
+    def _easy_trace(self, tokens, start_pos, page_table=None, kv_cache=None):
+        """
+        Tracing is easy! Just call this method and we'll handle tracing for you.
+        """
+        if not hasattr(self, "trace_id"):
+            trace_id, tt_inp, rot_idxs_tt, cache_idxs_tt, tt_logits, tt_page_table = self.capture_trace(
+                tokens, start_pos, page_table=page_table, kv_cache=kv_cache
+            )
+            self.trace_id = trace_id
+            self.trace_inputs = {
+                "tt_inp": tt_inp,
+                "rot_idxs_tt": rot_idxs_tt,
+                "cache_idxs_tt": cache_idxs_tt,
+                "tt_page_table": tt_page_table,
+            }
+            self.trace_output = tt_logits
+
+        trace_logits_rm = self.decode_forward_trace(
+            tokens,
             start_pos,
-            cache_idxs=cache_idxs_tt,
-            page_table=tt_page_table,
-            kv_cache=kv_cache,
-            mode="decode",
+            self.trace_id,
+            self.trace_inputs["tt_inp"],
+            self.trace_inputs["rot_idxs_tt"],
+            self.trace_inputs["cache_idxs_tt"],
+            self.trace_output,
+            page_table=page_table,
+            tt_page_table=self.trace_inputs["tt_page_table"],
+            read_from_device=False,
         )
 
-        # del tt_inp_emb
-        # del rot_mat
-
-        logits = self._process_logits(tt_logits)
-
-        logits = logits.permute(2, 1, 0, 3).squeeze().unsqueeze(1)  # [batch, 1, vocab_size]
-        logits = logits[:batch]  # Remove padded users
-        # del tt_logits
-
-        return logits
+        return trace_logits_rm
 
     def prefill_forward_single_user(
         self, tokens: torch.Tensor, start_pos: int, user_id: int, last_token_idx=None, page_table=None, kv_cache=None
@@ -360,6 +397,15 @@ class TtLlamaModelForGeneration:
             tt_logits, device=self.mesh_device, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=3)
         )
         return logits[..., : self.params.vocab_size].float()
+
+    ## Destructor (used to delete ttnn trace if exists)
+
+    def __del__(self):
+        if hasattr(self, "trace_id"):
+            self.delete_trace(self.trace_id)
+
+        if hasattr(super(TtLlamaModelForGeneration, self), "__del__"):
+            super().__del__()
 
 
 def _get_prefill_user_page_table(page_table, kv_cache, prefill_len):

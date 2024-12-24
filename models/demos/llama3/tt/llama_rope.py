@@ -132,7 +132,7 @@ class TtLlamaRotarySetup(LightweightModule):
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.num_devices > 1 else None,
+                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
