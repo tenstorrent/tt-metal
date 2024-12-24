@@ -173,6 +173,9 @@ on:
           - eltwise.unary.identity.identity_sharded
           - eltwise.unary.neg.neg
           - eltwise.unary.neg.neg_sharded
+          - eltwise.unary.identity.identity_output
+          - eltwise.unary.neg.neg
+          - eltwise.unary.neg.neg_output
           - eltwise.unary.sinh.sinh
           - eltwise.unary.sinh.sinh_sharded
           - eltwise.unary.asinh.asinh

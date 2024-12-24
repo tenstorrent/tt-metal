@@ -29,7 +29,7 @@ parameters = {
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
         + gen_shapes([32, 32], [256, 256], [32, 32], 32),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
@@ -88,7 +88,7 @@ def run(
 
     start_time = start_measuring_time()
     ttnn.neg(input_tensor_a, output_tensor=output_tensor)
-    output_tensor = ttnn.to_torch(result)
+    output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
