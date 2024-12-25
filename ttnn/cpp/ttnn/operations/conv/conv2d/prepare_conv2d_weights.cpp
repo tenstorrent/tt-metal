@@ -766,6 +766,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         bias_tensor_ = bias_tensor.value();
         bool is_bias_tensor_is_on_device = ttnn::is_tensor_on_device_or_multidevice(bias_tensor_);
         if(!is_bias_tensor_is_on_device) {
+            TT_FATAL(bias_tensor_.shape()[3]==out_channels, "Bias must have the same length as output channels");
             bias_tensor_ = conv_bias_layout_convert(bias_tensor_, weights_bias_dtype, weight_block_h_ntiles, weight_block_w_ntiles, output_parallel_config, device, out_channels_padded, is_non_tile_mul_width);
             bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
         }
@@ -938,6 +939,8 @@ ttnn::Tensor prepare_conv_bias(
 
     bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
     ttnn::Tensor bias_tensor_ = bias_tensor;
+    TT_FATAL(bias_tensor_.shape()[3]==out_channels, "Bias must have the same length as output channels");
+
     bias_tensor_ = conv_bias_layout_convert(
         bias_tensor_,
         conv_config.weights_dtype,
