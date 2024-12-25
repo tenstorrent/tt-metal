@@ -37,9 +37,16 @@ void MAIN {
     }
 
     // CONFIG REGISTER DPRINT
-    //dprint_tensix_alu_config();
-    //dprint_tensix_unpack_tile_descriptor();
-    dprint_tensix_unpack_config();
+
+    // GRAYSKULL
+    //dprint_tensix_unpack_tile_descriptor_grayskull();
+    //dprint_tensix_unpack_config_grayskull();
+    // ALU DOES NOT EXIST ON GRAYSKULL
+
+    // WORMHOLE/BLACKHOLE
+    //dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
+    //dprint_tensix_unpack_config_wormhole_or_blackhole();
+    //dprint_tensix_alu_config_wormhole_or_blackhole();
 
     release_dst();
 }

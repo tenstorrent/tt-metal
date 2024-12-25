@@ -206,7 +206,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
     }
 
 // Print content of the register field by field. Issue: No ENDL.
-inline void dprint_tensix_alu_config(){
+inline void dprint_tensix_alu_config_wormhole_or_blackhole(){
         uint32_t reg_val = dbg_read_cfgreg(ckernel::dbg_cfgreg::HW_CFG_0, ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32);
         DPRINT << "RND_MODE: ";                                                           
         DPRINT_TENSIX_ALU_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Fpu_srnd_en, "Fpu_srnd_en");          
@@ -232,8 +232,8 @@ inline void dprint_tensix_unpack_field(uint32_t word, uint32_t mask, uint8_t sha
 {
     DPRINT << name << ": " << HEX() << ((word & mask) >> shamt) << "; ";
 }
-
-inline void dprint_tensix_unpack_tile_descriptor(){
+// GRAYSKULL
+inline void dprint_tensix_unpack_tile_descriptor_grayskull(){
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
@@ -268,7 +268,7 @@ inline void dprint_tensix_unpack_tile_descriptor(){
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_unpack_config(){
+inline void dprint_tensix_unpack_config_grayskull(){
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
@@ -289,13 +289,91 @@ inline void dprint_tensix_unpack_config(){
     word = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 1];
     dprint_tensix_unpack_field(word, 0xf, 0, "uncmpr_cntx0_3");
     dprint_tensix_unpack_field(word, 0xfff0, 4, "res_1");
-    dprint_tensix_unpack_field(word, 0xf0000, 16, "uncmpr_cntx4-7");
+    dprint_tensix_unpack_field(word, 0xf0000, 16, "uncmpr_cntx4_7");
     dprint_tensix_unpack_field(word, 0xfff00000, 20, "res_2");
 
     //word 2
     word = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32];
     dprint_tensix_unpack_field(word, 0xffff, 0, "limit_addr");
     dprint_tensix_unpack_field(word, 0xffff0000, 16, "fifo_sz");
+
+    DPRINT << ENDL();
+}
+
+// WORMHOLE/BLACKHOLE
+inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole(){
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+
+    //word 0
+    uint32_t word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32];
+    dprint_tensix_unpack_field(word, 0xf, 0, "in_data_format");
+    dprint_tensix_unpack_field(word, 0x10, 4, "uncompressed");
+    dprint_tensix_unpack_field(word, 0xe0, 5, "reserved_0");
+    dprint_tensix_unpack_field(word, 0xf00, 8, "blobs_per_xy_plane");
+    dprint_tensix_unpack_field(word, 0xf000, 12, "reserved_1");
+    dprint_tensix_unpack_field(word, 0xffff0000, 16, "x_dim");
+
+    //word 1
+    word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
+    dprint_tensix_unpack_field(word, 0xffff, 0, "y_dim");
+    dprint_tensix_unpack_field(word, 0xffff0000, 16, "z_dim");
+
+    //word 2
+    word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32];
+    dprint_tensix_unpack_field(word, 0xffff, 0, "w_dim");
+    dprint_tensix_unpack_field(word, 0xffff0000, 16, "blobs_y_start_lo");
+
+    // word3
+    word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1];
+    dprint_tensix_unpack_field(word, 0xffff, 0, "blobs_y_start_hi");
+    dprint_tensix_unpack_field(word, 0xff0000, 16, "digest_type");
+    dprint_tensix_unpack_field(word, 0xff000000, 24, "digest_size");
+
+    // NOTE: Consider merging blobs_y_start hi and lo into 1 output (see GRAYSKULL)
+    // DPRINT << "blobs_y_start: " << HEX() << (((word & 0xffff) << 16) | ((tmp_word & 0xffff0000) >> 16)) << "; "; //blobs_y_start
+
+
+    DPRINT << ENDL();
+}
+
+inline void dprint_tensix_unpack_config_wormhole_or_blackhole(){
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+
+    //word 0
+    uint32_t word = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32];
+    dprint_tensix_unpack_field(word, 0xf, 0, "out_frmt");
+    dprint_tensix_unpack_field(word, 0x30, 4, "throt_md");
+    dprint_tensix_unpack_field(word, 0xc0, 6, "cx_cnt");
+    dprint_tensix_unpack_field(word, 0x100, 8, "halo_md");
+    dprint_tensix_unpack_field(word, 0x200, 9, "tile_md");
+    dprint_tensix_unpack_field(word, 0x400, 10, "unp_srreg_stupd");
+    dprint_tensix_unpack_field(word, 0x800, 11, "unpis");
+    dprint_tensix_unpack_field(word, 0x3000, 12, "ups_rate");
+    dprint_tensix_unpack_field(word, 0x4000, 14, "r1");
+    dprint_tensix_unpack_field(word, 0x8000, 15, "ups_and_int");
+    dprint_tensix_unpack_field(word, 0xffff0000, 16, "shamt");
+
+    //word 2
+    word = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 1];
+    dprint_tensix_unpack_field(word, 0xf, 0, "uncmpr_cx0_3");
+    dprint_tensix_unpack_field(word, 0xf0, 4, "unpis_cx0_3");
+    dprint_tensix_unpack_field(word, 0x100, 8, "force_shrd_exp");
+    dprint_tensix_unpack_field(word, 0xfe00, 9, "r2");
+    dprint_tensix_unpack_field(word, 0xf0000, 16, "uncmpr_cx4_7");
+    dprint_tensix_unpack_field(word, 0xf00000, 20, "unpis_cx4_7");
+    dprint_tensix_unpack_field(word, 0xff000000, 24, "r3");
+
+    //word 2
+    word = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32];
+    dprint_tensix_unpack_field(word, 0x1ffff, 0, "lmt_addr");
+    dprint_tensix_unpack_field(word, 0xfffe0000, 17, "r4");
+
+    //word 3
+    word = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32];
+    dprint_tensix_unpack_field(word, 0x1ffff, 0, "fifo_sz");
+    dprint_tensix_unpack_field(word, 0xfffe0000, 17, "r5");
 
     DPRINT << ENDL();
 }
