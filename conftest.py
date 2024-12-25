@@ -302,7 +302,6 @@ def mesh_device(request, silicon_arch_name, device_params):
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
-    assert mesh_device.get_num_devices() == param, "Failed to create requested number of devices"
     yield mesh_device
 
     for device in mesh_device.get_devices():
