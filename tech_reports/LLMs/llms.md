@@ -1366,8 +1366,8 @@ For performance work async mode should always be enabled. For debugging it can b
 
 Program configs and memory configs are your greatest levers for performance. As a prerequisite for this section, you should understand [Tensor and Memory Layouts](../tensor_layouts/tensor_layouts.md) and the concepts in [ViT-TTNN](../VIT-TTNN/vit.md).
 
-Most `ttnn` operations have arguments for `program_config` and `memory_config`. You should optimize these for best performance. 
-`memory_config` is used to determine the layout of the output tensor. 
+Most `ttnn` operations have arguments for `program_config` and `memory_config`. You should optimize these for best performance.
+`memory_config` is used to determine the layout of the output tensor.
 `program_config` configures the op with some hyperparameters like block size, core grid, etc. You should be intentional when setting up `memory_config` and `program_config`. Not only should you make each particular op execute fast, but ideally each op in the model should produce its output in a layout that is most efficient for the next op.
 
 Let's look at `ttnn.matmul` as an example.
@@ -1468,7 +1468,7 @@ Since we use matmul 2D for large matmuls, there may be some issues where we run 
 ##### DRAM-Sharded Matmul
 DRAM-Sharded matmul should be used in decode mode, where activations are small and DRAM-bandwidth to read weights is the limiting factor in op performance. This matmul gets its name because rather than having weights interleaved in DRAM, they are sharded across DRAM banks to optimally collocate weights with compute. See the [DRAM-Sharded Matmul](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) writeup for details on the implementation.
 
-We use DRAM-Sharded matmul for all matmuls in decode mode. The activation and output are width-sharded in L1, and the weights are width-sharded in DRAM. 
+We use DRAM-Sharded matmul for all matmuls in decode mode. The activation and output are width-sharded in L1, and the weights are width-sharded in DRAM.
 
 To use DRAM-Sharded matmul, create your weight memory config with this helper function we created in [`model_config.py`](../../models/demos/llama3/tt/model_config.py):
 
@@ -1504,10 +1504,10 @@ output = ttnn.linear(
 Be careful that the core grid evenly divides both the activations and the output. Padding functionality is not yet implemented for DRAM-Sharded matmuls.
 
 #### Matmul 1D
-Matmul 1D is the final variant to cover. Before ttnn implemented DRAM-Sharded matmul, this was the matmul of choice for decode mode. Now that DRAM-Sharded matmul exists and is much faster, matmul 1D is less often used. 
+Matmul 1D is the final variant to cover. Before ttnn implemented DRAM-Sharded matmul, this was the matmul of choice for decode mode. Now that DRAM-Sharded matmul exists and is much faster, matmul 1D is less often used.
 Matmul 1D gets its name because it only parallelizes over the N dimension. The activation and output(s) should be width-sharded in L1. Weights should be DRAM interleaved.
 
-To use matmul 1D, create a program config like this: 
+To use matmul 1D, create a program config like this:
 
 ```python
 model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
