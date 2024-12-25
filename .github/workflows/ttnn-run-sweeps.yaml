@@ -201,6 +201,10 @@ on:
           - eltwise.unary_backward.fill_zero_bw.fill_zero_bw_sharded
           - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw
           - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw_sharded
+          - eltwise.unary_backward.clip_bw.clip_bw
+          - eltwise.unary_backward.clip_bw.clip_bw_sharded
+          - eltwise.unary_backward.fill_zero_bw
+          - eltwise.unary_backward.log_sigmoid_bw
           - eltwise.unary_backward.logit_bw
           - eltwise.unary_backward.neg_bw.neg_bw
           - eltwise.unary_backward.neg_bw.neg_bw_sharded
@@ -230,6 +234,7 @@ on:
           - eltwise.unary_backward.trunc_bw.trunc_bw
           - eltwise.unary_backward.trunc_bw.trunc_bw_sharded
           - eltwise.unary_backward.clamp_bw.clamp_bw
+          - eltwise.unary_backward.clamp_bw.clamp_bw_sharded
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
           - eltwise.unary_backward.mul_bw.mul_bw
           - eltwise.unary_backward.softplus_bw.softplus_bw
