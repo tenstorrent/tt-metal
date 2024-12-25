@@ -111,6 +111,17 @@ public:
     static nlohmann::json end_graph_capture();
 };
 
+/**
+ * @class GraphCaptureScopeGuard
+ * @brief A RAII wrapper around graph capture that ensures proper resource management.
+ *
+ * This class automatically calls begin_graph_capture upon construction and
+ * end_graph_capture when it goes out of scope. It can be ended regularly
+ * by calling GraphCaptureScopeGuard::end_graph_capture().
+ *
+ * @note Copy and move operations are deleted to prevent multiple instances
+ * managing the same resource.
+ */
 class GraphCaptureScopeGuard {
 public:
     GraphCaptureScopeGuard(GraphProcessor::RunMode mode);
