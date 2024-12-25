@@ -61,6 +61,27 @@ def torch_random(shape, low, high, dtype):
     return torch.zeros(shape, dtype=dtype).uniform_(low, high)
 
 
+def torch_random_with_zeros(shape, low, high, dtype, zero_fraction=0.1):
+    total_elements = torch.prod(torch.tensor(shape)).item()
+    num_zeros = int(total_elements * zero_fraction)
+    num_random = total_elements - num_zeros
+
+    # Generate random values between low and high
+    random_values = torch.empty(num_random).uniform_(low, high)
+    zeros = torch.zeros(num_zeros)
+
+    # Combine zeros and random values
+    combined = torch.cat([zeros, random_values])
+
+    # Shuffle the tensor
+    shuffled = combined[torch.randperm(combined.size(0))]
+
+    # Reshape to the desired shape
+    result_tensor = shuffled.view(shape)
+    result_tensor.to(dtype)
+    return result_tensor
+
+
 ### Profiling ###
 class Profiler:
     def __init__(self):
