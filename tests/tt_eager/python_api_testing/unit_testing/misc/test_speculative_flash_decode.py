@@ -74,7 +74,7 @@ def fa_rand(*shape):
     return normal_1 + normal_2 * bernoulli
 
 
-def run_test_sdpa_decode_single_iter_single_device(
+def run_test_sdpa_decode_single_device(
     device,
     b,
     nh,
@@ -91,6 +91,8 @@ def run_test_sdpa_decode_single_iter_single_device(
     sharded_out=False,
     start_indices=None,
     causal=True,
+    single_iter=True,
+    debug_mode=False,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y - 1:
@@ -129,168 +131,206 @@ def run_test_sdpa_decode_single_iter_single_device(
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
 
-    start_indices = [s // 2 for _ in range(b)] if start_indices is None else start_indices
-    max_start_idx = max(start_indices)
     scale = d**-0.5
+    min_start_idx = 2 * speculation_length
+    max_start_idx = (max(start_indices) if start_indices is not None else s // 2 - 1) if single_iter else min_start_idx
 
-    k_chunk_size = get_chunk_size(max_start_idx + 1, s)
-    program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        q_chunk_size=padded_num_heads,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
-    )
+    # for debugging
+    error_runs = []
 
-    padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size) if causal else s
+    while max_start_idx < s:
+        if not single_iter or start_indices is None:
+            start_indices = [
+                max_start_idx for _ in range(b)
+            ]  # np.linspace(min_start_idx, max_start_idx, b, dtype=np.int32).tolist() if b > 1 else [max_start_idx]
 
-    # Test various sequence lengths
-    logger.debug(f"Testing with sequence length: {max_start_idx if causal else s}")
-    logger.debug(f"Using chunk size: {k_chunk_size}")
-    logger.debug(f"Using padded layer length: {padded_layer_len}")
-    logger.debug(f"Using padded num heads: {padded_num_heads}")
+        k_chunk_size = speculation_length  # 128#get_chunk_size(max_start_idx + 1, s)
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            q_chunk_size=padded_num_heads,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+        )
 
-    if causal:
-        attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
+        padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size) if causal else s
+
+        # Test various sequence lengths
+        logger.debug(f"Testing with max position: {max_start_idx if causal else s}")
+        logger.debug(f"Using chunk size: {k_chunk_size}")
+        logger.debug(f"Using padded layer length: {padded_layer_len}")
+        logger.debug(f"Using padded num heads: {padded_num_heads}")
+
+        if causal:
+            attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
+            for i in range(b):
+                start_idx = start_indices[i]
+                attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+        else:
+            attn_mask = torch.bernoulli(
+                torch.full(
+                    (b, nh, 1, padded_layer_len),
+                    0.25,
+                )
+            )
+            attn_mask = attn_mask * torch.finfo(torch.float32).min
+
+        Q = fa_rand(1, b, nh, d)
+
+        tt_Q = ttnn.as_tensor(
+            Q[:, :, :nh],
+            device=device,
+            dtype=q_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
+        )
+        if causal:
+            if cur_pos_tensor:
+                start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
+                (
+                    tt_back_gt,
+                    tt_back_spec,
+                    tt_back_spec_lp_distance,
+                    tt_back_lp_norm_x,
+                ) = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
+                    tt_Q,
+                    tt_K,
+                    tt_V,
+                    lambda_=lambda_,
+                    speculative_chunk_size=speculation_length,
+                    cur_pos_tensor=start_indices_tt,
+                    scale=scale,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                    memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+                )
+            else:
+                (
+                    tt_back_gt,
+                    tt_back_spec,
+                    tt_back_spec_lp_distance,
+                    tt_back_lp_norm_x,
+                ) = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
+                    tt_Q,
+                    tt_K,
+                    tt_V,
+                    lambda_=lambda_,
+                    speculative_chunk_size=speculation_length,
+                    cur_pos=start_indices,
+                    scale=scale,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                    memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+                )
+        else:
+            raise NotImplementedError("Non-causal not implemented")
+
+        tt_back_gt = ttnn.to_torch(tt_back_gt)
+        tt_back_gt = tt_back_gt[:, :, :nh, :]
+        tt_back_spec = ttnn.to_torch(tt_back_spec)
+        tt_back_spec = tt_back_spec[:, :, :nh, :]
+        tt_back_spec_lp_distance = ttnn.to_torch(tt_back_spec_lp_distance)
+        tt_back_lp_norm_x = ttnn.to_torch(tt_back_lp_norm_x)
+
+        ##########################################
+        #### Expected Calculation ####
+        ##########################################
+
+        Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
+        K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
+        K_slice = torch.cat(
+            [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+        )  # b, nh, d, S
+        V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
+        V_slice = torch.cat(
+            [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+        )  # b, nh, d, S
+        attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
+        expected_gt = torch.nn.functional.scaled_dot_product_attention(
+            Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+        )  # b, nh, 1, d
+        expected_gt = expected_gt.squeeze(2).unsqueeze(0)
+
+        # get speculated output
+        expected_spec = torch.zeros_like(Q_slice)
         for i in range(b):
             start_idx = start_indices[i]
-            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
-    else:
-        attn_mask = torch.bernoulli(
-            torch.full(
-                (b, nh, 1, padded_layer_len),
-                0.25,
+            padded_start_idx = nearest_n(max_start_idx + 1, n=32)
+            spec_last_chunk_start = padded_start_idx - speculation_length
+            Q_slice_i = Q_slice[[i]]
+            K_slice_i = torch.cat(
+                [K_slice[[i], :, :speculation_length, :], K_slice[[i], :, spec_last_chunk_start:padded_start_idx, :]],
+                dim=2,
             )
-        )
-        attn_mask = attn_mask * torch.finfo(torch.float32).min
-
-    Q = fa_rand(1, b, nh, d)
-
-    tt_Q = ttnn.as_tensor(
-        Q[:, :, :nh],
-        device=device,
-        dtype=q_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
-    )
-    if causal:
-        if cur_pos_tensor:
-            start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
-            (
-                tt_back_gt,
-                tt_back_spec,
-                tt_back_spec_lp_distance,
-                tt_back_lp_norm_x,
-            ) = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
-                tt_Q,
-                tt_K,
-                tt_V,
-                lambda_=lambda_,
-                speculative_chunk_size=speculation_length,
-                cur_pos_tensor=start_indices_tt,
-                scale=scale,
-                program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
-                memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+            V_slice_i = torch.cat(
+                [V_slice[[i], :, :speculation_length, :], V_slice[[i], :, spec_last_chunk_start:padded_start_idx, :]],
+                dim=2,
             )
+            attn_mask_slice_i = torch.cat(
+                [
+                    attn_mask_slice[[i], :, :, :speculation_length],
+                    attn_mask_slice[[i], :, :, spec_last_chunk_start:padded_start_idx],
+                ],
+                dim=3,
+            )
+
+            expected_spec[i] = torch.nn.functional.scaled_dot_product_attention(
+                Q_slice_i, K_slice_i, V_slice_i, attn_mask_slice_i, scale=scale, is_causal=False
+            )  # b, nh, 1, d
+        expected_spec = expected_spec.squeeze(2).unsqueeze(0)
+
+        # checking speculation error using expected values from torch
+        lp_distance = torch.linalg.vector_norm(expected_gt - expected_spec, ord=2, dim=(-2, -1))
+        lp_norm_x = torch.linalg.vector_norm(expected_gt, ord=2, dim=(-2, -1))  # Calculate the Lp norm of x
+        passing = torch.all(lp_distance < lambda_ * lp_norm_x)
+        logger.debug(f"gt speculation passing: {passing}")
+
+        ##########################################
+        #### Comparison ####
+        ##########################################
+
+        non_skip_indices = torch.tensor(start_indices) != -1
+        out_pass, out_pcc = comp_pcc(expected_gt[:, non_skip_indices], tt_back_gt[:, non_skip_indices], min_pcc)
+        logger.debug(f"gt python vs pytorch: {out_pcc}")
+        if debug_mode:
+            if not out_pass:
+                logger.warning(f"pcc check failed for {start_indices}")
+                error_runs.append((start_indices, "gt", out_pcc))
         else:
-            (
-                tt_back_gt,
-                tt_back_spec,
-                tt_back_spec_lp_distance,
-                tt_back_lp_norm_x,
-            ) = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
-                tt_Q,
-                tt_K,
-                tt_V,
-                lambda_=lambda_,
-                speculative_chunk_size=speculation_length,
-                cur_pos=start_indices,
-                scale=scale,
-                program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
-                memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
-            )
-    else:
-        raise NotImplementedError("Non-causal not implemented")
+            assert out_pass
 
-    tt_back_gt = ttnn.to_torch(tt_back_gt)
-    tt_back_gt = tt_back_gt[:, :, :nh, :]
-    tt_back_spec = ttnn.to_torch(tt_back_spec)
-    tt_back_spec = tt_back_spec[:, :, :nh, :]
-    tt_back_spec_lp_distance = ttnn.to_torch(tt_back_spec_lp_distance)
-    tt_back_lp_norm_x = ttnn.to_torch(tt_back_lp_norm_x)
+        out_pass, out_pcc = comp_pcc(expected_spec[:, non_skip_indices], tt_back_spec[:, non_skip_indices], min_pcc)
+        logger.debug(f"spec python vs pytorch: {out_pcc}")
+        if debug_mode:
+            if not out_pass:
+                logger.warning(f"pcc check failed for {start_indices}")
+                error_runs.append((start_indices, "spec", out_pcc))
+        else:
+            assert out_pass
 
-    ##########################################
-    #### Expected Calculation ####
-    ##########################################
+        # out_pass, out_pcc = comp_pcc(lp_distance, tt_back_spec_lp_distance, min_pcc)
+        # logger.debug(f"spec lp distance python vs pytorch: {out_pcc}")
+        # assert out_pass
 
-    Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-    K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
-    K_slice = torch.cat(
-        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
-    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
-    V_slice = torch.cat(
-        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
-    attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
-    expected_gt = torch.nn.functional.scaled_dot_product_attention(
-        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
-    )  # b, nh, 1, d
-    expected_gt = expected_gt.squeeze(2).unsqueeze(0)
+        # out_pass, out_pcc = comp_pcc(lp_norm_x, tt_back_lp_norm_x, min_pcc)
+        # logger.debug(f"lp norm output python vs pytorch: {out_pcc}")
+        # assert out_pass
 
-    # get speculated output
-    expected_spec = torch.zeros_like(Q_slice)
-    for i in range(b):
-        start_idx = start_indices[i]
-        padded_start_idx = nearest_n(max_start_idx + 1, n=32)
-        spec_last_chunk_start = padded_start_idx - speculation_length - 32
-        Q_slice_i = Q_slice[[i]]
-        K_slice_i = torch.cat(
-            [K_slice[[i], :, :speculation_length, :], K_slice[[i], :, spec_last_chunk_start:padded_start_idx, :]], dim=2
-        )
-        V_slice_i = torch.cat(
-            [V_slice[[i], :, :speculation_length, :], V_slice[[i], :, spec_last_chunk_start:padded_start_idx, :]], dim=2
-        )
-        attn_mask_slice_i = torch.cat(
-            [
-                attn_mask_slice[[i], :, :, :speculation_length],
-                attn_mask_slice[[i], :, :, spec_last_chunk_start:padded_start_idx],
-            ],
-            dim=3,
-        )
+        if single_iter:
+            break
 
-        expected_spec[i] = torch.nn.functional.scaled_dot_product_attention(
-            Q_slice_i, K_slice_i, V_slice_i, attn_mask_slice_i, scale=scale, is_causal=False
-        )  # b, nh, 1, d
-    expected_spec = expected_spec.squeeze(2).unsqueeze(0)
+        max_start_idx += 71 if max_start_idx < 4096 else 3001
 
-    # checking speculation error using expected values from torch
-    lp_distance = torch.linalg.vector_norm(expected_gt - expected_spec, ord=2, dim=(-2, -1))
-    lp_norm_x = torch.linalg.vector_norm(expected_gt, ord=2, dim=(-2, -1))  # Calculate the Lp norm of x
-    passing = torch.all(lp_distance < lambda_ * lp_norm_x)
-    logger.debug(f"gt speculation passing: {passing}")
-
-    ##########################################
-    #### Comparison ####
-    ##########################################
-
-    non_skip_indices = torch.tensor(start_indices) != -1
-    out_pass, out_pcc = comp_pcc(expected_gt[:, non_skip_indices], tt_back_gt[:, non_skip_indices], min_pcc)
-    logger.debug(f"gt python vs pytorch: {out_pcc}")
-    assert out_pass
-
-    out_pass, out_pcc = comp_pcc(expected_spec[:, non_skip_indices], tt_back_spec[:, non_skip_indices], min_pcc)
-    logger.debug(f"spec python vs pytorch: {out_pcc}")
-    assert out_pass
-
-    out_pass, out_pcc = comp_pcc(lp_distance, tt_back_spec_lp_distance, min_pcc)
-    logger.debug(f"spec lp distance python vs pytorch: {out_pcc}")
-    assert out_pass
-
-    out_pass, out_pcc = comp_pcc(lp_norm_x, tt_back_lp_norm_x, min_pcc)
-    logger.debug(f"lp norm output python vs pytorch: {out_pcc}")
-    assert out_pass
+    if debug_mode:
+        print("PRINTING ERROR RUNS")
+        for run in error_runs:
+            print("--------------------------------")
+            print(f"start_indices: {run[0]}")
+            print(f"type: {run[1]}")
+            print(f"pcc: {run[2]}")
+        if len(error_runs) == 0:
+            print("No errors found")
+        else:
+            assert False
 
 
 @skip_for_blackhole("Unsupported on BH, see #12349")
@@ -308,7 +348,12 @@ def run_test_sdpa_decode_single_iter_single_device(
     "b, nh, nkv, s, d, grid_size, single_iter, cur_pos_tensor",
     (
         # [8, 8, 1, 32768, 128, (8, 7), True, False],  # Llama2-70B
-        [4, 32, 8, 8192, 128, (8, 7), True, True],  # llama 3.1 8b
+        # [4, 32, 8, 8192, 128, (8, 7), True, True],  # llama 3.1 8b
+        # [1, 32, 8, 8192, 128, (8, 7), False, True],  # llama 3.1 8b
+        [1, 32, 8, 16 * 8192, 128, (8, 4), False, True],  # llama 3.1 8b
+        # [2, 8, 4, 256, 64, (8, 1), True, True],
+        # [1, 8, 1, 256, 64, (2, 1), False, True],
+        # [2, 8, 4, 256, 64, (8, 4), False, True],
     ),
 )
 @pytest.mark.parametrize(
@@ -337,21 +382,20 @@ def test_sdpa_decode_single_device(
 
     ttnn.device.DisablePersistentKernelCache()
 
-    if single_iter:
-        run_test_sdpa_decode_single_iter_single_device(
-            device,
-            b,
-            nh,
-            nkv,
-            s,
-            d,
-            dtype,
-            grid_size,
-            q_dtype,
-            cur_pos_tensor,
-            speculation_length,
-            sharded_in=False,
-            sharded_out=False,
-        )
-    else:
-        raise NotImplementedError("Multi-iter not implemented")
+    run_test_sdpa_decode_single_device(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        cur_pos_tensor,
+        speculation_length,
+        sharded_in=False,
+        sharded_out=False,
+        single_iter=single_iter,
+        debug_mode=False,
+    )

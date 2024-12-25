@@ -8,7 +8,9 @@
 
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/speculative_common.hpp"
 
+#include "debug/dprint.h"  // required in all kernels using DPRINT
 void kernel_main() {
     /*
     In DRAM, Q is (B, PNHt, DHt), K is (B, St, DHt), V is (B, St, DHt), mask is (B, PNHt, PSt)
@@ -34,6 +36,10 @@ void kernel_main() {
     constexpr uint32_t num_output_cores = get_compile_time_arg_val(16);
     constexpr bool is_causal = get_compile_time_arg_val(17) == 1;
     constexpr bool use_attention_mask = get_compile_time_arg_val(18) == 1;
+
+    constexpr uint32_t Spec_chunk_t =
+        get_compile_time_arg_val(19);  // speculative chunk size (in tiles), for the first and last chunk
+    constexpr uint32_t speculative_chunk_size = Spec_chunk_t * tt::constants::TILE_HEIGHT;
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -83,7 +89,6 @@ void kernel_main() {
             return;
         }
     }
-    const uint32_t valid_seq_len_tiles = (cur_pos + 1 + 32 - 1) / 32;
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
     if constexpr (is_paged_attention) {
@@ -99,11 +104,37 @@ void kernel_main() {
         page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
     }
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
-        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
+    auto
+        [k_num_chunks,
+         k_chunk_start,
+         k_chunk_end,
+         speculative_height_dim_start_tile_offset1,
+         speculative_height_dim_start_tile_offset2,
+         non_spec_height_dim_start_tile_offset,
+         adjusted_cur_pos_for_non_spec,
+         adjusted_cur_pos_for_spec,
+         do_speculative_compute] =
+            get_speculative_runtime_args(
+                cur_pos,
+                cur_batch,
+                core_num_in_reduce,
+                num_cores_per_head,
+                k_chunk_size,
+                speculative_chunk_size,
+                Spec_chunk_t);
     tt_l1_ptr uint32_t* all_output_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_output_cores;
     tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
+
+    DPRINT << "k_num_chunks: " << k_num_chunks << ENDL();
+    DPRINT << "k_chunk_start: " << k_chunk_start << ENDL();
+    DPRINT << "k_chunk_end: " << k_chunk_end << ENDL();
+    DPRINT << "spec_h_dim_t_offset1: " << speculative_height_dim_start_tile_offset1 << ENDL();
+    DPRINT << "spec_h_dim_t_offset2: " << speculative_height_dim_start_tile_offset2 << ENDL();
+    DPRINT << "non_spec_h_dim_t_offset: " << non_spec_height_dim_start_tile_offset << ENDL();
+    DPRINT << "adj_cur_pos_non_spec: " << adjusted_cur_pos_for_non_spec << ENDL();
+    DPRINT << "adj_cur_pos_spec: " << adjusted_cur_pos_for_spec << ENDL();
+    DPRINT << "do_spec_comp: " << (uint32_t)do_speculative_compute << ENDL();
 
     uint32_t output_core_noc_x = all_output_noc_x[cur_batch];
     uint32_t output_core_noc_y = all_output_noc_y[cur_batch];
@@ -114,7 +145,9 @@ void kernel_main() {
 
     constexpr uint32_t q_chunk_tiles = PNHt * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t spec_chunk_tiles = Spec_chunk_t * DHt;
     constexpr uint32_t mask_chunk_tiles = PNHt * Sk_chunk_t;
+    constexpr uint32_t spec_mask_chunk_tiles = PNHt * Spec_chunk_t;
 
     constexpr bool is_dram = true;
 
@@ -181,6 +214,99 @@ void kernel_main() {
     const InterleavedAddrGenFast<is_dram> mask_reader = {
         .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
 
+    // Read Speculative chunks to speculate
+    if (do_speculative_compute) {
+        uint32_t speculative_start_offset1 = speculative_height_dim_start_tile_offset1 *
+                                             DHt;  // the first speculative chunk reads from the start of the seqlen
+        uint32_t speculative_start_offset2 = speculative_height_dim_start_tile_offset2 * DHt;
+        for (uint32_t cur_head = cur_head_group * num_heads_per_core;
+             cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
+             ++cur_head) {
+            // Batch and head level offset
+            const uint32_t mask_batch_offset = (cur_batch % Bkv) * PNHt * St;
+            const uint32_t k_batch_offset = (cur_batch % Bkv) * num_kv_heads * St * DHt;
+            const uint32_t v_batch_offset = (cur_batch % Bkv) * num_kv_heads * St * DHt;
+            const uint32_t k_head_offset = cur_head * St * DHt;
+            const uint32_t v_head_offset = cur_head * St * DHt;
+
+            // Read first speculative chunk
+            {
+                //// Compute offset for mask
+                const uint32_t mask_chunk_offset = speculative_height_dim_start_tile_offset1 * Spec_chunk_t;
+                uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
+
+                //// Compute offset for K and V
+                const uint32_t k_chunk_offset = speculative_start_offset1;
+                const uint32_t v_chunk_offset = speculative_start_offset1;
+                uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
+                uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
+
+                read_kv_mask_chunks<
+                    DHt,
+                    Spec_chunk_t,
+                    barrier_threshold,
+                    spec_chunk_tiles,
+                    spec_mask_chunk_tiles,
+                    mask_tile_bytes,
+                    PNHt,
+                    use_attention_mask,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_mask_in>(
+                    0,  // read one chunk only
+                    1,  // read one chunk only
+                    k_start_tile_id,
+                    v_start_tile_id,
+                    mask_start_tile_id,
+                    k_reader,
+                    v_reader,
+                    mask_reader,
+                    k_tile_bytes,
+                    v_tile_bytes,
+                    St);
+            }
+
+            // Read last speculative chunk
+            {
+                //// Compute offset for mask
+                const uint32_t mask_chunk_offset = speculative_height_dim_start_tile_offset2 * Spec_chunk_t;
+                uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
+
+                //// Compute offset for K and V
+                const uint32_t k_chunk_offset = speculative_start_offset2;
+                const uint32_t v_chunk_offset = speculative_start_offset2;
+                uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
+                uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
+
+                read_kv_mask_chunks<
+                    DHt,
+                    Spec_chunk_t,
+                    barrier_threshold,
+                    spec_chunk_tiles,
+                    spec_mask_chunk_tiles,
+                    mask_tile_bytes,
+                    PNHt,
+                    use_attention_mask,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_mask_in>(
+                    0,  // read one chunk only
+                    1,  // read one chunk only
+                    k_start_tile_id,
+                    v_start_tile_id,
+                    mask_start_tile_id,
+                    k_reader,
+                    v_reader,
+                    mask_reader,
+                    k_tile_bytes,
+                    v_tile_bytes,
+                    St);
+            }
+        }
+    }
+
+    // Read Non-speculative chunks to compute
+    uint32_t non_speculative_start_offset = non_spec_height_dim_start_tile_offset * DHt;
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
@@ -221,7 +347,7 @@ void kernel_main() {
                         mask_tile_bytes,
                         barrier_threshold,
                         PNHt,
-                        Sk_chunk_t>(PSt, mask_start_tile_id, mask_reader);
+                        Sk_chunk_t>(St, mask_start_tile_id, mask_reader);
                 }
 
                 // Read V chunk in row major order, write in row-major order
@@ -259,64 +385,32 @@ void kernel_main() {
             // Then, read K, V, Mask k_chunk_tiles at a time
             const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;
             const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;
-            uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
-            uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
+            uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset + non_speculative_start_offset;
+            uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset + non_speculative_start_offset;
 
-            for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
-                // Read K chunk transposed
-                cb_reserve_back(cb_k_in, k_chunk_tiles);
-                uint32_t k_write_ptr = get_write_ptr(cb_k_in);
-                barrier_count = 0;
-                for (uint32_t col = 0; col < DHt; ++col) {
-                    uint32_t k_tile_id = k_start_tile_id + col;
-                    for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                        if (row <= valid_seq_len_tiles) {
-                            noc_async_read_tile(k_tile_id, k_reader, k_write_ptr);
-                            if (++barrier_count == barrier_threshold) {
-                                noc_async_read_barrier();
-                                barrier_count = 0;
-                            }
-                        }
-                        k_tile_id += DHt;
-                        k_write_ptr += k_tile_bytes;
-                    }
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_k_in, k_chunk_tiles);
-                k_start_tile_id += k_chunk_tiles;
-
-                if constexpr (use_attention_mask) {
-                    mask_start_tile_id = read_mask_chunk<
-                        cb_mask_in,
-                        mask_chunk_tiles,
-                        mask_tile_bytes,
-                        barrier_threshold,
-                        PNHt,
-                        Sk_chunk_t>(PSt, mask_start_tile_id, mask_reader);
-                }
-
-                // Read V chunk
-                cb_reserve_back(cb_v_in, k_chunk_tiles);
-                uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-                barrier_count = 0;
-                uint32_t v_tile_id = v_start_tile_id;
-                for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                    for (uint32_t col = 0; col < DHt; ++col) {
-                        if (row <= valid_seq_len_tiles) {
-                            noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
-                            if (++barrier_count == barrier_threshold) {
-                                noc_async_read_barrier();
-                                barrier_count = 0;
-                            }
-                        }
-                        v_tile_id++;
-                        v_write_ptr += v_tile_bytes;
-                    }
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_v_in, k_chunk_tiles);
-                v_start_tile_id += k_chunk_tiles;
-            }
+            read_kv_mask_chunks<
+                DHt,
+                Sk_chunk_t,
+                barrier_threshold,
+                k_chunk_tiles,
+                mask_chunk_tiles,
+                mask_tile_bytes,
+                PNHt,
+                use_attention_mask,
+                cb_k_in,
+                cb_v_in,
+                cb_mask_in>(
+                k_chunk_start,
+                k_chunk_end,
+                k_start_tile_id,
+                v_start_tile_id,
+                mask_start_tile_id,
+                k_reader,
+                v_reader,
+                mask_reader,
+                k_tile_bytes,
+                v_tile_bytes,
+                St);
         }
     }
 }
