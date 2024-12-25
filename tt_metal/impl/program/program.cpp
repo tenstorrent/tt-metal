@@ -1019,7 +1019,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
         if (semaphore.core_type() == CoreType::WORKER) {
             uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
             std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                device->extract_dst_noc_multicast_info(
                     semaphore.core_range_set().ranges(), CoreType::WORKER);
             transfer_info transfer_info = {
                 .dst_base_addr = semaphore.offset(),
@@ -1111,7 +1111,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
             // TODO: add a bit in the hal that says if this core type is unicast/multicast
             if (core_type == CoreType::WORKER) {
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                    device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                    device->extract_dst_noc_multicast_info(
                         kernel_group.core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
                 for (int dispatch_class = 0; dispatch_class < kernel_group.kernel_ids.size(); dispatch_class++) {
