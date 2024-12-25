@@ -437,6 +437,8 @@ template <
     uint32_t DHt,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
+    uint32_t qk_chunk_tiles,
+    uint32_t out_chunk_tiles,
     // QK matmul block parameters
     uint32_t qk_in0_block_w,
     uint32_t qk_subblock_w,
@@ -477,9 +479,8 @@ void flash_attention_loop(
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
     bool do_reduce,
-    bool apply_mask_at_last_chunk,  // for causal mode, optionally apply mask at the last chunk
-    uint32_t qk_chunk_tiles,
-    uint32_t out_chunk_tiles) {
+    bool apply_mask_at_last_chunk  // for causal mode, optionally apply mask at the last chunk
+) {
     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
         /* QK = Q_CHUNK @ K_CHUNK */
         reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
