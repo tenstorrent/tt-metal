@@ -1033,7 +1033,7 @@ Inputs to the model for generative decoding are generally:
 - position ids: the position of the tokens in the sequence
 - KV cache: an inference optimization that caches intermediate values
 
-In the model, tokens are embedded from the vocabulary space to the embedding space. Position ids are necessary for updating the KV cache and for positional embeddings like RoPE [TODO: Refer to the RoPE section]. 
+In the model, tokens are embedded from the vocabulary space to the embedding space. Position ids are necessary for updating the KV cache and for positional embeddings like RoPE. 
 
 The model outputs:
 - logits for the next token
