@@ -1393,7 +1393,7 @@ while True:
     break
 ```
 
-![alt text](continuous_batching.png)
+![alt text](images/continuous_batching.png)
 The above image from anyscale (https://www.anyscale.com/blog/continuous-batching-llm-inference) shows how continuous batching inserts prefill sequences into the batch as soon as there is a free slot.
 
 Continuous batching improves TTFT by reducing wait times for incoming users. It also increases total throughput by keeping the decode batch full of useful work.
