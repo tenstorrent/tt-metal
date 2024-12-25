@@ -206,6 +206,7 @@ void DevicePool::initialize(
 
     // Never skip for TG Cluster
     bool skip = not tt::Cluster::instance().is_galaxy_cluster();
+    std::vector<chip_id_t> target_mmio_ids;
     for (const auto& device_id : device_ids) {
         TT_FATAL(
             device_id < tt::Cluster::instance().number_of_devices(),
@@ -213,13 +214,23 @@ void DevicePool::initialize(
             device_id,
             tt::Cluster::instance().number_of_devices());
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        if (std::find(target_mmio_ids.begin(), target_mmio_ids.end(), mmio_device_id) == target_mmio_ids.end()) {
+            target_mmio_ids.push_back(mmio_device_id);
+        }
         skip &= (device_id == mmio_device_id);
     }
+    if (target_mmio_ids.size() != tt::Cluster::instance().number_of_pci_devices()) {
+        log_warning(
+            tt::LogMetal,
+            "Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, "
+            "consider using CreateDevices API.");
+    }
+
     _inst->skip_remote_devices = skip;
 
     _inst->add_devices_to_pool(device_ids);
     _inst->init_firmware_on_active_devices();
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
     _inst->init_profiler_devices();
 }
 
