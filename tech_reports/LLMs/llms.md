@@ -1,6 +1,6 @@
 # LLMs in TT-NN
 
-Authors: Mark O'Connor, Djordje Ivanovic, Jack (Xun) Cai, Kartik Paigwar, Johanna Rock, Stuti Raizada, Ammar Vora
+Authors: Mark O'Connor, Djordje Ivanovic, Jack (Xun) Cai, Kartik Paigwar, Johanna Rock, Stuti Raizada, Ammar Vora, Colman Glagovich
 
 ## Contents
 - [LLMs in TT-NN](#llms-in-tt-nn)
