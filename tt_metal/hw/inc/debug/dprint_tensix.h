@@ -232,11 +232,88 @@ inline void dprint_tensix_unpack_tile_descriptor(){
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
-    DPRINT << HEX() << cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] << ENDL();
+    //TEST
+    /*cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] = 0xfffffff5;
+    cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1] = 0xffffffff;
+    cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32] = 0x5678ffff;
+    cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1] = 0xffff1234;
+    */
+
+    //word 0
+    uint32_t word0 = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32];
+    DPRINT << HEX() << word0 << "; "; 
+    DPRINT << HEX() << ((word0 & 0xf) >> 0) << "; "; // in_data_format
+    DPRINT << HEX() << ((word0 & 0x10) >> 4) << "; "; // uncompressed
+    DPRINT << HEX() << ((word0 & 0xe0) >> 5) << "; "; // reserved_0
+    DPRINT << HEX() << ((word0 & 0xf00) >> 8) << "; "; // blobs_per_xy_plane
+    DPRINT << HEX() << ((word0 & 0xf000) >> 12) << "; "; // reserved_1
+    DPRINT << HEX() << ((word0 & 0xffff0000) >> 16) << "; "; // x_dim
+
+    //word 1
+    uint32_t word1 = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
+    DPRINT << HEX() << word1 << "; ";
+    DPRINT << HEX() << ((word1 & 0xffff) >> 0) << "; "; // y_dim
+    DPRINT << HEX() << ((word1 & 0xffff0000) >> 16) << "; "; //z_dim
+
+    //word 2
+    uint32_t word2 = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32];
+    DPRINT << HEX() << word2 << "; ";
+    DPRINT << HEX() << ((word2 & 0xffff) >> 0) << "; "; //w_dim
+    
+    // blobs_y_start is in 2 words (word2 and word3)
+    // word3
+    uint32_t word3 = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1];
+    DPRINT << HEX() << word3 << "; ";
+    DPRINT << HEX() << (((word3 & 0xffff) << 16) | ((word2 & 0xffff0000) >> 16)) << "; "; //blobs_y_start
+    DPRINT << HEX() << ((word3 & 0xff0000) >> 16) << "; "; //digest_type
+    DPRINT << HEX() << ((word3 & 0xff000000) >> 24) << "; "; //digest_size 
+
+    DPRINT << ENDL();
 }
 
 inline void dprint_tensix_unpack_config(){
+    // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
-    DPRINT << HEX() << cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] << ENDL();
+    //TEST
+    /*
+    cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] = 0x00000025;
+    cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 1] = 0x000f000f;
+    cfg[THCON_SEC1_REG2_Out_data_format_ADDR32] = 0x00000025;
+    cfg[THCON_SEC1_REG2_Out_data_format_ADDR32 + 1] = 0x000f000f;
+    */
+
+    //word 0
+    uint32_t word0 = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32];
+    DPRINT << "w0: " << HEX() << word0 << "; "; 
+    DPRINT << HEX() << ((word0 & 0xf) >> 0) << "; "; //out_data_format
+    DPRINT << HEX() << ((word0 & 0x30) >> 4) << "; "; //throttle_mode
+    DPRINT << HEX() << ((word0 & 0xc0) >> 6) << "; "; //context_count
+    DPRINT << HEX() << ((word0 & 0x100) >> 8) << "; "; //haloize_mode
+    DPRINT << HEX() << ((word0 & 0x200) >> 9) << "; "; //tileize_mode
+    DPRINT << HEX() << ((word0 & 0x400) >> 10) << "; "; //force_shared_exp
+    DPRINT << HEX() << ((word0 & 0x800) >> 11) << "; "; //reserved_0
+    DPRINT << HEX() << ((word0 & 0x7000) >> 12) << "; "; //upsample_rate
+    DPRINT << HEX() << ((word0 & 0x8000) >> 15) << "; "; //upsample_and_interlave
+    DPRINT << HEX() << ((word0 & 0xffff0000) >> 16) << "; "; //shift_amount
+
+    //word 2
+    uint32_t word1 = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 1];
+    DPRINT << "w1: " << HEX() << word1 << "; ";
+    DPRINT << HEX() << ((word1 & 0xf) >> 0) << "; "; //uncompress_cntx0_3
+    DPRINT << HEX() << ((word1 & 0xfff0) >> 4) << "; "; //reserved_1
+    DPRINT << HEX() << ((word1 & 0xf0000) >> 16) << "; "; //uncompress_cntx4_7
+    DPRINT << HEX() << ((word1 & 0xfff00000) >> 20) << "; "; //reserved_2
+
+    //word 2
+    uint32_t word2 = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32];
+    DPRINT << "w2: " << HEX() << word2 << "; ";
+    DPRINT << HEX() << ((word2 & 0xffff) >> 0) << "; "; //limit_addr
+    DPRINT << HEX() << ((word2 & 0xffff0000) >> 16) << "; "; //fifo_size
+
+    //word 3
+    uint32_t word3 = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32 + 1];
+    DPRINT << "w3: " << HEX() << word3 << "; ";
+
+    DPRINT << ENDL();
 }
