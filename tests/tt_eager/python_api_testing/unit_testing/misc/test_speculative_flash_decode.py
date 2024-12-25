@@ -15,6 +15,7 @@ import pytest
 from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0, skip_for_blackhole
 import math
 import numpy as np
+from tqdm import tqdm
 
 
 def is_watcher_enabled():
@@ -74,6 +75,185 @@ def fa_rand(*shape):
     return normal_1 + normal_2 * bernoulli
 
 
+def prepare_test_config_and_data(
+    b, nh, s, d, grid_size, padded_num_heads, speculation_length, max_start_idx, start_indices=None, causal=True
+):
+    """
+    Prepare test configuration and input data for speculative flash decode testing.
+
+    Returns:
+        Tuple of (program_config, padded_layer_len, attn_mask, Q)
+    """
+
+    # Configure chunk size and program
+    k_chunk_size = speculation_length  # 128#get_chunk_size(max_start_idx + 1, s)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=padded_num_heads,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+
+    # Calculate padded layer length
+    padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size) if causal else s
+
+    # Log debug information
+    logger.debug(f"Testing with max position: {max_start_idx if causal else s}")
+    logger.debug(f"Using chunk size: {k_chunk_size}")
+    logger.debug(f"Using padded layer length: {padded_layer_len}")
+    logger.debug(f"Using padded num heads: {padded_num_heads}")
+
+    # Create attention mask
+    if causal:
+        attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
+        for i in range(b):
+            start_idx = start_indices[i]
+            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+    else:
+        attn_mask = torch.bernoulli(
+            torch.full(
+                (b, nh, 1, padded_layer_len),
+                0.25,
+            )
+        )
+        attn_mask = attn_mask * torch.finfo(torch.float32).min
+
+    # Generate input tensor Q
+    Q = fa_rand(1, b, nh, d)
+
+    return program_config, padded_layer_len, attn_mask, Q
+
+
+def get_speculative_flash_decode_tt(
+    tt_Q,
+    tt_K,
+    tt_V,
+    device,
+    start_indices,
+    nh,
+    lambda_,
+    speculation_length,
+    scale,
+    program_config,
+    compute_kernel_config,
+    memory_config,
+    causal=True,
+    cur_pos_tensor=False,
+    sharded_out=False,
+    height_sharded_memcfg=None,
+):
+    """
+    Wrapper function for speculative flash decode tensor operations.
+    Returns tuple of (gt, spec, spec_lp_distance, lp_norm_x) tensors.
+    """
+    if causal:
+        if cur_pos_tensor:
+            start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
+            outputs = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
+                tt_Q,
+                tt_K,
+                tt_V,
+                lambda_=lambda_,
+                speculative_chunk_size=speculation_length,
+                cur_pos_tensor=start_indices_tt,
+                scale=scale,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=height_sharded_memcfg if sharded_out else memory_config,
+            )
+        else:
+            outputs = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
+                tt_Q,
+                tt_K,
+                tt_V,
+                lambda_=lambda_,
+                speculative_chunk_size=speculation_length,
+                cur_pos=start_indices,
+                scale=scale,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=height_sharded_memcfg if sharded_out else memory_config,
+            )
+    else:
+        raise NotImplementedError("Non-causal not implemented")
+
+    tt_back_gt, tt_back_spec, tt_back_spec_lp_distance, tt_back_lp_norm_x = outputs
+
+    # Convert to torch and slice to correct number of heads
+    tt_back_gt = ttnn.to_torch(tt_back_gt)[:, :, :nh, :]
+    tt_back_spec = ttnn.to_torch(tt_back_spec)[:, :, :nh, :]
+    tt_back_spec_lp_distance = ttnn.to_torch(tt_back_spec_lp_distance)
+    tt_back_lp_norm_x = ttnn.to_torch(tt_back_lp_norm_x)
+
+    return tt_back_gt, tt_back_spec, tt_back_spec_lp_distance, tt_back_lp_norm_x
+
+
+def get_speculative_flash_decode_expected(
+    Q, K, V, attn_mask, start_indices, nh, nkv, speculation_length, scale, max_start_idx, padded_layer_len, lambda_
+):
+    """
+    Calculate ground truth and speculative outputs for flash decode using PyTorch.
+
+    Returns:
+        Tuple of (expected_gt, expected_spec, lp_distance, lp_norm_x) tensors
+    """
+    b = Q.shape[1]
+    Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
+
+    # Prepare K and V slices
+    K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
+    K_slice = torch.cat(
+        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # b, nh, d, S
+
+    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
+    V_slice = torch.cat(
+        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # b, nh, d, S
+
+    # Calculate ground truth
+    attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
+    expected_gt = torch.nn.functional.scaled_dot_product_attention(
+        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+    )  # b, nh, 1, d
+    expected_gt = expected_gt.squeeze(2).unsqueeze(0)
+
+    # Calculate speculative output
+    expected_spec = torch.zeros_like(Q_slice)
+    for i in range(b):
+        start_idx = start_indices[i]
+        padded_start_idx = nearest_n(max_start_idx + 1, n=32)
+        spec_last_chunk_start = padded_start_idx - speculation_length
+
+        Q_slice_i = Q_slice[[i]]
+        K_slice_i = torch.cat(
+            [K_slice[[i], :, :speculation_length, :], K_slice[[i], :, spec_last_chunk_start:padded_start_idx, :]],
+            dim=2,
+        )
+        V_slice_i = torch.cat(
+            [V_slice[[i], :, :speculation_length, :], V_slice[[i], :, spec_last_chunk_start:padded_start_idx, :]],
+            dim=2,
+        )
+        attn_mask_slice_i = torch.cat(
+            [
+                attn_mask_slice[[i], :, :, :speculation_length],
+                attn_mask_slice[[i], :, :, spec_last_chunk_start:padded_start_idx],
+            ],
+            dim=3,
+        )
+
+        expected_spec[i] = torch.nn.functional.scaled_dot_product_attention(
+            Q_slice_i, K_slice_i, V_slice_i, attn_mask_slice_i, scale=scale, is_causal=False
+        )
+    expected_spec = expected_spec.squeeze(2).unsqueeze(0)
+
+    # Calculate error metrics
+    lp_distance = torch.linalg.vector_norm(expected_gt - expected_spec, ord=2, dim=(-2, -1))
+    lp_norm_x = torch.linalg.vector_norm(expected_gt, ord=2, dim=(-2, -1))
+
+    return expected_gt, expected_spec, lp_distance, lp_norm_x
+
+
 def run_test_sdpa_decode_single_device(
     device,
     b,
@@ -93,6 +273,7 @@ def run_test_sdpa_decode_single_device(
     causal=True,
     single_iter=True,
     debug_mode=False,
+    check_nd_pcc_iters=None,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y - 1:
@@ -139,42 +320,22 @@ def run_test_sdpa_decode_single_device(
     error_runs = []
 
     while max_start_idx < s:
+        # Set start indices if not provided or in multi-iteration mode
         if not single_iter or start_indices is None:
             start_indices = [
                 max_start_idx for _ in range(b)
             ]  # np.linspace(min_start_idx, max_start_idx, b, dtype=np.int32).tolist() if b > 1 else [max_start_idx]
 
-        k_chunk_size = speculation_length  # 128#get_chunk_size(max_start_idx + 1, s)
-        program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            q_chunk_size=padded_num_heads,
-            k_chunk_size=k_chunk_size,
-            exp_approx_mode=False,
+        ##########################################
+        #### Prepare test config and data
+        ##########################################
+        program_config, padded_layer_len, attn_mask, Q = prepare_test_config_and_data(
+            b, nh, s, d, grid_size, padded_num_heads, speculation_length, max_start_idx, start_indices, causal
         )
 
-        padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size) if causal else s
-
-        # Test various sequence lengths
-        logger.debug(f"Testing with max position: {max_start_idx if causal else s}")
-        logger.debug(f"Using chunk size: {k_chunk_size}")
-        logger.debug(f"Using padded layer length: {padded_layer_len}")
-        logger.debug(f"Using padded num heads: {padded_num_heads}")
-
-        if causal:
-            attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
-            for i in range(b):
-                start_idx = start_indices[i]
-                attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
-        else:
-            attn_mask = torch.bernoulli(
-                torch.full(
-                    (b, nh, 1, padded_layer_len),
-                    0.25,
-                )
-            )
-            attn_mask = attn_mask * torch.finfo(torch.float32).min
-
-        Q = fa_rand(1, b, nh, d)
+        ##########################################
+        #### TT Calculation ####
+        ##########################################
 
         tt_Q = ttnn.as_tensor(
             Q[:, :, :nh],
@@ -183,104 +344,71 @@ def run_test_sdpa_decode_single_device(
             layout=ttnn.TILE_LAYOUT,
             memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
         )
-        if causal:
-            if cur_pos_tensor:
-                start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
-                (
-                    tt_back_gt,
-                    tt_back_spec,
-                    tt_back_spec_lp_distance,
-                    tt_back_lp_norm_x,
-                ) = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
-                    tt_Q,
-                    tt_K,
-                    tt_V,
-                    lambda_=lambda_,
-                    speculative_chunk_size=speculation_length,
-                    cur_pos_tensor=start_indices_tt,
-                    scale=scale,
-                    program_config=program_config,
-                    compute_kernel_config=compute_kernel_config,
-                    memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
-                )
-            else:
-                (
-                    tt_back_gt,
-                    tt_back_spec,
-                    tt_back_spec_lp_distance,
-                    tt_back_lp_norm_x,
-                ) = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
-                    tt_Q,
-                    tt_K,
-                    tt_V,
-                    lambda_=lambda_,
-                    speculative_chunk_size=speculation_length,
-                    cur_pos=start_indices,
-                    scale=scale,
-                    program_config=program_config,
-                    compute_kernel_config=compute_kernel_config,
-                    memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
-                )
-        else:
-            raise NotImplementedError("Non-causal not implemented")
 
-        tt_back_gt = ttnn.to_torch(tt_back_gt)
-        tt_back_gt = tt_back_gt[:, :, :nh, :]
-        tt_back_spec = ttnn.to_torch(tt_back_spec)
-        tt_back_spec = tt_back_spec[:, :, :nh, :]
-        tt_back_spec_lp_distance = ttnn.to_torch(tt_back_spec_lp_distance)
-        tt_back_lp_norm_x = ttnn.to_torch(tt_back_lp_norm_x)
+        tt_back_gt, tt_back_spec, tt_back_spec_lp_distance, tt_back_lp_norm_x = get_speculative_flash_decode_tt(
+            tt_Q,
+            tt_K,
+            tt_V,
+            device,
+            start_indices,
+            nh,
+            lambda_,
+            speculation_length,
+            scale,
+            program_config,
+            compute_kernel_config,
+            dram_memcfg,
+            cur_pos_tensor=cur_pos_tensor,
+            sharded_out=sharded_out,
+            height_sharded_memcfg=height_sharded_memcfg,
+        )
+        if check_nd_pcc_iters is not None:
+            assert check_nd_pcc_iters > 0
+            for _ in tqdm(range(check_nd_pcc_iters)):
+                (
+                    tt_back_gt_new,
+                    tt_back_spec_new,
+                    tt_back_spec_lp_distance_new,
+                    tt_back_lp_norm_x_new,
+                ) = get_speculative_flash_decode_tt(
+                    tt_Q,
+                    tt_K,
+                    tt_V,
+                    device,
+                    start_indices,
+                    nh,
+                    lambda_,
+                    speculation_length,
+                    scale,
+                    program_config,
+                    compute_kernel_config,
+                    dram_memcfg,
+                    cur_pos_tensor=cur_pos_tensor,
+                    sharded_out=sharded_out,
+                    height_sharded_memcfg=height_sharded_memcfg,
+                )
+                assert torch.all(tt_back_gt_new == tt_back_gt)
+                assert torch.all(tt_back_spec_new == tt_back_spec)
+                # assert torch.all(tt_back_spec_lp_distance_new == tt_back_spec_lp_distance)
+                # assert torch.all(tt_back_lp_norm_x_new == tt_back_lp_norm_x)
 
         ##########################################
         #### Expected Calculation ####
         ##########################################
-
-        Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-        K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
-        K_slice = torch.cat(
-            [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, d, S
-        V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
-        V_slice = torch.cat(
-            [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, d, S
-        attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
-        expected_gt = torch.nn.functional.scaled_dot_product_attention(
-            Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
-        )  # b, nh, 1, d
-        expected_gt = expected_gt.squeeze(2).unsqueeze(0)
-
-        # get speculated output
-        expected_spec = torch.zeros_like(Q_slice)
-        for i in range(b):
-            start_idx = start_indices[i]
-            padded_start_idx = nearest_n(max_start_idx + 1, n=32)
-            spec_last_chunk_start = padded_start_idx - speculation_length
-            Q_slice_i = Q_slice[[i]]
-            K_slice_i = torch.cat(
-                [K_slice[[i], :, :speculation_length, :], K_slice[[i], :, spec_last_chunk_start:padded_start_idx, :]],
-                dim=2,
-            )
-            V_slice_i = torch.cat(
-                [V_slice[[i], :, :speculation_length, :], V_slice[[i], :, spec_last_chunk_start:padded_start_idx, :]],
-                dim=2,
-            )
-            attn_mask_slice_i = torch.cat(
-                [
-                    attn_mask_slice[[i], :, :, :speculation_length],
-                    attn_mask_slice[[i], :, :, spec_last_chunk_start:padded_start_idx],
-                ],
-                dim=3,
-            )
-
-            expected_spec[i] = torch.nn.functional.scaled_dot_product_attention(
-                Q_slice_i, K_slice_i, V_slice_i, attn_mask_slice_i, scale=scale, is_causal=False
-            )  # b, nh, 1, d
-        expected_spec = expected_spec.squeeze(2).unsqueeze(0)
-
-        # checking speculation error using expected values from torch
-        lp_distance = torch.linalg.vector_norm(expected_gt - expected_spec, ord=2, dim=(-2, -1))
-        lp_norm_x = torch.linalg.vector_norm(expected_gt, ord=2, dim=(-2, -1))  # Calculate the Lp norm of x
+        expected_gt, expected_spec, lp_distance, lp_norm_x = get_speculative_flash_decode_expected(
+            Q,
+            K,
+            V,
+            attn_mask,
+            start_indices,
+            nh,
+            nkv,
+            speculation_length,
+            scale,
+            max_start_idx,
+            padded_layer_len,
+            lambda_,
+        )
         passing = torch.all(lp_distance < lambda_ * lp_norm_x)
         logger.debug(f"gt speculation passing: {passing}")
 
@@ -398,4 +526,5 @@ def test_sdpa_decode_single_device(
         sharded_out=False,
         single_iter=single_iter,
         debug_mode=False,
+        # check_nd_pcc_iters=5000,
     )
