@@ -598,6 +598,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         PNHt,
         St,
         DHt,
+        Sk_chunk_t,
         packed_identity_scalar,
         scale_union.u,
         num_cores_per_batch,

@@ -161,11 +161,10 @@ uint32_t read_mask_chunk(uint32_t PSt, uint32_t mask_start_tile_id, const Interl
     return mask_start_tile_id;
 }
 
-template <uint32_t cb_mask_in, uint32_t PNHt>
-void generate_mask(uint32_t k_num_chunks, uint32_t PSt, uint32_t cur_pos) {
+template <uint32_t cb_mask_in, uint32_t PNHt, uint32_t Sk_chunk_t>
+void generate_mask(uint32_t k_num_chunks, uint32_t cur_pos) {
     /*
     example 1: 64 seqlen at cur_pos 40, 2 cores, 32 chunk size
-    PSt = 2
     k_num_chunks = 2
     Sk_chunk_t = 1
     cur_pos = 40
@@ -174,7 +173,6 @@ void generate_mask(uint32_t k_num_chunks, uint32_t PSt, uint32_t cur_pos) {
     cur_pos_in_tile = 8
 
     example 2: 1024 seqlen at cur_pos 990, 2 cores, 128 chunk size
-    PSt = 32
     k_num_chunks = 8
     Sk_chunk_t = 4
     cur_pos = 990
@@ -183,7 +181,6 @@ void generate_mask(uint32_t k_num_chunks, uint32_t PSt, uint32_t cur_pos) {
     cur_pos_in_tile = 30
 
     example 3: 64 seqlen at cur_pos 63, 2 cores, 32 chunk size
-    PSt = 2
     k_num_chunks = 2
     Sk_chunk_t = 1
     cur_pos = 63
@@ -192,7 +189,6 @@ void generate_mask(uint32_t k_num_chunks, uint32_t PSt, uint32_t cur_pos) {
     cur_pos_in_tile = 31
 
     example 3: 64 seqlen at cur_pos 0, 2 cores, 32 chunk size
-    PSt = 2
     k_num_chunks = 2
     Sk_chunk_t = 1
     cur_pos = 0
@@ -201,7 +197,6 @@ void generate_mask(uint32_t k_num_chunks, uint32_t PSt, uint32_t cur_pos) {
     cur_pos_in_tile = 0
     */
 
-    uint32_t Sk_chunk_t = PSt / k_num_chunks;
     // the cb_mask in is of size PNHt * Sk_chunk_t
     uint32_t total_read_tiles = PNHt * Sk_chunk_t;
     uint32_t cur_pos_in_chunk = cur_pos % (Sk_chunk_t * 32);
@@ -303,6 +298,67 @@ void worker_compute(
     cb_pop_front(cb_out_l, PNHt);
 }
 
+template <uint32_t cb_out, uint32_t out_chunk_tiles, uint32_t barrier_threshold>
+uint32_t write_tiles_to_memory(
+    uint32_t& out_tile_id, const InterleavedAddrGenFast<true>& out_writer, uint32_t& barrier_count) {
+    constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    uint32_t l1_read_addr = get_read_ptr(cb_out);
+    for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
+        noc_async_write_tile(out_tile_id, out_writer, l1_read_addr);
+        ++out_tile_id;
+        l1_read_addr += tile_bytes;
+        if (++barrier_count == barrier_threshold) {
+            noc_async_writes_flushed();
+            barrier_count = 0;
+        }
+    }
+    return barrier_count;
+}
+
+template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold>
+uint32_t write_partial_tiles_to_memory(
+    uint32_t& out_tile_id,
+    const InterleavedAddrGenFast<true>& out_writer,
+    uint32_t& barrier_count,
+    uint32_t cur_head,
+    uint32_t num_heads_to_write,
+    uint32_t out_chunk_tiles) {
+    constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    constexpr uint32_t SUBTILE_LINE_BYTES = 16 * ELEMENT_SIZE;
+
+    for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
+        uint64_t out_writer_noc_addr = get_noc_addr(out_tile_id, out_writer);
+        uint32_t l1_read_addr = get_read_ptr(cb_out) + tile * tile_bytes;
+
+        // write partial output for each head
+        for (uint32_t head = 0; head < num_heads_to_write; ++head) {
+            uint32_t starting_row = cur_head * num_heads_to_write + head;
+            uint32_t in_tile_offset_by_starting_head =
+                starting_row < 16 ? starting_row * SUBTILE_LINE_BYTES
+                                  : (starting_row - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
+            uint64_t out_writer_noc_addr_head = out_writer_noc_addr + in_tile_offset_by_starting_head;
+            uint32_t l1_read_addr_head = l1_read_addr + in_tile_offset_by_starting_head;
+
+            // Write first phase
+            noc_async_write(l1_read_addr_head, out_writer_noc_addr_head, SUBTILE_LINE_BYTES);
+
+            // Write second phase
+            noc_async_write(
+                l1_read_addr_head + 256 * ELEMENT_SIZE,
+                out_writer_noc_addr_head + 256 * ELEMENT_SIZE,
+                SUBTILE_LINE_BYTES);
+
+            if (++barrier_count == barrier_threshold) {
+                noc_async_writes_flushed();
+                barrier_count = 0;
+            }
+        }
+
+        ++out_tile_id;
+    }
+    return barrier_count;
+}
+
 /******************************************************************************
  *                   Reader Kernel Specific Functions                         *
  ******************************************************************************/
@@ -325,7 +381,6 @@ void read_kv_mask_chunks(
     uint32_t k_start_tile_id,
     uint32_t v_start_tile_id,
     uint32_t mask_start_tile_id,
-    uint32_t valid_seq_len_tiles,
     const InterleavedAddrGenFast<true>& k_reader,
     const InterleavedAddrGenFast<true>& v_reader,
     const InterleavedAddrGenFast<true>& mask_reader,
@@ -341,12 +396,10 @@ void read_kv_mask_chunks(
         for (uint32_t col = 0; col < DHt; ++col) {
             uint32_t k_tile_id = k_start_tile_id + col;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                if (row <= valid_seq_len_tiles) {
-                    noc_async_read_tile(k_tile_id, k_reader, k_write_ptr);
-                    if (++barrier_count == barrier_threshold) {
-                        noc_async_read_barrier();
-                        barrier_count = 0;
-                    }
+                noc_async_read_tile(k_tile_id, k_reader, k_write_ptr);
+                if (++barrier_count == barrier_threshold) {
+                    noc_async_read_barrier();
+                    barrier_count = 0;
                 }
                 k_tile_id += DHt;
                 k_write_ptr += k_tile_bytes;
@@ -369,12 +422,10 @@ void read_kv_mask_chunks(
         uint32_t v_tile_id = v_start_tile_id;
         for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
             for (uint32_t col = 0; col < DHt; ++col) {
-                if (row <= valid_seq_len_tiles) {
-                    noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
-                    if (++barrier_count == barrier_threshold) {
-                        noc_async_read_barrier();
-                        barrier_count = 0;
-                    }
+                noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
+                if (++barrier_count == barrier_threshold) {
+                    noc_async_read_barrier();
+                    barrier_count = 0;
                 }
                 v_tile_id++;
                 v_write_ptr += v_tile_bytes;
