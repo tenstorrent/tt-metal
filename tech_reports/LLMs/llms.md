@@ -1033,7 +1033,7 @@ Inputs to the model for generative decoding are generally:
 - position ids: the position of the tokens in the sequence
 - KV cache: an inference optimization that caches intermediate values
 
-In the model, tokens are embedded from the vocabulary space to the embedding space. Position ids are necessary for updating the KV cache and for positional embeddings like RoPE. 
+In the model, tokens are embedded from the vocabulary space to the embedding space. Position ids are necessary for updating the KV cache and for positional embeddings like RoPE.
 
 The model outputs:
 - logits for the next token
@@ -1047,7 +1047,7 @@ The logits are unnormalized probabilities over the vocabulary. Given these proba
 The KV cache is an inference optimization. It allows us to cache some intermediate values during the first inference step which are reused in later steps.
 On the first inference step, the model processes the full prompt and caches the K and V projections for each layer. Subsequent inference steps compute a Q, K, V projection only for the new token, then use the cached K and V projections in attention. Therefore the first step (prefill) creates the KV cache and subsequent steps (decode) use and update the cache.
 
-The size of the KV cache depends on the batch size and sequence length. Since accelerators have finite memory, it can be necessary to tradeoff batch size and sequence length to allow the KV cache to fit in memory.  
+The size of the KV cache depends on the batch size and sequence length. Since accelerators have finite memory, it can be necessary to tradeoff batch size and sequence length to allow the KV cache to fit in memory.
 
 #### Batching
 LLMs use batching to process multiple sequences in parallel. There are a few reasons why batching is useful:
@@ -1055,18 +1055,18 @@ LLMs use batching to process multiple sequences in parallel. There are a few rea
 - LLM inference is bound by time to read model weights from DRAM. Batching allows model weight reuse across multiple sequences.
 - Total throughput of the system increases with batch size.
 
-However, there are tradeoffs with batching. In decode mode, latency scales sublinearly with batch size up to a point. This is because decode is bound by time to read model weights from DRAM rather than time to compute. If the batch grows very large, decode mode will eventually become compute bound, causing latency to scale linearly with batch size. In prefill mode, latency scales linearly with batch size because prefill is compute bound. 
+However, there are tradeoffs with batching. In decode mode, latency scales sublinearly with batch size up to a point. This is because decode is bound by time to read model weights from DRAM rather than time to compute. If the batch grows very large, decode mode will eventually become compute bound, causing latency to scale linearly with batch size. In prefill mode, latency scales linearly with batch size because prefill is compute bound.
 
 It is typical to use different batch sizes for different use cases, depending on the goal of the system.
 
 #### Performance Metrics
-**Time to first token (TTFT)** measures the latency to generate the first token of the sequence. This is the time to prefill a prompt and generate the first token. It is a measure of interactivity. 
+**Time to first token (TTFT)** measures the latency to generate the first token of the sequence. This is the time to prefill a prompt and generate the first token. It is a measure of interactivity.
 
 **Total throughput (tokens per second)** tells us the total number of tokens that the model can generate per second. `total throughput = batch size / decode step latency`. Total throughput is important for cost-sensitive systems or offline processing, where interactivity is less important than throughput. Generally, increasing batch size will increase total throughput.
 
-**User throughput (tokens per second per user)** is calculated as `user throughput = 1 / decode step latency`. User throughput tells us how interactive the model is, and tells us how fast the generation is for a single user. Generally, decreasing batch size will increase user throughput. 
+**User throughput (tokens per second per user)** is calculated as `user throughput = 1 / decode step latency`. User throughput tells us how interactive the model is, and tells us how fast the generation is for a single user. Generally, decreasing batch size will increase user throughput.
 
-Note that each of these metrics change with batch size and sequence length. When reporting TTFT, total throughput, and user throughput, the batch size and sequence length must be specified. 
+Note that each of these metrics change with batch size and sequence length. When reporting TTFT, total throughput, and user throughput, the batch size and sequence length must be specified.
 
 
 ### 3.2 Prefill and Decode
@@ -1377,7 +1377,7 @@ For our [Llama3 family of models](../../models/demos/llama3) we are using the fo
 
 
 ### 3.4 Continuous Batching
-Continuous batching is a serving optimization. To describe continuous batching, it is useful to first discuss LLM serving without continuous batching. 
+Continuous batching is a serving optimization. To describe continuous batching, it is useful to first discuss LLM serving without continuous batching.
 
 Without continuous batching, an LLM service waits for `batch_size` requests to come in. The service then prefills each request. Then, the service decodes the batched requests token by token. Once all users in the batch finish generation, the service accepts new requests. This is suboptimal because 1) some requests might end generation early, so 2) some slots in the batch are not doing useful computation, while 3) new requests are waiting.
 
@@ -1415,8 +1415,8 @@ Beyond implementing the functionality needed for continuous batching, a model mu
 #### vLLM modifications
 On the vLLM side there may be additional changes needed to support the new model.
 
-- Modify [`tt_loader.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/model_executor/model_loader/tt_loader.py) if the model requires a different initialization. 
-- Modify [`tt_model_runner.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) if it is missing functionality for the new model. 
+- Modify [`tt_loader.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/model_executor/model_loader/tt_loader.py) if the model requires a different initialization.
+- Modify [`tt_model_runner.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) if it is missing functionality for the new model.
 
 #### Testing
 Finally, test the new model through vLLM. Register the new model as seen in [`offline_inference_tt.py`](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py).
@@ -1425,7 +1425,7 @@ Finally, test the new model through vLLM. Register the new model as seen in [`of
 from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 ModelRegistry.register_model("TTLlamaForCausalLM", TtLlamaModelForGeneration)
 ```
-and run `offline_inference_tt.py` to generate outputs with vLLM. 
+and run `offline_inference_tt.py` to generate outputs with vLLM.
 
 ## 4. Best Practices and Optimizations
 ### 4.1 Tracing
