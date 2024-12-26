@@ -53,6 +53,7 @@ void MAIN {
     // WORMHOLE
     //dprint_tensix_pack_config_wormhole();
     //dprint_tensix_pack_relu_config_wormhole();
+    //dprint_tensix_dest_rd_ctrl_wormhole();
 
     release_dst();
 }

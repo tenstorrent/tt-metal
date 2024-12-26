@@ -445,3 +445,22 @@ inline void dprint_tensix_pack_relu_config_wormhole(){
     DPRINT << ENDL();
 
 }
+
+inline void dprint_tensix_dest_rd_ctrl_wormhole(){
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    uint32_t reg_val = cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32];
+
+    DPRINT << "PCK_DEST_RD_CTRL: ";
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_32b_data, "read_32b_data");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_unsigned, "read_unsigned");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_int8, "read_int8");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Round_10b_mant, "round_10b_mant");
+
+    // Can't write to reserved? -> always prints 0
+    // reg_val gets only last 4 bits
+    //dprint_tensix_struct_field(reg_val, 0xfffffff0, 4, "reserved");
+
+    DPRINT << ENDL();
+
+}
