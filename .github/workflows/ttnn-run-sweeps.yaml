@@ -237,6 +237,7 @@ on:
           - eltwise.unary_backward.add_bw.add_bw
           - eltwise.unary_backward.assign_bw.assign_bw
           - eltwise.unary_backward.fill_bw.fill_bw
+          - eltwise.unary_backward.fill_bw.fill_bw_sharded
           - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
           - eltwise.unary_backward.lgamma_bw.lgamma_bw
           - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
@@ -289,12 +290,14 @@ on:
           - eltwise.unary.ltz.ltz
           - eltwise.unary.gez.gez
           - eltwise.unary.lez.lez
+          - eltwise.unary.lez.lez_sharded
           - eltwise.unary.nez.nez
           - eltwise.unary.prelu.prelu
           - eltwise.unary.prelu.prelu_sharded
           - eltwise.unary.hardswish.hardswish_pytorch2
           - eltwise.unary.hardtanh.hardtanh_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu
+          - eltwise.unary.leaky_relu.leaky_relu_sharded
           - eltwise.unary.reglu.reglu
           - eltwise.unary.round.round_sharded
           - eltwise.unary_complex.polar.polar
