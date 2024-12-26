@@ -1,6 +1,8 @@
 # TT-Metalium Distributed
 
-Authors: Joseph Chu (jchu@tenstorrent.com), Aditya Saigal (asaigal@tenstorrent.com)
+Authors: TT-Metalium Scale-Out Team
+
+For questions and comments please use the [TT-Metalium Scale-Out Discord Server](https://discord.com/channels/863154240319258674/1321621251269328956)
 
 ## Architecture Specification
 
@@ -1016,8 +1018,8 @@ Below, we include snippets from both the TT-Mesh and TT-Metal examples to illust
 MeshConfig mesh_config_0 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 0}, .type=mesh_type};
 MeshConfig mesh_config_1 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 4}, .type=mesh_type};
 
-DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1 /* num_command_queues */);
-DeviceHandle virtual_mesh_1 = CreateMeshDevice(mesh_config_1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1 /* num_command_queues */);
+DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_0, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
+DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_1, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
 ```
 
 *Directly create raw handles to two Devices.*
