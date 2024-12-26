@@ -36,11 +36,8 @@ inline uint32_t get_estimated_size_of_cbs(const Tensor& input_tensor_a) {
 }
 
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    tt::tt_metal::Device* device = input_tensor_a.device();
-    const std::vector<uint32_t>& bank_ids =
-        device->bank_ids_from_logical_core(BufferType::L1, *device->get_compute_cores().begin());
-    std::optional<uint64_t> lowest_address =
-        allocator::lowest_occupied_l1_address(*device->get_initialized_allocator(), bank_ids[0]);
+    auto device = input_tensor_a.device();
+    auto lowest_address = device->lowest_occupied_compute_l1_address();
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
     max_l1_space = max_l1_space - device->get_base_allocator_addr(HalMemType::L1);
     return max_l1_space;
