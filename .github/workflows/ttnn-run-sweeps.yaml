@@ -219,6 +219,7 @@ on:
           - eltwise.binary.add.add_all_pytorch2
           - eltwise.binary.add.add_set2_pytorch2
           - eltwise.binary.add.add_different_memory_configs
+          - eltwise.binary.add.add_forge
           - eltwise.unary.gtz.gtz
           - eltwise.unary.ltz.ltz
           - eltwise.unary.gez.gez
@@ -236,9 +237,11 @@ on:
           - eltwise.unary_complex.conj_bw
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
+          - eltwise.binary.subtract.subtract_forge
           - eltwise.binary.multiply.multiply
           - eltwise.binary.multiply.mul_tensor_pytorch2
           - eltwise.binary.multiply.multiply_scalar_pytorch2
+          - eltwise.binary.multiply.multiply_forge
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div.div_forge
@@ -259,6 +262,7 @@ on:
           - eltwise.binary.remainder.remainder_forge
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
+          - eltwise.binary.scatter.scatter_forge
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
           - eltwise.binary.eq.eq_scalar_pytorch2
@@ -298,8 +302,10 @@ on:
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
           - eltwise.composite.binary.minimum.minimum_pytorch2
+          - eltwise.composite.binary.minimum.minimum_forge
           - eltwise.composite.binary.maximum.maximum
           - eltwise.composite.binary.maximum.maximum_pytorch2
+          - eltwise.composite.binary.maximum.maximum_forge
           - eltwise.composite.binary.pow.pow_pytorch2
           - eltwise.composite.binary.pow.pow_scalar_pytorch2
           - eltwise.composite.binary.pow.pow_tensor_pytorch2
