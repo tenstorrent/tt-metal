@@ -60,9 +60,9 @@ Version 1.0
 
 This document presents a specification for **TT-Mesh** and **TT-Distributed**, Tenstorrent’s scale-up and scale-out infrastructure to natively support workloads on multiple Tenstorrent hardware accelerators, potentially spanning multiple host servers.
 
-TT-Metalium provides a flexible programming model over a mesh of Tensix cores. The TT-Mesh and TT-Distributed layers, built on top of TT-Fabric, extend this programming model to a grid of Tensix cores spanning multiple devices connected over ethernet and controlled by multiple host processors. Through this, users are exposed to the same programming model as a single-chip, when systems are scaled-out.
+TT-Metalium provides a flexible programming model over a mesh of Tensix cores. The TT-Mesh and TT-Distributed layers, built on top of TT-Fabric, extend this programming model to a grid of Tensix cores spanning multiple devices connected over ethernet and controlled by multiple host processors. Through this, users are exposed to the same programming model as a single device, when systems are scaled-out.
 
-This infrastructure exposes a multi-chip system as a large virtual device with a distributed memory space and a set of programmable Tensix cores. Unlike conventional architectures, programming cores distributed over multiple host machines will not fundamentally alter the programming model.
+The key idea is to present a multi-device multi-host system as: 1) a large virtual device that has, 2) a distributed shared memory space, and 3) a set of programmable Tensix cores. Unlike conventional architectures, programming cores distributed over multiple devices or multiple host machines will not fundamentally alter the programming model.
 
 ![A diagram of a computer Description automatically generated](images/image001.png)
 
