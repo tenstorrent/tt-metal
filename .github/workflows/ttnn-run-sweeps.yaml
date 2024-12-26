@@ -36,6 +36,7 @@ on:
           - eltwise.unary.sin.sin
           - eltwise.unary.sin.sin_pytorch2
           - eltwise.unary.sin.sin_forge
+          - eltwise.unary.sin.sin_sharded
           - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
           - eltwise.unary.clamp.clamp_forge
@@ -104,6 +105,8 @@ on:
           - eltwise.unary.neg.neg_pytorch2
           - eltwise.unary.neg.neg_forge
           - eltwise.unary.i0.i0
+          - eltwise.unary.reciprocal
+          - eltwise.unary.reciprocal_sharded
           - eltwise.unary.silu.silu
           - eltwise.unary.silu.silu_pytorch2
           - eltwise.unary.glu.glu
