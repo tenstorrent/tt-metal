@@ -51,7 +51,8 @@ void MAIN {
     // PACK CONFIG REGISTER DPRINT
 
     // WORMHOLE
-    // dprint_tensix_pack_config_wormhole();
+    //dprint_tensix_pack_config_wormhole();
+    //dprint_tensix_pack_relu_config_wormhole();
 
     release_dst();
 }
