@@ -123,7 +123,7 @@ void kernel_main() {
     } else if constexpr (ATOMIC_INC == test_command) {
         poll_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
         // TODO: read in wrap boundary as well from compile args
-        num_packets = num_producers * (total_data_words + PACKET_HEADER_SIZE_WORDS - 1) / PACKET_HEADER_SIZE_WORDS;
+        num_packets = num_producers * ((total_data_words + PACKET_HEADER_SIZE_WORDS - 1) / PACKET_HEADER_SIZE_WORDS);
         poll_val = atomic_increment * num_packets;
 
         // poll for the final value

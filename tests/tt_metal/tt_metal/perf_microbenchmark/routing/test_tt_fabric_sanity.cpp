@@ -22,16 +22,16 @@ using std::vector;
 using namespace tt;
 using json = nlohmann::json;
 
+std::mt19937 global_rng;
+
 inline std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint32_t end, uint32_t count) {
     std::vector<uint32_t> range(end - start + 1);
-    std::random_device rd;
 
     // generate the range
     std::iota(range.begin(), range.end(), start);
 
     // shuffle the range
-    std::mt19937 g(rd());
-    std::shuffle(range.begin(), range.end(), g);
+    std::shuffle(range.begin(), range.end(), global_rng);
 
     return std::vector<uint32_t>(range.begin(), range.begin() + count);
 }
@@ -43,9 +43,19 @@ typedef struct test_board {
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
 
     test_board(std::string& board_type_) {
-        std::random_device rd;
-
         if ("n300" == board_type_) {
+            const std::string mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
+            uint32_t num_chips = 2;
+
+            if (num_chips != tt_metal::GetNumAvailableDevices()) {
+                throw std::runtime_error("Not found the expected 2 chips for n300");
+            }
+
+            _init_control_plane(mesh_graph_descriptor);
+
+            for (auto i = 0; i < num_chips; i++) {
+                physical_chip_ids.push_back(i);
+            }
         } else if ("t3k" == board_type_) {
             const std::string mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml";
             uint32_t num_chips = 8;
@@ -75,8 +85,7 @@ typedef struct test_board {
         }
 
         // shuffle the list of chip IDs and assign consecutive IDs as a pair
-        std::mt19937 g(rd());
-        std::shuffle(physical_chip_ids.begin(), physical_chip_ids.end(), g);
+        std::shuffle(physical_chip_ids.begin(), physical_chip_ids.end(), global_rng);
         for (auto i = 0; i < physical_chip_ids.size(); i += 2) {
             unicast_map[physical_chip_ids[i]] = physical_chip_ids[i + 1];
         }
@@ -240,11 +249,9 @@ typedef struct test_device {
 
     std::vector<CoreCoord> select_random_worker_cores(uint32_t count) {
         std::vector<CoreCoord> result;
-        std::random_device rd;
 
         // shuffle the list of cores
-        std::mt19937 g(rd());
-        std::shuffle(worker_cores.begin(), worker_cores.end(), g);
+        std::shuffle(worker_cores.begin(), worker_cores.end(), global_rng);
 
         // return and delete the selected cores
         for (auto i = 0; i < count; i++) {
@@ -255,11 +262,11 @@ typedef struct test_device {
         return result;
     }
 
-    inline uint32_t get_endpoint_id(CoreCoord logical_core) {
-        return (device_handle->id()) << 8 + (logical_core.x) << 4 + (logical_core.y);
+    inline uint32_t get_endpoint_id(CoreCoord& logical_core) {
+        return ((device_handle->id()) << 8) | ((logical_core.x) << 4) | (logical_core.y);
     }
 
-    inline uint32_t get_noc_offset(CoreCoord logical_core) {
+    inline uint32_t get_noc_offset(CoreCoord& logical_core) {
         CoreCoord phys_core = device_handle->worker_core_from_logical_core(logical_core);
         return (phys_core.y << 10) | (phys_core.x << 4);
     }
@@ -495,8 +502,10 @@ typedef struct test_traffic {
 
     void print_result_summary() {
         double total_tx_bw = 0.0;
+        double total_tx_bw_2 = 0.0;
         uint64_t total_tx_words_sent = 0;
         uint64_t total_rx_words_checked = 0;
+        uint64_t max_tx_elapsed_cycles = 0;
         for (uint32_t i = 0; i < num_tx_workers; i++) {
             uint64_t tx_words_sent = get_64b_result(tx_results[i], PQ_TEST_WORD_CNT_INDEX);
             total_tx_words_sent += tx_words_sent;
@@ -504,6 +513,7 @@ typedef struct test_traffic {
             double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
             total_tx_bw += tx_bw;
             uint64_t iter = get_64b_result(tx_results[i], PQ_TEST_ITER_INDEX);
+            max_tx_elapsed_cycles = std::max(max_tx_elapsed_cycles, tx_elapsed_cycles);
             // uint64_t zero_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
             // uint64_t few_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
             // uint64_t many_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
@@ -532,12 +542,14 @@ typedef struct test_traffic {
                         stat[fmt::format("tx_many_data_sent_iter_{}", i)] = many_data_sent_iter;
             */
         }
+        total_tx_bw_2 = ((double)total_tx_words_sent) * PACKET_WORD_SIZE_BYTES / max_tx_elapsed_cycles;
         for (uint32_t i = 0; i < num_rx_workers; i++) {
             uint64_t words_received = get_64b_result(rx_results[i], PQ_TEST_WORD_CNT_INDEX);
             uint32_t num_tx = rx_to_tx_map[i].size();
             log_info(LogTest, "RX {}, num producers = {}, words received = {}", i, num_tx, words_received);
         }
-        log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
+        // log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
+        log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw_2);
     }
 
     // generates mapping of tx core indices to rx core indices
@@ -545,19 +557,17 @@ typedef struct test_traffic {
         std::vector<uint32_t> tx_workers(num_tx_workers);
         std::vector<uint32_t> rx_workers(num_rx_workers);
         uint32_t tx_idx, rx_idx;
-        std::random_device rd;
 
         // populate vectors
         std::iota(tx_workers.begin(), tx_workers.end(), 0);
         std::iota(rx_workers.begin(), rx_workers.end(), 0);
 
         // shuffle vectors
-        std::mt19937 g(rd());
-        std::shuffle(tx_workers.begin(), tx_workers.end(), g);
+        std::shuffle(tx_workers.begin(), tx_workers.end(), global_rng);
 
         // Assign tx to rx. Ensure that atleast one tx is mapped to a rx
         while (tx_workers.size() > 0) {
-            std::shuffle(rx_workers.begin(), rx_workers.end(), g);
+            std::shuffle(rx_workers.begin(), rx_workers.end(), global_rng);
             for (uint32_t i = 0; (i < num_rx_workers) && (tx_workers.size() > 0); i++) {
                 rx_idx = rx_workers[i];
                 tx_idx = tx_workers.back();
@@ -609,7 +619,7 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_demux_x = 0;
     constexpr uint32_t default_demux_y = 2;
 
-    constexpr uint32_t default_prng_seed = 0x100;
+    constexpr uint32_t default_prng_seed = 0xFFFFFFFF;
     constexpr uint32_t default_data_kb_per_tx = 1024*1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
 
@@ -767,6 +777,13 @@ int main(int argc, char **argv) {
     std::map<string, string> defines = {
         {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
     };
+
+    if (default_prng_seed == prng_seed) {
+        std::random_device rd;
+        prng_seed = rd();
+    }
+
+    global_rng.seed(prng_seed);
 
     try {
         test_board_t test_board(board_type);
