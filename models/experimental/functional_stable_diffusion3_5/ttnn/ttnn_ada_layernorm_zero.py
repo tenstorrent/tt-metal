@@ -22,27 +22,65 @@ class ttnn_AdaLayerNormZero:
 
     def __call__(
         self,
-        x: torch.Tensor,
+        hidden_states: torch.Tensor,
         timestep: Optional[ttnn.Tensor] = None,
         class_labels: Optional[ttnn.Tensor] = None,
         hidden_dtype=None,
         emb: Optional[ttnn.Tensor] = None,
         parameters=None,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        hifi2_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+        )
         if self.emb is not None:
             emb = self.emb(timestep, class_labels, hidden_dtype=hidden_dtype)
-        emb = self.linear(self.silu(emb), parameters["linear"]["weight"], bias=parameters["linear"]["bias"])
-        emb = ttnn.to_torch(emb)
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = emb.chunk(6, 1)
 
-        shift_msa = ttnn.from_torch(shift_msa, layout=ttnn.TILE_LAYOUT, device=x.device())
-        scale_msa = ttnn.from_torch(scale_msa, layout=ttnn.TILE_LAYOUT, device=x.device())
-        gate_msa = ttnn.from_torch(gate_msa, layout=ttnn.TILE_LAYOUT, device=x.device())
-        shift_mlp = ttnn.from_torch(shift_mlp, layout=ttnn.TILE_LAYOUT, device=x.device())
-        scale_mlp = ttnn.from_torch(scale_mlp, layout=ttnn.TILE_LAYOUT, device=x.device())
-        gate_mlp = ttnn.from_torch(gate_mlp, layout=ttnn.TILE_LAYOUT, device=x.device())
+        mm_a_y = 8
+        mm_a_x = 8
+        mm_a_x_strategy = ttnn.ShardStrategy.WIDTH
+        mm_a_x_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
-        x = self.norm(x) * (1 + ttnn.reshape(scale_msa, (scale_msa.shape[0], 1, scale_msa.shape[1]))) + ttnn.reshape(
-            shift_msa, (shift_msa.shape[0], 1, shift_msa.shape[1])
-        )  # shift_msa[:, None] replaced with ttnn.reshape(shift_msa,(shift_msa.shape[0],1,shift_msa.shape[1])) same for scale_msa[:,None]
-        return x, gate_msa, shift_mlp, scale_mlp, gate_mlp
+        # emb = ttnn.reshape(emb, (emb.shape[0], 1, emb.shape[1]))
+
+        emb = self.linear(
+            self.silu(emb),
+            parameters["linear"]["weight"],
+            bias=parameters["linear"]["bias"],
+            memory_config=mm_a_x_memory_config,
+            core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
+            compute_kernel_config=hifi2_kernel_config,
+        )
+        emb = ttnn.to_memory_config(emb, ttnn.L1_MEMORY_CONFIG)
+        one_chunk = emb.shape[-1] // 6
+
+        i_beg = 0
+        i_end = one_chunk
+        shift_msa = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+        i_beg += one_chunk
+        i_end += one_chunk
+        scale_msa = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+        i_beg += one_chunk
+        i_end += one_chunk
+        gate_msa = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+        i_beg += one_chunk
+        i_end += one_chunk
+        shift_mlp = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+        i_beg += one_chunk
+        i_end += one_chunk
+        scale_mlp = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+        i_beg += one_chunk
+        i_end += one_chunk
+        gate_mlp = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+
+        ttnn.deallocate(emb)
+
+        # x = self.norm(x, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=hifi2_kernel_config)
+        # x = x * (1 + scale_msa) + shift_msa
+
+        norm_hidden_states = self.norm(hidden_states, compute_kernel_config=hifi2_kernel_config)
+        scale_msa = scale_msa + 1
+        # TODO: can we shard the hidden state but keep scale tensor as interleaved?
+        norm_hidden_states = norm_hidden_states * scale_msa
+        norm_hidden_states = norm_hidden_states + shift_msa
+
+        return norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp

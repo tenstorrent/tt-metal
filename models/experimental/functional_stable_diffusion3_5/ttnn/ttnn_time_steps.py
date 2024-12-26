@@ -12,7 +12,7 @@ def get_timestep_embedding_tt(
 ):
     half_dim = embedding_dim // 2
     val1 = -math.log(max_period)
-    val2 = ttnn.arange(start=0, end=half_dim, dtype=ttnn.float32, device=device)
+    val2 = ttnn.arange(start=0, end=half_dim, dtype=ttnn.float32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     val2 = ttnn.to_layout(val2, layout=ttnn.TILE_LAYOUT)
     expon = ttnn.multiply(val2, val1)
     exponent = ttnn.div(expon, (half_dim - downscale_freq_shift), round_mode=None)
@@ -20,15 +20,14 @@ def get_timestep_embedding_tt(
     emb = ttnn.squeeze(emb, dim=0)
     emb = ttnn.squeeze(emb, dim=0)
     timesteps_p = ttnn.permute(timesteps, (1, 0))
-    emb = ttnn.matmul(timesteps_p, emb)
-    emb = ttnn.multiply(emb, scale)
+    emb = ttnn.matmul(timesteps_p, emb, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if not scale == 1:
+        emb = ttnn.multiply(emb, scale)
     emb_sin = ttnn.sin(emb)
     emb_cos = ttnn.cos(emb)
-    emb = ttnn.concat([emb_sin, emb_cos], dim=-1)
-
+    emb = ttnn.concat([emb_sin, emb_cos], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
     if flip_sin_to_cos:
-        emb = ttnn.concat([emb[:, half_dim:], emb[:, :half_dim]], dim=-1)
-
+        emb = ttnn.concat([emb[:, half_dim:], emb[:, :half_dim]], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
     return emb
 
 

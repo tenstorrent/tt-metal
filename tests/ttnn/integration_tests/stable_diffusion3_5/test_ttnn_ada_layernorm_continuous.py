@@ -23,8 +23,8 @@ def create_custom_preprocessor(device):
         parameters = {}
         if isinstance(model, AdaLayerNormContinuous):
             parameters["linear"] = {}
-            parameters["linear"]["weight"] = preprocess_linear_weight(model.linear.weight, dtype=ttnn.bfloat16)
-            parameters["linear"]["bias"] = preprocess_linear_bias(model.linear.bias, dtype=ttnn.bfloat16)
+            parameters["linear"]["weight"] = preprocess_linear_weight(model.linear.weight, dtype=ttnn.bfloat8_b)
+            parameters["linear"]["bias"] = preprocess_linear_bias(model.linear.bias, dtype=ttnn.bfloat8_b)
 
             # Its none as elementwise_affine=False
             parameters["norm"] = {}
@@ -40,7 +40,9 @@ def create_custom_preprocessor(device):
     "x_shape",
     [
         ([2, 4096, 1536]),
-        ([2, 333, 1536]),
+        # ([2, 333, 1536]),
+        # ([2, 1024, 1536]),
+        ([2, 160, 1536]),
     ],
 )
 def test_ada_layernorm_continuous(device, x_shape, reset_seeds):
@@ -54,19 +56,48 @@ def test_ada_layernorm_continuous(device, x_shape, reset_seeds):
     ).to(dtype=torch.bfloat16)
     reference_model.eval()
 
-    torch_innput_x = torch.randn(x_shape, dtype=torch.bfloat16)
-    torch_innput_conditioning_embedding = torch.randn(2, 1536, dtype=torch.bfloat16)
+    torch_input_x = torch.randn(x_shape, dtype=torch.bfloat16)
+    torch_input_conditioning_embedding = torch.randn(2, 1536, dtype=torch.bfloat16)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=device
     )
 
-    ttnn_input_x = ttnn.from_torch(torch_innput_x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    torch_input_x_unsqueezed = torch_input_x.unsqueeze(1)
+
+    # if torch_input_x_unsqueezed.shape[-2] < 512:
+    #     input_memory_config = ttnn.L1_MEMORY_CONFIG
+    # else:
+    #     mm_a_y = 8
+    #     mm_a_x = 8
+    #     mm_a_x_strategy = ttnn.ShardStrategy.BLOCK
+    #     mm_a_x_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+
+    #     input_memory_config = ttnn.create_sharded_memory_config(
+    #         torch_input_x_unsqueezed.shape,
+    #         core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
+    #         strategy=mm_a_x_strategy,
+    #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    #     )
+
     ttnn_input_conditioning_embedding = ttnn.from_torch(
-        torch_innput_conditioning_embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+        torch_input_conditioning_embedding.unsqueeze(1).unsqueeze(1),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    torch_output = reference_model(torch_innput_x, torch_innput_conditioning_embedding)
+    ttnn_input_x = ttnn.from_torch(
+        torch_input_x_unsqueezed,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    torch_output = reference_model(torch_input_x, torch_input_conditioning_embedding)
+
     ttnn_model = ttnn_AdaLayerNormContinuous(
         embedding_dim=1536,
         conditioning_embedding_dim=1536,
@@ -78,4 +109,4 @@ def test_ada_layernorm_continuous(device, x_shape, reset_seeds):
 
     ttnn_output = ttnn_model(ttnn_input_x, ttnn_input_conditioning_embedding, parameters=parameters)
 
-    assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output), pcc=0.99)
+    assert_with_pcc(torch_output.unsqueeze(1), ttnn.to_torch(ttnn_output), pcc=0.99)

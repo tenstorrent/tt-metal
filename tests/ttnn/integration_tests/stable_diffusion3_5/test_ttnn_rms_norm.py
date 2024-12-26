@@ -25,7 +25,7 @@ def create_custom_preprocessor(device):
             parameters["rms_norm"]["weight"] = ttnn.from_torch(
                 model.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                 device=device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
             )
         return parameters
@@ -47,7 +47,9 @@ def test_ttnn_rms_norm(init_inputs, fwd_inputs, device, reset_seeds):
         initialize_model=lambda: torch_sub_module, device=device, custom_preprocessor=create_custom_preprocessor(device)
     )
     hidden_states = torch.randn(fwd_inputs, dtype=torch.bfloat16)
-    tt_input_hidden_states = ttnn.from_torch(hidden_states, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_input_hidden_states = ttnn.from_torch(
+        hidden_states, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
     tt_sub_module = tt_module(
         dim=init_inputs[0], eps=init_inputs[1], elementwise_affine=init_inputs[2], parameters=parameters.rms_norm
     )

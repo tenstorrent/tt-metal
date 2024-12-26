@@ -28,11 +28,11 @@ def create_custom_preprocessor(device):
         parameters = {}
         if isinstance(model, PixArtAlphaTextProjection):
             parameters["linear_1"] = {}
-            parameters["linear_1"]["weight"] = preprocess_linear_weight(model.linear_1.weight, dtype=ttnn.bfloat16)
-            parameters["linear_1"]["bias"] = preprocess_linear_bias(model.linear_1.bias, dtype=ttnn.bfloat16)
+            parameters["linear_1"]["weight"] = preprocess_linear_weight(model.linear_1.weight, dtype=ttnn.bfloat8_b)
+            parameters["linear_1"]["bias"] = preprocess_linear_bias(model.linear_1.bias, dtype=ttnn.bfloat8_b)
             parameters["linear_2"] = {}
-            parameters["linear_2"]["weight"] = preprocess_linear_weight(model.linear_2.weight, dtype=ttnn.bfloat16)
-            parameters["linear_2"]["bias"] = preprocess_linear_bias(model.linear_2.bias, dtype=ttnn.bfloat16)
+            parameters["linear_2"]["weight"] = preprocess_linear_weight(model.linear_2.weight, dtype=ttnn.bfloat8_b)
+            parameters["linear_2"]["bias"] = preprocess_linear_bias(model.linear_2.bias, dtype=ttnn.bfloat8_b)
         return parameters
 
     return custom_preprocessor
@@ -54,9 +54,16 @@ def test_ttnn_px_art_alpha_text(in_features, hidden_size, out_features, fwd_inpu
         initialize_model=lambda: torch_sub_module, device=device, custom_preprocessor=create_custom_preprocessor(device)
     )
     torch_input = torch.randn([2, 2048], dtype=torch.bfloat16)
-    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    torch_input_unsqueezed = torch_input.unsqueeze(1).unsqueeze(1)
+    tt_input = ttnn.from_torch(
+        torch_input_unsqueezed,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     tt_sub_module = tt_module(parameters)
     tt_out = tt_sub_module(tt_input, device=device)
-    torch_out = torch_sub_module(torch_input)
+    torch_out = torch_sub_module(torch_input).unsqueeze(1).unsqueeze(1)
     tt_out_in_torch = ttnn.to_torch(tt_out)
     assert_with_pcc(torch_out, tt_out_in_torch, 0.99)

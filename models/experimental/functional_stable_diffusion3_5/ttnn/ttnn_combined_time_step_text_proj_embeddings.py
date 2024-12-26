@@ -21,5 +21,4 @@ class ttnn_CombinedTimestepTextProjEmbeddings:
         timesteps_emb = self.timestep_embedder(timesteps_proj, device)
         pooled_projections = self.text_embedder(pooled_projection, device)
         conditioning = ttnn.add(timesteps_emb, pooled_projections)
-
         return conditioning

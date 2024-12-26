@@ -31,32 +31,32 @@ def create_custom_preprocessor(device):
             parameters["text_embedder"] = {}
             parameters["text_embedder"]["linear_1"] = {}
             parameters["text_embedder"]["linear_1"]["weight"] = preprocess_linear_weight(
-                model.text_embedder.linear_1.weight, dtype=ttnn.bfloat16
+                model.text_embedder.linear_1.weight, dtype=ttnn.bfloat8_b
             )
             parameters["text_embedder"]["linear_1"]["bias"] = preprocess_linear_bias(
-                model.text_embedder.linear_1.bias, dtype=ttnn.bfloat16
+                model.text_embedder.linear_1.bias, dtype=ttnn.bfloat8_b
             )
             parameters["text_embedder"]["linear_2"] = {}
             parameters["text_embedder"]["linear_2"]["weight"] = preprocess_linear_weight(
-                model.text_embedder.linear_2.weight, dtype=ttnn.bfloat16
+                model.text_embedder.linear_2.weight, dtype=ttnn.bfloat8_b
             )
             parameters["text_embedder"]["linear_2"]["bias"] = preprocess_linear_bias(
-                model.text_embedder.linear_2.bias, dtype=ttnn.bfloat16
+                model.text_embedder.linear_2.bias, dtype=ttnn.bfloat8_b
             )
             parameters["timestep_embedder"] = {}
             parameters["timestep_embedder"]["linear_1"] = {}
             parameters["timestep_embedder"]["linear_1"]["weight"] = preprocess_linear_weight(
-                model.timestep_embedder.linear_1.weight, dtype=ttnn.bfloat16
+                model.timestep_embedder.linear_1.weight, dtype=ttnn.bfloat8_b
             )
             parameters["timestep_embedder"]["linear_1"]["bias"] = preprocess_linear_bias(
-                model.timestep_embedder.linear_1.bias, dtype=ttnn.bfloat16
+                model.timestep_embedder.linear_1.bias, dtype=ttnn.bfloat8_b
             )
             parameters["timestep_embedder"]["linear_2"] = {}
             parameters["timestep_embedder"]["linear_2"]["weight"] = preprocess_linear_weight(
-                model.timestep_embedder.linear_2.weight, dtype=ttnn.bfloat16
+                model.timestep_embedder.linear_2.weight, dtype=ttnn.bfloat8_b
             )
             parameters["timestep_embedder"]["linear_2"]["bias"] = preprocess_linear_bias(
-                model.timestep_embedder.linear_2.bias, dtype=ttnn.bfloat16
+                model.timestep_embedder.linear_2.bias, dtype=ttnn.bfloat8_b
             )
 
         return parameters
@@ -81,10 +81,20 @@ def test_ttnn_combined_time_step_text_proj_embeddings(init_inputs, fwd_inputs, d
     )
     timesteps = torch.tensor([100, 100], dtype=torch.int32)
     pooled_projection = torch.randn(fwd_inputs, dtype=torch.bfloat16)
-    tt_input_timesteps = ttnn.from_torch(timesteps, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-    tt_input_pool_proj = ttnn.from_torch(pooled_projection, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_input_timesteps = ttnn.from_torch(
+        timesteps, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    pooled_projection_unsqueezed = pooled_projection.unsqueeze(1).unsqueeze(1)
+    tt_input_pool_proj = ttnn.from_torch(
+        pooled_projection_unsqueezed,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     tt_sub_module = tt_module(embedding_dim=init_inputs[0], pooled_projection_dim=init_inputs[1], parameters=parameters)
     tt_out = tt_sub_module(timestep=tt_input_timesteps, pooled_projection=tt_input_pool_proj, device=device)
-    torch_out = torch_sub_module(timesteps, pooled_projection)
+
+    torch_out = torch_sub_module(timesteps, pooled_projection).unsqueeze(1).unsqueeze(1)
     tt_out_in_torch = ttnn.to_torch(tt_out)
     assert_with_pcc(torch_out, tt_out_in_torch, 0.99)

@@ -31,11 +31,13 @@ def test_ttnn_time_steps(init_inputs, device):
         initialize_model=lambda: torch_sub_module,
         device=device,
     )
-    time_stamps = torch.tensor([100, 100], dtype=torch.int32)
-    tt_input = ttnn.from_torch(time_stamps, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-    tt_input = ttnn.squeeze(tt_input, dim=0)
+    time_stamps = [1000, 1000]
+    time_stamps = torch.tensor(time_stamps, dtype=torch.int32)
+    tt_input = ttnn.from_torch(
+        time_stamps, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
     tt_sub_module = tt_module(init_inputs[0], init_inputs[1], init_inputs[2], init_inputs[3])
     tt_out = tt_sub_module(tt_input, device)
     torch_out = torch_sub_module(time_stamps)
     tt_out_in_torch = ttnn.to_torch(tt_out)
-    assert_with_pcc(torch_out, tt_out_in_torch, 0.96)
+    assert_with_pcc(torch_out, tt_out_in_torch, 0.969)

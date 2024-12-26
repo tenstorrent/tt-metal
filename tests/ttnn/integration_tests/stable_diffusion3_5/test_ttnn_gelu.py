@@ -18,8 +18,8 @@ def create_custom_preprocessor(device):
         parameters = {}
         if isinstance(model, GELU):
             parameters["proj"] = {}
-            parameters["proj"]["weight"] = preprocess_linear_weight(model.proj.weight, dtype=ttnn.bfloat16)
-            parameters["proj"]["bias"] = preprocess_linear_bias(model.proj.bias, dtype=ttnn.bfloat16)
+            parameters["proj"]["weight"] = preprocess_linear_weight(model.proj.weight, dtype=ttnn.bfloat8_b)
+            parameters["proj"]["bias"] = preprocess_linear_bias(model.proj.bias, dtype=ttnn.bfloat8_b)
 
         return parameters
 
@@ -32,7 +32,9 @@ def create_custom_preprocessor(device):
     "hidden_states_shape",
     [
         ([2, 4096, 1536]),
-        ([2, 333, 1536]),
+        # ([2, 352, 1536]),
+        # ([2, 1024, 1536]),
+        ([2, 160, 1536]),
     ],
 )
 def test_gelu(device, hidden_states_shape, reset_seeds):
@@ -47,8 +49,26 @@ def test_gelu(device, hidden_states_shape, reset_seeds):
     torch_output = reference_model(hidden_states=torch_hidden_states)
     ttnn_model = ttnn_GELU(dim_in=1536, dim_out=6144)
 
+    if torch_hidden_states.shape[-2] < 512:
+        mm_a_y = 6
+        mm_a_x = 8
+        mm_a_x_strategy = ttnn.ShardStrategy.WIDTH
+        mm_a_x_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+
+        input_memory_config = ttnn.create_sharded_memory_config(
+            torch_hidden_states.shape,
+            core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
+            strategy=mm_a_x_strategy,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        config_used = input_memory_config
+    else:
+        mm_a_y = 8
+        mm_a_x = 8
+        config_used = ttnn.DRAM_MEMORY_CONFIG
+
     ttnn_hidden_states = ttnn.from_torch(
-        torch_hidden_states, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+        torch_hidden_states, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=device, memory_config=config_used
     )
     ttnn_output = ttnn_model(hidden_states=ttnn_hidden_states, parameters=parameters)
     ttnn_output = ttnn.to_torch(ttnn_output)

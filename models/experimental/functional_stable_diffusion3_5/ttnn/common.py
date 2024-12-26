@@ -75,7 +75,7 @@ class Conv:
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
-        [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
+        output_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
@@ -91,16 +91,10 @@ class Conv:
             conv_config=conv_config,
             debug=False,
             groups=self.groups,
-            return_output_dim=True,
+            return_output_dim=False,
             return_weights_and_bias=False,
             compute_config=compute_config,
             dilation=(self.dilation, self.dilation),
         )
-        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor = ttnn.reshape(
-            output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])
-        )
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
-        del _out_height, _out_width
+
         return output_tensor
