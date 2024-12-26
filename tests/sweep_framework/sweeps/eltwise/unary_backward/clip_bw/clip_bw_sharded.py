@@ -47,11 +47,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     input_layout = test_vector["input_spec"]["input_layout"]
     sharding_invalidated, output_str = invalidate_vector_sharding(test_vector["input_spec"])
 
-    if test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+    if test_vector["input_a_dtype"] == ttnn.bfloat8_b or test_vector["grad_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is not supported"
     if input_layout == "ROW_MAJOR_LAYOUT":
         return True, "Input to eltwise binary must be tilized"
-    if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+    if input_layout == "ROW_MAJOR_LAYOUT" and (
+        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
+    ):
         return True, "bfloat8_b is only supported on tiled layout"
     if sharding_invalidated:
         return sharding_invalidated, output_str

@@ -34,7 +34,6 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_spec": gen_sharded_spec_unary(16, max_tensor_size_per_core=20 * 1024, layouts=["TILE_LAYOUT"]),
-        "mode": ["both", "min", "max"],
         "grad_dtype": [ttnn.bfloat16],
         "input_a_dtype": [ttnn.bfloat16],
     },
@@ -68,7 +67,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_spec,
-    mode,
     grad_dtype,
     input_a_dtype,
     *,
@@ -107,15 +105,10 @@ def run(
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
 
-    low, high = gen_low_high_scalars()
+    factor = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
-    if mode == "min":
-        high = None
-    elif mode == "max":
-        low = None
-
-    golden_function = ttnn.get_golden_function(ttnn.clamp_bw)
-    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, low, high)[0]
+    golden_function = ttnn.get_golden_function(ttnn.rdiv_bw)
+    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, factor)[0]
 
     grad_tensor = ttnn.from_torch(
         torch_grad_tensor,
@@ -134,7 +127,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.clamp_bw(grad_tensor, input_tensor_a, min=low, max=high, memory_config=sharded_config)[0]
+    result = ttnn.rdiv_bw(grad_tensor, input_tensor_a, factor, memory_config=sharded_config)[0]
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(result)
 
