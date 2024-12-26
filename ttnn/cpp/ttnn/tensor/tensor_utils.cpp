@@ -480,11 +480,30 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
         output_conv_weight_tensor_shape);
 }
 
+std::string create_reshape_error_msg(
+    const ttnn::Shape& input_shape,
+    int64_t input_volume,
+    const tt::stl::Span<const int32_t>& output_shape,
+    int64_t output_volume) {
+    std::ostringstream error_msg;
+    error_msg << "Invalid arguments to reshape: Input shape " << input_shape << " with volume " << input_volume
+              << ", and output shape [";
+    for (std::size_t i = 0; i < output_shape.size(); ++i) {
+        if (i > 0) {
+            error_msg << ", ";
+        }
+        error_msg << output_shape[i];
+    }
+    error_msg << "] with volume " << output_volume << ".";
+    return error_msg.str();
+}
+
 const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
     int64_t old_volume = tensor.get_logical_volume();
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
     bool has_zero = false;
+
     for (auto index = 0; index < shape.size(); ++index) {
         if (shape[index] == -1) {
             if (index_of_negative_1 != -1) {
@@ -503,6 +522,7 @@ const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Sp
             new_volume *= shape[index];
         }
     }
+
     if (has_zero && index_of_negative_1 != -1) {
         std::string error_msg = "cannot reshape tensor of 0 elements into shape (";
         for(auto & s: shape) {
@@ -514,10 +534,16 @@ const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Sp
 
     ttnn::SmallVector<uint32_t> new_shape(shape.size());
     std::copy(shape.begin(), shape.end(), new_shape.begin());
+    ttnn::Shape input_tensor_shape = tensor.get_shape().value;
+
     if (index_of_negative_1 == -1) {
-        TT_FATAL(new_volume == old_volume, "Invalid arguments to reshape");
+        if (new_volume != old_volume) {
+            TT_THROW("{}", create_reshape_error_msg(input_tensor_shape, old_volume, shape, new_volume));
+        }
     } else {
-        TT_FATAL(old_volume % new_volume == 0, "Invalid arguments to reshape");
+        if (old_volume % new_volume != 0) {
+            TT_THROW("{}", create_reshape_error_msg(input_tensor_shape, old_volume, shape, new_volume));
+        }
         new_shape[index_of_negative_1] = old_volume / new_volume;
     }
 
