@@ -724,7 +724,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                         }
                     } else {
                         std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                            device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                            device->extract_dst_noc_multicast_info(
                                 kernel->logical_coreranges(), core_type);
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
                             std::vector<CQDispatchWritePackedMulticastSubCmd>());
