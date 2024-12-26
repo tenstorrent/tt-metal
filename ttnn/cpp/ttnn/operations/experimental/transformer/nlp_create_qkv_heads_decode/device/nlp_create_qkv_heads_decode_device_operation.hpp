@@ -17,7 +17,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
     const uint32_t num_kv_heads,
     const uint32_t head_dim,
     const bool overlap_qk_coregrid,
-    std::optional<const uint32_t> batch_offset,
+    std::optional<const tt::tt_metal::Tensor> batch_offset,
     std::optional<const uint32_t> slice_size,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size);
@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     const uint32_t num_kv_heads,
     const uint32_t head_dim,
     const bool overlap_qk_coregrid,
-    std::optional<const uint32_t> batch_offset,
+    std::optional<const tt::tt_metal::Tensor> batch_offset,
     std::optional<const uint32_t> slice_size,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size);
@@ -44,7 +44,7 @@ struct NLPCreateHeadsDecodeDeviceOperation {
     const uint32_t num_kv_heads;
     const uint32_t head_dim;
     const bool overlap_qk_coregrid;
-    const std::optional<const uint32_t> batch_offset;
+    std::optional<const tt::tt_metal::Tensor> batch_offset;
     const std::optional<const uint32_t> slice_size;
     MemoryConfig output_mem_config;
 

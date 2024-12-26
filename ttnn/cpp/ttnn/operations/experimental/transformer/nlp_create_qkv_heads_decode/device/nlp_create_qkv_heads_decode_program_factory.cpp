@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
     const uint32_t num_kv_heads,
     const uint32_t head_dim,
     const bool overlap_qk_coregrid,
-    std::optional<const uint32_t> batch_offset,
+    std::optional<const tt::tt_metal::Tensor> batch_offset,
     std::optional<const uint32_t> slice_size,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size) {
@@ -204,7 +204,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     const uint32_t num_kv_heads,
     const uint32_t head_dim,
     const bool overlap_qk_coregrid,
-    std::optional<const uint32_t> batch_offset,
+    std::optional<const tt::tt_metal::Tensor> batch_offset,
     std::optional<const uint32_t> slice_size,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size) {
@@ -352,8 +352,24 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
         }
 
     uint32_t q_start_addr = q_base_addr;
-    const uint32_t device_batch_offset = batch_offset.value_or(0);
+    bool has_device_batch_offset = batch_offset.has_value();
+    // const uint32_t device_batch_offset = batch_offset.value_or(0);
 
+    // batch_offset is tensor with 1 value with shape (1,1) or (1)
+    // I want to get the value of the tensor
+    uint32_t device_batch_offset = 0;
+    if (has_device_batch_offset) {
+        // batch_offset is tensor with 1 value with shape (1,1) or (1)
+        // I want to get the value of the tensor
+        const tt::tt_metal::Tensor& tensor = batch_offset.value();
+        device_batch_offset = static_cast<uint32_t>(tensor.to_vector<int32_t>()[0]);
+        // device_batch_offset = batch_offset.value().buffer()->address();
+        // device_batch_offset = 0;
+    }
+
+    // if (has_device_batch_offset) {
+    //     q_start_addr += batch_offset.value() * sub_tile_line_bytes;
+    // }
     for (uint32_t i = 0; i < q_num_cores; ++i) {
         uint32_t device_batch_idx = i + device_batch_offset;
         uint32_t in_tile_offset_by_batch = device_batch_idx < 16
@@ -433,7 +449,10 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
                 uint32_t q_base_addr = input_tensors[0].buffer()->address();
                 uint32_t q_start_addr = q_base_addr;
 
-                uint32_t device_batch_offset = batch_offset.value_or(0);
+                const tt::tt_metal::Tensor& tensor = batch_offset.value();
+                uint32_t device_batch_offset = static_cast<uint32_t>(tensor.to_vector<int32_t>()[0]);
+                // // unit32_t device_batch_offset = tensor.at(0, 0);
+                // uint32_t device_batch_offset = 0;//batch_offset.value_or(0);
 
                 for (uint32_t i = 0; i < q_num_cores; ++i) {
                     uint32_t device_batch_idx = i + device_batch_offset;
