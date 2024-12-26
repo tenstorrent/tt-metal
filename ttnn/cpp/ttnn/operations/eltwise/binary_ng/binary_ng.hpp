@@ -7,6 +7,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
+#include "ttnn/operations/copy.hpp"
 
 namespace ttnn::operations::binary_ng {
 
