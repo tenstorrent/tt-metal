@@ -74,8 +74,14 @@ on:
           - eltwise.unary.clone.clone
           - eltwise.unary.elu.elu
           - eltwise.unary.elu.elu_pytorch2
+          - eltwise.unary.elu.elu_sharded
+          - eltwise.unary.erf.erf
+          - eltwise.unary.erf.erf_sharded
           - eltwise.unary.erfc.erfc
           - eltwise.unary.erfc.erfc_sharded
+          - eltwise.unary.erfinv.erfinv
+          - eltwise.unary.eqz.eqz
+          - eltwise.unary.eqz.eqz_sharded
           - eltwise.unary.exp.exp
           - eltwise.unary.exp.exp_sharded
           - eltwise.unary.exp.exp_forge
