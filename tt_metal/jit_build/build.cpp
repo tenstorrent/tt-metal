@@ -156,6 +156,10 @@ void JitBuildEnv::init(
             " ";
     }
 
+    if (tt::llrt::RunTimeOptions::get_instance().get_hw_cache_invalidation_enabled()) {
+        this->defines_ += "-DENABLE_HW_CACHE_INVALIDATION ";
+    }
+
     // Includes
     // TODO(pgk) this list is insane
     this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "tt_metal " +

@@ -124,7 +124,9 @@ void wait_for_workers(volatile CQDispatchCmd tt_l1_ptr* cmd) {
     uint8_t dispatch_message_offset = *((uint8_t*)&cmd->mcast.go_signal + offsetof(go_msg_t, dispatch_message_offset));
     volatile tt_l1_ptr uint32_t* worker_sem =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_base_addr + dispatch_message_offset);
-    while (wrap_gt(cmd->mcast.wait_count, *worker_sem));
+    while (wrap_gt(cmd->mcast.wait_count, *worker_sem)) {
+        invalidate_l1_cache();
+    }
 }
 
 template <bool flush_write = false>
@@ -160,6 +162,7 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     // Stall until the number of pages already acquired + the number that need to be acquired is greater
     // than the number available
     while (wrap_gt(num_pages_acquired + n, *sem_addr)) {
+        invalidate_l1_cache();
         update_worker_completion_count_on_dispatch_d();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
@@ -182,6 +185,7 @@ void process_go_signal_mcast_cmd() {
     // Wait for notification from dispatch_d, signalling that it's safe to send the go signal
     uint32_t& mcasts_sent = num_mcasts_sent[(cmd->mcast.wait_addr - worker_sem_base_addr) / L1_ALIGNMENT];
     while (wrap_ge(mcasts_sent, *sync_sem_addr)) {
+        invalidate_l1_cache();
         // Update dispatch_d with the latest num_workers
         update_worker_completion_count_on_dispatch_d();
     }
@@ -226,7 +230,9 @@ void process_dispatch_s_wait_cmd() {
     uint32_t index = (worker_sem_addr - worker_sem_base_addr) / L1_ALIGNMENT;
     volatile tt_l1_ptr uint32_t* worker_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr);
     // Wait for workers to complete
-    while (wrap_gt(cmd->wait.count, *worker_sem));
+    while (wrap_gt(cmd->wait.count, *worker_sem)) {
+        invalidate_l1_cache();
+    }
     // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before clearing the
     // counter. dispatch_d will clear it's own counter
     update_worker_completion_count_on_dispatch_d<true>();

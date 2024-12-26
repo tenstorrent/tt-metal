@@ -724,7 +724,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                         }
                     } else {
                         std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                            device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                            device->extract_dst_noc_multicast_info(
                                 kernel->logical_coreranges(), core_type);
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
                             std::vector<CQDispatchWritePackedMulticastSubCmd>());
@@ -1568,7 +1568,11 @@ void EnqueueProgramCommand::process() {
     uint32_t sync_count = 0;
     bool stall_first = reservation.first.need_sync;
     bool stall_before_program = false;
-    if (reservation.first.need_sync) {
+    if (!program.kernel_binary_always_stored_in_ringbuffer()) {
+        // Wait for all existing commands to run before writing out the kernel binary.
+        sync_count = this->expected_num_workers_completed;
+        stall_before_program = !stall_first;
+    } else if (reservation.first.need_sync) {
         // TODO: attempt to send RTA only without stalling.
         sync_count = reservation.first.sync_count;
         // Check if the launch message is the only thing preventing us from
@@ -1576,7 +1580,6 @@ void EnqueueProgramCommand::process() {
         // would also send the kernel binaries in this case, but the rest of the
         // code isn't set up for that.
         auto config_sizes = program.get_program_config_sizes();
-        config_sizes[config_sizes.size() - 2] = 0;
         config_sizes[config_sizes.size() - 1] = 0;
         const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> memory_reservation =
             this->config_buffer_mgr.reserve(config_sizes);
@@ -1619,9 +1622,9 @@ void EnqueueProgramCommand::process() {
     this->config_buffer_mgr.alloc(this->expected_num_workers_completed + num_workers);
     std::vector<ConfigBufferEntry>& kernel_config_addrs_raw = reservation.second;
 
-    // Remove launch buffers from config addrs, since they're not real cores.
+    // Remove launch buffer from config addrs, since it's not a real core.
     const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs{
-        kernel_config_addrs_raw.data(), kernel_config_addrs_raw.size() - 2};
+        kernel_config_addrs_raw.data(), kernel_config_addrs_raw.size() - 1};
 
     RecordProgramRun(program);
 
@@ -2011,7 +2014,7 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
     std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
     this->completion_queue_thread = std::move(completion_queue_thread);
     // Set the affinity of the completion queue reader.
-    set_device_thread_affinity(this->completion_queue_thread, device->completion_queue_reader_core);
+    set_device_thread_affinity(this->completion_queue_thread, device->get_completion_queue_reader_core());
 
     for (uint32_t i = 0; i < dispatch_constants::DISPATCH_MESSAGE_ENTRIES; i++) {
         this->expected_num_workers_completed[i] = 0;
@@ -3074,9 +3077,6 @@ void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
         // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
         // previous launch message.
         this->config_buffer_mgr[i].init_add_buffer(0, launch_msg_buffer_num_entries - 1);
-
-        // There's no ring buffer for active ethernet binaries, so keep track of them separately.
-        this->config_buffer_mgr[i].init_add_buffer(0, 1);
     }
 }
 

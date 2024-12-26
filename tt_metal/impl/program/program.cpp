@@ -337,7 +337,9 @@ detail::Program_::Program_() :
     }
 
     program_configs_.resize(programmable_core_count);
-    program_config_sizes_.resize(programmable_core_count + 2);
+    program_config_sizes_.resize(programmable_core_count + 1);
+    // Always need one launch buffer msg for a program.
+    program_config_sizes_[programmable_core_count] = 1;
 }
 
 Program::Program() : pimpl_(std::make_unique<detail::Program_>()) {}
@@ -1017,7 +1019,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
         if (semaphore.core_type() == CoreType::WORKER) {
             uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
             std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                device->extract_dst_noc_multicast_info(
                     semaphore.core_range_set().ranges(), CoreType::WORKER);
             transfer_info transfer_info = {
                 .dst_base_addr = semaphore.offset(),
@@ -1109,7 +1111,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
             // TODO: add a bit in the hal that says if this core type is unicast/multicast
             if (core_type == CoreType::WORKER) {
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                    device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                    device->extract_dst_noc_multicast_info(
                         kernel_group.core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
                 for (int dispatch_class = 0; dispatch_class < kernel_group.kernel_ids.size(); dispatch_class++) {
@@ -1502,9 +1504,6 @@ void detail::Program_::finalize(Device *device) {
                  offset, max_size, magic_enum::enum_name(programmable_core_type));
     }
 
-    this->get_program_config_size(hal.get_programmable_core_type_count()) = runs_on_noc_multicast_only_cores();
-    this->get_program_config_size(hal.get_programmable_core_type_count() + 1) = runs_on_noc_unicast_only_cores();
-
     // The sem offsets cross programmable_core_types so must be set after the loop above
     this->set_launch_msg_sem_offsets();
 
@@ -1652,7 +1651,7 @@ uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_c
     // Semaphores across sub-devices are expected to have the same address
     TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = sub_device_ids[0].to_index();
-    uint32_t base_addr = device->using_fast_dispatch
+    uint32_t base_addr = device->using_fast_dispatch()
                              ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(
                                    programmable_core_type)
                              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
@@ -1674,7 +1673,7 @@ uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_co
     // Addresses are not the same across sub-devices
     TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = sub_device_ids[0].to_index();
-    uint32_t base_addr = device->using_fast_dispatch
+    uint32_t base_addr = device->using_fast_dispatch()
                              ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(
                                    programmable_core_type)
                              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);

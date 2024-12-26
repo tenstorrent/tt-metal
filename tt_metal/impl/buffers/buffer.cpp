@@ -335,7 +335,7 @@ void Buffer::deallocate_impl() {
         return;
     }
 
-    if (device_->initialized_ && size_ != 0) {
+    if (device_->is_initialized() && size_ != 0) {
         // address_ is only modified from this thread, no sync required
         detail::DeallocateBuffer(this);
     }
