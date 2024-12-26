@@ -36,7 +36,7 @@ void MAIN {
         cb_push_back(tt::CBIndex::c_16, 1);
     }
 
-    // CONFIG REGISTER DPRINT
+    // UNPACK CONFIG REGISTER DPRINT
 
     // GRAYSKULL
     //dprint_tensix_unpack_tile_descriptor_grayskull();
@@ -47,6 +47,11 @@ void MAIN {
     //dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
     //dprint_tensix_unpack_config_wormhole_or_blackhole();
     //dprint_tensix_alu_config_wormhole_or_blackhole();
+
+    // PACK CONFIG REGISTER DPRINT
+
+    // WORMHOLE
+    // dprint_tensix_pack_config_wormhole();
 
     release_dst();
 }
