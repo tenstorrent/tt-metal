@@ -22,10 +22,6 @@ static Tensor reduce_impl(
     float scalar,
     bool reshape) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    if (not keepdim) {
-        TT_THROW("keepdim=False is not supported");
-    }
-
     auto input_shape = input_tensor_arg.get_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
@@ -58,48 +54,46 @@ static Tensor reduce_impl(
             rank);
     }
 
-    if (dim.size() == 1 && rank == 4) {
-        if (dim[0] == rank - 3) {
-            auto out_shape = input_tensor_arg.get_legacy_shape();
-            out_shape[1] = 1;
-
-            Tensor output = ttnn::transpose(input_tensor_arg, 1, -2, memory_config);
-            output = reduce_impl<reduce_type>(output, 2, keepdim, memory_config, compute_kernel_config, scalar, false);
-            output = ttnn::transpose(output, 1, -2, memory_config);
-            return AutoFormat::format_output_tensor(output, out_shape, input_tensor_arg.device(), Layout::TILE);
-        } else if (dim[0] == 0) {
-            auto out_shape = input_tensor_arg.get_legacy_shape();
-            out_shape[0] = 1;
-
-            Tensor output = ttnn::transpose(input_tensor_arg, 0, -2, memory_config);
-            output = reduce_impl<reduce_type>(output, 2, keepdim, memory_config, compute_kernel_config, scalar, false);
-            output = ttnn::transpose(output, 0, -2, memory_config);
-            return AutoFormat::format_output_tensor(output, out_shape, input_tensor_arg.device(), Layout::TILE);
-        }
-    }
-
     std::sort(dim.begin(), dim.end());
 
     ttnn::SmallVector<uint32_t> output_shape;
-    ttnn::SmallVector<uint32_t> padded_output_shape;
     for (int axis = 0; axis < input_shape.size(); axis++) {
         if (std::find(dim.begin(), dim.end(), axis) != dim.end()) {
             if (keepdim) {
                 output_shape.push_back(1);
-                padded_output_shape.push_back(axis >= rank - 2 ? ttnn::TILE_SIZE : 1);
             }
         } else {
             // Get the shape for the output tensor
             output_shape.push_back(input_shape[axis]);
-            // Get the padded shape for the output tensor
-            padded_output_shape.push_back(input_shape.value[axis]);
+        }
+    }
+
+    if (dim.size() == 1 && (rank == 3 || rank == 4)) {
+        if (dim[0] == 1 && rank == 4) {
+            Tensor output = ttnn::transpose(input_tensor_arg, 1, -2, memory_config);
+            output = reduce_impl<reduce_type>(
+                output, 2, /*keepdim=*/true, memory_config, compute_kernel_config, scalar, /*reshape=*/true);
+            output = ttnn::transpose(output, 1, -2, memory_config);
+            if (reshape) {
+                output = ttnn::reshape(output, ttnn::Shape{output_shape});
+            }
+            return output;
+        } else if (dim[0] == 0) {
+            Tensor output = ttnn::transpose(input_tensor_arg, 0, -2, memory_config);
+            output = reduce_impl<reduce_type>(
+                output, -2, /*keepdim=*/true, memory_config, compute_kernel_config, scalar, /*reshape=*/true);
+            output = ttnn::transpose(output, 0, -2, memory_config);
+            if (reshape) {
+                output = ttnn::reshape(output, ttnn::Shape{output_shape});
+            }
+            return output;
         }
     }
 
     auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_arg);
 
     Tensor output_tensor;
-    if (!dim_arg.has_value()) {
+    if (!dim_arg.has_value() || dim.size() == rank) {
         if constexpr (
             reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
             output_tensor = input_tensor;
@@ -199,7 +193,7 @@ static Tensor reduce_impl(
     }
 
     if (reshape) {
-        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{output_shape, padded_output_shape});
+        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{output_shape});
     }
 
     return output_tensor;

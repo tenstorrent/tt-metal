@@ -1,6 +1,6 @@
 # LLMs in TT-NN
 
-Authors: Mark O'Connor, Djordje Ivanovic, Jack (Xun) Cai, Kartik Paigwar, Johanna Rock, Stuti Raizada
+Authors: Mark O'Connor, Djordje Ivanovic, Jack (Xun) Cai, Kartik Paigwar, Johanna Rock, Stuti Raizada, Ammar Vora, Colman Glagovich
 
 ## Contents
 - [LLMs in TT-NN](#llms-in-tt-nn)
@@ -54,8 +54,87 @@ Other useful resources:
 ## 2. Modules
 ### 2.1 Embedding
 ### 2.2 RoPE
-  - Iterative update system
-  - When to use our fused op
+
+For added performance, our implementation of Llama uses a fused operation to apply the Rotary Position Embeddings (RoPE), which can be accessed via `ttnn.experimental.rotary_embedding_llama` API. In the Attention module, this API is called twice, one for the queries and one for the keys respectively.
+
+Here is an example of how the fused RoPE op is used in the attention module:
+
+```py
+q_heads = ttnn.experimental.rotary_embedding_llama(
+    q_heads_pre_rot,
+    cos_matrix,
+    sin_matrix,
+    transformation_matrix,
+    is_decode_mode="False"
+)
+
+k_heads = ttnn.experimental.rotary_embedding_llama(
+    k_heads_pre_rot,
+    cos_matrix,
+    sin_matrix,
+    transformation_matrix,
+    is_decode_mode="False"
+)
+```
+
+#### Setting up inputs to RoPE
+
+The fused operation uses a different parallelization scheme internally depending on of the model is in *prefill* or *decode* mode. Across these modes, the shapes and memory configs of the inputs vary and this table summararizes them below:
+
+|     is_decode_mode    |                         True                        |                        False                       |
+|:---------------------:|:---------------------------------------------------:|:--------------------------------------------------:|
+|         Input         | [1, batch, n_heads, head_dim], <br>HEIGHT_SHARDED in L1 | [1, n_heads, seq_len, head_dim],  <br>INTERLEAVED in L1 |
+|     Cos/Sin Matrix    |    [1, batch, 1, head_dim],  <br>HEIGHT_SHARDED in L1    |    [1, 1, seq_len, head_dim],  <br>INTERLEAVED in L1    |
+| Transformation Matrix |     [1, 1, TH * batch, TW],  <br>HEIGHT_SHARDED in L1    |          [1, 1, TH, TW],  <br>INTERLEAVED in L1         |
+
+*Note: (TH, TW) = (TILE_HEIGHT, TILE_WIDTH)*
+
+
+#### Decode mode specifics
+The cos/sin matrices, are generated in two slightly different ways, depending on the mode of operation. For *prefill* mode, the cos/sin matrices are computed once at intialization using the *prefill* sequence length, and then passed into the RoPE op. However, in *decode* mode, since the position index of each user is updated from token-to-token, the cos/sin matrices need to be updated across iterations. Here, we leverage our `TtLlamaRotarySetup` module, that can be used at each decode iteration to get the corresponding cos/sin matrices.
+
+This is an example of how `TtLlamaRotarySetup` can be used in decode mode:
+```py
+from llama_rope import TtLlamaRotarySetup
+
+# Step 1: Create the setup object
+rope_setup_decode = TtLlamaRotarySetup(
+    mesh_device,
+    head_dim,
+    max_seq_len,
+    rope_theta,
+    use_scaled_rope
+)
+
+transformation_mats_decode = rope_setup_decode.get_trans_mats()
+
+
+# Step 2: Get user position ids
+# For example, batch number of users, each with different position ids
+position_ids = torch.arange(batch)
+
+
+# Step 3: Retreive the relevant cos/sin matrices
+cos_sin_matrices = rope_setup_decode.get_rot_mats(position_ids)
+cos_matrix, sin_matrix = cos_sin_matrices
+
+
+# Step 4: Perform the RoPE operation
+out = ttnn.experimental.rotary_embedding_llama(
+    x,  # example input
+    cos_matrix
+    sin_matrix,
+    transformation_mats_decode,
+    is_decode_mode=True
+)
+
+```
+<br>
+
+#### Quick note about the transformation matrix
+Due to the sparse nature of the transformation matrix, the fused RoPE op takes as input a tile-sized transformation matrix, and then reuses that tile across all subsequent operations. In *decode* mode, this matrix is replicated *batch* times, and then sharded over *batch* number of cores. As a result, each core receives a single, tile-sized transformation matrix. In contrast, the *prefill* mode implementation requires only a single tile-sized transformation matrix, and then distributes it across all the cores internally.
+
+
 ### 2.3 Norm
 
 Normalization is a critical operation in Large Language Models (LLMs), ensuring stable training and efficient inference. Two widely adopted normalization techniques in modern LLMs, **LayerNorm** and **RMSNorm**, are fully supported in TT-NN.
@@ -451,6 +530,284 @@ TLDR -- here are some useful things about the attention ops to keep in mind that
 
 ### 2.5 MLP
 
+The MLP for the Llama models is implemented in the the `TtLlamaMLP` module class. The tests for this module are available in the `test_llama_mlp.py` file.
+
+As an overview, the MLP performs the following operations on an input `x`:
+```
+w1_out = FF1(x)
+w3_out = FF3(x)
+w2_in = SiLU(w1_out) * w3_out
+y = FF2(w2_in)
+```
+where FF1, FF2, and FF3 are linear transformations (matmuls) with weights `w1`, `w2`, and `w3` respectively. Since FF1 and FF3 share the same inputs, their optimizations are shared as well.
+
+
+Let's dive into our implementation of MLP, and discuss what makes it performant across different WH systems.
+
+#### 0. Setup
+When used in the model by the `TtLlamaDecoder` module class, the MLP class is initialized at the start, where the weights for `w1`, `w2`, and `w3` are loaded and fractured across devices in specific schemes, as outlined in the [Multi-Device](#33-multi-device) section. Specifically, in n300 and T3000 systems the weights are 1D column fractured, and in TG systems the weights are 2D fractured.
+
+```py
+self.feed_forward = TtLlamaMLP(
+    mesh_device=mesh_device,
+    args=args,
+    state_dict=state_dict,
+    weight_cache_path=weight_cache_path,
+    layer_num=layer_num,
+    dtype=dtype,
+    model_config=self.model_config,
+)
+```
+
+#### 1. Inputs
+Then, at runtime, the `forward` function of `TtLlamaMLP` is called with a mode (*'prefill'* or *'decode'*), with inputs that are replicated across devices, for all WH system configurations. Note, in the actual model, the input `ff_in` is the output of the `norm` step prior to MLP (See norm section below).
+
+**Decode mode**
+
+In *decode* mode, the inputs have a maximum batch of 32, where each user only has a single token. As such, the inputs in *decode* mode are considered to be much smaller compared to in *prefill* mode, where the sequence length can be up to 128k. To make our subsequent matmul operations faster in *decode* mode, we can shard the input across L1, where they can be processed by the matmul, without any extra time for loading. The specific core grid to shard on, `mlp_core_grid` is chosen to be the lowest number of cores that the input can be width sharded on, while maintaining tile size. This is so we can minimize any communication delay over the NOC, when moving around the activations during the matmul.
+
+
+```py
+# ff_in shape: [1, 1, m, k] => [1, 1, batch, dim]
+ff_in_memory_config = ttnn.create_sharded_memory_config(
+    (m, k // mlp_core_grid.num_cores),
+    mlp_core_grid,
+    ttnn.ShardStrategy.WIDTH,
+    ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
+```
+
+**Prefill mode**
+
+As mentioned before, the input in prefill mode can be very large, and may not fit in the available L1 space. As such, the inputs are stored in DRAM.
+
+```py
+# ff_in shape: [1, 1, m, k] => [1, 1, seq_len, dim]
+ff_in_memory_config = ttnn.DRAM_MEMORY_CONFIG
+```
+
+Note, similar to the Attention module, the matmul operation can exceed memory if the inputs are too large, and as a workaround, we push part of the sequence length into the batch dimension.
+```py
+# Reshape input to to fit on device and parallelize computation
+if seq_len >= 1024:
+    ff_in = ttnn.reshape(ff_in, [1, seq_len // 1024, 1024, -1])
+```
+
+
+
+#### 2. Setting up program configs for the matmuls
+Depending on the mode of operation, the `forward` function of `TtLlamaMLP` instantiates different program configs for the matmuls of FF1/FF3, and FF2.
+
+
+**Decode mode**
+
+Since the weights are much larger than the activations, and the weights must be loaded from DRAM, these matmul operations are DRAM-bound. This means that loading the weights from DRAM is a bottleneck, rather than the computation itself. As such, we use DRAM sharded matmuls in decode mode, which are more performant than regular mamtuls (See section _ for details).
+
+```py
+_, _, m, k = ff_in.shape
+n = hidden_dim // num_devices # Since w1/w3 are fractured on outer dim
+pc1 = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    in0_block_w=math.ceil(k / (tile_size * ff1_num_cores)),
+    per_core_M=math.ceil(m / tile_size),
+    per_core_N=math.ceil(n / (tile_size * ff1_num_cores)),
+    fused_activation=None,
+)
+
+k, n = n, k  # Since FF1 is up projection and FF2 is down projection
+pc2 = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    in0_block_w=math.ceil(k / (tile_size * ff2_num_cores)),
+    per_core_M=math.ceil(m / tile_size),
+    per_core_N=math.ceil(n / (tile_size * ff2_num_cores)),
+    fused_activation=None,
+)
+```
+
+**Prefill mode**
+
+In prefill mode, since the activation and weights are similarly shaped, loading activations and weights from DRAM is no longer a bottleneck. Instead, for these compute bound matmul operations, we utilize a 2D matmul.
+
+The specific paramers for the program configs are chosen to maximize matmul performance, based on the shapes of the inputs. See section _ for more details.
+
+```py
+# TODO: Move this function to a different section and just refer to it
+def matmul_config(
+    m: int,
+    k: int,
+    n: int,
+    grid_size: Tuple[int, int],
+    in0_block_w: int = None,
+    fuse_batch: bool = False,
+    fused_activation=None,
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    per_core_M = math.ceil(m / (tile_size * grid_size[1]))
+    per_core_N = math.ceil(n / (tile_size * grid_size[0]))
+
+    out_subblock_h = 1
+    out_subblock_w = get_out_subblock_w(per_core_N, out_subblock_h)
+
+    if in0_block_w is None:
+        in0_block_w = min(4, max(1, k // (tile_size * grid_size[0])))
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=fuse_batch,
+    )
+
+
+_, _, m, k = ff_in.shape
+n = hidden_dim // num_devices
+pc1 = matmul_config(
+    m=m, k=k, n=n, grid_size=(8, 8)
+)
+
+k, n = n, k  # Since FF1 is up projection and FF2 is down projection
+pc1 = matmul_config(
+    m=m, k=k, n=n, grid_size=(8, 8)
+)
+```
+
+
+#### 3. FF1/FF3 matmul
+The first set of operations in the MLP are:
+```py
+w1_out = FF1(x)
+w3_out = FF3(x)
+```
+Based on the program configs we computed beforehand, we perform the FF1/FF3 matmuls, making sure that the ouputs are L1 sharded in in decode mode, and interleaved in DRAM if in prefill mode. For the `compute_kernel_config`, we use `ttnn.MathFidelity.HiFi2` to retain accuracy while still being performant. Using `ttnn.MathFidelity.HiFi4` instead, would mean that this matmul would become compute bound.
+
+```py
+compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+w1_out = ttnn.linear(
+    ff_in,
+    w1,
+    compute_kernel_config=args.compute_kernel_config_hifi2,
+    core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
+    dtype=ttnn.bfloat16,
+    program_config=pc_1,
+    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+)
+
+w3_out = ttnn.linear(
+    ff_in,
+    w3,
+    compute_kernel_config=args.compute_kernel_config_hifi2,
+    core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
+    dtype=ttnn.bfloat16,
+    program_config=pc_1,
+    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+)
+```
+
+#### 3.1 FF1/FF3 Matmul with 2D Weight Fracturing
+
+In the case of TG systems, where we have access to a 2D device mesh, we can leverage 2D weight fracturing. For a weight tensor with shape `[1, 1, K, N]`, using 2D weight fracturing on a `(8, 4)` device mesh, the resulting shape on each device would be: `[1, 1, K / 4, N / 8]`. In other words, the inner dimension (K) of the matmul is spread out across 4 devices, and to complete the entire matmul operation, a reduction step across the partials is necessary. We do this using an all-reduce operation along the 4 devices in `cluster_axis=1` of the device mesh.
+```py
+  w1_out = tt_all_reduce(
+      w1_out,
+      self.mesh_device,
+      cluster_axis=1,
+      num_links=2,
+      sharded=True if mode == "decode" else False,
+      memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+  )
+  w3_out = tt_all_reduce(
+      w3_out,
+      self.mesh_device,
+      cluster_axis=1,
+      num_links=2,
+      sharded=True if mode == "decode" else False,
+      memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+  )
+```
+
+#### 4. Multiply + fused SiLU activation
+
+The output of the FF1/FF3 matmuls are column fractured tensors (the extra all-reduce operation for TG systems ensures this). The next operation is:
+```py
+w2_in = SiLU(w1_out) * w3_out
+```
+In ttnn, we have access to binary operations that can apply activations to any of the inputs, in a fused manner, leading to better performance as the inputs are only getting loaded/processed once. As such, the fused SiLU operation with the element-wise multiplication can be performed as follows:
+```py
+w2_in = ttnn.multiply(
+    w1_out,
+    w3_out,
+    memory_config=(
+        self.model_config["SHARDED_MLP2_INPUT_MEMCFG"] if TG else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    )
+    if mode == "decode"
+    else ttnn.DRAM_MEMORY_CONFIG,
+    input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+    dtype=ttnn.bfloat8_b,
+)
+```
+
+Following our pattern mentioned before, the outputs are L1 sharded in `decode` mode and DRAM interleaved in `prefill` mode.
+
+#### 5. FF2 Matmul
+The last computation in MLP is:
+```py
+y = FF2(w2_in)
+```
+FF2 is a row-parallel matmul, meaning that that the weights are fractured across devices in the inner dim. The inputs of FF2, produced by FF1/FF3, are also fractured across devices in the same dimension and as a result, FF2 produces partial outputs across all devices.
+
+Here's what the call for the FF2 matmul looks like. Note, that once the matmul operations are completed, we can undo the reshape operation we performed on the inputs of MLP to fit the matmuls on device in `prefill`.
+```py
+w2_out = ttnn.linear(
+    w2_in,
+    self.w2,
+    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+    core_grid=ttnn.CoreGrid(y=1, x=8) if not pc_2 else None,
+    dtype=ttnn.bfloat16,
+    program_config=pc_2,
+    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+)
+
+# Undo the reshape operation used to fit the matmul on device
+if seq_len >= 1024:  # Reshape back to intended shape
+    w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
+```
+
+5.1 Accumulating the partial outputs of FF2
+
+Since the output of FF2 is the correct shape, but only a partial on each device. The output of the MLP module is required to be fractured, where each device has fully accumulated the inner dim of the matmul, but only has a fraction of the outer dim. There are two different cases to handle this, depending on if the WH system has a 1D or 2D device mesh.
+
+1. 1D Device Mesh (n300, T3000): reduce-scatter operation across all devices, resulting in outputs fractued in the outer dim.
+    ```py
+    w2_out_reduced = ttnn.reduce_scatter(
+        w2_out,
+        scatter_dim=3,
+        math_op=ttnn.ReduceType.Sum,
+        num_links=1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG if mode == "prefill" else ttnn.L1_MEMORY_CONFIG,
+    )
+    ```
+2. 2D Device Mesh (TG): all-reduce operation along the same cluster axis as which the inner dimension is fractured on. The FF2 matmul inner dim is fractured across cluster axis 0 (row-parallel across 8 device), and the outer dim is fractured across cluster axis 1 (4 devices). Then an all-reduce performed on cluster axis 0 will accumulate the partials across the inner dim of the matmul and replicate them along all the devices in that axis, while still keeping them fractured across cluster axis 1 (4 devices).
+    ```py
+    w2_out_reduced = tt_all_reduce(
+        w2_out,
+        self.mesh_device,
+        cluster_axis=0,
+        num_links=2,
+        dim=0,
+        memory_config=(self.model_config["FF2_OUT_GATHERED_MEMCFG"],
+        sharded=(mode == "decode"),
+    )
+    ```
+
 ### 2.6 Decoder
 <div align="center">
 <img src="images/2.6-decoder.png" alt="Decoder Diagram" title="Decoder Title" width="350" height="400">
@@ -667,6 +1024,50 @@ def forward(
 
 ## 3. Features
 ### 3.1 Generative Decoding
+
+Almost every LLM generates text in the same manner: Given a prompt from the user, the LLM predicts the next token. Then, the LLM takes that new token and uses it as context to predict the following token. This process repeats until the LLM generates a token that indicates the end of the sequence, or until the user decides to stop the generation. The process is called "autoregressive generation" because each new token is used to predict the next token.
+
+#### Model Inputs and Outputs
+Inputs to the model for generative decoding are generally:
+- tokens: produced by the tokenizer
+- position ids: the position of the tokens in the sequence
+- KV cache: an inference optimization that caches intermediate values
+
+In the model, tokens are embedded from the vocabulary space to the embedding space. Position ids are necessary for updating the KV cache and for positional embeddings like RoPE.
+
+The model outputs:
+- logits for the next token
+- an updated KV cache
+
+The logits are unnormalized probabilities over the vocabulary. Given these probabilities, the sampler must decide which of these tokens in the vocabulary will be chosen. There are a few sampling methods that are commonly used to pick the next token:
+- Greedy decoding (argmax of the logits, picks the most likely next token)
+- Top-p/top-k sampling (restricts the logits according to p and k values, then samples according to the remaining probabilities)
+
+#### KV cache
+The KV cache is an inference optimization. It allows us to cache some intermediate values during the first inference step which are reused in later steps.
+On the first inference step, the model processes the full prompt and caches the K and V projections for each layer. Subsequent inference steps compute a Q, K, V projection only for the new token, then use the cached K and V projections in attention. Therefore the first step (prefill) creates the KV cache and subsequent steps (decode) use and update the cache.
+
+The size of the KV cache depends on the batch size and sequence length. Since accelerators have finite memory, it can be necessary to tradeoff batch size and sequence length to allow the KV cache to fit in memory.
+
+#### Batching
+LLMs use batching to process multiple sequences in parallel. There are a few reasons why batching is useful:
+- Real-world LLM services need to handle multiple concurrent requests.
+- LLM inference is bound by time to read model weights from DRAM. Batching allows model weight reuse across multiple sequences.
+- Total throughput of the system increases with batch size.
+
+However, there are tradeoffs with batching. In decode mode, latency scales sublinearly with batch size up to a point. This is because decode is bound by time to read model weights from DRAM rather than time to compute. If the batch grows very large, decode mode will eventually become compute bound, causing latency to scale linearly with batch size. In prefill mode, latency scales linearly with batch size because prefill is compute bound.
+
+It is typical to use different batch sizes for different use cases, depending on the goal of the system.
+
+#### Performance Metrics
+**Time to first token (TTFT)** measures the latency to generate the first token of the sequence. This is the time to prefill a prompt and generate the first token. It is a measure of interactivity.
+
+**Total throughput (tokens per second)** tells us the total number of tokens that the model can generate per second. `total throughput = batch size / decode step latency`. Total throughput is important for cost-sensitive systems or offline processing, where interactivity is less important than throughput. Generally, increasing batch size will increase total throughput.
+
+**User throughput (tokens per second per user)** is calculated as `user throughput = 1 / decode step latency`. User throughput tells us how interactive the model is, and tells us how fast the generation is for a single user. Generally, decreasing batch size will increase user throughput.
+
+Note that each of these metrics change with batch size and sequence length. When reporting TTFT, total throughput, and user throughput, the batch size and sequence length must be specified.
+
 
 ### 3.2 Prefill and Decode
 
@@ -976,9 +1377,56 @@ For our [Llama3 family of models](../../models/demos/llama3) we are using the fo
 
 
 ### 3.4 Continuous Batching
-  - quick intro and how it is implemented in demos.
+Continuous batching is a serving optimization. To describe continuous batching, it is useful to first discuss LLM serving without continuous batching.
+
+Without continuous batching, an LLM service waits for `batch_size` requests to come in. The service then prefills each request. Then, the service decodes the batched requests token by token. Once all users in the batch finish generation, the service accepts new requests. This is suboptimal because 1) some requests might end generation early, so 2) some slots in the batch are not doing useful computation, while 3) new requests are waiting.
+
+In contrast, continuous batching allows the service to process new requests as soon as there is a free slot in the batch. The pseudo-code for this algorithm is shown below.
+
+```python
+while True:
+  if not is_full(current_batch) and not prefill_q.empty():
+    model_prefill(prefill_q.pop())
+  elif not is_empty(current_batch):
+    model_decode(current_batch)
+  else:
+    break
+```
+
+![alt text](images/continuous_batching.png)
+The above image from anyscale (https://www.anyscale.com/blog/continuous-batching-llm-inference) shows how continuous batching inserts prefill sequences into the batch as soon as there is a free slot.
+
+Continuous batching improves TTFT by reducing wait times for incoming users. It also increases total throughput by keeping the decode batch full of useful work.
+
+Continuous batching is an LLM serving optimization but it requires some support in the model. The model has to support single user prefill so that when a slot is open, the model can prefill a new request into a specific slot of the batch. The model also has to support batched decode where position ids can be different for each user in the batch, to avoid context contamination.
+Implementing continuous batching requires that the serving code track data for each slot of the batch. An example of our continuous batching demo can be found [here](../../models/demos/t3000/llama2_70b/demo/demo_continuous_batching.py). In production deployment, vLLM handles continuous batching for the LLM service.
+
 ### 3.5 vLLM Integration
-  - Our vLLM repo and what's needed to integrate with it.
+
+#### Overview
+vLLM is an [open-source LLM serving library](https://github.com/vllm-project/vllm). We use vLLM to serve our models in production because of the features it enables. On the serving side, vLLM supports continuous batching and [paged attention](https://arxiv.org/pdf/2309.06180). In addition, vLLM provides an OpenAI-compatible server which is useful for deployment.
+
+Tenstorrent maintains a [fork of vLLM](https://github.com/tenstorrent/vllm/tree/dev) for serving models on Tenstorrent hardware. The [README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md) has instructions for setting up the environment.
+
+#### Implementation Requirements
+In order to add vLLM support to a new model, the model must conform to a certain interface. An example of the interface is the [Llama2-70b generation code](../../models/demos/t3000/llama2_70b/tt/llama_generation.py), which implements `prefill_forward`, `decode_forward`, and `initialize_vllm_model`.
+Beyond implementing the functionality needed for continuous batching, a model must also implement paged attention. For an example, see [Llama2-70b attention](../../models/demos/t3000/llama2_70b/tt/llama_attention_optimized.py).
+
+#### vLLM modifications
+On the vLLM side there may be additional changes needed to support the new model.
+
+- Modify [`tt_loader.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/model_executor/model_loader/tt_loader.py) if the model requires a different initialization.
+- Modify [`tt_model_runner.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) if it is missing functionality for the new model.
+
+#### Testing
+Finally, test the new model through vLLM. Register the new model as seen in [`offline_inference_tt.py`](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py).
+
+```python
+from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
+ModelRegistry.register_model("TTLlamaForCausalLM", TtLlamaModelForGeneration)
+```
+and run `offline_inference_tt.py` to generate outputs with vLLM.
+
 ## 4. Best Practices and Optimizations
 ### 4.1 Tracing
 Reference [Metal Trace guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for background on tracing. Tracing allows you to record a single pass of your model and store the list of commands and buffers used on-device. You can then execute that trace in a single command with no additional work performed on the host. This eliminates overhead in stages 1-3, you are still responsible for transferring any data needed to and from the device, but host-device transfer of commands is eliminated.
@@ -1004,13 +1452,172 @@ For performance work async mode should always be enabled. For debugging it can b
 
 ### 4.3 Multiple CQs
   - how to feed back output to input and read output asyncronously
+
 ### 4.4 Op Configs
-  - Writing correct program configs and shard specs
-  - Deciding how many cores to run an op on
-    - Why did we use 16 cores for MLP
-  - Which matmul to use when @Colman Glagovich
-    - 1d, 2d, dram-sharded, ...
-  - Implicitly padding weights in program config for matmuls
+
+Program configs and memory configs are your greatest levers for performance. As a prerequisite for this section, you should understand [Tensor and Memory Layouts](../tensor_layouts/tensor_layouts.md) and the concepts in [ViT-TTNN](../VIT-TTNN/vit.md).
+
+Most `ttnn` operations have arguments for `program_config` and `memory_config`. You should optimize these for best performance.
+`memory_config` is used to determine the layout of the output tensor.
+`program_config` configures the op with some hyperparameters like block size, core grid, etc. You should be intentional when setting up `memory_config` and `program_config`. Not only should you make each particular op execute fast, but ideally each op in the model should produce its output in a layout that is most efficient for the next op.
+
+Let's look at `ttnn.matmul` as an example.
+```python
+output = ttnn.linear(
+  act,
+  weight,
+  compute_kernel_config=compute_kernel_config,
+  dtype=ttnn.bfloat16,
+  program_config=program_config,
+  memory_config=memory_config,
+)
+```
+When you don't pass memory configs or program configs the operation will choose default values. These defaults are often sub-optimal. `memory_config` typically defaults to a DRAM interleaved configuration, while `program_config` defaults to something reasonable but still sub-optimal.
+See [Matrix Engine](../matrix_engine/matrix_engine.md) for background on `compute_kernel_config`.
+
+#### Memory Configs
+For the LLM context, memory configs are not as important in prefill mode, where activations are large (due to the long sequence lengths) and thus should generally be DRAM interleaved (otherwise wouldn't fit on L1). In prefill mode, each op should consume DRAM interleaved inputs and produce DRAM interleaved output(s).
+
+Memory configs are most important in decode mode. For some operation like `ttnn.matmul`, both the activation and the output will be sharded according to their memory configs. Decode mode activations are of shape `[batch_size, hidden_size]` and should be width-sharded in L1 (sharding the `hidden_size` dimension). By keeping activations and outputs width-sharded in L1 we reduce DRAM traffic and get better performance. The Llama3 codebase has examples of how to create a width-sharded memory config (see [Llama3 model config](../../models/demos/llama3/tt/model_config.py)).
+
+```python
+input_memcfg = ttnn.create_sharded_memory_config(
+  (
+    batch_size, # The HEIGHT of a single shard
+    hidden_dim // core_grid.num_cores, # The WIDTH of a single shard
+  ),
+  core_grid, # Core grid to shard over (e.g. 8x2)
+  ttnn.ShardStrategy.WIDTH, # WIDTH sharding (as opposed to HEIGHT or BLOCK)
+  ttnn.ShardOrientation.ROW_MAJOR, # Shards are laid out in a row-major order over the core grid
+  use_height_and_width_as_shard_shape=True,
+)
+```
+Now that we know activations should be width-sharded, the only design decision to make is the `core_grid` on which to shard over. This is where you pay attention to 1) any constraints that an op might have on the input core grid, 2) how the input core grid affects the speed of the op, and 3) how the input core grid interplays with the output core grid.
+
+There are some cases where you don't need to create a specific sharded memory config. In these cases, you can instead pass one of the following:
+1. `ttnn.DRAM_MEMORY_CONFIG` when you just want DRAM interleaved.
+2. `ttnn.L1_MEMORY_CONFIG` when you want L1 interleaved.
+3. `ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG` when you want width-sharded and the op can infer the core grid and shard shape.
+
+As always, you should try running your `ttnn` op in a unit test with whichever settings you provide. You may find that the op produces incorrect outputs because it's missing some validation or different shard specs are used between input/output and the op itself (as TT-Metal matures, the sharding logic will get better at detecting these edge cases). You may also find that your memory config is not optimal and you can improve performance with a different configuration.
+
+Be careful when your memory config creates shards that require padding (i.e, the shard shape does not divide evenly into 32x32 tiles). Padded shards and padded ops are under active development and can be sources of bugs. When your memory config requires padding, you probably want to instead find a core grid which divides evenly into the tensor shape.
+
+#### Program Configs and Picking the Right Matmul
+Each `ttnn` operation has its own unique program config class. In general, program configs configure the op with hyperparameters that affects their functionality and performance. There are too many ops and program configs to cover in detail. We will focus on `ttnn.matmul` since it has multiple variants and it usually requires the most care.
+
+Picking a matmul variant is a key decision in optimizing a model. The choice depends on the shapes of the inputs and outputs and how the matmul fits into the rest of the model. You choose a variant by providing a specific `program_config` to `ttnn.matmul`. The following presents three matmul variants that are commonly used in LLMs.
+
+##### Matmul 2D
+Matmul 2D gets its name because it parallelizes an `(M x K) @ (K x N)` matmul over the M and N dimensions. It is useful to have this 2D parallelization when M and N are large (usually >= 256). Rule of thumb: use matmul 2D for all matmuls in prefill mode. Generally, inputs and output to matmul 2D will be interleaved in DRAM because these matmuls should be compute bound rather than memory bound and the inputs may be too large to fit in L1. NOTE: the weights can be DRAM sharded and still work with matmul 2D.
+
+The following is a description of the program config for matmul 2D.
+Given your input tensors of shape `(M x K)` and `(K x N)` and a core grid of shape `(cores_x, cores_y)`:
+
+```python
+matmul_2d_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+  compute_with_storage_grid_size=(cores_x, cores_y),
+  in0_block_w=1,
+  out_subblock_h=1, # Must be divisible by per_core_M
+  out_subblock_w=1, # Must be divisible by per_core_N
+  per_core_M=math.ceil(M / 32 / cores_y),  # M / TILE_HEIGHT / Grid_Size
+  per_core_N=math.ceil(N / 32 / cores_x),  # N / TILE_WIDTH / grid width
+  transpose_mcast=False,
+  fused_activation=None,
+  fuse_batch=False,
+)
+```
+Line by line, this is what the program config means.
+
+- `ttnn.MatmulMultiCoreReuseMultiCastProgramConfig`: Selects the matmul 2D variant.
+
+- `compute_with_storage_grid_size=(cores_x, cores_y)`: Determines how many cores to execute the matmul on. Note that M is parallelized over `cores_y` and N is parallelized over `cores_x`.
+
+```python
+in0_block_w=1,
+out_subblock_h=1, # Must be divisible by per_core_M
+out_subblock_w=1, # Must be divisible by per_core_N
+```
+`in0_block_w` should divide evenly into K. Higher is better. `out_subblock_h` and `out_subblock_w` should divide evenly into M and N respectively. Higher is better. The product `out_subblock_h * out_subblock_w` must be less than or equal to the size of DST, which depends on the HW architecture and whether FP32 accumulation is enabled. For example, Wormhole DST has 8 tiles when accumulating in BF16 and 4 tiles when accumulating in FP32.
+
+```python
+per_core_M=math.ceil(M / 32 / cores_y),  # M / TILE_HEIGHT / Grid_Size
+per_core_N=math.ceil(N / 32 / cores_x),  # N / TILE_WIDTH / grid width
+```
+- These parameters tell the matmul how many tiles of output each core is responsible for. Therefore, divide M and N by 32 (the tile size) and the core grid size. Round up because you may have padding.
+
+```python
+transpose_mcast=False,
+fused_activation=None,
+fuse_batch=False,
+```
+- If this matmul is part of an MLP with an activation, `fused_activation` will tell the kernel which activation to apply.
+- `fuse_batch` should generally be set to `False`.
+
+Since we use matmul 2D for large matmuls, there may be some issues where we run out of L1 just to store intermediate values in the kernel. When this happens, try reducing `in0_block_w` and `out_subblock_h` and `out_subblock_w`.
+
+##### DRAM-Sharded Matmul
+DRAM-Sharded matmul should be used in decode mode, where activations are small and DRAM-bandwidth to read weights is the limiting factor in op performance. This matmul gets its name because rather than having weights interleaved in DRAM, they are sharded across DRAM banks to optimally collocate weights with compute. See the [DRAM-Sharded Matmul](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) writeup for details on the implementation.
+
+We use DRAM-Sharded matmul for all matmuls in decode mode. The activation and output are width-sharded in L1, and the weights are width-sharded in DRAM.
+
+To use DRAM-Sharded matmul, create your weight memory config with this helper function we created in [`model_config.py`](../../models/demos/llama3/tt/model_config.py):
+
+```python
+weights_memory_config = create_dram_sharded_mem_config(k=K, n=N)
+```
+
+This function takes care of padding weights to fit evenly into the 12 DRAM banks.
+
+You will also have to create a program config. We have another helper function in `model_config.py` which does this for you:
+
+```python
+matmul_program_config = dram_matmul_config(
+  m=M,
+  k=K,
+  n=N,
+  num_cores=core_grid.num_cores,
+)
+```
+
+The `core_grid` should be the same core grid that the activation is width-sharded on. The output will end up width-sharded on this core grid as well. Call the matmul like this:
+```python
+output = ttnn.linear(
+  activation,
+  weights,
+  compute_kernel_config=compute_kernel_config,
+  dtype=ttnn.bfloat16,
+  program_config=matmul_program_config,
+  memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+)
+```
+
+Be careful that the core grid evenly divides both the activations and the output. Padding functionality is not yet implemented for DRAM-Sharded matmuls.
+
+#### Matmul 1D
+Matmul 1D is the final variant to cover. Before ttnn implemented DRAM-Sharded matmul, this was the matmul of choice for decode mode. Now that DRAM-Sharded matmul exists and is much faster, matmul 1D is less often used.
+Matmul 1D gets its name because it only parallelizes over the N dimension. The activation and output(s) should be width-sharded in L1. Weights should be DRAM interleaved.
+
+To use matmul 1D, create a program config like this:
+
+```python
+model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+  compute_with_storage_grid_size=(cores_x, cores_y),
+  in0_block_w=in0_block_w,
+  out_subblock_h=out_subblock_h,
+  out_subblock_w=out_subblock_w,
+  per_core_M=shard_height / 32, # Shard height in tiles
+  per_core_N=shard_width / 32, # Shard width in tiles
+  fuse_batch=True,
+  fused_activation=None,
+  mcast_in0=True,
+)
+```
+
+The parameters of this matmul config have the same meaning as in matmul 2D. The only difference is that each core is responsible for some width shard of the output, rather than some 2D shard of the output.
+When creating a matmul 1D program config, maximize the `in0_block_w` and `out_subblock` parameters. In addition, sweep the `compute_with_storage_grid_size` to find the fastest core grid.
+
+
 ### 4.5 Accuracy
 
 While we work on maximizing the performance of large language models on Tenstorrent hardware, we must also ensure that the models are functionally correct and that they produce outputs of the expected quality. The subsections below will describe our methods for evaluating the accuracy (also referred to as functionality or correctness for our purposes) of a given model and how to debug issues pertaining to this.
