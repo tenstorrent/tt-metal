@@ -29,6 +29,7 @@ def test_dopout(device):
     prob = 0.2
     for _ in range(1000):
         output = ttnn.experimental.dropout(t_tt, seed=s, probability=prob, scale=1.0 / (1.0 - prob))
+        s = s + 1
         output_torch = ttnn.to_torch(output)
         r = 1.0 - (torch.count_nonzero(output_torch) / torch.count_nonzero(t)).item()
         tt_ratios.append(r)

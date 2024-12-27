@@ -49,3 +49,26 @@ TEST_F(DropoutTest, TestSeed) {
     EXPECT_FALSE(xt::allclose(result01_vec, result02_vec, /*rtol=*/1e-4, /*atol=*/1e-3));
     EXPECT_EQ(num_cache_before, num_cache_after - 1);
 }
+
+TEST_F(DropoutTest, TestProb) {
+    uint32_t dropout_seed = 42;
+    float scale = 1.0F;
+    float prob = 0.2F;
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+    xt::xarray<float> xtensor_a = xt::ones<float>({2, 2, 64, 64});
+    std::vector<float> ratios;
+    ratios.reserve(100);
+    auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
+    for (int i = 0; i < 100; i++) {
+        auto result01 = ttnn::experimental::dropout(xtensor_a_tensor, prob, scale, dropout_seed);
+        auto result01_vec = ttml::core::to_xtensor(result01);
+        float ratio = xt::sum(result01_vec)() / xt::sum(xtensor_a)();
+        ratios.push_back(ratio);
+    }
+    auto xt_ratios = xt::adapt(ratios);
+    auto mean_ratio = xt::mean(xt_ratios)();
+    auto std_ratio = xt::stddev(xt_ratios)();
+    EXPECT_NEAR(mean_ratio, 1.0F - prob, 0.05);
+    EXPECT_NEAR(std_ratio, 0.05, 0.05);
+}

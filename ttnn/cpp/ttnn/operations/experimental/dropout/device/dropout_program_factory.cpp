@@ -16,111 +16,107 @@ namespace ttnn::operations::experimental::dropout::program {
 
 using namespace tt::constants;
 
-DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
-    using namespace tt;
+/**
+ *   Helper struct to hold references to all kernels we create,
+ *        used during runtime argument setup.
+ */
+struct DropoutKernels {
+    tt::tt_metal::KernelHandle reader;
+    tt::tt_metal::KernelHandle writer;
+    tt::tt_metal::KernelHandle compute_group_1;
+    tt::tt_metal::KernelHandle compute_group_2;
+    bool has_group_2;
+};
+
+/**
+ *   Create and configure a circular buffer, returning both the configuration and the handle.
+ */
+inline std::pair<tt::tt_metal::CircularBufferConfig, tt::tt_metal::CBHandle> create_circular_buffer(
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    uint32_t cb_index,
+    tt::DataFormat data_format,
+    uint32_t single_tile_size,
+    uint32_t num_tiles) {
     using namespace tt::tt_metal;
 
-    const auto& input = tensor_args.input;
+    CircularBufferConfig cb_config = CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
+                                         .set_page_size(cb_index, single_tile_size);
 
-    tt::tt_metal::Program program{};
+    auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
+    return {cb_config, cb_handle};
+}
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
+/**
+ *   Create a reader kernel with the given compile-time arguments.
+ */
+inline tt::tt_metal::KernelHandle create_reader_kernel(
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    const std::vector<uint32_t>& compile_time_args,
+    const std::string& kernel_path) {
+    using namespace tt::tt_metal;
 
-    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
+    return CreateKernel(program, kernel_path, core_ranges, ReaderDataMovementConfig(compile_time_args));
+}
 
-    tt::tt_metal::Device* device = input.device();
+/**
+ *   Create a writer kernel with the given compile-time arguments.
+ */
+inline tt::tt_metal::KernelHandle create_writer_kernel(
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    const std::vector<uint32_t>& compile_time_args,
+    const std::string& kernel_path) {
+    using namespace tt::tt_metal;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    return CreateKernel(program, kernel_path, core_ranges, WriterDataMovementConfig(compile_time_args));
+}
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+/**
+ * Create a compute kernel (for dropout) with the given compile-time arguments.
+ */
+inline tt::tt_metal::KernelHandle create_compute_kernel(
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    const std::vector<uint32_t>& compile_time_args,
+    const std::string& kernel_path,
+    bool math_approx_mode) {
+    using namespace tt::tt_metal;
 
-    uint32_t output_cb_index = tt::CBIndex::c_2;
-    uint32_t num_output_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, single_tile_size_output);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
-
-    auto src_buffer = input.buffer();
-
-    auto dst_buffer = output.buffer();
-
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
-
-    tt::tt_metal::KernelHandle dropout_reader_kernel_id = tt::tt_metal::CreateKernel(
+    return CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/reader_dropout_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    tt::tt_metal::KernelHandle dropout_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    union {
-        float f;
-        uint32_t u;
-    } f2u_scale;
-
-    int32_t uprob = static_cast<uint32_t>((double)INT_MAX * args.prob);
-    f2u_scale.f = args.scale;
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_tiles_per_core_group_1,  // per_core_block_cnt
-        1,                           // per_core_block_size
-        uprob,                       // prob
-        f2u_scale.u,                 // scale
-    };
-
-    bool math_approx_mode = false;
-    auto dropout_kernel_group_1_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp",
-        core_group_1,
-        tt::tt_metal::ComputeConfig{
+        kernel_path,
+        core_ranges,
+        ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1});
-    bool has_core_group_2 = !core_group_2.ranges().empty();
-    tt::tt_metal::KernelHandle dropout_kernel_group_2_id = tt::tt_metal::KernelHandle{};
-    if (has_core_group_2) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_tiles_per_core_group_2,  // per_core_block_cnt
-            1                            // per_core_block_size
-        };
+            .compile_args = compile_time_args});
+}
 
-        dropout_kernel_group_2_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp",
-            core_group_2,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = false,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args_group_2});
-    }
+/**
+ * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
+ *        for each core in the grid.
+ */
+inline void assign_per_core_runtime_args(
+    tt::tt_metal::Program& program,
+    const DropoutKernels& kernels,
+    const tt::tt_metal::Buffer* src_buffer,
+    const tt::tt_metal::Buffer* dst_buffer,
+    uint32_t num_cores,
+    uint32_t num_cores_y,
+    uint32_t num_tiles_per_core_group_1,
+    uint32_t num_tiles_per_core_group_2,
+    const tt::tt_metal::CoreRangeSet& core_group_1,
+    const tt::tt_metal::CoreRangeSet& core_group_2,
+    uint32_t seed) {
+    using namespace tt::tt_metal;
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        // Determine how many tiles this core will process
         uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -130,27 +126,164 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, dropout_kernel_group_1_id, core, {args.seed});
-        if (has_core_group_2) {
-            tt::tt_metal::SetRuntimeArgs(program, dropout_kernel_group_2_id, core, {args.seed});
+        // Set compute kernel's seed (group1 and group2 if present)
+        SetRuntimeArgs(program, kernels.compute_group_1, core, {seed});
+        if (kernels.has_group_2) {
+            SetRuntimeArgs(program, kernels.compute_group_2, core, {seed});
         }
-        tt::tt_metal::SetRuntimeArgs(
-            program, dropout_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
 
-        tt::tt_metal::SetRuntimeArgs(
-            program, dropout_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        // Reader kernel: (src_addr, number_of_tiles, offset_in_tiles)
+        SetRuntimeArgs(program, kernels.reader, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
+
+        // Writer kernel: (dst_addr, number_of_tiles, offset_in_tiles)
+        SetRuntimeArgs(program, kernels.writer, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+
         num_tiles_written += num_tiles_per_core;
     }
+}
 
+DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    // -------------------------------------------------------------------------
+    // 1) Setup device, data formats, tile sizes, and compute split
+    // -------------------------------------------------------------------------
+    const auto& input = tensor_args.input;
+    auto* device = input.device();
+
+    tt::tt_metal::Program program{};
+
+    tt::DataFormat data_fmt_in = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat data_fmt_out = datatype_to_dataformat_converter(output.get_dtype());
+
+    uint32_t single_tile_size_in = tt::tt_metal::detail::TileSize(data_fmt_in);
+    uint32_t single_tile_size_out = tt::tt_metal::detail::TileSize(data_fmt_out);
+
+    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+
+    // -------------------------------------------------------------------------
+    // 2) Create and configure circular buffers
+    // -------------------------------------------------------------------------
+    constexpr uint32_t SRC0_CB_INDEX = CBIndex::c_0;
+    constexpr uint32_t OUTPUT_CB_INDEX = CBIndex::c_2;
+
+    const uint32_t NUM_INPUT_TILES = 2;
+    const uint32_t NUM_OUTPUT_TILES = 2;
+
+    auto [cb_src0_config, cb_src0] =
+        create_circular_buffer(program, all_cores, SRC0_CB_INDEX, data_fmt_in, single_tile_size_in, NUM_INPUT_TILES);
+
+    auto [cb_output_config, cb_output] = create_circular_buffer(
+        program, all_cores, OUTPUT_CB_INDEX, data_fmt_out, single_tile_size_out, NUM_OUTPUT_TILES);
+
+    // -------------------------------------------------------------------------
+    // 3) Create reader/writer kernels
+    // -------------------------------------------------------------------------
+    auto src_buffer = input.buffer();
+    bool src_is_dram = (src_buffer->buffer_type() == BufferType::DRAM);
+
+    std::vector<uint32_t> reader_compile_args = {static_cast<uint32_t>(src_is_dram)};
+
+    auto dst_buffer = output.buffer();
+    bool dst_is_dram = (dst_buffer->buffer_type() == BufferType::DRAM);
+
+    std::vector<uint32_t> writer_compile_args = {
+        static_cast<uint32_t>(OUTPUT_CB_INDEX), static_cast<uint32_t>(dst_is_dram)};
+
+    DropoutKernels kernels;
+    kernels.reader = create_reader_kernel(
+        program,
+        all_cores,
+        reader_compile_args,
+        "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/"
+        "reader_dropout_interleaved_start_id.cpp");
+
+    kernels.writer = create_writer_kernel(
+        program,
+        all_cores,
+        writer_compile_args,
+        "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/"
+        "writer_dropout_interleaved_start_id.cpp");
+
+    // -------------------------------------------------------------------------
+    // 4) Create compute kernels for dropout
+    // -------------------------------------------------------------------------
+    uint32_t uscale = std::bit_cast<uint32_t>(args.scale);
+
+    // Convert probability (args.prob) to integer representation
+    uint32_t prob_int = static_cast<uint32_t>(static_cast<double>(INT_MAX) * args.prob);
+
+    // Group 1 compile-time arguments
+    std::vector<uint32_t> compute_group_1_args = {
+        num_tiles_per_core_group_1,  // per_core_block_cnt
+        1,                           // per_core_block_size
+        prob_int,                    // prob
+        uscale                       // scale
+    };
+
+    bool math_approx_mode = false;
+
+    kernels.compute_group_1 = create_compute_kernel(
+        program,
+        core_group_1,
+        compute_group_1_args,
+        "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp",
+        math_approx_mode);
+
+    // Group 2 (if present) compile-time arguments
+    kernels.has_group_2 = !core_group_2.ranges().empty();
+    if (kernels.has_group_2) {
+        std::vector<uint32_t> compute_group_2_args = {
+            num_tiles_per_core_group_2,  // per_core_block_cnt
+            1                            // per_core_block_size
+            // NOTE: If needed, prob/scale can be appended or set as runtime
+        };
+
+        kernels.compute_group_2 = create_compute_kernel(
+            program,
+            core_group_2,
+            compute_group_2_args,
+            "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp",
+            math_approx_mode);
+    }
+
+    // -------------------------------------------------------------------------
+    // 5) Assign runtime args for each core
+    // -------------------------------------------------------------------------
+    assign_per_core_runtime_args(
+        program,
+        kernels,
+        src_buffer,
+        dst_buffer,
+        num_cores,
+        num_cores_y,
+        num_tiles_per_core_group_1,
+        num_tiles_per_core_group_2,
+        core_group_1,
+        core_group_2,
+        args.seed);
+
+    // -------------------------------------------------------------------------
+    // 6) Return the fully configured program & relevant shared variables
+    // -------------------------------------------------------------------------
     return cached_program_t{
         std::move(program),
-        {dropout_reader_kernel_id,
-         dropout_writer_kernel_id,
-         dropout_kernel_group_1_id,
-         dropout_kernel_group_2_id,
-         has_core_group_2,
-         num_cores,
-         num_cores_y}};
+        {/* dropout_reader_kernel_id  = */ kernels.reader,
+         /* dropout_writer_kernel_id  = */ kernels.writer,
+         /* dropout_kernel_group_1_id = */ kernels.compute_group_1,
+         /* dropout_kernel_group_2_id = */ kernels.compute_group_2,
+         /* has_core_group_2          = */ kernels.has_group_2,
+         /* num_cores                 = */ num_cores,
+         /* num_cores_y               = */ num_cores_y}};
 }
 
 void DropoutProgramFactory::override_runtime_arguments(
@@ -158,38 +291,46 @@ void DropoutProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    auto& dropout_reader_kernel_id = cached_program.shared_variables.dropout_reader_kernel_id;
-    auto& dropout_writer_kernel_id = cached_program.shared_variables.dropout_writer_kernel_id;
-    auto& dropout_kernel_group_1_id = cached_program.shared_variables.dropout_kernel_group_1_id;
-    auto& dropout_kernel_group_2_id = cached_program.shared_variables.dropout_kernel_group_2_id;
-    auto& has_core_group_2 = cached_program.shared_variables.has_core_group_2;
-    const uint32_t num_cores = cached_program.shared_variables.num_cores;
-    const uint32_t num_cores_y = cached_program.shared_variables.num_cores_y;
+    using namespace tt::tt_metal;
+
+    auto& shared_vars = cached_program.shared_variables;
+    auto& dropout_reader_kernel = shared_vars.dropout_reader_kernel_id;
+    auto& dropout_writer_kernel = shared_vars.dropout_writer_kernel_id;
+    auto& dropout_group_1_kernel = shared_vars.dropout_kernel_group_1_id;
+    auto& dropout_group_2_kernel = shared_vars.dropout_kernel_group_2_id;
 
     auto& program = cached_program.program;
+
+    bool has_core_group_2 = shared_vars.has_core_group_2;
+    uint32_t num_cores = shared_vars.num_cores;
+    uint32_t num_cores_y = shared_vars.num_cores_y;
 
     const auto& input = tensor_args.input;
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+    // Only seed/address arguments need updating here; tile counts remain the same as in create().
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
+        // Update the source address for the reader kernel
         {
-            auto& runtime_args = GetRuntimeArgs(program, dropout_reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, dropout_reader_kernel, core);
             runtime_args[0] = src_buffer->address();
         }
-
+        // Update the destination address for the writer kernel
         {
-            auto& runtime_args = GetRuntimeArgs(program, dropout_writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, dropout_writer_kernel, core);
             runtime_args[0] = dst_buffer->address();
         }
+        // Update the seed for group 1
         {
-            auto& runtime_args = GetRuntimeArgs(program, dropout_kernel_group_1_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, dropout_group_1_kernel, core);
             runtime_args[0] = operation_attributes.seed;
         }
+        // Update the seed for group 2 if it exists
         if (has_core_group_2) {
-            auto& runtime_args = GetRuntimeArgs(program, dropout_kernel_group_2_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, dropout_group_2_kernel, core);
             runtime_args[0] = operation_attributes.seed;
         }
     }
