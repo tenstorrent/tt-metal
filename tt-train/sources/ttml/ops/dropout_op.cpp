@@ -19,16 +19,13 @@ autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability
     if (probability == 0.0F) {
         return tensor;
     }
-    auto mask = core::ones_like(tensor->get_value());
-    // dropout seed is not properly used in ttnn::dropout
-    // auto dropout_seed = autograd::ctx().get_generator()();
 
-    // currently seed is not used in ttnn::dropout
-    // we use default seed for now to simplify job of program cache
-    // it will require to generate only one program and reuse it later
-    auto dropout_seed = 0U;
+    auto mask = core::ones_like(tensor->get_value());
+    auto dropout_seed = autograd::ctx().get_generator()();
+    fmt::println("dropout_seed: {}", dropout_seed);
+    fmt::println(" mask shape: {}", mask.get_shape());
     auto scaler = 1.0F / (1.0F - probability);
-    mask = ttnn::experimental::dropout(mask, dropout_seed, probability, scaler);
+    mask = ttnn::experimental::dropout(mask, probability, scaler, static_cast<uint32_t>(dropout_seed));
     auto out = autograd::create_tensor();
     auto masked_out = ttnn::multiply(tensor->get_value(), mask);
     out->set_value(masked_out);

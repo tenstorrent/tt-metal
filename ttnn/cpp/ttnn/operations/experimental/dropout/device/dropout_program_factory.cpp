@@ -25,7 +25,6 @@ struct DropoutKernels {
     tt::tt_metal::KernelHandle writer;
     tt::tt_metal::KernelHandle compute_group_1;
     tt::tt_metal::KernelHandle compute_group_2;
-    bool has_group_2;
 };
 
 /**
@@ -126,12 +125,13 @@ inline void assign_per_core_runtime_args(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        // Set compute kernel's seed (group1 and group2 if present)
-        SetRuntimeArgs(program, kernels.compute_group_1, core, {seed});
-        if (kernels.has_group_2) {
+        if (core_group_1.contains(core)) {
+            SetRuntimeArgs(program, kernels.compute_group_1, core, {seed});
+        } else if (core_group_2.contains(core)) {
             SetRuntimeArgs(program, kernels.compute_group_2, core, {seed});
+        } else {
+            TT_THROW("Core not in specified core ranges.");
         }
-
         // Reader kernel: (src_addr, number_of_tiles, offset_in_tiles)
         SetRuntimeArgs(program, kernels.reader, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
 
@@ -240,12 +240,12 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
         math_approx_mode);
 
     // Group 2 (if present) compile-time arguments
-    kernels.has_group_2 = !core_group_2.ranges().empty();
-    if (kernels.has_group_2) {
+    if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {
             num_tiles_per_core_group_2,  // per_core_block_cnt
-            1                            // per_core_block_size
-            // NOTE: If needed, prob/scale can be appended or set as runtime
+            1,                           // per_core_block_size
+            prob_int,                    // prob
+            uscale                       // scale
         };
 
         kernels.compute_group_2 = create_compute_kernel(
@@ -281,7 +281,8 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
          /* dropout_writer_kernel_id  = */ kernels.writer,
          /* dropout_kernel_group_1_id = */ kernels.compute_group_1,
          /* dropout_kernel_group_2_id = */ kernels.compute_group_2,
-         /* has_core_group_2          = */ kernels.has_group_2,
+         /* core_group_1              = */ core_group_1,
+         /* core_group_2              = */ core_group_2,
          /* num_cores                 = */ num_cores,
          /* num_cores_y               = */ num_cores_y}};
 }
@@ -298,10 +299,10 @@ void DropoutProgramFactory::override_runtime_arguments(
     auto& dropout_writer_kernel = shared_vars.dropout_writer_kernel_id;
     auto& dropout_group_1_kernel = shared_vars.dropout_kernel_group_1_id;
     auto& dropout_group_2_kernel = shared_vars.dropout_kernel_group_2_id;
-
+    auto& core_group_1 = shared_vars.core_group_1;
+    auto& core_group_2 = shared_vars.core_group_2;
     auto& program = cached_program.program;
 
-    bool has_core_group_2 = shared_vars.has_core_group_2;
     uint32_t num_cores = shared_vars.num_cores;
     uint32_t num_cores_y = shared_vars.num_cores_y;
 
@@ -323,15 +324,14 @@ void DropoutProgramFactory::override_runtime_arguments(
             auto& runtime_args = GetRuntimeArgs(program, dropout_writer_kernel, core);
             runtime_args[0] = dst_buffer->address();
         }
-        // Update the seed for group 1
-        {
+        if (core_group_1.contains(core)) {
             auto& runtime_args = GetRuntimeArgs(program, dropout_group_1_kernel, core);
             runtime_args[0] = operation_attributes.seed;
-        }
-        // Update the seed for group 2 if it exists
-        if (has_core_group_2) {
+        } else if (core_group_2.contains(core)) {
             auto& runtime_args = GetRuntimeArgs(program, dropout_group_2_kernel, core);
             runtime_args[0] = operation_attributes.seed;
+        } else {
+            TT_THROW("Core not in specified core ranges.");
         }
     }
 }

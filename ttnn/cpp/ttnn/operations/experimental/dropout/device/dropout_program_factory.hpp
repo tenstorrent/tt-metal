@@ -15,7 +15,8 @@ struct DropoutProgramFactory {
         KernelHandle dropout_writer_kernel_id;
         KernelHandle dropout_kernel_group_1_id;
         KernelHandle dropout_kernel_group_2_id;
-        bool has_core_group_2 = false;
+        CoreRangeSet core_group_1;
+        CoreRangeSet core_group_2;
         uint32_t num_cores;
         uint32_t num_cores_y;
     };

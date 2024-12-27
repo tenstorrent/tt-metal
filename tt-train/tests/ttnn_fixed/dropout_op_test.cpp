@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <gtest/gtest.h>
 
 #include <core/ttnn_all_includes.hpp>
@@ -5,7 +9,6 @@
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/compute_kernel_config.hpp"
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
@@ -29,7 +32,7 @@ TEST_F(DropoutTest, TestSeed) {
     xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
-    xt::xarray<float> xtensor_a = xt::random::rand({128 * 64}, -0.5, 0.5).reshape({2, 1, 64, 64});
+    xt::xarray<float> xtensor_a = xt::random::rand({64, 1, 256, 38}, -0.5, 0.5);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
     auto num_cache_before = device->num_program_cache_entries();
@@ -56,7 +59,7 @@ TEST_F(DropoutTest, TestProb) {
     float prob = 0.2F;
     auto* device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
-    xt::xarray<float> xtensor_a = xt::ones<float>({2, 2, 64, 64});
+    xt::xarray<float> xtensor_a = xt::ones<float>({64, 1, 256, 38});
     std::vector<float> ratios;
     ratios.reserve(100);
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
