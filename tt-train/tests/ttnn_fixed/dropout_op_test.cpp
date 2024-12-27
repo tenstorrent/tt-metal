@@ -29,6 +29,7 @@ TEST_F(DropoutTest, TestSeed) {
     float prob = 0.5F;
     xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
     xt::xarray<float> xtensor_a = xt::random::rand({128 * 64}, -0.5, 0.5).reshape({2, 1, 64, 64});
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
@@ -38,6 +39,7 @@ TEST_F(DropoutTest, TestSeed) {
     auto result11 = ttnn::experimental::dropout(xtensor_a_tensor, prob, scale, dropout_seed1);
     auto result12 = ttnn::experimental::dropout(xtensor_a_tensor, prob, scale, dropout_seed2);
     auto num_cache_after = device->num_program_cache_entries();
+
     auto result01_vec = ttml::core::to_xtensor(result01);
     auto result02_vec = ttml::core::to_xtensor(result02);
     auto result11_vec = ttml::core::to_xtensor(result11);

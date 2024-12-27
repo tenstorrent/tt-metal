@@ -120,7 +120,7 @@ tt::stl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
     args_without_seed.seed = 0;
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<DropoutDeviceOperation>(
-        args,
+        args_without_seed,
         program_factory.index(),
         input_tensor.dtype(),
         std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
