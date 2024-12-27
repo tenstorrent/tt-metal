@@ -1040,7 +1040,7 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
   <tr>
     <th>
       Mesh<br>
-      Notes:  For a TG system, we only have CPU hosts connected to<br>
+      Notes: For a TG system, we only have CPU hosts connected to<br>
       N150 gateway cards that are connected to the Galaxy via<br>
       ethernet links. There is no direct PCI access to chips on the<br>
       Galaxy board.<br>
@@ -1096,20 +1096,172 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
 ## 7.3 Multi-Host TGG <a id="tgg"></a>
 
 ![](images/image021.png)
+<table>
+  <tr>
+    <th colspan="2">TG</th>
+  </tr>
+  <tr>
+  <th>Chip</th>
+    <td>
+      Wormhole:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Ethernet Ports:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; N:4<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; E:4<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; S:4<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; W:4<br>
+    </td>
+  </tr>
+  <tr>
+    <th>Board</th>
+    <td>
+      Galaxy:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Wormhole<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 4x8 <br>
+      N150Gateway:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Wormhole<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1 <br>
+    </td>
+  </tr>
+  <tr>
+    <th>
+      Mesh<br>
+      Notes: For a multi-host TGG system, we have two hosts that are <br>
+      connected to N150 gateway cards. The Galaxy boards are connected <br>
+      via long edge with external ethernet cables. There are only 2 <br>
+      links per chip-to-chip connection, which is not uniform with the <br>
+      chip-to-chip within the Galaxy board. 
+      <br>
+    </th>
+    <td>
+      0:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
+      1:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
+      2:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
+      3:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
+      4:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost1&gt]]<br>
+      5:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost1&gt]]<br>
+      6:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost1&gt]]<br>
+      7:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost1&gt]]<br>
+      8:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Galaxy<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[ ]]<br>
+      9:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Galaxy<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[ ]]<br>
+    </td>
+  </tr>
+  <tr>
+    <th>Graph</th>
+    <td>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {0, S0} <---> {8, N0}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {0, S1} <---> {8, N4}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {1, S0} <---> {8, N8}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {1, S1} <---> {8, N12}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {2, S0} <---> {8, N16}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {2, S1} <---> {8, N20}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {3, S0} <---> {8, N24}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {3, S1} <---> {8, N28}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N0} <---> {0, S0}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N4} <---> {0, S1}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N8} <---> {1, S0}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N12} <---> {1, S1}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N16} <---> {2, S0}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N20} <---> {2, S1}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N24} <---> {3, S0}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N28} <---> {3, S1}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, S0} <---> {8, N0}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, S1} <---> {8, N4}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {5, S0} <---> {8, N8}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {5, S1} <---> {8, N12}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {6, S0} <---> {8, N16}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {6, S1} <---> {8, N20}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {7, S0} <---> {8, N24}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {7, S1} <---> {8, N28}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S0} <---> {4, N0}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S4} <---> {4, N1}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S8} <---> {5, N0}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S12} <---> {5, N1}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S16} <---> {6, N0}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S20} <---> {6, N1}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S24} <---> {7, N0}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S28} <---> {7, N1}<br>
+    </td>
+  </tr>
 
-| Chip | Wormhole:   * Ethernet Ports: * N: 4 * E: 4 * S: 4 * W: 4 |
-| --- | --- |
-| Board | Galaxy:   * Submodule: Wormhole * Topology: 4x8   N150Gateway:   * Submodule: Wormhole * Topology: 1x1 |
-| Mesh  Notes:  For a multi-host TGG system, we have two hosts that are connected to N150 gateway cards. The Galaxy boards are connected via long edge with external ethernet cables. There are only 2 links per chip-to-chip connection, which is not uniform with the chip-to-chip within the Galaxy board. | 0:   * Submodule: 150Gateway * Topology: 1x1 * Host Mapping: [[<host0>]]   1:   * Submodule: 150Gateway * Topology: 1x1 * Host Mapping: [[<host0>]]   2:   * Submodule: 150Gateway * Topology: 1x1 * Host Mapping: [[<host0>]]   3:   * Submodule: 150Gateway * Topology: 1x1 * Host Mapping: [[<host0>]]   4:   * Submodule: 150Gateway * Topology: 1x1 * Host Mapping: [[<host1>]]   5:   * Submodule: 150Gateway * Topology: 1x1 * Host Mapping: [[<host1>]]   6:   * Submodule: 150Gateway * Topology: 1x1 * Host Mapping: [[<host1>]]   7:   * Submodule: 150Gateway * Topology: 1x1 * Host Mapping: [[<host1>]]   8:   * Submodule: Galaxy * Topology: 1x1 * Host Mapping: [[]]   9:   * Submodule: Galaxy * Topology: 1x1 * Host Mapping: [[]] |
-| Graph | * {0, S0} <---> {8, N0} * {0, S1} <---> {8, N4} * {1, S0} <---> {8, N8} * {1, S1} <---> {8, N12} * {2, S0} <---> {8, N16} * {2, S1} <---> {8, N20} * {3, S0} <---> {8, N24} * {3, S1} <---> {8, N28} * {8, N0} <---> {0, S0} * {8, N4} <---> {0, S1} * {8, N8} <---> {1, S0} * {8, N12} <---> {1, S1} * {8, N16} <---> {2, S0} * {8, N20} <---> {2, S1} * {8, N24} <---> {3, S0} * {8, N28} <---> {3, S1} * {4, S0} <---> {9, N0} * {4, N1} <---> {9, N4} * {5, N0} <---> {9, N8} * {5, N1} <---> {9, S12} * {6, N0} <---> {9, S16} * {6, N1} <---> {9, S20} * {7, N0} <---> {9, S24} * {7, N1} <---> {9, S28} * {9, S0} <---> {4, N0} * {9, S4} <---> {4, N1} * {9, S8} <---> {5, N0} * {9, S12} <---> {5, N1} * {9, S16} <---> {6, N0} * {9, S20} <---> {6, N1} * {9, S24} <---> {7, N0} * {9, S28} <---> {7, N1} |
+</table>
 
 ## 7.4 Quanta 2 Galaxy System <a id="ubb_galaxy"></a>
 
-| Chip | Wormhole:   * Ethernet Ports: * N: 4 * E: 4 * S: 4 * W: 4 |
-| --- | --- |
-| Board | Galaxy:   * Submodule: Wormhole * Topology: 4x8   N150Gateway:   * Submodule: Wormhole * Topology: 1x1 |
-| Mesh  Notes:  For a Quanta Galaxy box, Galaxy to Galaxy connections also have four edges, so we can represent two Galaxys as a 2x1 Mesh. We will also have one CPU host per Galaxy box. | 0:   * Submodule: Galaxy * Topology: 2x1 * Host Mapping: [[<host0>, <host1>]] |
-| Graph |  |
+<table>
+  <tr>
+    <th colspan="2">TG</th>
+  </tr>
+  <tr>
+    <th>Chip</th>
+    <td>
+      Wormhole:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Ethernet Ports:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; N:4<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; E:4<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; S:4<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; W:4<br>
+    </td>
+  </tr>
+  <tr>
+    <th>Board</th>
+    <td>
+      Galaxy:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Wormhole<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 4x8 <br>
+    </td>
+  </tr>
+  <tr>
+    <th>
+      Mesh<br>
+      Notes: For a Quanta Galaxy box, Galaxy to Galaxy connections <br>
+      also have four edges, so we can represent two Galaxys as a 2x1 Mesh. <br>
+      We will also have one CPU host per Galaxy box. 
+      <br>
+    </th>
+    <td>
+      0:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Galaxy<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 2x1<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[ ]]<br>
+    </td>
+  </tr>
+  <tr>
+    <th>Graph</th>
+    <td>
+    </td>
+  </tr>
+
+</table>
 
 # 8 Resource Allocation <a id="resource_alloc"></a>
 This seciton estimates the hardware resources required to implement different TT-Fabric workers.
