@@ -158,10 +158,8 @@ class ResnetConvTest(OpTestBase):
     indirect=["mesh_device"],
 )
 def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_program_cache, simulate_bh_harvesting):
-    if is_blackhole():
-        pytest.skip("Blackhole is not supported for this test")
-    if simulate_bh_harvesting and is_blackhole() == False:
-        pytest.skip("Blackhole harvesting simulation is only supported for Blackhole devices")
+    if simulate_bh_harvesting:
+        pytest.skip("Blackhole harvesting is not supported for this test")
 
     groups = 1
     dilation = 1
@@ -180,6 +178,7 @@ def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_
         batch_size = 12
         compute_with_storage_grid_size = (6, 8)
         logger.info("Using batch size 12 for TT_CONV_6x8=1")
+        assert False, "Needs conv fixes for TT_CONV_6x8 to work"
 
     output_channels = 64
     input_channels = 16
