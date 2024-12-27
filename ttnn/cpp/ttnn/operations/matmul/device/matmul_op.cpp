@@ -14,6 +14,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
+#include "umd/device/types/arch.h"
 
 using namespace tt;
 using namespace tt::constants;
@@ -1250,7 +1251,8 @@ void add_stagger_defines_if_needed(
     // See issue #9857.
     const char* stagger_type = std::getenv("TT_MATMUL_STAGGER_TYPE");
     const char* stagger_value = std::getenv("TT_MATMUL_STAGGER_VALUE");
-    if (stagger_type && arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
+    if (stagger_type && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) &&
+        num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
         // TODO check range for stagger_type
         mm_kernel_defines["MM_STAGGER_TYPE"] = stagger_type;
 
@@ -1315,26 +1317,26 @@ void add_mm_throttle_defines_if_needed(
 
 void add_precision_defines_if_needed(const tt::ARCH arch, std::map<string, string>& mm_kernel_defines) {
     const bool half_lofi = std::getenv("TT_ENABLE_HALF_LOFI");
-    if (half_lofi && arch == tt::ARCH::WORMHOLE_B0) {
+    if (half_lofi && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
         mm_kernel_defines["HALF_LOFI"] = "1";
     }
 
     const bool quarter_lofi = std::getenv("TT_ENABLE_QUARTER_LOFI");
-    if (quarter_lofi && arch == tt::ARCH::WORMHOLE_B0) {
+    if (quarter_lofi && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
         mm_kernel_defines["QUARTER_LOFI"] = "1";
     }
 }
 
 void add_dram_skip_defines_if_needed(const tt::ARCH arch, std::map<string, string>& mm_in1_sender_writer_defines) {
     const bool skip_in1_dram = std::getenv("TT_MATMUL_SKIP_IN1_DRAM");
-    if (skip_in1_dram && arch == tt::ARCH::WORMHOLE_B0) {
+    if (skip_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
         mm_in1_sender_writer_defines["SKIP_IN1_DRAM"] = "1";
     }
 }
 
 bool should_sync_after_in1_dram(const tt::ARCH arch) {
     const bool sync_in1_dram = std::getenv("TT_MATMUL_SYNC_AFTER_IN1_DRAM");
-    if (sync_in1_dram && arch == tt::ARCH::WORMHOLE_B0) {
+    if (sync_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
         return true;
     }
 

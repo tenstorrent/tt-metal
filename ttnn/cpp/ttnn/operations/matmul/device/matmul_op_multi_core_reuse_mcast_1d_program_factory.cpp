@@ -851,7 +851,14 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
             constexpr int first_core_delay = 240;
             constexpr int total_mcast_delay = 140;
             constexpr int per_core_mcast_delay = 10;
-            uint32_t in1_sync_wait_time = total_mcast_delay - (core.x + core.y) * per_core_mcast_delay;
+            uint32_t in1_sync_wait_time = 0;
+
+            // Todo: this is a fix for bh, as we can get into negative values.
+            // Properly fix this after doing an analysis
+            int wait_time = total_mcast_delay - (core.x + core.y) * per_core_mcast_delay;
+            if (wait_time >= 0) {
+                in1_sync_wait_time = (uint32_t)(wait_time);
+            }
             if (i == 0) {
                 in1_sync_wait_time += first_core_delay;
             }
