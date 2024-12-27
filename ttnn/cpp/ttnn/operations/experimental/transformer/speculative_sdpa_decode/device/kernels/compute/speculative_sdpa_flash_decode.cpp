@@ -348,5 +348,54 @@ void MAIN {
         }
     }
     cb_pop_front(cb_q_in, q_chunk_tiles);
+    cb_pop_front(cb_identity_scale_in, 1);
+
+    // if do verification, we wait for ground truth to be written to cb_q_in.
+    // assume output core also does verification
+    if (do_output) {
+        // read in ground truth output to cb_out_im
+        cb_wait_front(cb_q_in, q_chunk_tiles);
+        pack_reconfig_data_format(cb_out_im);
+        copy_block(cb_q_in, cb_out_im, q_chunk_tiles);
+
+        // read in speculative output to cb_out_accumulate_im and do inplace subtraction
+        // with ground truth to find pair wise distance
+        cb_wait_front(cb_q_in, q_chunk_tiles);
+        pack_reconfig_data_format(cb_out_accumulate_im);
+        copy_block(cb_q_in, cb_out_accumulate_im, q_chunk_tiles);
+        sub_block_inplace<false /*don't pop cb_out_im*/>(cb_out_accumulate_im, cb_out_im, q_chunk_tiles);
+
+        // Do L2 norm of ground truth output
+        // first, inplace square every element in cb_out_im
+        pow_block_inplace<2>(cb_out_im, q_chunk_tiles);
+        // second, do rc reduction
+        reduce_c<
+            PoolType::SUM,
+            ReduceDim::REDUCE_SCALAR,
+            cb_out_im,
+            cb_identity_scale_in,
+            cb_cur_sum,
+            1,  // single row
+            q_chunk_tiles>();
+        cb_pop_front(cb_out_im, q_chunk_tiles);
+        // last, copy to output
+        copy_block(cb_cur_sum, cb_out_m, 1);
+
+        // Do L2 norm of speculative output
+        // first, inplace square every element in cb_out_accumulate_im
+        pow_block_inplace<2>(cb_out_accumulate_im, q_chunk_tiles);
+        // second, do rc reduction
+        reduce_c<
+            PoolType::SUM,
+            ReduceDim::REDUCE_SCALAR,
+            cb_out_accumulate_im,
+            cb_identity_scale_in,
+            cb_cur_max,
+            1,  // single row
+            q_chunk_tiles>();
+        cb_pop_front(cb_out_accumulate_im, q_chunk_tiles);
+        // last, copy to output
+        copy_block(cb_cur_max, cb_out_l, 1);
+    }
 }
 }  // namespace NAMESPACE

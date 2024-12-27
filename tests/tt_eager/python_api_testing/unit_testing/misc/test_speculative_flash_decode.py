@@ -418,7 +418,7 @@ def run_test_sdpa_decode_single_device(
 
         non_skip_indices = torch.tensor(start_indices) != -1
         out_pass, out_pcc = comp_pcc(expected_gt[:, non_skip_indices], tt_back_gt[:, non_skip_indices], min_pcc)
-        logger.debug(f"gt python vs pytorch: {out_pcc}")
+        logger.debug(f"gt tt vs pytorch: {out_pcc}")
         if debug_mode:
             if not out_pass:
                 logger.warning(f"pcc check failed for {start_indices}")
@@ -427,7 +427,7 @@ def run_test_sdpa_decode_single_device(
             assert out_pass
 
         out_pass, out_pcc = comp_pcc(expected_spec[:, non_skip_indices], tt_back_spec[:, non_skip_indices], min_pcc)
-        logger.debug(f"spec python vs pytorch: {out_pcc}")
+        logger.debug(f"spec tt vs pytorch: {out_pcc}")
         if debug_mode:
             if not out_pass:
                 logger.warning(f"pcc check failed for {start_indices}")
@@ -435,13 +435,23 @@ def run_test_sdpa_decode_single_device(
         else:
             assert out_pass
 
-        # out_pass, out_pcc = comp_pcc(lp_distance, tt_back_spec_lp_distance, min_pcc)
-        # logger.debug(f"spec lp distance python vs pytorch: {out_pcc}")
-        # assert out_pass
+        min_frac_tol = 0.25 if torch.all(lp_distance.squeeze() > 2) else 0.5
+        out_pass = torch.allclose(
+            lp_distance.squeeze(), tt_back_spec_lp_distance.to(torch.float32).squeeze() ** (0.5), rtol=min_frac_tol
+        )
+        logger.debug(
+            f"lp distance output tt vs pytorch: {lp_distance.squeeze()}, {tt_back_spec_lp_distance.to(torch.float32).squeeze()**(0.5)}"
+        )
+        assert out_pass
 
-        # out_pass, out_pcc = comp_pcc(lp_norm_x, tt_back_lp_norm_x, min_pcc)
-        # logger.debug(f"lp norm output python vs pytorch: {out_pcc}")
-        # assert out_pass
+        min_frac_tol = 0.25 if torch.all(lp_norm_x.squeeze() > 2) else 0.5
+        out_pass = torch.allclose(
+            lp_norm_x.squeeze(), tt_back_lp_norm_x.to(torch.float32).squeeze() ** (0.5), rtol=min_frac_tol
+        )
+        logger.debug(
+            f"lp norm output tt vs pytorch: {lp_norm_x.squeeze()}, {tt_back_lp_norm_x.to(torch.float32).squeeze()**(0.5)}"
+        )
+        assert out_pass
 
         if single_iter:
             break
@@ -479,6 +489,7 @@ def run_test_sdpa_decode_single_device(
         # [4, 32, 8, 8192, 128, (8, 7), True, True],  # llama 3.1 8b
         # [1, 32, 8, 8192, 128, (8, 7), False, True],  # llama 3.1 8b
         [1, 32, 8, 16 * 8192, 128, (8, 4), False, True],  # llama 3.1 8b
+        # [2, 32, 8, 256, 64, (8, 4), False, True],
         # [2, 8, 4, 256, 64, (8, 1), True, True],
         # [1, 8, 1, 256, 64, (2, 1), False, True],
         # [2, 8, 4, 256, 64, (8, 4), False, True],

@@ -79,6 +79,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     bool is_q_sharded = input_tensor_q.is_sharded();
     bool is_output_sharded = full_output_tensor.is_sharded();
     bool is_spec_output_sharded = speculated_output_tensor.is_sharded();
+    TT_FATAL(!is_output_sharded, "sharded output is not yet supported for speculative SDPA decode");
     TT_FATAL(
         is_output_sharded == is_spec_output_sharded, "Output and speculative output must have the same memory config");
     if (!share_cache.has_value()) {
@@ -118,6 +119,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     auto v_buffer = input_tensor_v.buffer();
     auto out0_buffer = full_output_tensor.buffer();
     auto out1_buffer = speculated_output_tensor.buffer();
+    auto l2_dist_buffer = l2_dist_tensor.buffer();
+    auto l2_norm_buffer = l2_norm_tensor.buffer();
 
     bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     bool use_attention_mask = attn_mask.has_value();
@@ -597,7 +600,9 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         num_output_cores,
         is_causal,
         use_attention_mask,
-        Spec_chunk_t};
+        Spec_chunk_t,
+        output_semaphore_id,
+        is_output_sharded};
 
     std::vector<uint32_t> writer_compile_time_args_common = {
         B,
@@ -696,6 +701,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     uint32_t attn_mask_addr = use_attention_mask ? attn_mask.value().buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
     uint32_t out_spec_addr = out1_buffer->address();
+    uint32_t l2_dist_addr = l2_dist_buffer->address();
+    uint32_t l2_norm_addr = l2_norm_buffer->address();
 
     // Set rt args
     for (uint32_t i = 0; i < num_active_cores; ++i) {
@@ -731,6 +738,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
             pos_addr,
             page_table_addr,
             attn_mask_addr,
+            out_addr,
+            out_spec_addr,
             page_table_stick_size,
             do_reduce,
             do_output,
@@ -746,6 +755,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         std::vector<uint32_t> writer_rt_args = {
             out_addr,
             out_spec_addr,
+            l2_dist_addr,
+            l2_norm_addr,
             worker_id_for_reduce,
             worker_id_for_output,
             do_reduce,
@@ -818,6 +829,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
 
         auto out0_buffer = output_tensors.at(0).buffer();
         auto out1_buffer = output_tensors.at(1).buffer();
+        auto l2_dist_buffer = output_tensors.at(2).buffer();
+        auto l2_norm_buffer = output_tensors.at(3).buffer();
         uint32_t q_addr = q_buffer->address();
         uint32_t k_addr = k_buffer->address();
         uint32_t v_addr = v_buffer->address();
@@ -828,6 +841,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
         uint32_t out_addr = out0_buffer->address();
         uint32_t out_spec_addr = out1_buffer->address();
+        uint32_t l2_dist_addr = l2_dist_buffer->address();
+        uint32_t l2_norm_addr = l2_norm_buffer->address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
@@ -858,6 +873,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
             reader_args[arg_idx++] = pos_addr;
             reader_args[arg_idx++] = page_table_addr;
             reader_args[arg_idx++] = attn_mask_addr;
+            reader_args[arg_idx++] = out_addr;
+            reader_args[arg_idx++] = out_spec_addr;
             reader_args[arg_idx++] = page_table_stick_size;
             reader_args[arg_idx++] = do_reduce;
             reader_args[arg_idx++] = do_output;
@@ -871,6 +888,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
             arg_idx = 0;
             writer_args[arg_idx++] = out_addr;
             writer_args[arg_idx++] = out_spec_addr;
+            writer_args[arg_idx++] = l2_dist_addr;
+            writer_args[arg_idx++] = l2_norm_addr;
             writer_args[arg_idx++] = worker_id_for_reduce;
             writer_args[arg_idx++] = worker_id_for_output;
             writer_args[arg_idx++] = do_reduce;

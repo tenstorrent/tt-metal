@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(7);          // num cores per batch
     constexpr uint32_t num_cores = get_compile_time_arg_val(8);                    // num running cores in total
     uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));  // semaphore for reducer
-    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));  // semaphore for sender
+    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));  // semaphore for output ready
     constexpr bool is_out_sharded = get_compile_time_arg_val(11);
     constexpr uint32_t k_chunk_size = get_compile_time_arg_val(12);
     constexpr uint32_t num_q_heads = get_compile_time_arg_val(13);
@@ -43,6 +43,8 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t out_spec_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t l2_dist_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t l2_norm_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id_for_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id_for_output = get_arg_val<uint32_t>(arg_idx++);
     const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
@@ -98,6 +100,7 @@ void kernel_main() {
                 speculative_chunk_size,
                 Spec_chunk_t);
 
+    // Get semaphore noc addresses for reducer and output cores
     tt_l1_ptr uint32_t* all_reducer_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_reducer_cores;
     tt_l1_ptr uint32_t* all_reducer_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -110,8 +113,14 @@ void kernel_main() {
     uint32_t reduce_core_noc_x = all_reducer_noc_x[reduce_core_index];
     uint32_t reduce_core_noc_y = all_reducer_noc_y[reduce_core_index];
 
-    const uint64_t in0_sender_semaphore_noc_addr =
+    const uint64_t reducer_semaphore_noc_addr =
         get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, reducer_semaphore_addr);
+
+    uint32_t output_core_noc_x = all_output_noc_x[cur_batch];
+    uint32_t output_core_noc_y = all_output_noc_y[cur_batch];
+
+    const uint64_t output_semaphore_noc_addr =
+        get_noc_addr(output_core_noc_x, output_core_noc_y, output_semaphore_addr);
 
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
@@ -159,7 +168,7 @@ void kernel_main() {
                 1 /*assume 1 num chunks and use adjusted_cur_pos_for_spec*/, adjusted_cur_pos_for_spec);
         }
         worker_compute<out_chunk_tiles, cb_out_worker, cb_out_m, cb_out_l, cb_intermed_out, PNHt>(
-            in0_sender_semaphore_noc_addr,
+            reducer_semaphore_noc_addr,
             0 /*speculative output should always have index=0 in intermed cb*/,
             reduce_core_noc_x,
             reduce_core_noc_y);
@@ -200,6 +209,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(cb_out, out_chunk_tiles);
+        noc_semaphore_inc(output_semaphore_noc_addr, 1);  // signal speculative output is ready
         DPRINT << "done spec_compute" << ENDL();
     }
 
@@ -208,7 +218,7 @@ void kernel_main() {
         ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
                                           // should not be more than one head per core
         worker_compute<out_chunk_tiles, cb_out_worker, cb_out_m, cb_out_l, cb_intermed_out, PNHt>(
-            in0_sender_semaphore_noc_addr,
+            reducer_semaphore_noc_addr,
             worker_id_for_reduce + 1 /*index=0 is reserved for speculative output*/,
             reduce_core_noc_x,
             reduce_core_noc_y);
@@ -312,6 +322,58 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(cb_out, out_chunk_tiles);
+    }
+    noc_semaphore_inc(output_semaphore_noc_addr, 1);  // signal ground truth output is ready
+
+    // assume output core also does verification
+    if (do_output) {
+        constexpr uint32_t l2_norm_scalar_bytes = 2 /*2 bytes for bfloat16*/;
+        generate_reduce_scaler(
+            cb_identity_scale_in, identity_scalar_packed);  // push in identity scaler for now. TODO: change this to
+                                                            // tile mask to support rows < 32
+
+        // wait for ground truth norm to be ready
+        cb_wait_front(cb_out_m, 1);
+        const InterleavedAddrGen<is_dram> s_out_norm = {
+            .bank_base_address = l2_norm_addr, .page_size = l2_norm_scalar_bytes};
+        uint64_t l2_norm_noc_addr = get_noc_addr(cur_batch, s_out_norm);
+        DPRINT << "l2 norm addr: " << get_read_ptr(cb_out_m) << ENDL();
+        // read in norm value
+        {
+            volatile tt_l1_ptr uint16_t* norm_val_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_out_m));
+            // Use union for safe type punning
+            union {
+                uint32_t i;
+                float f;
+            } converter;
+            converter.i = static_cast<uint32_t>(norm_val_ptr[0]) << 16;  // shift to high bits
+            float converted_val = converter.f;
+            DPRINT << "norm val: " << converted_val << ENDL();
+        }
+        noc_async_write(get_read_ptr(cb_out_m), l2_norm_noc_addr, l2_norm_scalar_bytes);
+        noc_async_write_barrier();
+
+        // read in dist norm value
+        const InterleavedAddrGen<is_dram> s_out_dist_norm = {
+            .bank_base_address = l2_dist_addr, .page_size = l2_norm_scalar_bytes};
+        uint64_t l2_dist_norm_noc_addr = get_noc_addr(cur_batch, s_out_dist_norm);
+        cb_wait_front(cb_out_l, 1);
+        DPRINT << "l2 dist norm addr: " << get_read_ptr(cb_out_l) << ENDL();
+        {
+            volatile tt_l1_ptr uint16_t* norm_val_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_out_l));
+            // Use union for safe type punning
+            union {
+                uint32_t i;
+                float f;
+            } converter;
+            converter.i = static_cast<uint32_t>(norm_val_ptr[0]) << 16;  // shift to high bits
+            float converted_val = converter.f;
+            DPRINT << "dist norm val: " << converted_val << ENDL();
+        }
+        noc_async_write(get_read_ptr(cb_out_l), l2_dist_norm_noc_addr, l2_norm_scalar_bytes);
+        noc_async_write_barrier();
     }
     DPRINT << "done reducer_compute" << ENDL();
 }

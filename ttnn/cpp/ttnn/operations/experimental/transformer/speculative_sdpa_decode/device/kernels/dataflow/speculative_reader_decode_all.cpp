@@ -11,6 +11,8 @@
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/speculative_common.hpp"
 
 #include "debug/dprint.h"  // required in all kernels using DPRINT
+#include "debug/assert.h"
+
 void kernel_main() {
     /*
     In DRAM, Q is (B, PNHt, DHt), K is (B, St, DHt), V is (B, St, DHt), mask is (B, PNHt, PSt)
@@ -40,6 +42,8 @@ void kernel_main() {
     constexpr uint32_t Spec_chunk_t =
         get_compile_time_arg_val(19);  // speculative chunk size (in tiles), for the first and last chunk
     constexpr uint32_t speculative_chunk_size = Spec_chunk_t * tt::constants::TILE_HEIGHT;
+    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));  // semaphore for output ready
+    constexpr bool is_output_sharded = get_compile_time_arg_val(21) == 1;
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -48,6 +52,8 @@ void kernel_main() {
     const uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mask_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t out_spec_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_page_size = get_arg_val<uint32_t>(arg_idx++);
     const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -411,6 +417,62 @@ void kernel_main() {
                 k_tile_bytes,
                 v_tile_bytes,
                 St);
+        }
+    }
+
+    // if do verification, we wait for semaphore to know that ground truth output and speculative output are written to
+    // output tensor memory assume output core also does verification
+    if (is_output_core) {
+        volatile tt_l1_ptr uint32_t* output_semaphore_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_semaphore_addr);
+        // num signals to wait is the 2*num_reducer_cores (1 signal for speculative and 1 for ground truth per head)
+        DPRINT << "waiting for output done semaphore \n";
+        noc_semaphore_wait(output_semaphore_addr_ptr, 2 * (num_kv_heads / num_heads_per_core));
+        DPRINT << "got output done semaphore with value " << *output_semaphore_addr_ptr << "\n";
+
+        // ground truth output and speculative output have the same shape and format as input q
+        if constexpr (is_output_sharded) {
+            ASSERT(false);  // TODO: implement sharded output
+        } else {
+            // read ground truth output
+            {
+                const InterleavedAddrGenFast<is_dram> out_reader = {
+                    .bank_base_address = out_addr, .page_size = q_tile_bytes, .data_format = q_data_format};
+                uint32_t q_tile_id = q_batch_offset;
+                cb_reserve_back(cb_q_in, q_chunk_tiles);
+                uint32_t q_write_ptr = get_write_ptr(cb_q_in);
+                for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
+                    noc_async_read_tile(q_tile_id, out_reader, q_write_ptr);
+                    q_tile_id += 1;
+                    q_write_ptr += q_tile_bytes;
+                    if (++barrier_count == barrier_threshold) {
+                        noc_async_read_barrier();
+                        barrier_count = 0;
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_q_in, q_chunk_tiles);
+            }
+
+            // read speculative output
+            {
+                const InterleavedAddrGenFast<is_dram> out_spec_reader = {
+                    .bank_base_address = out_spec_addr, .page_size = q_tile_bytes, .data_format = q_data_format};
+                uint32_t q_tile_id = q_batch_offset;
+                cb_reserve_back(cb_q_in, q_chunk_tiles);
+                uint32_t q_write_ptr = get_write_ptr(cb_q_in);
+                for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
+                    noc_async_read_tile(q_tile_id, out_spec_reader, q_write_ptr);
+                    q_tile_id += 1;
+                    q_write_ptr += q_tile_bytes;
+                    if (++barrier_count == barrier_threshold) {
+                        noc_async_read_barrier();
+                        barrier_count = 0;
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_q_in, q_chunk_tiles);
+            }
         }
     }
 }

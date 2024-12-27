@@ -215,15 +215,15 @@ std::vector<TensorSpec> SpeculativeScaledDotProductAttentionDecode::compute_outp
         input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
 
     auto batch_size = input.get_logical_shape()[1];
-    ttnn::SimpleShape spec_stat_shape{1, 1, 1, batch_size};
+    ttnn::SimpleShape spec_stat_shape{1, 1, batch_size, 1};
     MemoryConfig stat_mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
     auto l2_dist_tensor =
-        TensorSpec(spec_stat_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stat_mem_cfg));
+        TensorSpec(spec_stat_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), stat_mem_cfg));
     auto l2_norm_tensor =
-        TensorSpec(spec_stat_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stat_mem_cfg));
+        TensorSpec(spec_stat_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), stat_mem_cfg));
     return {full_output, speculated_output, l2_dist_tensor, l2_norm_tensor};
 }
 
