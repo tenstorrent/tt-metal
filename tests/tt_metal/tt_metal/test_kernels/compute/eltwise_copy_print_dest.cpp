@@ -51,7 +51,7 @@ void MAIN {
     // PACK CONFIG REGISTER DPRINT
 
     // GRAYSKULL
-    dprint_tensix_pack_config_grayskull();
+    // dprint_tensix_pack_config_grayskull();
 
     // WORMHOLE
     //dprint_tensix_pack_config_wormhole();
