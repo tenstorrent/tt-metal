@@ -53,6 +53,7 @@ Tensor BinaryNg<binary_op_type>::invoke(
 
 template struct BinaryNg<BinaryOpType::ADD>;
 template struct BinaryNg<BinaryOpType::SUB>;
+template struct BinaryNg<BinaryOpType::RSUB>;
 template struct BinaryNg<BinaryOpType::MUL>;
 template struct BinaryNg<BinaryOpType::DIV>;
 template struct BinaryNg<BinaryOpType::GT>;

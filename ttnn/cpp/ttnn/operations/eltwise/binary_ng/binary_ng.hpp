@@ -54,6 +54,10 @@ constexpr auto sub = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::sub",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::SUB>>();
 
+constexpr auto rsub = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::rsub",
+    ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::RSUB>>();
+
 constexpr auto mul = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::mul",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::MUL>>();

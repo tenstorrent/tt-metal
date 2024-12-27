@@ -60,7 +60,15 @@ void kernel_main() {
                     uint32_t l1_write_addr = get_write_ptr(cb_id_src);
                     noc_async_read_tile(tile_offset + tw, src, l1_write_addr);
                     noc_async_read_barrier();
+#ifdef F32_SCALARB
+                    fill_tile_with_first_row(cb_id_src);
+#endif
+#ifdef INT32_SCALARB
+                    fill_tile_with_first_row(cb_id_src);
+#endif
+#ifdef BF16_SCALARB
                     fill_tile_with_first_row_bfloat16(cb_id_src);
+#endif
                     cb_push_back(cb_id_src, onetile);
 
                     // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
