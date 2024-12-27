@@ -1050,7 +1050,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         constexpr uint32_t first_core_delay = 240;
         constexpr uint32_t total_mcast_delay = 140;
         constexpr uint32_t per_core_mcast_delay = 10;
-        in1_sync_wait_time += total_mcast_delay - (core.x + core.y) * per_core_mcast_delay;
+
+        // Todo: properly do this, as this is a temp fix to unblock BH
+        int wait_time = total_mcast_delay - (core.x + core.y) * per_core_mcast_delay;
+        if (wait_time >= 0) {
+            in1_sync_wait_time += (uint32_t)wait_time;
+        }
         if (core_id == 0) {
             in1_sync_wait_time += first_core_delay;
         }
