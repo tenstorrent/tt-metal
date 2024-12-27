@@ -59,6 +59,7 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
 void py_module(py::module& module) {
     detail::bind_binary_ng_operation(module, ttnn::experimental::add, "Binary Add Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::sub, "Binary Sub Operation");
+    detail::bind_binary_ng_operation(module, ttnn::experimental::rsub, "Binary RSub Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::mul, "Binary Mul Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::div, "Binary Div Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::gt, "Binary Greater Than Operation");

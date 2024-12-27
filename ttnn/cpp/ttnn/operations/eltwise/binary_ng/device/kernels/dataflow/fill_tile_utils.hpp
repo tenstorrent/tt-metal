@@ -17,6 +17,14 @@ FORCE_INLINE void fill_with_val_bfloat16(uint32_t cb_id, uint32_t packed_scalar)
     }
 }
 
+template <uint32_t ElementsV, class ScalarT>
+FORCE_INLINE void fill_with_val(uint32_t cb_id, ScalarT scalar) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr ScalarT*>(get_write_ptr(cb_id));
+    for (uint32_t i = 0; i < ElementsV; ++i) {
+        ptr[i] = scalar;
+    }
+}
+
 // Reads the very first element of the CB and fills the entire tile with that value.
 // Tile is assumed to have 16-bit elements
 FORCE_INLINE void fill_tile_with_first_element_bfloat16(uint32_t cb_id) {
@@ -30,6 +38,19 @@ FORCE_INLINE void fill_tile_with_first_element_bfloat16(uint32_t cb_id) {
     // TODO: should I fill one face like this and then use noc to fill the rest?
     for (uint32_t i = 0; i < 512; ++i) {
         write_ptr[i] = packed_first_elem;
+    }
+}
+
+// Reads the very first element of the CB and fills the entire tile with that value.
+// Tile is assumed to have 32-bit elements (float32 or int32).
+template <typename T>
+FORCE_INLINE void fill_tile_with_first_element(uint32_t cb_id) {
+    auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(get_write_ptr(cb_id));
+    const T first_elem = read_ptr[0];
+
+    auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(get_write_ptr(cb_id));
+    for (uint32_t i = 0; i < 1024; ++i) {
+        write_ptr[i] = first_elem;
     }
 }
 

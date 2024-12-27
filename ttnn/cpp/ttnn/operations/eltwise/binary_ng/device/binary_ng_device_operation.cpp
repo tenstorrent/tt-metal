@@ -6,6 +6,42 @@
 
 namespace ttnn::operations::binary_ng {
 
+namespace utils {
+bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
+    switch (val) {
+        case BinaryOpType::ADD:
+            return (
+                (a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
+        case BinaryOpType::SUB:
+        case BinaryOpType::MUL:
+        case BinaryOpType::DIV:
+        case BinaryOpType::RSUB:
+        case BinaryOpType::LOGADDEXP:
+        case BinaryOpType::LOGADDEXP2:
+        case BinaryOpType::LDEXP:
+        case BinaryOpType::SQUARED_DIFFERENCE:
+        case BinaryOpType::LOGICAL_OR:
+        case BinaryOpType::LOGICAL_XOR:
+        case BinaryOpType::LOGICAL_AND:
+        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::GT:
+        case BinaryOpType::LT:
+        case BinaryOpType::GTE:
+        case BinaryOpType::LTE:
+        case BinaryOpType::EQ:
+        case BinaryOpType::NE: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
+        case BinaryOpType::LEFT_SHIFT:
+        case BinaryOpType::RIGHT_SHIFT:
+        case BinaryOpType::BITWISE_XOR:
+        case BinaryOpType::BITWISE_AND:
+        case BinaryOpType::BITWISE_OR: return (a == DataType::INT32 && b == DataType::INT32);
+        case BinaryOpType::POWER: return true;
+        default: return false;
+    }
+    return false;
+}
+}  // namespace utils
+
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w) {
     if (a_h == b_h && a_w == b_w) {
         return SubtileBroadcastType::NONE;
@@ -49,6 +85,7 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
 
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    std::cout << "BinaryNG validate_on_program_cache_miss" << std::endl;
     // We don't support sharding for now
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
@@ -83,6 +120,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
 
 void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    std::cout << "BinaryNG validate_on_program_cache_hit" << std::endl;
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& output_tensor = tensor_args.output_tensor;
 
@@ -107,6 +145,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
 
 BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    std::cout << "BinaryNG compute_output_specs" << std::endl;
     const auto& output_tensor = tensor_args.output_tensor;
     if (output_tensor.has_value()) {
         return output_tensor->get_tensor_spec();
@@ -147,8 +186,22 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return ProgramFactory{};
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    bool device_check = tensor_args.input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
+    const auto& b = tensor_args.input_tensor_b;
+    BinaryOpType op = attributes.binary_op_type;
+    DataType dtype1 = tensor_args.input_tensor_a.get_dtype();
+    DataType dtype2 = b.has_value() ? b->get_dtype() : dtype1;
+    bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2);
+    std::cout << "BinaryNG device_check " << device_check << std::endl;
+    std::cout << "BinaryNG sfpu_op_check " << sfpu_op_check << std::endl;
+    if (device_check && sfpu_op_check) {
+        std::cout << "BinaryNG sfpu pgm factory" << std::endl;
+        return SfpuProgramFactory{};
+    } else {
+        std::cout << "BinaryNG fpu pgm factory" << std::endl;
+        return ProgramFactory{};
+    }
 }
 
 BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(

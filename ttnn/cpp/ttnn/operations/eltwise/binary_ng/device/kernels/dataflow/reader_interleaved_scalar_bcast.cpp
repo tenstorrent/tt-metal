@@ -45,9 +45,16 @@ void kernel_main() {
             uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
             noc_async_read_tile(tile_offset, src, l1_write_addr_src);
             noc_async_read_barrier();
+#ifdef F32_SCALARB
+            fill_tile_with_first_element<float>(cb_id_src);  // For float32 data
+#endif
+#ifdef INT32_SCALARB
+            fill_tile_with_first_element<int32_t>(cb_id_src);  // For int32 data
+#endif
+#ifdef BF16_SCALARB
             fill_tile_with_first_element_bfloat16(cb_id_src);
+#endif
             cb_push_back(cb_id_src, onetile);
-
             num_tiles_read += HtWt - start_t;
             tile_offset += c_stride;
         }

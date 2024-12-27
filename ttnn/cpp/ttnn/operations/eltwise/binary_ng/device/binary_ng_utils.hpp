@@ -6,6 +6,8 @@
 
 #include "binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 #include <optional>
 #include <string>
@@ -39,6 +41,7 @@ struct BinaryNgKernelConfig {
 };
 
 std::string get_kernel_file_path(KernelName kernel_name);
+std::string get_sfpu_kernel_file_path(KernelName kernel_name);
 
 struct OpConfig {
     struct SfpuConfig {
@@ -68,5 +71,12 @@ struct OpConfig {
 struct Lowercase {
     std::string_view view;
 };
+
+std::map<std::string, std::string> get_defines_fp32(
+    BinaryOpType op_type,
+    const std::optional<tt::tt_metal::DataType> in_a_dtype = std::nullopt,
+    const std::optional<tt::tt_metal::DataType> in_b_dtype = std::nullopt,
+    const std::optional<ttnn::operations::unary::FusedActivations>& fused_activations = std::nullopt,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
 }  // namespace ttnn::operations::binary_ng

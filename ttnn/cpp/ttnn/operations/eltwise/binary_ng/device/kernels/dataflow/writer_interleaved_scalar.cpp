@@ -7,9 +7,8 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
-
 void kernel_main() {
-    uint32_t packed_scalar = get_arg_val<uint32_t>(0);
+    uint32_t packed_scalar = get_arg_val<uint32_t>(0);  // u.u32 or packed_scalar
     uint32_t dst_addr = get_arg_val<uint32_t>(1);
     uint32_t start_tile_id = get_arg_val<uint32_t>(2);
     uint32_t num_tiles = get_arg_val<uint32_t>(3);
@@ -39,7 +38,16 @@ void kernel_main() {
 
     // we only need to fill a tile with the scalar value once
     cb_reserve_back(cb_id_src, onetile);
+#ifdef F32_SCALARB
+    float* float_ptr = reinterpret_cast<float*>(&packed_scalar);
+    fill_with_val<1024, float>(cb_id_src, *float_ptr);
+#endif
+#ifdef INT32_SCALARB
+    fill_with_val<1024, int32_t>(cb_id_src, packed_scalar);
+#endif
+#ifdef BF16_SCALARB
     fill_with_val_bfloat16(cb_id_src, packed_scalar);
+#endif
     cb_push_back(cb_id_src, onetile);
 
     uint32_t num_tiles_written = 0;
