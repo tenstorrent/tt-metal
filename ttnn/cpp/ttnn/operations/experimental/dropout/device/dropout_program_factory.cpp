@@ -311,24 +311,32 @@ void DropoutProgramFactory::override_runtime_arguments(
     auto dst_buffer = output.buffer();
 
     // Only seed/address arguments need updating here; tile counts remain the same as in create().
+    auto& reader_runtime_args = GetRuntimeArgs(program, dropout_reader_kernel);
+    auto& writer_runtime_args = GetRuntimeArgs(program, dropout_writer_kernel);
+    auto& group_1_runtime_args = GetRuntimeArgs(program, dropout_group_1_kernel);
+    // we need to initialize it with something, but if group 2 is  empty it will be used in the loop
+    auto& group_2_runtime_args =
+        core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, dropout_group_2_kernel);
+
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Update the source address for the reader kernel
         {
-            auto& runtime_args = GetRuntimeArgs(program, dropout_reader_kernel, core);
+            auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[0] = src_buffer->address();
         }
         // Update the destination address for the writer kernel
         {
-            auto& runtime_args = GetRuntimeArgs(program, dropout_writer_kernel, core);
+            auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[0] = dst_buffer->address();
         }
+        // Update the seed for the compute kernels
         if (core_group_1.contains(core)) {
-            auto& runtime_args = GetRuntimeArgs(program, dropout_group_1_kernel, core);
+            auto& runtime_args = group_1_runtime_args[core.x][core.y];
             runtime_args[0] = operation_attributes.seed;
         } else if (core_group_2.contains(core)) {
-            auto& runtime_args = GetRuntimeArgs(program, dropout_group_2_kernel, core);
+            auto& runtime_args = group_2_runtime_args[core.x][core.y];
             runtime_args[0] = operation_attributes.seed;
         } else {
             TT_THROW("Core not in specified core ranges.");

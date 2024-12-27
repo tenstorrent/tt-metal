@@ -22,8 +22,6 @@ autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability
 
     auto mask = core::ones_like(tensor->get_value());
     auto dropout_seed = autograd::ctx().get_generator()();
-    fmt::println("dropout_seed: {}", dropout_seed);
-    fmt::println(" mask shape: {}", mask.get_shape());
     auto scaler = 1.0F / (1.0F - probability);
     mask = ttnn::experimental::dropout(mask, probability, scaler, static_cast<uint32_t>(dropout_seed));
     auto out = autograd::create_tensor();
