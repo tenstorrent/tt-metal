@@ -7,10 +7,10 @@
 
 #include <unordered_set>
 
-#include "tt_metal/tt_stl/strong_type_handle.hpp"
+#include "tt_metal/tt_stl/strong_type.hpp"
 
-using MyIntId = tt::stl::StrongTypeHandle<int, struct MyIntIdTag>;
-using MyStringId = tt::stl::StrongTypeHandle<std::string, struct MyStringIdTag>;
+using MyIntId = tt::stl::StrongType<int, struct MyIntIdTag>;
+using MyStringId = tt::stl::StrongType<std::string, struct MyStringIdTag>;
 
 namespace tt::stl {
 namespace {
@@ -19,18 +19,18 @@ using ::testing::ElementsAre;
 using ::testing::IsNull;
 using ::testing::UnorderedElementsAre;
 
-TEST(StrongTypeHandleTest, Basic) {
-    MyIntId handle1(42);
-    MyIntId handle2(43);
+TEST(StrongTypeTest, Basic) {
+    MyIntId my_int_id1(42);
+    MyIntId my_int_id2(43);
 
-    EXPECT_EQ(*handle1, 42);
-    EXPECT_LT(*handle1, *handle2);
+    EXPECT_EQ(*my_int_id1, 42);
+    EXPECT_LT(*my_int_id1, *my_int_id2);
 
-    handle1 = MyIntId(43);
-    EXPECT_EQ(handle1, handle2);
+    my_int_id1 = MyIntId(43);
+    EXPECT_EQ(my_int_id1, my_int_id2);
 }
 
-TEST(StrongTypeHandleTest, UseInContainers) {
+TEST(StrongTypeTest, UseInContainers) {
     std::unordered_set<MyIntId> unordered;
     std::set<MyIntId> ordered;
 
@@ -45,19 +45,19 @@ TEST(StrongTypeHandleTest, UseInContainers) {
     EXPECT_THAT(ordered, ElementsAre(MyIntId(1), MyIntId(2), MyIntId(3)));
 }
 
-TEST(StrongTypeHandleTest, StreamingOperator) {
+TEST(StrongTypeTest, StreamingOperator) {
     std::stringstream ss;
     ss << MyStringId("hello world");
     EXPECT_EQ(ss.str(), "hello world");
 }
 
-TEST(StrongTypeHandleTest, MoveOnlyType) {
-    using MoveOnlyHandle = StrongTypeHandle<std::unique_ptr<int>, struct MoveOnlyTag>;
+TEST(StrongTypeTest, MoveOnlyType) {
+    using MoveOnlyType = StrongType<std::unique_ptr<int>, struct MoveOnlyTag>;
 
-    MoveOnlyHandle from(std::make_unique<int>(42));
+    MoveOnlyType from(std::make_unique<int>(42));
     EXPECT_EQ(**from, 42);
 
-    MoveOnlyHandle to = std::move(from);
+    MoveOnlyType to = std::move(from);
 
     // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_THAT(*from, IsNull());
