@@ -321,7 +321,7 @@ inline void set_ncrisc_kernel_resume_deassert_address() {
 
 inline void run_triscs(dispatch_core_processor_masks enables) {
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
-        mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_TRISCS_GO;
+        increment_stream_register(STREAM_CHANNEL, RUN_ALL_TRISCS);
     }
 }
 
@@ -338,13 +338,16 @@ inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
 
 inline void wait_ncrisc_trisc() {
     WAYPOINT("NTW");
-    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+    // stall on trisc first to reduce L1 hits
+    while (get_stream_register_value(STREAM_CHANNEL) & RUN_ALL_TRISCS != 0);  // stall on trisc first to reduce L1 hits
+    while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
         invalidate_l1_cache();
     }
     WAYPOINT("NTD");
 }
 
 int main() {
+    reset_stream_register(STREAM_CHANNEL);
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
