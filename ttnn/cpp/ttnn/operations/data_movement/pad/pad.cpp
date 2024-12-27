@@ -128,10 +128,10 @@ static ttnn::Tensor pad_impl(
             !input_tensor.is_sharded() || output_w == output_memory_config.shard_spec->shape[1],
             "output_w != output_memory_config.shard_spec().shape[1]");
 
-        tt::tt_metal::LegacyShape output_padded_legacy_shape{output_padded_shape};
-
+        ttnn::SimpleShape output_shape{output_padded_shape};
         auto output_tensor = operation::run(
-                                 Pad{output_padded_legacy_shape,
+                                 Pad{output_shape,
+                                     output_shape,
                                      ttnn::SimpleShape{input_tensor_start},
                                      value,
                                      output_memory_config,
