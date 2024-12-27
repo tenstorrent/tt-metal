@@ -50,10 +50,20 @@ void MAIN {
 
     // PACK CONFIG REGISTER DPRINT
 
+    // GRAYSKULL
+    dprint_tensix_pack_config_grayskull();
+
     // WORMHOLE
     //dprint_tensix_pack_config_wormhole();
-    //dprint_tensix_pack_relu_config_wormhole();
-    //dprint_tensix_dest_rd_ctrl_wormhole();
+
+    // WORMHOLE/BLACKHOLE
+    // dprint_tensix_pack_relu_config_wormhole_or_blackhole();
+    // dprint_tensix_dest_rd_ctrl_wormhole_or_blackhole();
+    // dprint_tensix_pck_edge_offset_wormhole_or_blackhole();
+    // dprint_tensix_pack_counters_wormhole_or_blackhole();
+
+    // BLACKHOLE
+    // dprint_tensix_pack_config_blackhole();
 
     release_dst();
 }

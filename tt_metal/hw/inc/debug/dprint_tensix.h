@@ -211,24 +211,24 @@ inline void dprint_tensix_alu_config_wormhole_or_blackhole(){
         volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
         uint32_t reg_val = cfg[ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32];
 
-        DPRINT << "RND_MODE: ";                                                           
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Fpu_srnd_en, "Fpu_srnd_en");          
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Gasket_srnd_en, "Gasket_srnd_en");    
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Packer_srnd_en, "Packer_srnd_en");    
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Padding, "Padding");                  
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_GS_LF, "GS_LF");                      
+        DPRINT << "RND_MODE: ";
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Fpu_srnd_en, "Fpu_srnd_en");
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Gasket_srnd_en, "Gasket_srnd_en");
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Packer_srnd_en, "Packer_srnd_en");
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Padding, "Padding");
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_GS_LF, "GS_LF");
         DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Bfp8_HF, "Bfp8_HF");
-        DPRINT << "FORMAT: ";                     
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcAUnsigned, "SrcAUnsigned");     
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcBUnsigned, "SrcBUnsigned");     
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcA, "SrcA");                     
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG1_SrcB, "SrcB");                     
+        DPRINT << "FORMAT: ";
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcAUnsigned, "SrcAUnsigned");
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcBUnsigned, "SrcBUnsigned");
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcA, "SrcA");
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG1_SrcB, "SrcB");
         DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG2_Dstacc, "Dstacc");
-        DPRINT << "ACC_CTRL: ";                      
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Fp32_enabled, "Fp32_enabled");             
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_SFPU_Fp32_enabled, "SFPU_Fp32_enabled");   
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_INT8_math_enabled, "INT8_math_enabled");   
-        DPRINT << ENDL();  
+        DPRINT << "ACC_CTRL: ";
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Fp32_enabled, "Fp32_enabled");
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_SFPU_Fp32_enabled, "SFPU_Fp32_enabled");
+        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_INT8_math_enabled, "INT8_math_enabled");
+        DPRINT << ENDL();
 }
 
 inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t shamt, const char* name)
@@ -260,7 +260,7 @@ inline void dprint_tensix_unpack_tile_descriptor_grayskull(){
     //word 2
     word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32];
     dprint_tensix_struct_field(word, 0xffff, 0, "w_dim");
-    
+
     // blobs_y_start is in 2 words (word2 and word3)
     uint32_t tmp_word = word;
 
@@ -386,21 +386,27 @@ inline void dprint_tensix_unpack_config_wormhole_or_blackhole(){
 
 // PACKER CONFIG REGISTERS
 
-inline void dprint_tensix_pack_config_wormhole(){
+inline void dprint_tensix_pack_config_grayskull() {
+    // HAS MULTIPLE REGISTERS
+    uint reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32;
+    // uint reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32;
+    // uint reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32;
+    // uint reg_addr = THCON_SEC1_REG8_Row_start_section_size_ADDR32;
+
     // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
     // word 0
-    uint32_t word = cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32];
+    uint32_t word = cfg[reg_addr];
     dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz");
     dprint_tensix_struct_field(word, 0xffff0000, 16, "exp_sec_sz");
 
     // word 1
-    word = cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 1];
+    word = cfg[reg_addr + 1];
     dprint_tensix_struct_field(word, 0xffffffff, 0, "l1_dst_adr");
 
     // word 2
-    word = cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2];
+    word = cfg[reg_addr + 2];
     dprint_tensix_struct_field(word, 0x1, 0, "uncmpr");
     dprint_tensix_struct_field(word, 0x2, 1, "add_l1_dst_adr_ofs");
     dprint_tensix_struct_field(word, 0xc, 2, "r0");
@@ -412,7 +418,50 @@ inline void dprint_tensix_pack_config_wormhole(){
     dprint_tensix_struct_field(word, 0xff000000, 24, "l1_src_adr");
 
     // word 3
-    word = cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 3];
+    word = cfg[reg_addr + 3];
+    dprint_tensix_struct_field(word, 0xffff, 0, "dsmpl_mask");
+    dprint_tensix_struct_field(word, 0x70000, 16, "dsmpl_shcnt");
+    dprint_tensix_struct_field(word, 0x80000, 19, "r_md");
+    dprint_tensix_struct_field(word, 0x100000, 20, "exp_th_en");
+    dprint_tensix_struct_field(word, 0xe00000, 21, "r2");
+    dprint_tensix_struct_field(word, 0xff000000, 24, "exp_th");
+
+    DPRINT << ENDL();
+}
+
+inline void dprint_tensix_pack_config_wormhole(){
+    // HAS MULTIPLE REGISTERS
+    uint reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32;
+    // uint reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32;
+    // uint reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32;
+    // uint reg_addr = THCON_SEC1_REG8_Row_start_section_size_ADDR32;
+
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+
+    // word 0
+    uint32_t word = cfg[reg_addr];
+    dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz");
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "exp_sec_sz");
+
+    // word 1
+    word = cfg[reg_addr + 1];
+    dprint_tensix_struct_field(word, 0xffffffff, 0, "l1_dst_adr");
+
+    // word 2
+    word = cfg[reg_addr + 2];
+    dprint_tensix_struct_field(word, 0x1, 0, "uncmpr");
+    dprint_tensix_struct_field(word, 0x2, 1, "add_l1_dst_adr_ofs");
+    dprint_tensix_struct_field(word, 0xc, 2, "r0");
+    dprint_tensix_struct_field(word, 0xf0, 4, "out_frmt");
+    dprint_tensix_struct_field(word, 0xf00, 8, "in_frmt");
+    dprint_tensix_struct_field(word, 0xf000, 12, "r1");
+    dprint_tensix_struct_field(word, 0x10000, 16, "src_if_sel");
+    dprint_tensix_struct_field(word, 0xfe0000, 17, "pck_per_xy_pl");
+    dprint_tensix_struct_field(word, 0xff000000, 24, "l1_src_adr");
+
+    // word 3
+    word = cfg[reg_addr + 3];
     dprint_tensix_struct_field(word, 0xffff, 0, "dsmpl_mask");
     dprint_tensix_struct_field(word, 0x70000, 16, "dsmpl_shcnt");
     dprint_tensix_struct_field(word, 0x80000, 19, "r_md");
@@ -420,33 +469,73 @@ inline void dprint_tensix_pack_config_wormhole(){
     dprint_tensix_struct_field(word, 0x600000, 21, "pck_l1_ac_dis_pck_0_flg");
     dprint_tensix_struct_field(word, 0x800000, 23, "r2");
     dprint_tensix_struct_field(word, 0xff000000, 24, "exp_th");
- 
+
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_pack_relu_config_wormhole(){
+inline void dprint_tensix_pack_config_blackhole() {
+    // HAS MULTIPLE REGISTERS
+    uint reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32;
+    // uint reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32;
+    // uint reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32;
+    // uint reg_addr = THCON_SEC1_REG8_Row_start_section_size_ADDR32;
+
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+    // word 0
+    uint32_t word = cfg[reg_addr];
+    dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz");
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "exp_sec_sz");
+
+    // word 1
+    word = cfg[reg_addr + 1];
+    dprint_tensix_struct_field(word, 0xffffffff, 0, "l1_dst_adr");
+
+    // word2
+    word = cfg[reg_addr + 2];
+    dprint_tensix_struct_field(word, 0x1, 0, "uncmps");
+    dprint_tensix_struct_field(word, 0x2, 1, "aldao");
+    dprint_tensix_struct_field(word, 0x4, 2, "dis_pck_0_fl");
+    dprint_tensix_struct_field(word, 0x8, 3, "r0");
+    dprint_tensix_struct_field(word, 0xf0, 4, "out_frmt");
+    dprint_tensix_struct_field(word, 0xf00, 8, "in_frmt");
+    dprint_tensix_struct_field(word, 0x1000, 12, "dsea");
+    dprint_tensix_struct_field(word, 0x2000, 13, "alpis");
+    dprint_tensix_struct_field(word, 0x4000, 14, "en_out_fifo");
+    dprint_tensix_struct_field(word, 0x8000, 15, "sub_l1_til_h_sz");
+    dprint_tensix_struct_field(word, 0x10000, 16, "src_if_sel");
+    dprint_tensix_struct_field(word, 0x1e0000, 17, "pck_st_intf_pos");
+    dprint_tensix_struct_field(word, 0x200000, 21, "apd0co");
+    dprint_tensix_struct_field(word, 0x400000, 22, "add_til_h_sz");
+    dprint_tensix_struct_field(word, 0x800000, 23, "pdypso");
+    dprint_tensix_struct_field(word, 0xff000000, 24, "l1_src_adr");
+
+    DPRINT << ENDL();
+}
+
+inline void dprint_tensix_pack_relu_config_wormhole_or_blackhole() {
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
     uint32_t reg_val = cfg[ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32];
 
     DPRINT << "ALU_ACC_CTRL: ";
     DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Zero_Flag_disabled_src, "zero_flag_disabled_src");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Zero_Flag_disabled_dst, "zero_flag_disabled_dst"); 
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Zero_Flag_disabled_dst, "zero_flag_disabled_dst");
     DPRINT << "STACC_RELU: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, STACC_RELU_ApplyRelu, "apply_relu"); 
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, STACC_RELU_ApplyRelu, "apply_relu");
     DPRINT_TENSIX_CONFIG_FIELD(reg_val, STACC_RELU_ReluThreshold, "relu_threshold");
-    DPRINT << "DISABLE_RISC_BP_Disable: ";       
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_main, "main"); 
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_trisc, "trisc"); 
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_ncrisc, "ncrisc"); 
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_main, "bmp_clear_main"); 
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_trisc, "bmp_clear_trisc"); 
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_ncrisc, "bmp_clear_ncrisc"); 
+    DPRINT << "DISABLE_RISC_BP_Disable: ";
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_main, "main");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_trisc, "trisc");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_ncrisc, "ncrisc");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_main, "bmp_clear_main");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_trisc, "bmp_clear_trisc");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_ncrisc, "bmp_clear_ncrisc");
     DPRINT << ENDL();
-
 }
 
-inline void dprint_tensix_dest_rd_ctrl_wormhole(){
+inline void dprint_tensix_dest_rd_ctrl_wormhole_or_blackhole() {
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
     uint32_t reg_val = cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32];
@@ -462,5 +551,49 @@ inline void dprint_tensix_dest_rd_ctrl_wormhole(){
     //dprint_tensix_struct_field(reg_val, 0xfffffff0, 4, "reserved");
 
     DPRINT << ENDL();
+}
 
+inline void dprint_tensix_pck_edge_offset_wormhole_or_blackhole() {
+    // HAS MULTIPLE REGISTERS
+    uint reg_addr = PCK_EDGE_OFFSET_SEC0_mask_ADDR32;
+    // uint reg_addr = PCK_EDGE_OFFSET_SEC1_mask_ADDR32;
+    // uint reg_addr = PCK_EDGE_OFFSET_SEC2_mask_ADDR32;
+    // uint reg_addr = PCK_EDGE_OFFSET_SEC3_mask_ADDR32;
+
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+    uint32_t reg_val = cfg[reg_addr];
+
+    dprint_tensix_struct_field(reg_val, 0xffff, 0, "mask");
+    dprint_tensix_struct_field(reg_val, 0x10000, 16, "mode");
+    dprint_tensix_struct_field(reg_val, 0x60000, 17, "tile_row_set_select_pack0");
+    dprint_tensix_struct_field(reg_val, 0x180000, 19, "tile_row_set_select_pack1");
+    dprint_tensix_struct_field(reg_val, 0x600000, 21, "tile_row_set_select_pack2");
+    dprint_tensix_struct_field(reg_val, 0x1800000, 23, "tile_row_set_select_pack3");
+
+    // Can't write to reserved? -> always prints 0
+    // reg_val gets only last 4 bits
+    // dprint_tensix_struct_field(reg_val, 0xfe000000, 25, "reserved");
+
+    DPRINT << ENDL();
+}
+
+inline void dprint_tensix_pack_counters_wormhole_or_blackhole() {
+    // HAS MULTIPLE REGISTERS
+    uint reg_addr = PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32;
+    // uint reg_addr = PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32;
+    // uint reg_addr = PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32;
+    // uint reg_addr = PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32;
+
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+    uint32_t reg_val = cfg[reg_addr];
+
+    dprint_tensix_struct_field(reg_val, 0xff, 0, "pack_per_xy_plane");
+    dprint_tensix_struct_field(reg_val, 0xff00, 8, "pack_reads_per_xy_plane");
+    dprint_tensix_struct_field(reg_val, 0x7f0000, 16, "pack_xys_per_til");
+    dprint_tensix_struct_field(reg_val, 0x800000, 23, "pack_yz_transposed");
+    dprint_tensix_struct_field(reg_val, 0xff000000, 24, "pack_per_xy_plane_offset");
+
+    DPRINT << ENDL();
 }
