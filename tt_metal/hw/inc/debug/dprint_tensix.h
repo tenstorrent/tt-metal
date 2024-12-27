@@ -474,7 +474,7 @@ inline void dprint_tensix_pack_config_wormhole(){
 }
 
 inline void dprint_tensix_pack_config_blackhole() {
-    // HAS MULTIPLE REGISTERS
+    // HAS MULTIPLE REGISTERS0
     uint reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32;
     // uint reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32;
     // uint reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32;

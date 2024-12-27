@@ -39,9 +39,8 @@ void MAIN {
     // UNPACK CONFIG REGISTER DPRINT
 
     // GRAYSKULL
-    //dprint_tensix_unpack_tile_descriptor_grayskull();
-    //dprint_tensix_unpack_config_grayskull();
-    // ALU DOES NOT EXIST ON GRAYSKULL
+    // dprint_tensix_unpack_tile_descriptor_grayskull();
+    // dprint_tensix_unpack_config_grayskull();
 
     // WORMHOLE/BLACKHOLE
     //dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
