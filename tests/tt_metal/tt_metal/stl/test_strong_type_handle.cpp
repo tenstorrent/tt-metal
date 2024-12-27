@@ -24,7 +24,6 @@ TEST(StrongTypeHandleTest, Basic) {
     MyIntId handle2(43);
 
     EXPECT_EQ(*handle1, 42);
-    EXPECT_EQ(handle1.value(), 42);
     EXPECT_LT(*handle1, *handle2);
 
     handle1 = MyIntId(43);

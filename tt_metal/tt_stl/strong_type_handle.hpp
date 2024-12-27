@@ -61,7 +61,6 @@ public:
     StrongTypeHandle& operator=(const StrongTypeHandle&) = default;
     StrongTypeHandle& operator=(StrongTypeHandle&&) = default;
 
-    const T& value() const { return value_; }
     const T& operator*() const { return value_; }
 
     auto operator<=>(const StrongTypeHandle&) const = default;
