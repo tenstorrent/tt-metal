@@ -206,29 +206,35 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
     }
 
 // Print content of the register field by field. Issue: No ENDL.
-inline void dprint_tensix_alu_config_wormhole_or_blackhole(){
-        // Get pointer to registers for current state ID
-        volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
-        uint32_t reg_val = cfg[ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32];
+inline void dprint_tensix_alu_config() {
+    // Get pointer to registers for current state ID
 
-        DPRINT << "RND_MODE: ";
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Fpu_srnd_en, "Fpu_srnd_en");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Gasket_srnd_en, "Gasket_srnd_en");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Packer_srnd_en, "Packer_srnd_en");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Padding, "Padding");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_GS_LF, "GS_LF");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Bfp8_HF, "Bfp8_HF");
-        DPRINT << "FORMAT: ";
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcAUnsigned, "SrcAUnsigned");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcBUnsigned, "SrcBUnsigned");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcA, "SrcA");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG1_SrcB, "SrcB");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG2_Dstacc, "Dstacc");
-        DPRINT << "ACC_CTRL: ";
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Fp32_enabled, "Fp32_enabled");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_SFPU_Fp32_enabled, "SFPU_Fp32_enabled");
-        DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_INT8_math_enabled, "INT8_math_enabled");
-        DPRINT << ENDL();
+#ifdef ARCH_GRAYSKULL
+    DPRINT << "GRAYSKULL HAS NO ALU CONFIG REGISTERS" << ENDL();
+    return
+#endif
+
+        volatile uint tt_reg_ptr * cfg = get_cfg_pointer();
+    uint32_t reg_val = cfg[ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32];
+
+    DPRINT << "RND_MODE: ";
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Fpu_srnd_en, "Fpu_srnd_en");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Gasket_srnd_en, "Gasket_srnd_en");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Packer_srnd_en, "Packer_srnd_en");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Padding, "Padding");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_GS_LF, "GS_LF");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Bfp8_HF, "Bfp8_HF");
+    DPRINT << "FORMAT: ";
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcAUnsigned, "SrcAUnsigned");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcBUnsigned, "SrcBUnsigned");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcA, "SrcA");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG1_SrcB, "SrcB");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG2_Dstacc, "Dstacc");
+    DPRINT << "ACC_CTRL: ";
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Fp32_enabled, "Fp32_enabled");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_SFPU_Fp32_enabled, "SFPU_Fp32_enabled");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_INT8_math_enabled, "INT8_math_enabled");
+    DPRINT << ENDL();
 }
 
 inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t shamt, const char* name)

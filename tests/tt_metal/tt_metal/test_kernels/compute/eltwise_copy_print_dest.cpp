@@ -43,9 +43,9 @@ void MAIN {
     // dprint_tensix_unpack_config_grayskull();
 
     // WORMHOLE/BLACKHOLE
-    //dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
-    //dprint_tensix_unpack_config_wormhole_or_blackhole();
-    //dprint_tensix_alu_config_wormhole_or_blackhole();
+    // dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
+    // dprint_tensix_unpack_config_wormhole_or_blackhole();
+    // dprint_tensix_alu_config();
 
     // PACK CONFIG REGISTER DPRINT
 
