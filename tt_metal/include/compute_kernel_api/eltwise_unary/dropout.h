@@ -38,7 +38,7 @@ ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_facto
 }
 
 /**
- * Please refer to documentation for any_init.
+ * This init should be called once in kernel. Not once per tile
  */
 ALWI void dropout_tile_init(uint32_t seed) { MATH((llk_math_eltwise_unary_sfpu_dropout_init<APPROX>(seed))); }
 
