@@ -228,8 +228,8 @@ std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> create_global_
         CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
         auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
         auto worker_subdevice_id = worker_subdevice_id_opt.has_value()
-                                       ? tt::stl::Span<const SubDeviceId>{{worker_subdevice_id_opt.value()}}
-                                       : tt::stl::Span<const SubDeviceId>{};
+                                       ? std::vector<SubDeviceId>{worker_subdevice_id_opt.value()}
+                                       : std::vector<SubDeviceId>{};
         auto sem = CreateGlobalSemaphore(d, core_grid, 0, BufferType::L1, worker_subdevice_id);
         semaphores.push_back(sem);
     }
@@ -253,8 +253,8 @@ std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> create_global_
             auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
             while (semaphores[i]->address() != highest_addr) {
                 auto worker_subdevice_id = worker_subdevice_id_opt.has_value()
-                                               ? tt::stl::Span<const SubDeviceId>{worker_subdevice_id_opt.value()}
-                                               : tt::stl::Span<const SubDeviceId>{};
+                                               ? std::vector<SubDeviceId>{worker_subdevice_id_opt.value()}
+                                               : std::vector<SubDeviceId>{};
                 auto sem = CreateGlobalSemaphore(devices[i], core_grid, 0, BufferType::L1, worker_subdevice_id);
                 if (sem->address() == highest_addr) {
                     semaphores[i] = sem;
