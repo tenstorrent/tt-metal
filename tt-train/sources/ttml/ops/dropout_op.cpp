@@ -28,7 +28,7 @@ autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability
     // it will require to generate only one program and reuse it later
     auto dropout_seed = 0U;
     auto scaler = 1.0F / (1.0F - probability);
-    mask = ttnn::dropout(mask, dropout_seed, probability, scaler);
+    mask = ttnn::experimental::dropout(mask, dropout_seed, probability, scaler);
     auto out = autograd::create_tensor();
     auto masked_out = ttnn::multiply(tensor->get_value(), mask);
     out->set_value(masked_out);
