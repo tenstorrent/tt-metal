@@ -638,10 +638,6 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_tunneler_queue_size_bytes = 0x4000; // maximum queue (power of 2)
     constexpr uint32_t default_tunneler_test_results_addr = 0x39000; // 0x8000 * 4 + 0x19000; 0x10000 * 4 + 0x19000 = 0x59000 > 0x40000 (256kB)
     constexpr uint32_t default_tunneler_test_results_size = 0x6000;  // 256kB total L1 in ethernet core - 0x39000
-    static_assert(
-        default_tunneler_test_results_addr + default_tunneler_test_results_size <=
-            eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_HARDCODED_TESTING_ADDR,
-        "Tunneler test results buffer exceeds available memory");
 
     constexpr uint32_t default_timeout_mcycles = 1000;
     constexpr uint32_t default_rx_disable_data_check = 0;

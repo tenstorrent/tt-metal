@@ -66,8 +66,6 @@ struct address_map {
         (FABRIC_ROUTER_CONFIG_BASE + sizeof(tt::tt_fabric::fabric_router_l1_config_t) + 31) & ~31;
     static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_L1_LOADING_SIZE - ERISC_L1_UNRESERVED_BASE;
 
-    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_HARDCODED_TESTING_ADDR = 0x3F000;
-
     static_assert((ERISC_L1_UNRESERVED_BASE % 32) == 0);
 
     static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE + 4;
