@@ -200,9 +200,11 @@ on:
           - eltwise.unary_backward.hardshrink_bw
           - eltwise.unary_backward.softshrink_bw
           - eltwise.unary_backward.acos_bw.acos_bw
+          - eltwise.unary_backward.acos_bw.acos_bw_sharded
           - eltwise.unary_backward.acosh_bw.acosh_bw
           - eltwise.unary_backward.atan_bw.atan_bw
           - eltwise.unary_backward.cos_bw.cos_bw
+          - eltwise.unary_backward.cos_bw.cos_bw_sharded
           - eltwise.unary_backward.frac_bw.frac_bw
           - eltwise.unary_backward.i0_bw.i0_bw
           - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
@@ -239,6 +241,7 @@ on:
           - eltwise.unary_backward.fill_bw.fill_bw
           - eltwise.unary_backward.fill_bw.fill_bw_sharded
           - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
+          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw_sharded
           - eltwise.unary_backward.lgamma_bw.lgamma_bw
           - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
           - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
@@ -368,6 +371,7 @@ on:
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
           - eltwise.binary_backward.hypot_bw.hypot_bw
           - eltwise.binary_backward.add_bw.add_bw
+          - eltwise.binary_backward.add_bw.add_bw_sharded
           - eltwise.binary_backward.sub_bw.sub_bw
           - eltwise.binary_backward.mul_bw.mul_bw
           - eltwise.binary_backward.div_bw.div_bw
