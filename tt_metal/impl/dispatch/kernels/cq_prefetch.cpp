@@ -452,10 +452,8 @@ static uint32_t write_pages_to_dispatcher(
 
     // Grabbing all pages at once is ok if scratch_size < 3 * downstream_cb_block_size
     // test_for_nonzero is an optimization: inner loops moving lots of pages don't bother
-    if constexpr (!test_for_nonzero) {
-        if (npages != 0) {
-            cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
-        }
+    if (!test_for_nonzero || npages != 0) {
+        cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
     }
 
     uint64_t noc_addr;
@@ -1157,7 +1155,7 @@ bool process_cmd(
                 uint32_t is_dram = packed_page_flags & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
                 uint32_t start_page = (packed_page_flags >> CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT) &
                                       CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK;
-                if constexpr (is_dram) {
+                if (is_dram) {
                     stride = process_relay_paged_cmd<true>(cmd_ptr, downstream_data_ptr, start_page);
                 } else {
                     stride = process_relay_paged_cmd<false>(cmd_ptr, downstream_data_ptr, start_page);

@@ -74,6 +74,7 @@ constexpr DispatchRemoteNetworkType
 
 constexpr uint32_t test_results_buf_addr_arg = get_compile_time_arg_val(14);
 constexpr uint32_t test_results_buf_size_bytes = get_compile_time_arg_val(15);
+constexpr bool debug_info = test_results_buf_addr_arg > 0;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const test_results =
@@ -139,10 +140,11 @@ constexpr uint32_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
 
 
 void kernel_main() {
-
-    write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
-    write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000000);
-    write_test_results(test_results, PQ_TEST_MISC_INDEX+1, 0xaa000000 | mux_fan_in);
+    if constexpr (debug_info) {
+        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
+        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000000);
+        write_test_results(test_results, PQ_TEST_MISC_INDEX+1, 0xaa000000 | mux_fan_in);
+    }
 
     for (uint32_t i = 0; i < mux_fan_in; i++) {
         input_queues[i].init(i, rx_queue_start_addr_words + i*rx_queue_size_words, rx_queue_size_words,
@@ -160,11 +162,11 @@ void kernel_main() {
                       output_depacketize_remove_header);
 
     if (!wait_all_src_dest_ready(input_queues, mux_fan_in, &output_queue, 1, timeout_cycles)) {
-        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
+        if constexpr (debug_info) write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
 
-    write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000001);
+    if constexpr (debug_info) write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000001);
 
     uint32_t curr_input = 0;
     bool timeout = false;
@@ -177,8 +179,8 @@ void kernel_main() {
     uint32_t heartbeat = 0;
     while (!dest_finished && !timeout) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-        iter++;
-        if (timeout_cycles > 0) {
+        if constexpr (debug_info) iter++;
+        if constexpr (timeout_cycles > 0) {
             uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
             if (cycles_since_progress > timeout_cycles) {
                 timeout = true;
@@ -187,10 +189,15 @@ void kernel_main() {
         }
         if (input_queues[curr_input].get_curr_packet_valid()) {
             bool full_packet_sent;
-            uint32_t words_sent = output_queue.forward_data_from_input(curr_input, full_packet_sent, input_queues[curr_input].get_end_of_cmd());
-            data_words_sent += words_sent;
-            if ((words_sent > 0) && (timeout_cycles > 0)) {
-                progress_timestamp = get_timestamp_32b();
+            const uint32_t words_sent = output_queue.forward_data_from_input(curr_input, full_packet_sent, input_queues[curr_input].get_end_of_cmd());
+            if constexpr (debug_info) {
+                data_words_sent += words_sent;
+            }
+
+            if constexpr (timeout_cycles > 0) {
+                if (words_sent > 0) {
+                    progress_timestamp = get_timestamp_32b();
+                }
             }
             curr_input_partial_packet_sent = !full_packet_sent;
         }
@@ -205,7 +212,7 @@ void kernel_main() {
     }
 
     if (!timeout) {
-        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000002);
+        if constexpr (debug_info) write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000002);
         if (!output_queue.output_barrier(timeout_cycles)) {
             timeout = true;
         }
@@ -213,23 +220,22 @@ void kernel_main() {
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     if (!timeout) {
-        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000003);
+        if constexpr (debug_info) write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000003);
         for (uint32_t i = 0; i < mux_fan_in; i++) {
             input_queues[i].send_remote_finished_notification();
         }
     }
 
-    set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
-    set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
-    set_64b_result(test_results, iter, PQ_TEST_ITER_INDEX);
+    if constexpr (debug_info) {
+        set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
+        set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
+        set_64b_result(test_results, iter, PQ_TEST_ITER_INDEX);
 
-    if (timeout) {
-        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
-        // DPRINT << "mux timeout" << ENDL();
-        // input_queues[0].dprint_object();
-        // output_queue.dprint_object();
-    } else {
-        write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
-        write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);
+        if (timeout) {
+            write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
+        } else {
+            write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+            write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);
+        }
     }
 }
