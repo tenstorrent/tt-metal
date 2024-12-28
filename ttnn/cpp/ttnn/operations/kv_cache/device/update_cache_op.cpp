@@ -7,6 +7,8 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::kv_cache {
 
 using namespace tt::constants;

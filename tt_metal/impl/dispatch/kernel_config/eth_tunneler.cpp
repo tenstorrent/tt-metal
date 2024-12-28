@@ -9,6 +9,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+using namespace tt::tt_metal;
+
 void EthTunnelerKernel::GenerateStaticConfigs() {
     chip_id_t downstream_device_id = FDKernel::GetDownstreamDeviceId(device_id_);
     // For MMIO devices, the above function just gets one of the possible downstream devices, we've populated this

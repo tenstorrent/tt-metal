@@ -32,7 +32,7 @@ struct BinaryNgDeviceOperation {
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
         std::optional<float> scalar;
-        MemoryConfig memory_config;
+        tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
         std::optional<DataType> dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
@@ -50,9 +50,9 @@ struct BinaryNgDeviceOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
-            KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
             CoreCoord compute_with_storage_grid_size;
         };
 

@@ -15,6 +15,8 @@
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
 
+using namespace tt::tt_metal;
+
 // Helper function to get upstream device in the tunnel from current device, not valid for mmio
 chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);

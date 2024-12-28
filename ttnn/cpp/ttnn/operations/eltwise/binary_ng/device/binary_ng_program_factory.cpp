@@ -6,6 +6,8 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 
+using namespace tt::tt_metal;
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 

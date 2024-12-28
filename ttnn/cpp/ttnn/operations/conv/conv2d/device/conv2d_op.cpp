@@ -23,10 +23,12 @@
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+
 using namespace tt::constants;
+using namespace tt::tt_metal;
+
 namespace optimized_conv_op_utils {
 using namespace tt;
-using namespace tt::tt_metal;
 
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
     const tt::tt_metal::LegacyShape& conv_activation_shape,

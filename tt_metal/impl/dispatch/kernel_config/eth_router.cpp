@@ -8,6 +8,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+using namespace tt::tt_metal;
+
 void EthRouterKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
     if (as_mux_) {
