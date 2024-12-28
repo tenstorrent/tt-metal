@@ -18,6 +18,8 @@
 #define DISPATCH_MAX_UPSTREAM 4
 #define DISPATCH_MAX_DOWNSTREAM 4
 
+using namespace tt::tt_metal;
+
 typedef struct {
     int id;
     chip_id_t device_id;                          // Device that this kernel is located on
