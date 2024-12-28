@@ -194,6 +194,7 @@ Result conv2d(
 
         if (bypass_halo) {
             if (input_tensor_post_tm.layout() == Layout::TILE) {
+                // Reshape is used as a workaround to an issue in to_layout mentioned here : https://github.com/tenstorrent/tt-metal/issues/16330
                 input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.get_padded_shape());
                 input_tensor_post_tm = ttnn::to_layout(
                     input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
