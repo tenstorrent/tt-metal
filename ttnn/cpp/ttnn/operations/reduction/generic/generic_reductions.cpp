@@ -55,6 +55,20 @@ static Tensor reduce_impl(
             rank);
     }
 
+    // bail out early if unsupported reduce op is provided
+    constexpr bool reduce_op_has_linear_property = reduce_type == ReduceType::Sum || reduce_type == ReduceType::Mean ||
+                                                   reduce_type == ReduceType::Max || reduce_type == ReduceType::Min;
+    constexpr bool reduce_op_has_nonlinear_property = reduce_type == ReduceType::Var || reduce_type == ReduceType::Std;
+    if (dim.size() == rank) {
+        if constexpr (!reduce_op_has_linear_property) {
+            TT_THROW("Unsupported reduction operation");
+        }
+    } else {
+        if constexpr (!reduce_op_has_linear_property && !reduce_op_has_nonlinear_property) {
+            TT_THROW("Unsupported reduction operation");
+        }
+    }
+
     std::sort(dim.begin(), dim.end());
 
     ttnn::SmallVector<uint32_t> output_shape;
@@ -69,94 +83,80 @@ static Tensor reduce_impl(
         }
     }
 
-    auto transpose_and_compute_reduction = [&](const Tensor& input_tensor_arg,
+    auto transpose_and_compute_reduction = [&](const Tensor& input_tensor,
                                                const int dim1,
                                                const int dim2,
-                                               const std::variant<int, ttnn::SmallVector<int>>& reduce_dim) -> Tensor {
-        Tensor output = ttnn::transpose(input_tensor_arg, dim1, dim2, memory_config);
-        output = reduce_impl<reduce_type>(
-            output, reduce_dim, /*keepdim=*/true, memory_config, compute_kernel_config, scalar, /*reshape=*/true);
-        output = ttnn::transpose(output, dim1, dim2, memory_config);
-        if (reshape) {
-            output = ttnn::reshape(output, ttnn::Shape{output_shape});
+                                               const std::variant<int, ttnn::SmallVector<int>>& reduce_dim,
+                                               const bool need_additional_reshape) -> Tensor {
+        // edge case: if both the dims are same no need of transpose
+        const bool is_same_dims = (dim1 == dim2) || ((dim1 + rank) % rank == (dim2 + rank) % rank);
+
+        ttnn::SmallVector<uint32_t> new_output_shape = {
+            input_tensor.get_shape()[0],
+            input_tensor.get_shape()[1],
+            input_tensor.get_shape()[2],
+            input_tensor.get_shape()[3]};
+        new_output_shape[dim1] = 1;
+
+        Tensor output = input_tensor;
+        if (!is_same_dims) {
+            output = ttnn::transpose(input_tensor, dim1, dim2, memory_config);
+        }
+        if constexpr (reduce_type == ReduceType::Mean) {
+            output = reduce_impl<ReduceType::Sum>(
+                output,
+                reduce_dim,
+                /*keepdim=*/true,
+                memory_config,
+                compute_kernel_config,
+                scalar,
+                need_additional_reshape);
+        } else {
+            output = reduce_impl<reduce_type>(
+                output,
+                reduce_dim,
+                /*keepdim=*/true,
+                memory_config,
+                compute_kernel_config,
+                scalar,
+                need_additional_reshape);
+        }
+        if (!is_same_dims) {
+            output = ttnn::transpose(output, dim1, dim2, memory_config);
+            if (reshape) {
+                output = ttnn::reshape(output, ttnn::Shape{new_output_shape});
+            }
         }
         return output;
     };
 
-    std::variant<int, ttnn::SmallVector<int>> reduce_dim;
-    if (dim.size() == 1 && (rank == 3 || rank == 4)) {
-        if (dim[0] == 1 && rank == 4) {
-            reduce_dim = 2;
-            return transpose_and_compute_reduction(input_tensor_arg, 1, -2, reduce_dim);
-        } else if (dim[0] == 0) {
-            reduce_dim = -2;
-            return transpose_and_compute_reduction(input_tensor_arg, 0, -2, reduce_dim);
-        }
-    }
-
-    if (dim.size() == 2 && (rank == 3 || rank == 4)) {
-        if (rank == 3) {
-            if (dim[0] == 0) {
-                auto transpose_to_idx = (dim[1] == 1 ? -1 : -2);
-                reduce_dim = ttnn::SmallVector<int>({transpose_to_idx, dim[1]});
-                return transpose_and_compute_reduction(input_tensor_arg, 0, transpose_to_idx, reduce_dim);
-            }
-        } else if (rank == 4) {
-            if (dim[0] == 0) {
-                if (dim[1] == 1) {
-                    Tensor output = ttnn::transpose(input_tensor_arg, 0, -2, memory_config);
-                    output = ttnn::transpose(output, 1, -1, memory_config);
-                    reduce_dim = ttnn::SmallVector<int>({-2, -1});
-                    output = reduce_impl<reduce_type>(
-                        output,
-                        reduce_dim,
-                        /*keepdim=*/true,
-                        memory_config,
-                        compute_kernel_config,
-                        scalar,
-                        /*reshape=*/true);
-                    output = ttnn::transpose(output, 0, -2, memory_config);
-                    output = ttnn::transpose(output, 1, -1, memory_config);
-                    if (reshape) {
-                        output = ttnn::reshape(output, ttnn::Shape{output_shape});
-                    }
-                    return output;
-                } else {
-                    auto transpose_to_idx = (dim[1] == 2 ? -1 : -2);
-                    reduce_dim = ttnn::SmallVector<int>({transpose_to_idx, dim[1]});
-                    return transpose_and_compute_reduction(input_tensor_arg, 0, transpose_to_idx, reduce_dim);
-                }
-            } else if (dim[0] == 1) {
-                auto transpose_to_idx = (dim[1] == 2 ? -1 : -2);
-                reduce_dim = ttnn::SmallVector<int>({transpose_to_idx, dim[1]});
-                return transpose_and_compute_reduction(input_tensor_arg, 1, transpose_to_idx, reduce_dim);
-            }
-        }
-    }
+    auto is_w_or_h_or_wh_case = [&]() -> bool {
+        return (dim.size() == 1 and dim[0] == rank - 1) || (dim.size() == 1 and dim[0] == rank - 2) ||
+               (dim.size() == 2 and dim[0] == rank - 2 and dim[1] == rank - 1);
+    };
 
     auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_arg);
-
     Tensor output_tensor;
-    if (!dim_arg.has_value() || dim.size() == rank) {
-        if constexpr (
-            reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
-            output_tensor = input_tensor;
-            for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
-                output_tensor = reduce_impl<reduce_type>(
-                    output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
-            }
-        } else if constexpr (reduce_type == ReduceType::Mean) {
-            output_tensor = input_tensor;
-            for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
-                output_tensor = reduce_impl<ReduceType::Sum>(
-                    output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
-            }
-            float inv_volume = 1.0f / input_tensor.get_logical_volume();
-            output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
-        } else {
+
+    // if we get dims as vector, we recursively call this function until we reach the case where we deal with W or H or
+    // WH dimensions
+    if (!is_w_or_h_or_wh_case()) {
+        if constexpr (!reduce_op_has_linear_property) {
             TT_THROW("Unsupported reduction operation");
         }
+        output_tensor = input_tensor;
+        for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
+            if (std::find(dim.begin(), dim.end(), rank) == dim.end()) {
+                continue;
+            }
+            output_tensor = transpose_and_compute_reduction(output_tensor, rank, -1, -1, dim.size() != rank);
+        }
+        if constexpr (reduce_type == ReduceType::Mean) {
+            float inv_volume = 1.0f / input_tensor.get_logical_volume();
+            output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
+        }
     } else {
+        // Only deal with dimension : W, H, WH
         tt::tt_metal::ReduceOpDim reduce_op_dim;
         if (dim.size() == 1 and dim[0] == rank - 1) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::W;
