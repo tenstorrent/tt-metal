@@ -8,6 +8,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+using namespace tt::tt_metal;
+
 void DemuxKernel::GenerateStaticConfigs() {
     uint16_t channel =
         tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);  // TODO: this can be mmio

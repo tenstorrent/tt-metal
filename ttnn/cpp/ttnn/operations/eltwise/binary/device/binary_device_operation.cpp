@@ -11,6 +11,8 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::binary {
 
 namespace utils {
