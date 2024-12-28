@@ -249,7 +249,7 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
 }
 
 void process_exec_buf_end_h() {
-    if (split_prefetch) {
+    if constexpr (split_prefetch) {
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             get_semaphore<fd_core_type>(prefetch_h_local_downstream_sem_addr));
@@ -574,7 +574,7 @@ void process_write_packed(
     uint32_t writes = 0;
     uint32_t mcasts = 0;
     auto wait_for_barrier = [&]() {
-        if (!mcast) {
+        if constexpr (!mcast) {
             return;
         }
         noc_nonposted_writes_num_issued[noc_index] += writes;
@@ -993,7 +993,7 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
             DPRINT << "cmd_write_linear_h\n";
-            if (is_h_variant) {
+            if constexpr (is_h_variant) {
                 process_write(block_noc_writes_to_clear, block_next_start_addr);
             } else {
                 relay_write_h(block_noc_writes_to_clear, block_next_start_addr);
@@ -1002,7 +1002,7 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
             DPRINT << "cmd_write_linear_h_host\n";
-            if (is_h_variant) {
+            if constexpr (is_h_variant) {
                 process_write_host_h(block_noc_writes_to_clear, block_next_start_addr);
             } else {
                 process_write_host_d(block_noc_writes_to_clear, block_next_start_addr);
@@ -1062,7 +1062,7 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_EXEC_BUF_END:
             DPRINT << "cmd_exec_buf_end\n";
-            if (is_h_variant) {
+            if constexpr (is_h_variant) {
                 process_exec_buf_end_h();
             } else {
                 process_exec_buf_end_d(block_noc_writes_to_clear, block_next_start_addr);
@@ -1094,7 +1094,7 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_TERMINATE:
             DPRINT << "dispatch terminate\n";
-            if (is_d_variant && !is_h_variant) {
+            if constexpr (is_d_variant && !is_h_variant) {
                 relay_to_next_cb<split_dispatch_page_preamble_size>(
                     cmd_ptr, sizeof(CQDispatchCmd), block_noc_writes_to_clear, block_next_start_addr);
             }
@@ -1226,7 +1226,7 @@ void kernel_main() {
 
     noc_async_write_barrier();
 
-    if (is_h_variant && !is_d_variant) {
+    if constexpr (is_h_variant && !is_d_variant) {
         // Set upstream semaphore MSB to signal completion and path teardown
         // in case dispatch_h is connected to a depacketizing stage.
         // TODO: This should be replaced with a signal similar to what packetized
