@@ -89,7 +89,9 @@ static Tensor reduce_impl(
                                                const std::variant<int, ttnn::SmallVector<int>>& reduce_dim,
                                                const bool need_additional_reshape) -> Tensor {
         // edge case: if both the dims are same no need of transpose
-        const bool is_same_dims = (dim1 == dim2) || ((dim1 + rank) % rank == (dim2 + rank) % rank);
+        // if the dims are rank-1 or rank-2, no need of transpose
+        const bool skip_transpose = (dim1 == dim2) || ((dim1 + rank) % rank == (dim2 + rank) % rank) ||
+                                    (dim1 == rank - 1) || (dim1 == rank - 2);
 
         ttnn::SmallVector<uint32_t> new_output_shape = {
             input_tensor.get_shape()[0],
@@ -99,13 +101,13 @@ static Tensor reduce_impl(
         new_output_shape[dim1] = 1;
 
         Tensor output = input_tensor;
-        if (!is_same_dims) {
+        if (!skip_transpose) {
             output = ttnn::transpose(input_tensor, dim1, dim2, memory_config);
         }
         if constexpr (reduce_type == ReduceType::Mean) {
             output = reduce_impl<ReduceType::Sum>(
                 output,
-                reduce_dim,
+                skip_transpose ? dim1 : reduce_dim,
                 /*keepdim=*/true,
                 memory_config,
                 compute_kernel_config,
@@ -114,14 +116,14 @@ static Tensor reduce_impl(
         } else {
             output = reduce_impl<reduce_type>(
                 output,
-                reduce_dim,
+                skip_transpose ? dim1 : reduce_dim,
                 /*keepdim=*/true,
                 memory_config,
                 compute_kernel_config,
                 scalar,
                 need_additional_reshape);
         }
-        if (!is_same_dims) {
+        if (!skip_transpose) {
             output = ttnn::transpose(output, dim1, dim2, memory_config);
             if (reshape) {
                 output = ttnn::reshape(output, ttnn::Shape{new_output_shape});
@@ -130,17 +132,27 @@ static Tensor reduce_impl(
         return output;
     };
 
-    auto is_w_or_h_or_wh_case = [&]() -> bool {
-        return (dim.size() == 1 and dim[0] == rank - 1) || (dim.size() == 1 and dim[0] == rank - 2) ||
-               (dim.size() == 2 and dim[0] == rank - 2 and dim[1] == rank - 1);
+    auto is_w_or_h_or_wh_case = [&](tt::tt_metal::ReduceOpDim& reduce_op_dim) -> bool {
+        if (std::find(dim.begin(), dim.end(), rank - 1) != dim.end() &&
+            std::find(dim.begin(), dim.end(), rank - 2) != dim.end()) {
+            reduce_op_dim = tt::tt_metal::ReduceOpDim::HW;
+        } else if (std::find(dim.begin(), dim.end(), rank - 1) != dim.end()) {
+            reduce_op_dim = tt::tt_metal::ReduceOpDim::W;
+        } else if (std::find(dim.begin(), dim.end(), rank - 2) != dim.end()) {
+            reduce_op_dim = tt::tt_metal::ReduceOpDim::H;
+        } else {
+            return false;
+        }
+        return (reduce_op_dim == tt::tt_metal::ReduceOpDim::HW) ? dim.size() == 2 : dim.size() == 1;
     };
 
     auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_arg);
     Tensor output_tensor;
+    tt::tt_metal::ReduceOpDim reduce_op_dim;
 
     // if we get dims as vector, we recursively call this function until we reach the case where we deal with W or H or
     // WH dimensions
-    if (!is_w_or_h_or_wh_case()) {
+    if (!is_w_or_h_or_wh_case(reduce_op_dim)) {
         if constexpr (!reduce_op_has_linear_property) {
             TT_THROW("Unsupported reduction operation");
         }
@@ -157,20 +169,12 @@ static Tensor reduce_impl(
         }
     } else {
         // Only deal with dimension : W, H, WH
-        tt::tt_metal::ReduceOpDim reduce_op_dim;
-        if (dim.size() == 1 and dim[0] == rank - 1) {
-            reduce_op_dim = tt::tt_metal::ReduceOpDim::W;
-        } else if (dim.size() == 1 and dim[0] == rank - 2) {
-            reduce_op_dim = tt::tt_metal::ReduceOpDim::H;
-        } else if (dim.size() == 2 and dim[0] == rank - 2 and dim[1] == rank - 1) {
-            reduce_op_dim = tt::tt_metal::ReduceOpDim::HW;
-        } else {
-            TT_THROW("Unsupported dim");
-        }
-
         int reduced_volume = 1;
-        for (int axis : dim) {
-            reduced_volume *= input_shape[axis];
+        if (std::find(dim.begin(), dim.end(), rank - 1) != dim.end()) {
+            reduced_volume *= input_shape[rank - 1];
+        }
+        if (std::find(dim.begin(), dim.end(), rank - 2) != dim.end()) {
+            reduced_volume *= input_shape[rank - 2];
         }
 
         if constexpr (reduce_type == ReduceType::Sum) {
