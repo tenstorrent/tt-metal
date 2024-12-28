@@ -68,10 +68,10 @@ std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> get_global_semaphor
     if (create_semaphore_handles) {
         std::vector<std::shared_ptr<GlobalSemaphore>> semaphore_handles;
         for (const auto& device : devices) {
-            auto subdevice_span = subdevice_id.has_value() ? tt::stl::Span<const SubDeviceId>{subdevice_id.value()}
-                                                           : tt::stl::Span<const SubDeviceId>{};
+            auto worker_subdevice_id =
+                subdevice_id.has_value() ? std::vector<SubDeviceId>{subdevice_id.value()} : std::vector<SubDeviceId>{};
 
-            auto handle = GlobalSemaphore::create(device, core_range, 0, BufferType::L1, subdevice_span);
+            auto handle = GlobalSemaphore::create(device, core_range, 0, BufferType::L1, worker_subdevice_id);
             log_trace(
                 tt::LogOp, "Created semaphore handle at address {} for device {}", handle->address(), device->id());
             semaphore_handles.push_back(handle);
