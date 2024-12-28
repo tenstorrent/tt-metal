@@ -81,7 +81,7 @@ def test_sum_4d_tensors(device, batch_size, c, h, w, dim, keepdim):
 def test_prod(device, batch_size, c, h, w, dim, keepdim):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.randn((batch_size, c, h, w), dtype=torch.float32)
+    torch_input_tensor = torch.randn((batch_size, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.prod(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(
