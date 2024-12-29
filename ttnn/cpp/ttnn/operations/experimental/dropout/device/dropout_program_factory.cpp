@@ -12,6 +12,24 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
+namespace {
+constexpr auto kWriterKernelPath =
+    "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp";
+constexpr auto kReaderKernelPath =
+    "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/reader_dropout_interleaved_start_id.cpp";
+constexpr auto kComputeKernelPath =
+    "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp";
+constexpr auto kSeedIdx = 0;
+constexpr auto kDstBufferIdx = 0;
+constexpr auto kSrcBufferIdx = 0;
+
+constexpr auto kSrc0CbIndex = tt::CBIndex::c_0;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_2;
+
+constexpr uint32_t kNumInputTiles = 2;
+constexpr uint32_t kNumOutputTiles = 2;
+}  // namespace
+
 namespace ttnn::operations::experimental::dropout::program {
 
 using namespace tt::constants;
@@ -30,7 +48,7 @@ struct DropoutKernels {
 /**
  *   Create and configure a circular buffer, returning both the configuration and the handle.
  */
-inline std::pair<tt::tt_metal::CircularBufferConfig, tt::tt_metal::CBHandle> create_circular_buffer(
+inline tt::tt_metal::CBHandle create_circular_buffer(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreRangeSet& core_ranges,
     uint32_t cb_index,
@@ -43,7 +61,7 @@ inline std::pair<tt::tt_metal::CircularBufferConfig, tt::tt_metal::CBHandle> cre
                                          .set_page_size(cb_index, single_tile_size);
 
     auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
-    return {cb_config, cb_handle};
+    return cb_handle;
 }
 
 /**
@@ -173,17 +191,12 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
-    constexpr uint32_t SRC0_CB_INDEX = CBIndex::c_0;
-    constexpr uint32_t OUTPUT_CB_INDEX = CBIndex::c_2;
 
-    const uint32_t NUM_INPUT_TILES = 2;
-    const uint32_t NUM_OUTPUT_TILES = 2;
+    auto cb_src0 =
+        create_circular_buffer(program, all_cores, kSrc0CbIndex, data_fmt_in, single_tile_size_in, kNumInputTiles);
 
-    auto [cb_src0_config, cb_src0] =
-        create_circular_buffer(program, all_cores, SRC0_CB_INDEX, data_fmt_in, single_tile_size_in, NUM_INPUT_TILES);
-
-    auto [cb_output_config, cb_output] = create_circular_buffer(
-        program, all_cores, OUTPUT_CB_INDEX, data_fmt_out, single_tile_size_out, NUM_OUTPUT_TILES);
+    auto cb_output =
+        create_circular_buffer(program, all_cores, kOutputCbIndex, data_fmt_out, single_tile_size_out, kNumOutputTiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -197,22 +210,12 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     bool dst_is_dram = (dst_buffer->buffer_type() == BufferType::DRAM);
 
     std::vector<uint32_t> writer_compile_args = {
-        static_cast<uint32_t>(OUTPUT_CB_INDEX), static_cast<uint32_t>(dst_is_dram)};
+        static_cast<uint32_t>(kOutputCbIndex), static_cast<uint32_t>(dst_is_dram)};
 
     DropoutKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        reader_compile_args,
-        "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/"
-        "reader_dropout_interleaved_start_id.cpp");
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, kReaderKernelPath);
 
-    kernels.writer = create_writer_kernel(
-        program,
-        all_cores,
-        writer_compile_args,
-        "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/"
-        "writer_dropout_interleaved_start_id.cpp");
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for dropout
@@ -232,12 +235,8 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
 
     bool math_approx_mode = false;
 
-    kernels.compute_group_1 = create_compute_kernel(
-        program,
-        core_group_1,
-        compute_group_1_args,
-        "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp",
-        math_approx_mode);
+    kernels.compute_group_1 =
+        create_compute_kernel(program, core_group_1, compute_group_1_args, kComputeKernelPath, math_approx_mode);
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -248,12 +247,8 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
             uscale                       // scale
         };
 
-        kernels.compute_group_2 = create_compute_kernel(
-            program,
-            core_group_2,
-            compute_group_2_args,
-            "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp",
-            math_approx_mode);
+        kernels.compute_group_2 =
+            create_compute_kernel(program, core_group_2, compute_group_2_args, kComputeKernelPath, math_approx_mode);
     }
 
     // -------------------------------------------------------------------------
@@ -324,20 +319,20 @@ void DropoutProgramFactory::override_runtime_arguments(
         // Update the source address for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[0] = src_buffer->address();
+            runtime_args[kSrcBufferIdx] = src_buffer->address();
         }
         // Update the destination address for the writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[0] = dst_buffer->address();
+            runtime_args[kDstBufferIdx] = dst_buffer->address();
         }
         // Update the seed for the compute kernels
         if (core_group_1.contains(core)) {
             auto& runtime_args = group_1_runtime_args[core.x][core.y];
-            runtime_args[0] = operation_attributes.seed;
+            runtime_args[kSeedIdx] = operation_attributes.seed;
         } else if (core_group_2.contains(core)) {
             auto& runtime_args = group_2_runtime_args[core.x][core.y];
-            runtime_args[0] = operation_attributes.seed;
+            runtime_args[kSeedIdx] = operation_attributes.seed;
         } else {
             TT_THROW("Core not in specified core ranges.");
         }

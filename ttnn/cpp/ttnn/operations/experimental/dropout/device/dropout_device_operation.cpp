@@ -7,7 +7,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -35,6 +34,11 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
         out_memory_config = preallocated_output_tensor->memory_config();
         output_datatype = preallocated_output_tensor->get_dtype();
     }
+    TT_FATAL(
+        output_datatype == input_tensor.dtype(),
+        "Dropout operation requires input and output data types to match. Input data type: {}, Output data type: {}",
+        static_cast<int>(input_tensor.dtype()),
+        static_cast<int>(output_datatype));
 
     auto arch = input_tensor.device()->arch();
     TT_FATAL(

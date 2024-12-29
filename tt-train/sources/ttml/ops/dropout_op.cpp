@@ -20,15 +20,15 @@ autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability
         return tensor;
     }
 
-    auto mask = core::ones_like(tensor->get_value());
     auto dropout_seed = autograd::ctx().get_generator()();
     auto scaler = 1.0F / (1.0F - probability);
-    mask = ttnn::experimental::dropout(mask, probability, scaler, static_cast<uint32_t>(dropout_seed));
+    auto masked_out =
+        ttnn::experimental::dropout(tensor->get_value(), probability, scaler, static_cast<uint32_t>(dropout_seed));
     auto out = autograd::create_tensor();
-    auto masked_out = ttnn::multiply(tensor->get_value(), mask);
     out->set_value(masked_out);
-    autograd::GradFunction grad = [tensor, out, mask]() {
-        auto res = ttnn::multiply(out->get_grad(), mask);
+    autograd::GradFunction grad = [tensor, probability, scaler, out, dropout_seed]() {
+        auto res =
+            ttnn::experimental::dropout(out->get_grad(), probability, scaler, static_cast<uint32_t>(dropout_seed));
         tensor->add_grad(res);
     };
 
