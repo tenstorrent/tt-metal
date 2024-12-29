@@ -204,6 +204,9 @@ void SpeculativeScaledDotProductAttentionDecode::validate(
             q_shape_unpadded[2],
             k_shape[1]);
     }
+
+    TT_FATAL(
+        q_shape_unpadded[2] <= 32, "Speculative flash decode only supports <= 32 q heads, got {}", q_shape_unpadded[2]);
 }
 
 std::vector<TensorSpec> SpeculativeScaledDotProductAttentionDecode::compute_output_specs(

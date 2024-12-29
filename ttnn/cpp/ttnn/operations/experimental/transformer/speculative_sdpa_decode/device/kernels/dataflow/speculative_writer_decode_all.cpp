@@ -328,9 +328,16 @@ void kernel_main() {
     // assume output core also does verification
     if (do_output) {
         constexpr uint32_t l2_norm_scalar_bytes = 2 /*2 bytes for bfloat16*/;
-        generate_reduce_scaler(
-            cb_identity_scale_in, identity_scalar_packed);  // push in identity scaler for now. TODO: change this to
-                                                            // tile mask to support rows < 32
+
+        if constexpr (num_q_heads < 32) {
+            // push in tile mask to mask out rows > num_q_heads
+            constexpr uint32_t tile_bytes = get_tile_size(cb_scale_in);
+            constexpr uint32_t ONE = 0x3F803F80;  // 1.0 in bfloat16 double packed
+            constexpr uint32_t ZERO = 0x00000000;
+            cb_reserve_back(cb_scale_in, 1);
+            fill_tile_partial_transposed<tile_bytes>(cb_scale_in, 0, num_q_heads - 1, ZERO, ONE);
+            cb_push_back(cb_scale_in, 1);
+        }
 
         // wait for ground truth norm to be ready
         cb_wait_front(cb_out_m, 1);

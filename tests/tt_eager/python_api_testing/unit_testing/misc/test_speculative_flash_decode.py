@@ -383,8 +383,8 @@ def run_test_sdpa_decode_single_device(
                 )
                 assert torch.all(tt_back_gt_new == tt_back_gt)
                 assert torch.all(tt_back_spec_new == tt_back_spec)
-                # assert torch.all(tt_back_spec_lp_distance_new == tt_back_spec_lp_distance)
-                # assert torch.all(tt_back_lp_norm_x_new == tt_back_lp_norm_x)
+                assert torch.all(tt_back_spec_lp_distance_new == tt_back_spec_lp_distance)
+                assert torch.all(tt_back_lp_norm_x_new == tt_back_lp_norm_x)
 
         ##########################################
         #### Expected Calculation ####
@@ -483,6 +483,7 @@ def run_test_sdpa_decode_single_device(
         # [4, 32, 8, 8192, 128, (8, 7), True, True],  # llama 3.1 8b
         # [1, 32, 8, 8192, 128, (8, 7), False, True],  # llama 3.1 8b
         [1, 32, 8, 16 * 8192, 128, (8, 4), False, True],  # llama 3.1 8b
+        [2, 24, 8, 16 * 8192, 128, (8, 4), False, True],  # llama 3.1 8b
         # [2, 32, 8, 256, 64, (8, 4), False, True],
         # [2, 8, 4, 256, 64, (8, 1), True, True],
         # [1, 8, 1, 256, 64, (2, 1), False, True],

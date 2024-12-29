@@ -651,7 +651,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         num_heads_per_core,
         is_causal,
         use_attention_mask,
-        Spec_chunk_t};
+        Spec_chunk_t,
+        num_q_heads};
 
     std::map<string, string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);

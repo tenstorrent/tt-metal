@@ -50,6 +50,7 @@ void MAIN {
     constexpr uint32_t Spec_chunk_t =
         get_compile_time_arg_val(22);  // speculative chunk size (in tiles), for the first and last chunk
     constexpr uint32_t speculative_chunk_size = Spec_chunk_t * tt::constants::TILE_HEIGHT;
+    constexpr uint32_t num_q_heads = get_compile_time_arg_val(23);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -348,7 +349,7 @@ void MAIN {
         }
     }
     cb_pop_front(cb_q_in, q_chunk_tiles);
-    cb_pop_front(cb_identity_scale_in, 1);
+    cb_pop_front(cb_scale_in, 1);
 
     // if do verification, we wait for ground truth to be written to cb_q_in.
     // assume output core also does verification
@@ -364,6 +365,16 @@ void MAIN {
         pack_reconfig_data_format(cb_out_accumulate_im);
         copy_block(cb_q_in, cb_out_accumulate_im, q_chunk_tiles);
         sub_block_inplace<false /*don't pop cb_out_im*/>(cb_out_accumulate_im, cb_out_im, q_chunk_tiles);
+
+        if constexpr (num_q_heads < 32) {
+            // need to mask out the unused heads to calculate l2 norm
+            // use cb_scale_in to mask out the unused heads
+            cb_wait_front(cb_scale_in, 1);
+
+            // debug print
+            mul_block_inplace_reuse_in1(cb_out_im, cb_scale_in, q_chunk_tiles);
+            mul_block_inplace_reuse_in1(cb_out_accumulate_im, cb_scale_in, q_chunk_tiles);
+        }
 
         // Do L2 norm of ground truth output
         // first, inplace square every element in cb_out_im

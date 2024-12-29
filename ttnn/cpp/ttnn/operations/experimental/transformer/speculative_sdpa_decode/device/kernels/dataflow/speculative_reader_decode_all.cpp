@@ -132,6 +132,10 @@ void kernel_main() {
     arg_idx += num_output_cores;
     tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
 
+    DPRINT << "cur_pos: " << cur_pos << ENDL();
+    DPRINT << "k_chunk_size: " << k_chunk_size << ENDL();
+    DPRINT << "speculative_chunk_size: " << speculative_chunk_size << ENDL();
+    DPRINT << "Spec_chunk_t: " << Spec_chunk_t << ENDL();
     DPRINT << "k_num_chunks: " << k_num_chunks << ENDL();
     DPRINT << "k_chunk_start: " << k_chunk_start << ENDL();
     DPRINT << "k_chunk_end: " << k_chunk_end << ENDL();
