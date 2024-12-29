@@ -76,7 +76,7 @@ def fa_rand(*shape):
 
 
 def prepare_test_config_and_data(
-    b, nh, s, d, grid_size, padded_num_heads, speculation_length, max_start_idx, start_indices=None, causal=True
+    b, nh, s, d, grid_size, padded_num_heads, k_chunk_size, max_start_idx, start_indices=None, causal=True
 ):
     """
     Prepare test configuration and input data for speculative flash decode testing.
@@ -86,7 +86,6 @@ def prepare_test_config_and_data(
     """
 
     # Configure chunk size and program
-    k_chunk_size = speculation_length  # 128#get_chunk_size(max_start_idx + 1, s)
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=padded_num_heads,
@@ -132,7 +131,6 @@ def get_speculative_flash_decode_tt(
     start_indices,
     nh,
     lambda_,
-    speculation_length,
     scale,
     program_config,
     compute_kernel_config,
@@ -154,7 +152,6 @@ def get_speculative_flash_decode_tt(
                 tt_K,
                 tt_V,
                 lambda_=lambda_,
-                speculative_chunk_size=speculation_length,
                 cur_pos_tensor=start_indices_tt,
                 scale=scale,
                 program_config=program_config,
@@ -167,7 +164,6 @@ def get_speculative_flash_decode_tt(
                 tt_K,
                 tt_V,
                 lambda_=lambda_,
-                speculative_chunk_size=speculation_length,
                 cur_pos=start_indices,
                 scale=scale,
                 program_config=program_config,
@@ -265,7 +261,7 @@ def run_test_sdpa_decode_single_device(
     grid_size,
     q_dtype=ttnn.bfloat16,
     cur_pos_tensor=False,
-    speculation_length=128,
+    k_chunk_size=128,
     lambda_=0.2,
     sharded_in=False,
     sharded_out=False,
@@ -313,7 +309,7 @@ def run_test_sdpa_decode_single_device(
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
 
     scale = d**-0.5
-    min_start_idx = 2 * speculation_length
+    min_start_idx = 2 * k_chunk_size
     max_start_idx = (max(start_indices) if start_indices is not None else s // 2 - 1) if single_iter else min_start_idx
 
     # for debugging
@@ -330,7 +326,7 @@ def run_test_sdpa_decode_single_device(
         #### Prepare test config and data
         ##########################################
         program_config, padded_layer_len, attn_mask, Q = prepare_test_config_and_data(
-            b, nh, s, d, grid_size, padded_num_heads, speculation_length, max_start_idx, start_indices, causal
+            b, nh, s, d, grid_size, padded_num_heads, k_chunk_size, max_start_idx, start_indices, causal
         )
 
         ##########################################
@@ -353,7 +349,6 @@ def run_test_sdpa_decode_single_device(
             start_indices,
             nh,
             lambda_,
-            speculation_length,
             scale,
             program_config,
             compute_kernel_config,
@@ -378,7 +373,6 @@ def run_test_sdpa_decode_single_device(
                     start_indices,
                     nh,
                     lambda_,
-                    speculation_length,
                     scale,
                     program_config,
                     compute_kernel_config,
@@ -403,7 +397,7 @@ def run_test_sdpa_decode_single_device(
             start_indices,
             nh,
             nkv,
-            speculation_length,
+            k_chunk_size,  # speculative chunk size
             scale,
             max_start_idx,
             padded_layer_len,
@@ -496,7 +490,7 @@ def run_test_sdpa_decode_single_device(
     ),
 )
 @pytest.mark.parametrize(
-    "speculation_length",
+    "k_chunk_size",
     [
         128,
     ],
@@ -513,7 +507,7 @@ def test_sdpa_decode_single_device(
     q_dtype,
     single_iter,
     cur_pos_tensor,
-    speculation_length,
+    k_chunk_size,
     use_program_cache,
 ):
     if nkv > 1 and q_dtype != ttnn.bfloat16:
@@ -532,7 +526,7 @@ def test_sdpa_decode_single_device(
         grid_size,
         q_dtype,
         cur_pos_tensor,
-        speculation_length,
+        k_chunk_size,
         sharded_in=False,
         sharded_out=False,
         single_iter=single_iter,

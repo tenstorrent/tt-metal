@@ -32,7 +32,6 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
 
         Keyword args:
             lambda_ (float): the lambda value for the speculation error tolerance threshold. Defaults to `0.2`.
-            speculative_chunk_size (int): the speculative chunk size. Defaults to `128`.
             is_causal (bool): whether the attention is is_causal. Defaults to `True`.
             attn_mask (ttnn.Tensor, optional): the input tensor [b x 1 x s x s]. Defaults to `None`.
             cur_pos (List of int, optional): list of integers of length b. Defaults to `None`.
@@ -66,7 +65,6 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
                const ttnn::Tensor& input_tensor_k,
                const ttnn::Tensor& input_tensor_v,
                std::optional<float> lambda_,
-               std::optional<uint32_t> speculative_chunk_size,
                const bool is_causal,
                const std::optional<const Tensor>& attn_mask,
                const std::vector<uint32_t>& cur_pos,
@@ -82,7 +80,6 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
                     input_tensor_k,
                     input_tensor_v,
                     lambda_,
-                    speculative_chunk_size,
                     is_causal,
                     attn_mask,
                     cur_pos,
@@ -97,7 +94,6 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
             py::arg("input_tensor_v").noconvert(),
             py::kw_only(),
             py::arg("lambda_") = std::nullopt,
-            py::arg("speculative_chunk_size") = std::nullopt,
             py::arg("is_causal").noconvert() = true,
             py::arg("attn_mask").noconvert() = std::nullopt,
             py::arg("cur_pos").noconvert() = std::vector<uint32_t>(),

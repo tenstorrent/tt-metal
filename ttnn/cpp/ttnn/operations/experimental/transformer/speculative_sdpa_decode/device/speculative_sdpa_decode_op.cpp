@@ -244,7 +244,7 @@ operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::crea
     auto& l2_dist_tensor = output_tensors.at(2);
     auto& l2_norm_tensor = output_tensors.at(3);
 
-    // set default values for scale, lambda, and speculative_chunk_size if not provided
+    // set default values for scale, lambda if not provided
     auto scale = this->scale;
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_padded_shape()[-1]));
@@ -255,12 +255,8 @@ operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::crea
         lambda = 0.2f;
     }
 
-    uint32_t speculative_chunk_size_;
-    if (not this->speculative_chunk_size.has_value()) {
-        speculative_chunk_size_ = 128;
-    } else {
-        speculative_chunk_size_ = this->speculative_chunk_size.value();
-    }
+    // speculative_chunk_size should be the same as k_chunk_size
+    uint32_t speculative_chunk_size = this->k_chunk_size;
 
     return detail::speculative_sdpa_decode_multi_core(
         input_tensor_q,
@@ -279,7 +275,7 @@ operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::crea
         this->compute_kernel_config,
         this->program_config,
         this->k_chunk_size,
-        speculative_chunk_size_,
+        speculative_chunk_size,
         this->share_cache);
 }
 
@@ -290,7 +286,6 @@ operation::Hash SpeculativeScaledDotProductAttentionDecode::compute_program_hash
     bool has_attn_mask = optional_input_tensors.at(2).has_value();
     return operation::hash_operation<SpeculativeScaledDotProductAttentionDecode>(
         this->lambda_,
-        this->speculative_chunk_size,
         this->scale,
         this->output_mem_config,
         this->program_config,

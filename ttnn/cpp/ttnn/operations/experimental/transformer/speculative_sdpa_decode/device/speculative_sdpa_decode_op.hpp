@@ -15,7 +15,6 @@ namespace ttnn::operations::experimental::transformer {
 
 struct SpeculativeScaledDotProductAttentionDecode {
     const std::optional<float> lambda_;
-    const std::optional<uint32_t> speculative_chunk_size;
     const bool is_causal;
     std::vector<uint32_t> cur_pos;
     const std::optional<float> scale;

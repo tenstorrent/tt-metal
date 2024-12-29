@@ -39,7 +39,6 @@ ExecuteSpeculativeScaledDotProductAttentionDecode::invoke(
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
     std::optional<float> lambda_,
-    std::optional<uint32_t> speculative_chunk_size,
     const bool is_causal,
     const std::optional<const Tensor>& attn_mask,
     const std::vector<uint32_t>& cur_pos,
@@ -75,7 +74,6 @@ ExecuteSpeculativeScaledDotProductAttentionDecode::invoke(
     auto output_tensors = operation::run(
         SpeculativeScaledDotProductAttentionDecode{
             .lambda_ = lambda_,
-            .speculative_chunk_size = speculative_chunk_size,
             .is_causal = is_causal,
             .cur_pos = cur_pos,
             .scale = scale,
@@ -103,7 +101,6 @@ ExecuteSpeculativeScaledDotProductAttentionDecode::invoke(
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
     std::optional<float> lambda_,
-    std::optional<uint32_t> speculative_chunk_size,
     const bool is_causal,
     const std::optional<const Tensor>& attn_mask,
     const std::vector<uint32_t>& cur_pos,
@@ -118,7 +115,6 @@ ExecuteSpeculativeScaledDotProductAttentionDecode::invoke(
         input_tensor_k,
         input_tensor_v,
         lambda_,
-        speculative_chunk_size,
         is_causal,
         attn_mask,
         cur_pos,
