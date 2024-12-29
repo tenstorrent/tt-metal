@@ -4,6 +4,8 @@
 
 #include "binary_ng_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::binary_ng {
 
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w) {

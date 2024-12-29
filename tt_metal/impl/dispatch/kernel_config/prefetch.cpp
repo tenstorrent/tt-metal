@@ -9,6 +9,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+using namespace tt::tt_metal;
+
 void PrefetchKernel::GenerateStaticConfigs() {
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
@@ -112,8 +114,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, static_config_.downstream_cb_pages.value(), GetCoreType());
-        tt::tt_metal::CreateSemaphore(
-            *program_, logical_core_, 0, GetCoreType());  // TODO: what is this third semaphore for?
         static_config_.cmddat_q_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
 
@@ -128,6 +128,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
         dependent_config_.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.downstream_cb_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.downstream_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
+        static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
+            *program_, logical_core_, my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
 
         static_config_.pcie_base = 0;
         static_config_.pcie_size = 0;
@@ -152,11 +154,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_pages = my_dispatch_constants.prefetch_d_buffer_pages();
         static_config_.my_upstream_cb_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
-        static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
-            *program_,
-            logical_core_,
-            my_dispatch_constants.dispatch_buffer_pages(),
-            GetCoreType());  // TODO: this is out of order to match previous implementation
         static_config_.cmddat_q_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
 
@@ -231,7 +228,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, just host so no dispatch core
         TT_ASSERT(upstream_kernels_.size() == 0);
-        dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE_ADJUSTED;
+        dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
 
         // Downstream, expect just one ROUTER
@@ -239,7 +236,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         auto router_kernel = dynamic_cast<EthRouterKernel*>(downstream_kernels_[0]);
         TT_ASSERT(router_kernel);
         dependent_config_.downstream_logical_core = router_kernel->GetLogicalCore();
-        dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE_ADJUSTED;
+        dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         uint32_t router_idx = router_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
         dependent_config_.downstream_cb_base =
             (router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +

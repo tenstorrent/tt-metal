@@ -8,6 +8,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+using namespace tt::tt_metal;
+
 void DemuxKernel::GenerateStaticConfigs() {
     uint16_t channel =
         tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);  // TODO: this can be mmio
@@ -24,18 +26,13 @@ void DemuxKernel::GenerateStaticConfigs() {
     static_config_.test_results_buf_size_bytes = 0;
     static_config_.timeout_cycles = 0;
 
-    // TODO: Do we need an upstream sem here?
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
         FDKernel* k = downstream_kernels_[idx];
         static_config_.remote_tx_queue_id[idx] = 0;
         static_config_.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
         static_config_.output_depacketize_cb_log_page_size[idx] = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
-        // Only connected dispatchers need a semaphore. TODO: can initialize anyways, but this matches previous
-        // implementation
-        if (dynamic_cast<DispatchKernel*>(k)) {
-            static_config_.output_depacketize_local_sem_id[idx] =
-                tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
-        }
+        static_config_.output_depacketize_local_sem_id[idx] =
+            tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         static_config_.output_depacketize_remove_header[idx] = 1;
     }
 }
@@ -89,9 +86,6 @@ void DemuxKernel::GenerateDependentConfigs() {
             dependent_config_.remote_tx_queue_start_addr_words[idx] =
                 demux_kernel->GetStaticConfig().rx_queue_start_addr_words.value();
             dependent_config_.remote_tx_queue_size_words[idx] = 0x1000;  // TODO: hard-coded on previous implementation
-            // Match previous implementation where downstream demux has output_depacketize fields zeroed out. TODO: can
-            // remove this later
-            dependent_config_.output_depacketize_downstream_sem_id[idx] = 0;
             uint64_t dest_endpoint_output_map;
             if (device_->num_hw_cqs() == 1) {
                 uint32_t dest_map_array[4] = {0, 0, 1, 1};  // TODO: how to set these generically? Currently just
@@ -106,10 +100,6 @@ void DemuxKernel::GenerateDependentConfigs() {
         } else {
             TT_FATAL(false, "Unexpected kernel type downstream of DEMUX");
         }
-    }
-    // TODO: this is just to match the previous implementation hard-code, remove later
-    if (!tt::Cluster::instance().is_galaxy_cluster()) {
-        dependent_config_.output_depacketize = 0x3;
     }
 }
 

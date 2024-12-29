@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
+tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     Program& program,
     const Tensor& input_tensor,
     const uint32_t pad_val,
