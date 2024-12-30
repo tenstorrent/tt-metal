@@ -73,7 +73,7 @@ def run(
         input_shape = sanitize_shape_rm(input_shape)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-2147483647, high=2147483648, dtype=torch.int64), input_a_dtype
+        partial(torch_random, low=-2147483647, high=2147483648, dtype=torch.int32), input_a_dtype
     )(input_shape)
     torch_input_tensor_a = torch.full(size=input_shape, fill_value=-2147483647).to(torch.int32)
     golden_function = ttnn.get_golden_function(ttnn.bitwise_not)

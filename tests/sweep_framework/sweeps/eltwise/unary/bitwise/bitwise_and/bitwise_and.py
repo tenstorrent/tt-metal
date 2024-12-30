@@ -25,12 +25,14 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 128, 128], [1, 1, 1, 1], 32)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 32)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 32),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 128, 128], [1, 1, 1, 1], 16)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 16),
         "input_a_dtype": [ttnn.int32],
+        "input_b_dtype": [ttnn.int32],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
@@ -60,8 +62,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_shape,
     input_a_dtype,
+    input_b_dtype,
     input_layout,
     input_a_memory_config,
+    input_b_memory_config,
     output_memory_config,
     *,
     device,
@@ -75,9 +79,12 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=0, high=2147483648, dtype=torch.int64), input_a_dtype
     )(input_shape)
-    scalar = torch.randint(0, 2147483648, (1,), dtype=torch.int32).item()
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=0, high=2147483648, dtype=torch.int64), input_b_dtype
+    )(input_shape)
+
     golden_function = ttnn.get_golden_function(ttnn.bitwise_and)
-    torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -86,9 +93,16 @@ def run(
         device=device,
         memory_config=input_a_memory_config,
     )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=input_b_dtype,
+        layout=input_layout,
+        device=device,
+        memory_config=input_b_memory_config,
+    )
 
     start_time = start_measuring_time()
-    result = ttnn.bitwise_and(input_tensor_a, value=scalar, memory_config=output_memory_config)
+    result = ttnn.bitwise_and(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(result)
