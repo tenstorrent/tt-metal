@@ -22,6 +22,9 @@ struct MeshOffset {
     size_t row = 0;
     size_t col = 0;
 };
+
+class MeshCommandQueue;
+
 class MeshDeviceView;
 
 struct MeshSubDeviceManagerId;
@@ -86,8 +89,10 @@ private:
     std::unique_ptr<MeshDeviceView> view;
     std::map<chip_id_t, Device*> opened_devices;
     std::vector<Device*> devices;
-    std::vector<std::shared_ptr<MeshDevice>> submeshes;  // Parent owns submeshes and responsible fortheir destruction
+    std::vector<std::shared_ptr<MeshDevice>>
+        submeshes;  // Parent owns submeshes and is responsible for their destruction
     std::weak_ptr<MeshDevice> parent_mesh;               // Submesh created with reference to parent mesh
+    std::unique_ptr<MeshCommandQueue> mesh_command_queue_;
 
     void initialize(
         size_t l1_small_size,
@@ -117,6 +122,7 @@ public:
     Device* get_device(chip_id_t physical_device_id) const;
     Device* get_device(size_t row_idx, size_t col_idx) const;
 
+    MeshCommandQueue& mesh_command_queue();
     const DeviceIds get_device_ids() const;
 
     size_t num_devices() const;
@@ -140,7 +146,6 @@ public:
     // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
     // 2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
     void reshape(const MeshShape& new_shape);
-
     void close_devices();
     const MeshDeviceView& get_view() const;
 
@@ -186,7 +191,10 @@ public:
     size_t num_program_cache_entries() const;
 
     int num_dram_channels() const;
-    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id = SubDeviceId{0}) const;
+    allocator::Statistics get_memory_allocation_statistics(
+        const BufferType& buffer_type, SubDeviceId sub_device_id = SubDeviceId{0}) const;
+
+    bool using_fast_dispatch();
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);

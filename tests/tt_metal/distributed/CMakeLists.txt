@@ -1,4 +1,7 @@
-set(UNIT_TESTS_DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_distributed.cpp)
+set(UNIT_TESTS_DISTRIBUTED_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_distributed.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_workload.cpp
+)
 
 add_executable(distributed_unit_tests ${UNIT_TESTS_DISTRIBUTED_SRC})
 target_link_libraries(
