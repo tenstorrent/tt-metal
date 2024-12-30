@@ -65,6 +65,8 @@ public:
 
     virtual void dump_blocks(std::ostream& out) const = 0;
 
+    virtual std::vector<std::unordered_map<std::string, std::string>> get_block_table() const = 0;
+
     virtual void shrink_size(DeviceAddr shrink_size, bool bottom_up = true) = 0;
 
     virtual void reset_size() = 0;

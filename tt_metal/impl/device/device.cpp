@@ -1426,6 +1426,11 @@ void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &ou
     return allocator::dump_memory_blocks(*allocator, buffer_type, out);
 }
 
+std::vector<std::unordered_map<std::string, std::string>> Device::get_block_table(const BufferType &buffer_type) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::get_block_table(*allocator, buffer_type);
+}
+
 const std::unordered_set<Buffer *> &Device::get_allocated_buffers() const {
     const auto& allocator = this->get_initialized_allocator();
     return allocator::get_allocated_buffers(*allocator);

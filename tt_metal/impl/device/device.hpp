@@ -178,6 +178,8 @@ public:
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const;
 
+    std::vector<std::unordered_map<std::string, std::string>> get_block_table(const BufferType &buffer_type) const;
+
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
     // core.y represents different channels along one <x>

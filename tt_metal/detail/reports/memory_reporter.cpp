@@ -144,9 +144,38 @@ void MemoryReporter::init_reports() {
     write_headers(
         this->program_memory_usage_summary_report_, this->program_l1_usage_summary_report_, /*add_program_id=*/true);
 }
+
 void DumpDeviceMemoryState(const Device* device, const std::string& prefix) {
     MemoryReporter::inst().dump_memory_usage_state(device, std::move(prefix));
 }
+
+MemoryView get_memory_view(const Device* device, const BufferType& buffer_type) {
+    auto stats = device->get_memory_allocation_statistics(buffer_type);
+    auto num_banks_ = device->num_banks(buffer_type);
+
+    return MemoryView{
+        .num_banks = num_banks_,
+        .total_allocatable_per_bank_size_bytes = stats.total_allocatable_size_bytes,
+        .total_allocated_per_bank_size_bytes = stats.total_allocated_bytes,
+        .total_free_per_bank_size_bytes = stats.total_free_bytes,
+        .total_allocatable_size_bytes = stats.total_allocatable_size_bytes * num_banks_,
+        .total_allocated_size_bytes = stats.total_allocated_bytes * num_banks_,
+        .total_free_size_bytes = stats.total_free_bytes * num_banks_,
+        .largest_contiguous_free_block_per_bank_size_bytes = stats.largest_free_block_bytes,
+        .blockTable = device->get_block_table(buffer_type)};
+}
+
+MemoryView MemoryReporter::get_dram_memory_view(const Device* device) const {
+    return get_memory_view(device, BufferType::DRAM);
+}
+
+MemoryView MemoryReporter::get_l1_memory_view(const Device* device) const {
+    return get_memory_view(device, BufferType::L1);
+}
+
+MemoryView GetDramMemoryView(const Device* device) { return MemoryReporter::inst().get_dram_memory_view(device); }
+
+MemoryView GetL1MemoryView(const Device* device) { return MemoryReporter::inst().get_l1_memory_view(device); }
 
 bool MemoryReporter::enabled() { return is_enabled_; }
 

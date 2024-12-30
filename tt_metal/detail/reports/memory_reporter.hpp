@@ -8,6 +8,9 @@
 #include <atomic>
 #include <fstream>
 #include <string>
+#include <unordered_map>
+#include <vector>
+
 namespace tt::tt_metal {
 inline namespace v0 {
 
@@ -16,6 +19,7 @@ class Device;
 
 }  // namespace v0
 namespace detail {
+struct MemoryView;
 
 /**
  * Enable generation of reports for memory allocation statistics.
@@ -60,6 +64,59 @@ void DisableMemoryReports();
  * */
 void DumpDeviceMemoryState(const Device* device, const std::string& prefix = "");
 
+/**
+ * Populates MemoryView for DRAM. Used when storing to disk is not an option.
+ *
+ * num_banks: total number of dram banks for given device
+ * total_allocatable_per_bank_size_bytes: total allocatable size per bank of dram in bytes
+ * total_allocated_per_bank_size_bytes: currently allocated size per bank of dram in bytes
+ * total_free_per_bank_size_bytes: total free size per bank of dram in bytes
+ * total_allocatable_size_bytes: total allocatable size of dram in bytes
+ * total_allocated_size_bytes: currently allocated size of dram in bytes
+ * total_free_size_bytes: total free size of dram in bytes
+ * largest_contiguous_free_block_per_bank_size_bytes: largest contiguous free block of dram in bytes
+ * blockTable: list of all blocks in dram (blockID, address, size, prevID, nextID, allocated)
+ *
+ * std::vector<std::unordered_map<std::string, std::string>>: list of all blocks in dram (blockID, address, size,
+ * prevID, nextID, allocated)
+ *
+ * | Argument      | Description                                       | Type            | Valid Range | Required |
+ * |---------------|---------------------------------------------------|-----------------|--------------------------------------------------------|----------|
+ * | device        | The device for which memory stats will be dumped. | const Device *  | | True     |
+ * */
+MemoryView GetDramMemoryView(const Device* device);
+
+/**
+ * Populates MemoryView for L1. Used when storing to disk is not an option.
+ *
+ * num_banks: total number of dram banks for given device
+ * total_allocatable_per_bank_size_bytes: total allocatable size per bank of dram in bytes
+ * total_allocated_per_bank_size_bytes: currently allocated size per bank of dram in bytes
+ * total_free_per_bank_size_bytes: total free size per bank of dram in bytes
+ * total_allocatable_size_bytes: total allocatable size of dram in bytes
+ * total_allocated_size_bytes: currently allocated size of dram in bytes
+ * total_free_size_bytes: total free size of dram in bytes
+ * largest_contiguous_free_block_per_bank_size_bytes: largest contiguous free block of dram in bytes
+ * blockTable: list of all blocks in dram (blockID, address, size, prevID, nextID, allocated)
+ *
+ * | Argument      | Description                                       | Type            | Valid Range | Required |
+ * |---------------|---------------------------------------------------|-----------------|--------------------------------------------------------|----------|
+ * | device        | The device for which memory stats will be dumped. | const Device *  | | True     |
+ * */
+MemoryView GetL1MemoryView(const Device* device);
+
+struct MemoryView {
+    std::uint64_t num_banks;
+    size_t total_allocatable_per_bank_size_bytes;
+    size_t total_allocated_per_bank_size_bytes;
+    size_t total_free_per_bank_size_bytes;
+    size_t total_allocatable_size_bytes;  // total_allocatable_per_bank_size_bytes * num_banks
+    size_t total_allocated_size_bytes;    // total_allocated_per_bank_size_bytes * num_banks
+    size_t total_free_size_bytes;         // total_free_per_bank_size_bytes * num_banks
+    size_t largest_contiguous_free_block_per_bank_size_bytes;
+    std::vector<std::unordered_map<std::string, std::string>> blockTable;
+};
+
 class MemoryReporter {
 public:
     MemoryReporter& operator=(const MemoryReporter&) = delete;
@@ -70,6 +127,8 @@ public:
     void flush_program_memory_usage(uint64_t program_id, const Device* device);
 
     void dump_memory_usage_state(const Device* device, const std::string& prefix = "") const;
+    MemoryView get_dram_memory_view(const Device* device) const;
+    MemoryView get_l1_memory_view(const Device* device) const;
 
     static void toggle(bool state);
     static MemoryReporter& inst();
