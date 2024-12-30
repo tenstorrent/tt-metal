@@ -15,6 +15,8 @@
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
 
+namespace tt::tt_metal::dispatch {
+
 using namespace tt::tt_metal;
 
 FDKernel* DefaultFDKernelGenerator::Generate(
@@ -148,3 +150,5 @@ void FDKernel::configure_kernel_variant(
                 .defines = defines});
     }
 }
+
+};  // namespace tt::tt_metal::dispatch

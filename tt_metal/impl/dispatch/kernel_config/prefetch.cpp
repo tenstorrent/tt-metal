@@ -9,6 +9,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+namespace tt::tt_metal::dispatch {
+
 using namespace tt::tt_metal;
 
 void PrefetchKernel::GenerateStaticConfigs() {
@@ -388,3 +390,5 @@ void PrefetchKernel::ConfigureCore() {
         detail::WriteToDeviceL1(device_, logical_core_, prefetch_q_base, prefetch_q, GetCoreType());
     }
 }
+
+};  // namespace tt::tt_metal::dispatch

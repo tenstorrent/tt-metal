@@ -10,6 +10,8 @@
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
 #define UNUSED_SEM_ID 0
 
+namespace tt::tt_metal::dispatch {
+
 typedef struct {
     NOC non_dispatch_noc;  // For communicating with workers/DRAM/host
     NOC upstream_noc;      // For communicating with upstream dispatch modules
@@ -137,3 +139,5 @@ protected:
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;
 };
+
+};  // namespace tt::tt_metal::dispatch

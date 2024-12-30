@@ -80,7 +80,7 @@ private:
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
     static DevicePool* _inst;
 
-    std::vector<FDKernel*> fd_topology_kernels;
+    std::vector<tt::tt_metal::dispatch::FDKernel*> fd_topology_kernels;
 
     // TODO remove with v0
     tt_metal::v1::DeviceHandle get_handle(Device* device) const;
