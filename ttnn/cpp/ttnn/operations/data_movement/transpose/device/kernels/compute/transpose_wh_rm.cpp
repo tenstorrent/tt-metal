@@ -146,7 +146,7 @@ void MAIN {
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // tilize input
-        tilize_init_short(cb_in, Wt);
+        tilize_init_short(cb_in, Wt, cb_tilize);
         for (uint32_t h = 0; h < Ht; ++h) {
             cb_wait_front(cb_in, Wt);
             cb_reserve_back(cb_tilize, Wt);
@@ -154,7 +154,7 @@ void MAIN {
             cb_push_back(cb_tilize, Wt);
             cb_pop_front(cb_in, Wt);
         }
-        tilize_uninit(cb_in);
+        tilize_uninit(cb_in, cb_tilize);
 
         // transpose
         cb_wait_front(cb_tilize, HtWt);

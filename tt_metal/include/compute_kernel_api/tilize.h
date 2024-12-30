@@ -19,7 +19,7 @@ namespace ckernel {
 /**
  * Initialize the tilize operation. To be called once at beginning of a kernel.
  */
-ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16) {
+ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
           BroadcastType::NONE,
@@ -46,7 +46,7 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t icb0,
     uint32_t icb1_scaler,
     uint32_t block,
-    uint32_t ocb = 16,
+    uint32_t ocb,
     uint32_t num_faces = 4,
     uint32_t face_r_dim = 16) {
     UNPACK((llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1_scaler)));
@@ -80,7 +80,7 @@ ALWI void tilizeA_B_reduce_init(
  * */
 
 ALWI void tilizeA_B_dot_product_init(
-    uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t ocb = 16, uint32_t num_faces = 4, uint32_t face_r_dim = 16) {
+    uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t ocb, uint32_t num_faces = 4, uint32_t face_r_dim = 16) {
     UNPACK((llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1)));
     UNPACK((llk_unpack_tilizeA_B_init<false, false, true>(icb0, icb1, block, num_faces, face_r_dim, face_r_dim)));
 
@@ -96,7 +96,7 @@ ALWI void tilizeA_B_dot_product_init(
 /**
  * Re-initialize for the tilize operation. This can be called after a full init.
  */
-ALWI void tilize_init_short(uint32_t icb, uint32_t block, uint32_t ocb = 16) {
+ALWI void tilize_init_short(uint32_t icb, uint32_t block, uint32_t ocb) {
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
           BroadcastType::NONE,
@@ -115,7 +115,7 @@ ALWI void tilize_init_unpack(uint32_t icb, uint32_t block) { UNPACK((llk_unpack_
 /**
  * Re-initialize for the tilize operation. This also reconfigure the unpacker with CB data type.
  */
-ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t block, uint32_t ocb = 16) {
+ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t block, uint32_t ocb) {
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
           BroadcastType::NONE,
@@ -197,7 +197,7 @@ ALWI void unpack_tilizeA_B_dot_product_block(
 /**
  * Uninitialize tilize operation before re-initializing for another operation.
  */
-ALWI void tilize_uninit(uint32_t icb, uint32_t ocb = 16) {
+ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init(ocb)));
@@ -207,7 +207,7 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb = 16) {
 /**
  * Uninitialize the tilize operation along with re-configuring unpacker with the CB data types.
  */
-ALWI void tilize_uninit_with_dt(uint32_t old_icb = 0, uint32_t new_icb = 1, uint32_t ocb = 16) {
+ALWI void tilize_uninit_with_dt(uint32_t old_icb = 0, uint32_t new_icb = 1, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(old_icb)));
     UNPACK((llk_unpack_reconfig_data_format_srca(old_icb, new_icb)));
     MATH((llk_math_reconfig_data_format_srca(old_icb, new_icb)));
