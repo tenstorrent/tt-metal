@@ -80,7 +80,7 @@ ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t c
         }
         tile_idx = tile_idx - HtWt + 1;
     }
-    pack_untilize_uninit();
+    pack_untilize_uninit(cb_out);
 }
 
 template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
@@ -107,7 +107,7 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, uint32_t cb_out) {
         cb_wait_front(cb_out, Ht);
         tile_idx = tile_idx - HtWt + 1;
     }
-    pack_untilize_uninit();
+    pack_untilize_uninit(cb_out);
 }
 
 namespace NAMESPACE {

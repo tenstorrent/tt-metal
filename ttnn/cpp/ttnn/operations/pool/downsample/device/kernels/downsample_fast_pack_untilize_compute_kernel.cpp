@@ -91,7 +91,7 @@ void MAIN {
             cb_pop_front(halo_next_input_cb_index, num_input_tiles_in_row);
         }
     }
-    pack_untilize_uninit();
+    pack_untilize_uninit(untilize_cb_index);
 
     // Tilize downsampled input
     cb_wait_front(untilize_downsampled_cb_index, num_output_tiles);
