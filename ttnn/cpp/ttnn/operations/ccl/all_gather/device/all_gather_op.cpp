@@ -187,7 +187,7 @@ void AllGather::validate(const std::vector<Tensor>& input_tensors) const {
 }
 
 std::vector<ttnn::TensorSpec> AllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    auto output_shape = input_tensors[0].get_padded_shape();  // TODO: Replace with get_logical_shape()
+    auto output_shape = input_tensors[0].get_logical_shape();
     output_shape[this->dim] *= this->ring_size;
 
     const auto& input_tensor = input_tensors[0];
