@@ -105,7 +105,7 @@ Tensor ProdOperation::invoke(
     TT_FATAL(dim >= -4 && dim <= 3, "Dimension out of range (expected to be in range of [-4, 3]");
 
     if (all_dimensions) {
-        return prod_all(input_tensor_4d, output_mem_config);
+        return ttnn::squeeze_from_4D(prod_all(input_tensor_4d, output_mem_config), old_rank);
     }
     Tensor temp = input_tensor_4d;
     // Permute for dim 2,3
@@ -120,27 +120,28 @@ Tensor ProdOperation::invoke(
     // Permute and unpad result for dim 2,3
     auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
     if (dim == 0 || dim == 1 || dim == -4 || dim == -3) {
-        return result;
+        return ttnn::squeeze_from_4D(result, old_rank);
     } else if (dim == 2 || dim == -2) {
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
-        const auto input_shape = input_a.get_shape();
+        const auto input_shape = input_tensor_4d.get_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
-        return ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
+        return ttnn::squeeze_from_4D(
+            ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt), old_rank);
     } else {  // dim 3
         // permute
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         // unpad
-        const auto input_shape = input_a.get_shape();
+        const auto input_shape = input_tensor_4d.get_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
         Tensor new_unpad_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
         // permute back
         after_permute_dims = {0, 1, 3, 2};
         Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);
-        return res_host;
+        return ttnn::squeeze_from_4D(res_host, old_rank);
     }
 }
 
