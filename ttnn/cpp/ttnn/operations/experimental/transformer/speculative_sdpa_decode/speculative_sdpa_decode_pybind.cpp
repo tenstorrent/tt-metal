@@ -23,7 +23,7 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
 
 
         Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension.
-
+        When priority_tensor is provided, for each batch, sender device sets p = 2 if verification fails and otherwise p = 0. Receiver always sets p = 1.
 
         Args:
             input_tensor_q (ttnn.Tensor): the input tensor [1 x b x nh x dh]
@@ -41,14 +41,13 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
             scale (float, optional): Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-
+            priority_tensor (ttnn.Tensor, optional): [1 x 1 x b x 1] tensor of integers of length b. Defaults to `None`. If provided, the op will inplace update the priority tensor with verification results.
 
         Returns:
             ttnn.Tensor: the full output tensor [1 x b x pnh x dh].
             ttnn.Tensor: the speculative output tensor [1 x b x pnh x dh].
             ttnn.Tensor: the row major l2 distance tensor [b].
             ttnn.Tensor: the row major l2 norm x tensor [b].
-
 
         "Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension."
         "If a position is given as (-1), compute for the corresponding index in the batch is skipped."
@@ -73,6 +72,7 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<Tensor>& priority_tensor,
                uint8_t queue_id) {
                 return self(
                     queue_id,
@@ -87,7 +87,8 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
                     scale,
                     memory_config,
                     program_config,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    priority_tensor);
             },
             py::arg("input_tensor_q").noconvert(),
             py::arg("input_tensor_k").noconvert(),
@@ -102,6 +103,7 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("priority_tensor").noconvert() = std::nullopt,
             py::arg("queue_id") = 0,
         });
 }

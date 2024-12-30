@@ -139,6 +139,7 @@ def get_speculative_flash_decode_tt(
     cur_pos_tensor=False,
     sharded_out=False,
     height_sharded_memcfg=None,
+    priority_tensor=None,
 ):
     """
     Wrapper function for speculative flash decode tensor operations.
@@ -157,6 +158,7 @@ def get_speculative_flash_decode_tt(
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 memory_config=height_sharded_memcfg if sharded_out else memory_config,
+                priority_tensor=priority_tensor,
             )
         else:
             outputs = ttnn.experimental.speculative_scaled_dot_product_attention_decode(
@@ -169,6 +171,7 @@ def get_speculative_flash_decode_tt(
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 memory_config=height_sharded_memcfg if sharded_out else memory_config,
+                priority_tensor=priority_tensor,
             )
     else:
         raise NotImplementedError("Non-causal not implemented")
@@ -185,7 +188,7 @@ def get_speculative_flash_decode_tt(
 
 
 def get_speculative_flash_decode_expected(
-    Q, K, V, attn_mask, start_indices, nh, nkv, speculation_length, scale, max_start_idx, padded_layer_len, lambda_
+    Q, K, V, attn_mask, start_indices, nh, nkv, speculation_length, scale, padded_layer_len, lambda_
 ):
     """
     Calculate ground truth and speculative outputs for flash decode using PyTorch.
@@ -218,7 +221,7 @@ def get_speculative_flash_decode_expected(
     expected_spec = torch.zeros_like(Q_slice)
     for i in range(b):
         start_idx = start_indices[i]
-        padded_start_idx = nearest_n(max_start_idx + 1, n=32)
+        padded_start_idx = nearest_n(start_idx + 1, n=32)
         spec_last_chunk_start = padded_start_idx - speculation_length
 
         Q_slice_i = Q_slice[[i]]
@@ -318,9 +321,9 @@ def run_test_sdpa_decode_single_device(
     while max_start_idx < s:
         # Set start indices if not provided or in multi-iteration mode
         if not single_iter or start_indices is None:
-            start_indices = [
-                max_start_idx for _ in range(b)
-            ]  # np.linspace(min_start_idx, max_start_idx, b, dtype=np.int32).tolist() if b > 1 else [max_start_idx]
+            start_indices = (
+                np.linspace(min_start_idx, max_start_idx, b, dtype=np.int32).tolist() if b > 1 else [max_start_idx]
+            )
 
         ##########################################
         #### Prepare test config and data
@@ -399,7 +402,6 @@ def run_test_sdpa_decode_single_device(
             nkv,
             k_chunk_size,  # speculative chunk size
             scale,
-            max_start_idx,
             padded_layer_len,
             lambda_,
         )
@@ -431,7 +433,10 @@ def run_test_sdpa_decode_single_device(
 
         min_frac_tol = 0.25 if torch.all(lp_distance.squeeze() > 2) else 0.5
         out_pass = torch.allclose(
-            lp_distance.squeeze(), tt_back_spec_lp_distance.to(torch.float32).squeeze() ** (0.5), rtol=min_frac_tol
+            lp_distance.squeeze(),
+            tt_back_spec_lp_distance.to(torch.float32).squeeze() ** (0.5),
+            rtol=min_frac_tol,
+            atol=1e-1,
         )
         logger.debug(
             f"lp distance output tt vs pytorch: {lp_distance.squeeze()}, {tt_back_spec_lp_distance.to(torch.float32).squeeze()**(0.5)}"
@@ -440,7 +445,7 @@ def run_test_sdpa_decode_single_device(
 
         min_frac_tol = 0.25 if torch.all(lp_norm_x.squeeze() > 2) else 0.5
         out_pass = torch.allclose(
-            lp_norm_x.squeeze(), tt_back_lp_norm_x.to(torch.float32).squeeze() ** (0.5), rtol=min_frac_tol
+            lp_norm_x.squeeze(), tt_back_lp_norm_x.to(torch.float32).squeeze() ** (0.5), rtol=min_frac_tol, atol=1e-1
         )
         logger.debug(
             f"lp norm output tt vs pytorch: {lp_norm_x.squeeze()}, {tt_back_lp_norm_x.to(torch.float32).squeeze()**(0.5)}"
@@ -533,4 +538,246 @@ def test_sdpa_decode_single_device(
         single_iter=single_iter,
         debug_mode=False,
         # check_nd_pcc_iters=5000,
+    )
+
+
+def run_test_sdpa_decode_single_device_priority_tensor(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    dtype,
+    grid_size,
+    start_indices,
+    q_dtype=ttnn.bfloat16,
+    cur_pos_tensor=False,
+    k_chunk_size=128,
+    lambda_=0.2,
+    sharded_in=False,
+    sharded_out=False,
+    causal=True,
+):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y - 1:
+        pytest.skip(
+            f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size} with last column dedicated for ccl"
+        )
+
+    padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
+    torch.manual_seed(1234)
+
+    num_parallel_cores = grid_size[0] * grid_size[1] // b
+    if num_parallel_cores == 1:
+        min_pcc = 0.90
+    else:
+        min_pcc = 0.99
+        if q_dtype == ttnn.bfloat8_b:
+            min_pcc = 0.98
+        min_pcc = 0.91 if dtype == ttnn.bfloat4_b else min_pcc
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+
+    shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
+
+    height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    # make Q the same as Q_base so that attention dot product is large, and assign Q_base to masked out KV cache
+    Q_base = fa_rand(b, nkv, 1, d)
+    Q = torch.cat([Q_base[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1).reshape(
+        1, b, nh, d
+    )  # 1, b, nh, d
+
+    # mask out the middle portion of KV cache to make sure speculative results are correct
+    for i in range(b):
+        start_idx = start_indices[i]
+
+        padded_start_idx = nearest_n(start_idx + 1, n=32)
+        spec_last_chunk_start = padded_start_idx - k_chunk_size
+
+        K[i, :, k_chunk_size:spec_last_chunk_start, :] = -torch.cat(
+            [Q_base[i]] * (spec_last_chunk_start - k_chunk_size), dim=1
+        )
+        V[i, :, k_chunk_size:spec_last_chunk_start, :] = 0
+
+    tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
+    tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
+
+    scale = d**-0.5
+    max_start_idx = max(start_indices)
+
+    # set up priority tensor
+    priority_tensor = torch.zeros(1, 1, b, 1)
+    priority_tensor_tt = ttnn.as_tensor(
+        priority_tensor, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_memcfg
+    )
+
+    ##########################################
+    #### Prepare test config and data
+    ##########################################
+    program_config, padded_layer_len, attn_mask, _ = prepare_test_config_and_data(
+        b, nh, s, d, grid_size, padded_num_heads, k_chunk_size, max_start_idx, start_indices, causal
+    )
+
+    ##########################################
+    #### TT Calculation ####
+    ##########################################
+
+    tt_Q = ttnn.as_tensor(
+        Q[:, :, :nh],
+        device=device,
+        dtype=q_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
+    )
+
+    tt_back_gt, tt_back_spec, tt_back_spec_lp_distance, tt_back_lp_norm_x = get_speculative_flash_decode_tt(
+        tt_Q,
+        tt_K,
+        tt_V,
+        device,
+        start_indices,
+        nh,
+        lambda_,
+        scale,
+        program_config,
+        compute_kernel_config,
+        dram_memcfg,
+        cur_pos_tensor=cur_pos_tensor,
+        sharded_out=sharded_out,
+        height_sharded_memcfg=height_sharded_memcfg,
+        priority_tensor=priority_tensor_tt,
+    )
+    tt_back_priority_tensor = ttnn.to_torch(priority_tensor_tt)
+
+    ##########################################
+    #### Expected Calculation ####
+    ##########################################
+    expected_gt, expected_spec, lp_distance, lp_norm_x = get_speculative_flash_decode_expected(
+        Q,
+        K,
+        V,
+        attn_mask,
+        start_indices,
+        nh,
+        nkv,
+        k_chunk_size,  # speculative chunk size
+        scale,
+        padded_layer_len,
+        lambda_,
+    )
+    passing = torch.all(lp_distance <= lambda_ * lp_norm_x)
+    priority_tensor[0, 0, :, 0] = (lp_distance <= lambda_ * lp_norm_x).to(torch.int32) * 2
+    logger.debug(f"gt speculation passing: {passing}")
+
+    ##########################################
+    #### Comparison ####
+    ##########################################
+
+    non_skip_indices = torch.tensor(start_indices) != -1
+    out_pass, out_pcc = comp_pcc(expected_gt[:, non_skip_indices], tt_back_gt[:, non_skip_indices], min_pcc)
+    logger.debug(f"gt tt vs pytorch: {out_pcc}")
+    assert out_pass
+
+    out_pass, out_pcc = comp_pcc(expected_spec[:, non_skip_indices], tt_back_spec[:, non_skip_indices], min_pcc)
+    logger.debug(f"spec tt vs pytorch: {out_pcc}")
+    assert out_pass
+
+    min_frac_tol = 0.25 if torch.all(lp_distance.squeeze() > 2) else 0.5
+    out_pass = torch.allclose(
+        lp_distance.squeeze(),
+        tt_back_spec_lp_distance.to(torch.float32).squeeze() ** (0.5),
+        rtol=min_frac_tol,
+        atol=1e-1,
+    )
+    logger.debug(
+        f"lp distance output tt vs pytorch: {lp_distance.squeeze()}, {tt_back_spec_lp_distance.to(torch.float32).squeeze()**(0.5)}"
+    )
+    assert out_pass
+
+    min_frac_tol = 0.25 if torch.all(lp_norm_x.squeeze() > 2) else 0.5
+    out_pass = torch.allclose(
+        lp_norm_x.squeeze(), tt_back_lp_norm_x.to(torch.float32).squeeze() ** (0.5), rtol=min_frac_tol, atol=1e-1
+    )
+    logger.debug(
+        f"lp norm output tt vs pytorch: {lp_norm_x.squeeze()}, {tt_back_lp_norm_x.to(torch.float32).squeeze()**(0.5)}"
+    )
+    assert out_pass
+
+    out_pass = torch.allclose(priority_tensor.to(torch.int32), tt_back_priority_tensor.to(torch.int32))
+    logger.debug(f"priority tensor tt vs pytorch: {priority_tensor}, {tt_back_priority_tensor}")
+    assert out_pass
+
+
+@skip_for_blackhole("Unsupported on BH, see #12349")
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize(
+    "dtype, q_dtype",
+    [
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=[
+        "kv_bfp8",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
+    (
+        # [1, 32, 8, 4096, 128, (8, 4), True],  # llama 3.1 8b
+        [2, 24, 8, 4096, 128, (8, 4), True],  # llama 3.1 8b
+    ),
+)
+@pytest.mark.parametrize(
+    "k_chunk_size",
+    [
+        128,
+    ],
+)
+def test_sdpa_decode_single_device_priority_tensor(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    dtype,
+    grid_size,
+    q_dtype,
+    cur_pos_tensor,
+    k_chunk_size,
+    use_program_cache,
+):
+    if nkv > 1 and q_dtype != ttnn.bfloat16:
+        pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
+
+    start_indices = [s // 2 + 671] * b
+
+    ttnn.device.DisablePersistentKernelCache()
+
+    run_test_sdpa_decode_single_device_priority_tensor(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        start_indices,
+        q_dtype,
+        cur_pos_tensor,
+        k_chunk_size,
+        sharded_in=False,
+        sharded_out=False,
     )

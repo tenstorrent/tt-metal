@@ -207,6 +207,26 @@ void SpeculativeScaledDotProductAttentionDecode::validate(
 
     TT_FATAL(
         q_shape_unpadded[2] <= 32, "Speculative flash decode only supports <= 32 q heads, got {}", q_shape_unpadded[2]);
+
+    if (optional_input_tensors.at(3).has_value()) {
+        const auto B = q_shape[1];
+        const auto& priority_tensor = optional_input_tensors.at(3).value();
+        TT_FATAL(
+            priority_tensor.get_dtype() == DataType::INT32,
+            "Expect priority tensor to be INT32, got {}",
+            priority_tensor.get_dtype());
+        TT_FATAL(
+            priority_tensor.get_layout() == Layout::ROW_MAJOR,
+            "Expect priority tensor to be ROW_MAJOR, got {}",
+            priority_tensor.get_layout());
+        const auto priority_shape = priority_tensor.get_logical_shape();
+        ;
+        TT_FATAL(
+            (priority_shape[0] == 1) && (priority_shape[1] == 1) && (priority_shape[2] == B) &&
+                (priority_shape[3] == 1),
+            "Expect priority tensor to be [1, 1, B, 1], got {}",
+            priority_shape);
+    }
 }
 
 std::vector<TensorSpec> SpeculativeScaledDotProductAttentionDecode::compute_output_specs(
@@ -241,6 +261,7 @@ operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::crea
     auto& cur_pos_tensor = optional_input_tensors.at(0);
     auto& page_table_tensor = optional_input_tensors.at(1);
     auto& attn_mask = optional_input_tensors.at(2);
+    auto& priority_tensor = optional_input_tensors.at(3);
 
     auto& full_output_tensor = output_tensors.at(0);
     auto& speculated_output_tensor = output_tensors.at(1);
@@ -268,6 +289,7 @@ operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::crea
         cur_pos_tensor,
         page_table_tensor,
         attn_mask,
+        priority_tensor,
         full_output_tensor,
         speculated_output_tensor,
         l2_dist_tensor,
@@ -275,6 +297,7 @@ operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::crea
         this->is_causal,
         this->cur_pos,
         scale,
+        lambda,
         this->compute_kernel_config,
         this->program_config,
         this->k_chunk_size,
@@ -287,6 +310,7 @@ operation::Hash SpeculativeScaledDotProductAttentionDecode::compute_program_hash
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     bool has_cur_pos = optional_input_tensors.at(0).has_value();
     bool has_attn_mask = optional_input_tensors.at(2).has_value();
+    bool has_priority = optional_input_tensors.at(3).has_value();
     return operation::hash_operation<SpeculativeScaledDotProductAttentionDecode>(
         this->lambda_,
         this->scale,
@@ -298,6 +322,7 @@ operation::Hash SpeculativeScaledDotProductAttentionDecode::compute_program_hash
         this->is_causal,
         has_attn_mask,
         has_cur_pos,
+        has_priority,
         input_tensors);
 }
 

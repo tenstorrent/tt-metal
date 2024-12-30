@@ -39,12 +39,15 @@ void kernel_main() {
     constexpr uint32_t Spec_chunk_t =
         get_compile_time_arg_val(21);  // speculative chunk size (in tiles), for the first and last chunk
     constexpr uint32_t speculative_chunk_size = Spec_chunk_t * tt::constants::TILE_HEIGHT;
+    constexpr bool use_priority_tensor = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t lambda_val = get_compile_time_arg_val(23);
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t out_spec_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t l2_dist_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t l2_norm_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t priority_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id_for_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id_for_output = get_arg_val<uint32_t>(arg_idx++);
     const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
@@ -340,47 +343,69 @@ void kernel_main() {
         }
 
         // wait for ground truth norm to be ready
-        cb_wait_front(cb_out_m, 1);
         const InterleavedAddrGen<is_dram> s_out_norm = {
             .bank_base_address = l2_norm_addr, .page_size = l2_norm_scalar_bytes};
         uint64_t l2_norm_noc_addr = get_noc_addr(cur_batch, s_out_norm);
         DPRINT << "l2 norm addr: " << get_read_ptr(cb_out_m) << ENDL();
+        cb_wait_front(cb_out_m, 1);
         // read in norm value
-        {
-            volatile tt_l1_ptr uint16_t* norm_val_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_out_m));
-            // Use union for safe type punning
-            union {
-                uint32_t i;
-                float f;
-            } converter;
-            converter.i = static_cast<uint32_t>(norm_val_ptr[0]) << 16;  // shift to high bits
-            float converted_val = converter.f;
-            DPRINT << "norm val: " << converted_val << ENDL();
-        }
         noc_async_write(get_read_ptr(cb_out_m), l2_norm_noc_addr, l2_norm_scalar_bytes);
         noc_async_write_barrier();
 
-        // read in dist norm value
+        // wait for dist norm to be ready
         const InterleavedAddrGen<is_dram> s_out_dist_norm = {
             .bank_base_address = l2_dist_addr, .page_size = l2_norm_scalar_bytes};
         uint64_t l2_dist_norm_noc_addr = get_noc_addr(cur_batch, s_out_dist_norm);
-        cb_wait_front(cb_out_l, 1);
         DPRINT << "l2 dist norm addr: " << get_read_ptr(cb_out_l) << ENDL();
+        cb_wait_front(cb_out_l, 1);
+        // read in dist norm value
+        noc_async_write(get_read_ptr(cb_out_l), l2_dist_norm_noc_addr, l2_norm_scalar_bytes);
+        noc_async_write_barrier();
+
         {
-            volatile tt_l1_ptr uint16_t* norm_val_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_out_l));
             // Use union for safe type punning
             union {
                 uint32_t i;
                 float f;
             } converter;
+            // read in norm value
+            volatile tt_l1_ptr uint16_t* norm_val_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_out_m));
             converter.i = static_cast<uint32_t>(norm_val_ptr[0]) << 16;  // shift to high bits
-            float converted_val = converter.f;
-            DPRINT << "dist norm val: " << converted_val << ENDL();
+            float converted_norm_val = converter.f;
+            DPRINT << "norm val: " << converted_norm_val << ENDL();
+            // read in dist value
+            volatile tt_l1_ptr uint16_t* dist_val_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_out_l));
+            converter.i = static_cast<uint32_t>(dist_val_ptr[0]) << 16;  // shift to high bits
+            float converted_dist_val = converter.f;
+            DPRINT << "dist norm val: " << converted_dist_val << ENDL();
+            // get scale value in float
+            converter.i = lambda_val;
+            float lambda_val_float = converter.f;
+            DPRINT << "lambda val: " << lambda_val_float << ENDL();
+
+            // verify speculation result
+            // to save computation, dist_val is squared and norm_val is squared
+            // so we want to check wether sqrt(dist_val) <= lambda * sqrt(norm_val)
+            // we can square both sides to get dist_val <= lambda^2 * norm_val
+            bool is_speculation_correct =
+                converted_dist_val <= (lambda_val_float * lambda_val_float) * converted_norm_val;
+            uint32_t priority_val = is_speculation_correct ? 2 : 0;
+            DPRINT << "priority val: " << priority_val << ENDL();
+            // write priority to a local cb, in this case, cb_out_l
+            volatile tt_l1_ptr uint32_t* priority_val_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_out_l));
+            priority_val_ptr[0] = priority_val;
+
+            // write priority to memory
+            constexpr uint32_t priority_scalar_bytes = 4;  // 4 bytes for uint32_t
+            const InterleavedAddrGen<is_dram> s_out_priority = {
+                .bank_base_address = priority_addr, .page_size = priority_scalar_bytes};
+            uint64_t priority_noc_addr = get_noc_addr(cur_batch, s_out_priority);
+            noc_async_write(get_read_ptr(cb_out_l), priority_noc_addr, priority_scalar_bytes);
+            noc_async_write_barrier();
         }
-        noc_async_write(get_read_ptr(cb_out_l), l2_dist_norm_noc_addr, l2_norm_scalar_bytes);
-        noc_async_write_barrier();
     }
     DPRINT << "done reducer_compute" << ENDL();
 }

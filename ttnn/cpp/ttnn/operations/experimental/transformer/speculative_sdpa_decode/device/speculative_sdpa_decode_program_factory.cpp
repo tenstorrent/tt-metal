@@ -28,6 +28,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     std::optional<const Tensor> cur_pos_tensor,
     std::optional<const Tensor> page_table_tensor,
     std::optional<const Tensor> attn_mask,
+    std::optional<const Tensor> priority_tensor,
     const Tensor& full_output_tensor,
     const Tensor& speculated_output_tensor,
     const Tensor& l2_dist_tensor,
@@ -35,6 +36,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     bool is_causal,
     const std::vector<uint32_t>& cur_pos_ids,
     std::optional<float> scale,
+    std::optional<float> lambda,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config,
     const uint32_t k_chunk_size,
@@ -124,9 +126,11 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
 
     bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     bool use_attention_mask = attn_mask.has_value();
+    bool use_priority_tensor = priority_tensor.has_value();
 
     log_debug("use_cur_pos_tensor: {}", use_cur_pos_tensor);
     log_debug("use_attention_mask: {}", use_attention_mask);
+    log_debug("use_priority_tensor: {}", use_priority_tensor);
 
     // Parallelization scheme
     // We will assign cores to batches
@@ -516,6 +520,12 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     } scale_union;
     scale_union.f = scale.value_or(1.0f);
 
+    union {
+        float f;
+        uint32_t u;
+    } lambda_union;
+    lambda_union.f = lambda.value_or(0.2f);
+
     // Create core groups for reduce cores
     std::vector<uint32_t> reduce_core_physical_xs;
     std::vector<uint32_t> reduce_core_physical_ys;
@@ -626,7 +636,9 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         num_output_cores,
         full_output_tensor.element_size(),
         is_causal,
-        Spec_chunk_t};
+        Spec_chunk_t,
+        use_priority_tensor,
+        lambda_union.u};
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
@@ -700,6 +712,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
     uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
     uint32_t attn_mask_addr = use_attention_mask ? attn_mask.value().buffer()->address() : 0;
+    uint32_t priority_addr = use_priority_tensor ? priority_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
     uint32_t out_spec_addr = out1_buffer->address();
     uint32_t l2_dist_addr = l2_dist_buffer->address();
@@ -758,6 +771,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
             out_spec_addr,
             l2_dist_addr,
             l2_norm_addr,
+            priority_addr,
             worker_id_for_reduce,
             worker_id_for_output,
             do_reduce,
@@ -812,7 +826,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
                                                 use_cur_pos_tensor,
                                                 use_attention_mask,
                                                 is_paged_attention,
-                                                is_causal](
+                                                is_causal,
+                                                use_priority_tensor](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -838,6 +853,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         uint32_t pos_addr = use_cur_pos_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
         uint32_t page_table_addr = is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
         uint32_t attn_mask_addr = use_attention_mask ? optional_input_tensors.at(2).value().buffer()->address() : 0;
+        uint32_t priority_addr = use_priority_tensor ? optional_input_tensors.at(3).value().buffer()->address() : 0;
         auto page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
         uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
         uint32_t out_addr = out0_buffer->address();
@@ -891,6 +907,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
             writer_args[arg_idx++] = out_spec_addr;
             writer_args[arg_idx++] = l2_dist_addr;
             writer_args[arg_idx++] = l2_norm_addr;
+            writer_args[arg_idx++] = priority_addr;
             writer_args[arg_idx++] = worker_id_for_reduce;
             writer_args[arg_idx++] = worker_id_for_output;
             writer_args[arg_idx++] = do_reduce;

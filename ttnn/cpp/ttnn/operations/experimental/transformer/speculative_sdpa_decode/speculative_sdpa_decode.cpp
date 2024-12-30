@@ -46,7 +46,8 @@ ExecuteSpeculativeScaledDotProductAttentionDecode::invoke(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& priority_tensor) {
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                     ? input_tensor_q.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
@@ -83,7 +84,7 @@ ExecuteSpeculativeScaledDotProductAttentionDecode::invoke(
             .k_chunk_size = k_chunk_size,
             .paged_attention = false},
         {input_tensor_q, input_tensor_k, input_tensor_v},
-        {cur_pos_tensor, std::nullopt, attn_mask},
+        {cur_pos_tensor, std::nullopt, attn_mask, priority_tensor},
         {},
         queue_id);
 
@@ -108,7 +109,8 @@ ExecuteSpeculativeScaledDotProductAttentionDecode::invoke(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& priority_tensor) {
     return invoke(
         DefaultQueueId,
         input_tensor_q,
@@ -122,7 +124,8 @@ ExecuteSpeculativeScaledDotProductAttentionDecode::invoke(
         scale,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        priority_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::transformer

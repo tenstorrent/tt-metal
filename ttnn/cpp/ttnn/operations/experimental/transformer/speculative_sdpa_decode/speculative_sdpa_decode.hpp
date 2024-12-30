@@ -27,7 +27,8 @@ struct ExecuteSpeculativeScaledDotProductAttentionDecode {
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<Tensor>& priority_tensor = std::nullopt);
 
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor_q,
@@ -41,7 +42,8 @@ struct ExecuteSpeculativeScaledDotProductAttentionDecode {
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<Tensor>& priority_tensor = std::nullopt);
 };
 
 }  // namespace operations::experimental::transformer
