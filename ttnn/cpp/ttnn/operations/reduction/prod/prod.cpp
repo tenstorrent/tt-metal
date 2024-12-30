@@ -110,7 +110,7 @@ Tensor ProdOperation::invoke(
     TT_FATAL(dim >= -4 && dim <= 3, "Dimension out of range (expected to be in range of [-4, 3]");
 
     if (all_dimensions) {
-        return ttnn::squeeze_from_4D(prod_all(input_tensor_4d, output_mem_config), old_rank);
+        return prod_all(input_tensor_4d, output_mem_config);
     }
     Tensor temp = input_tensor_4d;
     // Permute for dim 2,3
