@@ -8,6 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/kernels/data_types.hpp"
 #include "llrt/hal.hpp"
+#include "umd/device/tt_soc_descriptor.h"
 
 namespace tt::tt_metal::detail {
 
@@ -47,6 +48,16 @@ inline NOC GetPreferredNOCForDRAMWrite(ARCH arch) {
         case ARCH::GRAYSKULL: return NOC::NOC_0;
         case ARCH::WORMHOLE_B0:
         default: return NOC::NOC_1;
+    }
+}
+
+inline HalProgrammableCoreType hal_programmable_core_type_from_core_type(CoreType core_type) {
+    switch (core_type) {
+        case CoreType::WORKER:
+        case CoreType::TENSIX: return HalProgrammableCoreType::TENSIX;
+        case CoreType::ACTIVE_ETH: return HalProgrammableCoreType::ACTIVE_ETH;
+        case CoreType::IDLE_ETH: return HalProgrammableCoreType::IDLE_ETH;
+        default: TT_FATAL(false, "CoreType is not recognized by the HAL in {}", __FUNCTION__);
     }
 }
 

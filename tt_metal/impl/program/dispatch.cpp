@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "program_dispatch_utils.hpp"
+#include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/distributed/mesh_command_queue.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
+#include "tt_metal/distributed/mesh_workload.hpp"
 
 namespace tt::tt_metal {
-namespace program_utils {
+namespace program_dispatch {
 
 enum DispatchWriteOffsets {
     DISPATCH_WRITE_OFFSET_ZERO = 0,
@@ -120,10 +122,10 @@ uint32_t finalize_rt_args(
     CoreType core_type = hal.get_core_type(programmable_core_type_index);
     HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
 
-    uint32_t max_unique_rta_size = program_utils::configure_rta_offsets_for_kernel_groups(
+    uint32_t max_unique_rta_size = program_dispatch::configure_rta_offsets_for_kernel_groups(
         programmable_core_type_index, kernels, kernel_groups, base_offset);
     uint32_t crta_base_offset = base_offset + max_unique_rta_size;
-    uint32_t total_crta_size = program_utils::configure_crta_offsets_for_kernel_groups(
+    uint32_t total_crta_size = program_dispatch::configure_crta_offsets_for_kernel_groups(
         programmable_core_type_index, kernels, kernel_groups, crta_base_offset, crta_offsets, crta_sizes);
 
     uint32_t offset = max_unique_rta_size + total_crta_size;
@@ -265,6 +267,120 @@ uint32_t finalize_kernel_bins(
     kernel_text_offset = base_offset;
     kernel_text_size = max_offset - base_offset;
     return max_offset;
+}
+
+template <typename T>
+void finalize_program_offsets(T& workload, Device* device) {
+    if (workload.is_finalized()) {
+        return;
+    }
+    // TODO (AS): Enacapsulate the variables below in a struct to avoid implicit updates on references.
+    // TODO (AS): Rather than in-place updating atrtibutes in the program, update them explicitly through a
+    // returned set of offsets.
+    // Base offset for Program Configs across all core types, wrt kernel config slot start address
+    uint32_t config_base_offset = 0;
+    // Incremental offset. Will correspond to the size of the program config per core, once the
+    // program is finalized.
+    uint32_t offset = 0;
+    // Unique RTA offset.
+    uint32_t rta_offset = 0;
+    // Common RTA offsets and sizes.
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    // Semaphore offsets and sizes.
+    uint32_t sem_offset = 0;
+    uint32_t sem_size = 0;
+    // CB offsets and sizes.
+    uint32_t cb_offset = 0;
+    uint32_t cb_size = 0;
+    uint32_t local_cb_size = 0;
+    // Kernel binary offsets and sizes.
+    uint32_t kernel_text_offset = 0;
+    uint32_t kernel_text_size = 0;
+    // TODO (AS): Explicitly encode what's needed by the lambdas below.
+    auto set_program_offsets_and_sizes = [&](Program& program, uint32_t index) {
+        auto& program_config = program.get_program_config(index);
+        program_config.rta_offset = rta_offset;
+        program_config.crta_offsets = crta_offsets;
+        program_config.crta_sizes = crta_sizes;
+        program_config.sem_offset = sem_offset;
+        program_config.sem_size = sem_size;
+        program_config.cb_offset = cb_offset;
+        program_config.cb_size = cb_size;
+        program_config.kernel_text_offset = kernel_text_offset;
+        program_config.kernel_text_size = kernel_text_size;
+        program.get_program_config_sizes()[index] = offset;
+    };
+
+    auto set_program_attrs_across_core_types = [&](Program& program) {
+        program.get_program_config_sizes()[hal.get_programmable_core_type_count()] =
+            workload.runs_on_noc_multicast_only_cores();
+        program.get_program_config_sizes()[hal.get_programmable_core_type_count() + 1] =
+            workload.runs_on_noc_unicast_only_cores();
+        program.set_launch_msg_sem_offsets();
+        // TODO: This check is wrong - it populates dispatch data for dispatch kernels
+        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+            program.populate_dispatch_data(device);  // TODO: maybe rename
+        }
+    };
+
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
+        offset = finalize_rt_args(
+            workload.get_kernels(index),
+            workload.get_kernel_groups(index),
+            config_base_offset,
+            index,
+            rta_offset,
+            crta_offsets,
+            crta_sizes);
+
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
+
+        offset = finalize_sems(index, offset, workload.semaphores(), sem_offset, sem_size);
+
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
+
+        offset = finalize_cbs(index, workload.get_kernel_groups(index), offset, cb_offset, cb_size, local_cb_size);
+
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
+
+        offset = finalize_kernel_bins(
+            device,
+            index,
+            workload.get_kernels(index),
+            workload.get_kernel_groups(index),
+            offset,
+            kernel_text_offset,
+            kernel_text_size);
+
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
+
+        auto max_size = hal.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+        TT_FATAL(
+            offset < max_size,
+            "Program size ({}) too large for kernel config buffer ({}) on {}",
+            offset,
+            max_size,
+            magic_enum::enum_name(programmable_core_type));
+
+        if constexpr (std::is_same_v<T, Program>) {
+            set_program_offsets_and_sizes(workload, index);
+        } else {
+            for (const auto& device_range : workload.get_logical_device_ranges()) {
+                set_program_offsets_and_sizes(workload.get_program_on_device_range(device_range), index);
+            }
+        }
+    }
+    // The sem offsets cross programmable_core_types so must be set after the loop above
+    if constexpr (std::is_same_v<T, Program>) {
+        set_program_attrs_across_core_types(workload);
+    } else {
+        for (const auto& device_range : workload.get_logical_device_ranges()) {
+            set_program_attrs_across_core_types(workload.get_program_on_device_range(device_range));
+        }
+    }
+    workload.set_finalized();
 }
 
 uint32_t get_packed_write_max_unicast_sub_cmds(Device* device) {
@@ -590,8 +706,7 @@ void assemble_runtime_args_commands(
                         }
                     } else {
                         std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                            device->extract_dst_noc_multicast_info(
-                                kernel->logical_coreranges(), core_type);
+                            device->extract_dst_noc_multicast_info(kernel->logical_coreranges(), core_type);
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
                             std::vector<CQDispatchWritePackedMulticastSubCmd>());
                         auto& multicast_sub_cmd =
@@ -1282,6 +1397,21 @@ void assemble_device_commands(
              ->mcast;
 }
 
+void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr) {
+    for (uint32_t index = 0; index < tt::tt_metal::hal.get_programmable_core_type_count(); index++) {
+        config_buffer_mgr.init_add_buffer(
+            tt::tt_metal::hal.get_dev_addr(
+                tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
+            tt::tt_metal::hal.get_dev_size(
+                tt::tt_metal::hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG));
+    }
+    // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
+    // previous launch message.
+    config_buffer_mgr.init_add_buffer(0, launch_msg_buffer_num_entries - 1);
+    // There's no ring buffer for active ethernet binaries, so keep track of them separately.
+    config_buffer_mgr.init_add_buffer(0, 1);
+}
+
 void reserve_space_in_kernel_config_buffer(
     WorkerConfigBufferMgr& config_buffer_mgr,
     const std::vector<uint32_t>& program_config_sizes,
@@ -1336,13 +1466,14 @@ void reserve_space_in_kernel_config_buffer(
         dispatch_md.sync_count = expected_num_workers_completed;
     }
 
-    dispatch_md.kernel_config_addrs = reservation.second;
+    // Remove launch buffer from config addrs, since it's not a real core.
+    dispatch_md.kernel_config_addrs = std::vector<ConfigBufferEntry>(
+        std::make_move_iterator(reservation.second.begin()), std::make_move_iterator(reservation.second.end() - 2));
 }
 
 void update_program_dispatch_commands(
     Program& program,
     ProgramCommandSequence& cached_program_command_sequence,
-    const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
@@ -1351,7 +1482,7 @@ void update_program_dispatch_commands(
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
-    int num_unicast_txns) {
+    std::pair<bool, int> unicast_go_signal_update) {
     uint32_t i = 0;
     ZoneScopedN("program_loaded_on_device");
 
@@ -1377,12 +1508,12 @@ void update_program_dispatch_commands(
     // Update preamble based on kernel config ring buffer slot
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         tensix_l1_write_offset_offset,
-        &kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
+        &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
         sizeof(uint32_t));
     if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
             eth_l1_write_offset_offset,
-            &kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)],
+            &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)],
             sizeof(uint32_t));
     }
 
@@ -1415,8 +1546,8 @@ void update_program_dispatch_commands(
     }
     // Update launch messages
     for (auto& go_signal : cached_program_command_sequence.go_signals) {
-        for (uint32_t i = 0; i < kernel_config_addrs.size(); i++) {
-            go_signal->kernel_config.kernel_config_base[i] = kernel_config_addrs[i].addr;
+        for (uint32_t i = 0; i < dispatch_md.kernel_config_addrs.size(); i++) {
+            go_signal->kernel_config.kernel_config_base[i] = dispatch_md.kernel_config_addrs[i].addr;
         }
         go_signal->kernel_config.host_assigned_id = program.get_runtime_id();
     }
@@ -1446,12 +1577,168 @@ void update_program_dispatch_commands(
         *reinterpret_cast<uint32_t*>(&run_program_go_signal);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
-    // This is required when a MeshWorkload users ethernet cores on a set of devices
+    // This is required when a MeshWorkload uses ethernet cores on a set of devices
     // where the number of active eth cores is heterogenous across devices.
     // Update the number of unicast txns to eth cores to match the minimum number of cores
     // across devices (specified by user)
-    if (num_unicast_txns >= 0 && cached_program_command_sequence.mcast_go_signal_cmd_ptr->num_unicast_txns) {
-        cached_program_command_sequence.mcast_go_signal_cmd_ptr->num_unicast_txns = num_unicast_txns;
+    if (unicast_go_signal_update.first) {
+        TT_FATAL(unicast_go_signal_update.second > 0, "Must specify a valid number of cores to unicast the go signal to when updating dispatch commands");
+        cached_program_command_sequence.mcast_go_signal_cmd_ptr->num_unicast_txns = unicast_go_signal_update.second;
+    }
+}
+
+void write_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    CoreType dispatch_core_type,
+    bool stall_first,
+    bool stall_before_program) {
+    uint32_t preamble_fetch_size_bytes = program_command_sequence.preamble_command_sequence.size_bytes();
+    auto& curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
+    uint32_t stall_fetch_size_bytes =
+        (stall_first || stall_before_program)
+            ? program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes()
+            : 0;
+
+    uint32_t runtime_args_fetch_size_bytes = program_command_sequence.runtime_args_fetch_size_bytes;
+
+    uint32_t program_fetch_size_bytes = program_command_sequence.device_command_sequence.size_bytes();
+
+    uint32_t program_config_buffer_data_size_bytes = program_command_sequence.program_config_buffer_data_size_bytes;
+
+    uint32_t program_rem_fetch_size_bytes = program_fetch_size_bytes - program_config_buffer_data_size_bytes;
+
+    uint8_t* program_command_sequence_data = (uint8_t*)program_command_sequence.device_command_sequence.data();
+
+    uint32_t total_fetch_size_bytes =
+        stall_fetch_size_bytes + preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
+
+    if (total_fetch_size_bytes <= dispatch_constants::get(dispatch_core_type).max_prefetch_command_size()) {
+        manager.issue_queue_reserve(total_fetch_size_bytes, command_queue_id);
+        uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+
+        manager.cq_write(
+            program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
+        write_ptr += preamble_fetch_size_bytes;
+
+        if (stall_first) {
+            // Must stall before writing runtime args
+            manager.cq_write(
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
+                stall_fetch_size_bytes,
+                write_ptr);
+            write_ptr += stall_fetch_size_bytes;
+        }
+
+        for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
+            manager.cq_write(cmds.data(), cmds.size_bytes(), write_ptr);
+            write_ptr += cmds.size_bytes();
+        }
+
+        if (stall_before_program) {
+            if (program_config_buffer_data_size_bytes > 0) {
+                manager.cq_write(program_command_sequence_data, program_config_buffer_data_size_bytes, write_ptr);
+                program_command_sequence_data += program_config_buffer_data_size_bytes;
+                write_ptr += program_config_buffer_data_size_bytes;
+            }
+
+            // Didn't stall before kernel config data, stall before remaining commands
+            manager.cq_write(
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
+                stall_fetch_size_bytes,
+                write_ptr);
+            write_ptr += stall_fetch_size_bytes;
+
+            manager.cq_write(program_command_sequence_data, program_rem_fetch_size_bytes, write_ptr);
+        } else {
+            manager.cq_write(program_command_sequence_data, program_fetch_size_bytes, write_ptr);
+        }
+
+        manager.issue_queue_push_back(total_fetch_size_bytes, command_queue_id);
+
+        // One fetch queue entry for entire program
+        manager.fetch_queue_reserve_back(command_queue_id);
+        manager.fetch_queue_write(total_fetch_size_bytes, command_queue_id);
+
+        // TODO: We are making a lot of fetch queue entries here, we can pack multiple commands into one fetch q entry
+    } else {
+        manager.issue_queue_reserve(preamble_fetch_size_bytes, command_queue_id);
+        uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+        manager.cq_write(
+            program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
+        manager.issue_queue_push_back(preamble_fetch_size_bytes, command_queue_id);
+        // One fetch queue entry for just the wait and stall, very inefficient
+        manager.fetch_queue_reserve_back(command_queue_id);
+        manager.fetch_queue_write(preamble_fetch_size_bytes, command_queue_id);
+
+        if (stall_first) {
+            // Must stall before writing kernel config data
+            manager.issue_queue_reserve(stall_fetch_size_bytes, command_queue_id);
+            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+            manager.cq_write(
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
+                stall_fetch_size_bytes,
+                write_ptr);
+            manager.issue_queue_push_back(stall_fetch_size_bytes, command_queue_id);
+            // One fetch queue entry for just the wait and stall, very inefficient
+            manager.fetch_queue_reserve_back(command_queue_id);
+            manager.fetch_queue_write(stall_fetch_size_bytes, command_queue_id);
+        }
+
+        // TODO: We can pack multiple RT args into one fetch q entry
+        for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
+            uint32_t fetch_size_bytes = cmds.size_bytes();
+            manager.issue_queue_reserve(fetch_size_bytes, command_queue_id);
+            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+            manager.cq_write(cmds.data(), fetch_size_bytes, write_ptr);
+            manager.issue_queue_push_back(fetch_size_bytes, command_queue_id);
+            // One fetch queue entry for each runtime args write location, e.g. BRISC/NCRISC/TRISC/ERISC
+            manager.fetch_queue_reserve_back(command_queue_id);
+            manager.fetch_queue_write(fetch_size_bytes, command_queue_id);
+        }
+
+        // Insert a stall between program data that goes on the ring buffer and the rest of the data
+        // Otherwise write all data in 1 prefetch entry
+        if (stall_before_program) {
+            if (program_config_buffer_data_size_bytes > 0) {
+                manager.issue_queue_reserve(program_config_buffer_data_size_bytes, command_queue_id);
+                write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+                manager.cq_write(program_command_sequence_data, program_config_buffer_data_size_bytes, write_ptr);
+                manager.issue_queue_push_back(program_config_buffer_data_size_bytes, command_queue_id);
+                manager.fetch_queue_reserve_back(command_queue_id);
+                manager.fetch_queue_write(program_config_buffer_data_size_bytes, command_queue_id);
+                program_command_sequence_data += program_config_buffer_data_size_bytes;
+            }
+
+            // Didn't stall before kernel config data, stall before remaining commands
+            manager.issue_queue_reserve(stall_fetch_size_bytes, command_queue_id);
+            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+            manager.cq_write(
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
+                stall_fetch_size_bytes,
+                write_ptr);
+            manager.issue_queue_push_back(stall_fetch_size_bytes, command_queue_id);
+            // One fetch queue entry for just the wait and stall, very inefficient
+            manager.fetch_queue_reserve_back(command_queue_id);
+            manager.fetch_queue_write(stall_fetch_size_bytes, command_queue_id);
+
+            manager.issue_queue_reserve(program_rem_fetch_size_bytes, command_queue_id);
+            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+            manager.cq_write(program_command_sequence_data, program_rem_fetch_size_bytes, write_ptr);
+            manager.issue_queue_push_back(program_rem_fetch_size_bytes, command_queue_id);
+            // One fetch queue entry for rest of program commands
+            manager.fetch_queue_reserve_back(command_queue_id);
+            manager.fetch_queue_write(program_rem_fetch_size_bytes, command_queue_id);
+        } else {
+            manager.issue_queue_reserve(program_fetch_size_bytes, command_queue_id);
+            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+            manager.cq_write(program_command_sequence_data, program_fetch_size_bytes, write_ptr);
+            manager.issue_queue_push_back(program_fetch_size_bytes, command_queue_id);
+            // One fetch queue entry for rest of program commands
+            manager.fetch_queue_reserve_back(command_queue_id);
+            manager.fetch_queue_write(program_fetch_size_bytes, command_queue_id);
+        }
     }
 }
 
@@ -1462,6 +1749,26 @@ KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
     return kernel_handle & 0xffff;
 }
 
-}  // namespace program_utils
+template <typename WorkloadType, typename DeviceType>
+uint32_t program_base_addr_on_core(
+    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType programmable_core_type) {
+    uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
+    const auto& sub_device_ids = workload.determine_sub_device_ids(generic_device);
+    // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
+    // Addresses are not the same across sub-devices
+    TT_FATAL(
+        sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
+    auto sub_device_index = sub_device_ids.begin()->to_index();
+    auto cq = workload.get_last_used_command_queue();
+    return cq ? (cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type))
+              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+}
+
+template void finalize_program_offsets<Program>(Program&, Device*);
+template void finalize_program_offsets<distributed::MeshWorkload>(distributed::MeshWorkload&, Device*);
+template uint32_t program_base_addr_on_core<Program, Device*>(Program&, Device*, HalProgrammableCoreType);
+template uint32_t program_base_addr_on_core<distributed::MeshWorkload, distributed::MeshDevice*>(
+    distributed::MeshWorkload&, distributed::MeshDevice*, HalProgrammableCoreType);
+}  // namespace program_dispatch
 
 }  // namespace tt::tt_metal
