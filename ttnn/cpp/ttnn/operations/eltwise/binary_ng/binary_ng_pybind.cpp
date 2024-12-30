@@ -84,10 +84,45 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
             py::arg("post_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
             py::arg("queue_id") = 0});
 }
+
+template <typename T>
+void bind_inplace_binary_ng_operation(py::module& module, T op, const std::string& docstring) {
+    bind_registered_operation(
+        module,
+        op,
+        docstring,
+
+        // tensor and scalar
+        ttnn::pybind_overload_t{
+            [](const T& self,
+               const ttnn::Tensor& input_tensor_a,
+               const float scalar,
+               const std::optional<const DataType>& dtype,
+               const uint8_t& queue_id) -> ttnn::Tensor { return self(queue_id, input_tensor_a, scalar, dtype); },
+            py::arg("input_tensor_a"),
+            py::arg("scalar"),
+            py::kw_only(),
+            py::arg("dtype") = std::nullopt,
+            py::arg("queue_id") = 0},
+
+        // tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const T& self,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<const DataType>& dtype,
+               uint8_t queue_id) -> ttnn::Tensor { return self(queue_id, input_tensor_a, input_tensor_b, dtype); },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("dtype") = std::nullopt,
+            py::arg("queue_id") = 0});
+}
 }  // namespace detail
 
 void py_module(py::module& module) {
     detail::bind_binary_ng_operation(module, ttnn::experimental::add, "Binary Add Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::add_, "Binary Add In-place Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::sub, "Binary Sub Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::mul, "Binary Mul Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::div, "Binary Div Operation");

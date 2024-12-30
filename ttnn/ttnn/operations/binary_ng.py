@@ -7,6 +7,7 @@ import torch
 
 
 ttnn.attach_golden_function(ttnn.experimental.add, golden_function=lambda a, b: a + b)
+ttnn.attach_golden_function(ttnn.experimental.add_, golden_function=lambda a, b: a + b)
 ttnn.attach_golden_function(ttnn.experimental.sub, golden_function=lambda a, b: a - b)
 ttnn.attach_golden_function(ttnn.experimental.mul, golden_function=lambda a, b: a * b)
 ttnn.attach_golden_function(ttnn.experimental.div, golden_function=lambda a, b: torch.divide(a, b))

@@ -100,7 +100,38 @@ Tensor BinaryNg<binary_op_type>::invoke(
         post_activations);
 }
 
+template <BinaryOpType binary_op_type>
+Tensor InplaceBinaryNg<binary_op_type>::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype) {
+    return ttnn::prim::binary_ng(queue_id, input_tensor_a, input_tensor_b, binary_op_type, output_dtype);
+}
+
+template <BinaryOpType binary_op_type>
+Tensor InplaceBinaryNg<binary_op_type>::invoke(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<const DataType>& output_dtype) {
+    return invoke(DefaultQueueId, input_tensor_a, input_tensor_b, output_dtype);
+}
+
+template <BinaryOpType binary_op_type>
+Tensor InplaceBinaryNg<binary_op_type>::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const float scalar,
+    const std::optional<const DataType>& output_dtype) {
+    return ttnn::prim::binary_ng(queue_id, input_tensor_a, scalar, binary_op_type, output_dtype);
+}
+
+template <BinaryOpType binary_op_type>
+Tensor InplaceBinaryNg<binary_op_type>::invoke(
+    const Tensor& input_tensor_a, const float scalar, const std::optional<const DataType>& output_dtype) {
+    return invoke(DefaultQueueId, input_tensor_a, scalar, output_dtype);
+}
+
 template struct BinaryNg<BinaryOpType::ADD>;
+template struct InplaceBinaryNg<BinaryOpType::ADD>;
 template struct BinaryNg<BinaryOpType::SUB>;
 template struct BinaryNg<BinaryOpType::MUL>;
 template struct BinaryNg<BinaryOpType::DIV>;
