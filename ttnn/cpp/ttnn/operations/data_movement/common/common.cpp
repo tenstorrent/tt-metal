@@ -52,14 +52,12 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
     if (rank == 4) {
         return tensor;
     }
-    printf("shape[0]: %u\n", shape[0]);
     int i = 0;
     if (shape[i] == 1) {
         auto squeezed = tensor;
         while (rank > 4 && shape[i] == 1) {
             squeezed = ttnn::squeeze(squeezed, 0);
             rank = squeezed.get_shape().rank();
-            printf("rank: %zu\n", rank);
             i++;
         }
         if (rank <= 4) {
