@@ -70,7 +70,9 @@ on:
           - eltwise.unary.tanh.tanh_pytorch2
           - eltwise.unary.tanh.tanh_forge
           - eltwise.unary.atanh.atanh
+          - eltwise.unary.atanh.atanh_sharded
           - eltwise.unary.atan.atan
+          - eltwise.unary.atan.atan_sharded
           - eltwise.unary.sign.sign
           - eltwise.unary.rad2deg.rad2deg
           - eltwise.unary.deg2rad.deg2rad
@@ -92,6 +94,7 @@ on:
           - eltwise.unary.log_sigmoid.log_sigmoid
           - eltwise.unary.logical_not.logical_not_
           - eltwise.unary.logical_not.logical_not
+          - eltwise.unary.logical_not.logical_not_sharded
           - eltwise.unary.logical_not.logical_not_forge
           - eltwise.unary.logical_not.logical_not_output
           - eltwise.unary.logical_not.logical_not_pytorch2
@@ -106,8 +109,10 @@ on:
           - eltwise.unary.geglu.geglu
           - eltwise.unary.swiglu.swiglu
           - eltwise.unary.sigmoid.sigmoid
+          - eltwise.unary.sigmoid.sigmoid_sharded
           - eltwise.unary.sigmoid.sigmoid_pytorch2
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
+          - eltwise.unary.sigmoid_accurate.sigmoid_accurate_sharded
           - eltwise.unary.tril.tril
           - eltwise.unary.tril.tril_sharded
           - eltwise.unary.triu.triu
@@ -129,6 +134,7 @@ on:
           - eltwise.unary.neg.neg
           - eltwise.unary.sinh.sinh
           - eltwise.unary.asinh.asinh
+          - eltwise.unary.asinh.asinh_sharded
           - eltwise.unary.cosh.cosh
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
@@ -191,7 +197,8 @@ on:
           - eltwise.unary_complex.conj
           - eltwise.unary_complex.is_real
           - eltwise.unary_complex.is_imag
-          - eltwise.unary_complex.reciprocal
+          - eltwise.unary_complex.reciprocal.reciprocal
+          - eltwise.unary_complex.reciprocal.reciprocal_sharded
           - eltwise.unary_complex.reciprocal_bw
           - eltwise.binary_complex.div_bw.div_bw
           - eltwise.binary_complex.add_bw.add_bw
