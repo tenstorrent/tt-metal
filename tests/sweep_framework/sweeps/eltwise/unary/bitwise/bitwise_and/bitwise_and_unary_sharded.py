@@ -33,7 +33,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_spec": gen_sharded_spec_unary(16, layouts=["TILE_LAYOUT"]),
+        "input_spec": gen_sharded_spec_unary(16, max_tensor_size_per_core=62 * 1024, layouts=["TILE_LAYOUT"]),
         "input_a_dtype": [ttnn.int32],
     },
 }
@@ -100,11 +100,13 @@ def run(
     )
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-2147483647, high=2147483648, dtype=torch.int64), input_a_dtype
+        partial(torch_random, low=0, high=2147483648, dtype=torch.int32), input_a_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.bitwise_not)
-    torch_output_tensor = golden_function(torch_input_tensor_a)
+    scalar = torch.randint(0, 2147483648, (1,), dtype=torch.int32).item()
+
+    golden_function = ttnn.get_golden_function(ttnn.bitwise_and)
+    torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -115,7 +117,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.bitwise_not(input_tensor_a, memory_config=sharded_config)
+    result = ttnn.bitwise_and(input_tensor_a, scalar, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(result)
 
