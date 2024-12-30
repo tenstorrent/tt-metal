@@ -304,17 +304,14 @@ inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole(){
     //word 2
     word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32];
     dprint_tensix_struct_field(word, 0xffff, 0, "w_dim");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "blobs_y_start_lo");
+
+    uint32_t prev_word = word;
 
     // word3
     word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1];
-    dprint_tensix_struct_field(word, 0xffff, 0, "blobs_y_start_hi");
+    DPRINT << "blobs_y_start: " << HEX() << (((word & 0xffff) << 16) | ((prev_word & 0xffff0000) >> 16)) << "; ";
     dprint_tensix_struct_field(word, 0xff0000, 16, "digest_type");
     dprint_tensix_struct_field(word, 0xff000000, 24, "digest_size");
-
-    // NOTE: Consider merging blobs_y_start hi and lo into 1 output (see GRAYSKULL)
-    // DPRINT << "blobs_y_start: " << HEX() << (((word & 0xffff) << 16) | ((tmp_word & 0xffff0000) >> 16)) << "; "; //blobs_y_start
-
 
     DPRINT << ENDL();
 }
