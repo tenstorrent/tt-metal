@@ -219,9 +219,8 @@ public:
         this->memcpy((char*)relay_paged_cmd_dst + sizeof(CQPrefetchCmd), &sub_cmds[offset_idx], sub_cmds_sizeB);
     }
 
-    template <bool inline_data = false>
+    template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(
-        bool flush_prefetch,
         uint8_t num_mcast_dests,
         uint32_t noc_xy_addr,
         uint32_t addr,
@@ -249,10 +248,25 @@ public:
             initialize_write_cmd(write_cmd_dst);
         }
 
-        if constexpr (inline_data) {
-            TT_ASSERT(data != nullptr);  // compiled out?
-            uint32_t increment_sizeB = align(data_sizeB, this->pcie_alignment);
-            this->add_data(data, data_sizeB, increment_sizeB);
+        // Case 1: flush_prefetch
+        //  a) there is inline_data: data is provided here and follows prefetch relay inline and cq dispatch write linear so total increment size is:
+        //          align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + data_sizeB, pcie_alignment)
+        //  b) don't have inline_data: next command should be to add_data (don't do aligned increment) so total increment size is:
+        //          sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)
+        // Case 2: !flush_prefetch: no data, increment size is:
+        //          align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment)
+        // Note that adding prefetch_relay_inline and writing the dispatch command already increment cmd_write_offsetB via calls to reserve_space
+        if constexpr (flush_prefetch) {
+            if constexpr (inline_data) {
+                TT_ASSERT(data != nullptr);  // compiled out?
+                this->add_data(data, data_sizeB, data_sizeB);
+		// this->cmd_write_offsetB has been incremented by sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + data_sizeB
+		// need to ensure this is aligned for next cmds to be written at the correct location
+            	this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+            }
+        } else {
+            // Need to make sure next command that flushes prefetch is written to correctly aligned location
+            this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
         }
     }
 

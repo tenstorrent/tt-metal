@@ -68,12 +68,12 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
     //This function turns ND -> MD into 2D->MD for row major and 3D->MD for tiled using a 0 cost view
     const auto layout = tensor.get_layout();
     const auto tensor_shape = tensor.get_shape();
-    TT_FATAL((tensor_shape.rank()!=0), "can't do reshape from rank 0 tensor");
+    TT_FATAL((tensor_shape.rank() != 0), "Can't do reshape from rank 0 tensor");
     if(layout == ttnn::ROW_MAJOR_LAYOUT)
     {
         //Collapse into the second last dimension
         uint32_t second_dim = 1;
-        for (int i=0; i <tensor_shape.rank()-1; i++)
+        for (int64_t i = 0; i < static_cast<int64_t>(tensor_shape.rank()) - 1; ++i)
         {
             second_dim = second_dim * tensor_shape[i];
         }
@@ -97,7 +97,7 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
     {
         uint32_t third_dim = 1;
         //Collapse into the third last dimension
-        for (int i=0; i <tensor_shape.rank()-2; i++)
+        for (int64_t i = 0; i < static_cast<int64_t>(tensor_shape.rank()) - 2; ++i)
         {
             third_dim = third_dim * tensor_shape[i];
         }
@@ -120,7 +120,7 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
             pad_value
         );
     }
-    TT_FATAL(false, "layout is neither tile nor row major");
+    TT_FATAL(false, "Layout is neither tile nor row major");
 
 }
 
@@ -136,9 +136,9 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_3D_TILE(
 {
     //This function turns a TILE 3D->MD into an equivalent 3D->3D conversion and then turns the 3D output back to MD using a 0 cost view
     //Collapse into the third last dimension
-    TT_FATAL((shape.rank()!=0), "can't do reshape to rank 0 tensor");
+    TT_FATAL((shape.rank() != 0), "Can't do reshape to rank 0 tensor");
     uint32_t third_dim = 1;
-    for (int i=0; i <shape.rank()-2; i++)
+    for (int64_t i = 0; i < static_cast<int64_t>(shape.rank()) - 2; ++i)
     {
         third_dim = third_dim * shape[i];
     }
@@ -170,10 +170,10 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     )
 {
     //This function turns a RM 2D->MD into an equivalent 2D->2D conversion and then turns the 2D output back to MD using a 0 cost view
-    TT_FATAL((shape.rank()!=0), "can't do reshape to rank 0 tensor");
+    TT_FATAL((shape.rank() != 0), "Can't do reshape to rank 0 tensor");
     //Collapse into the second last dimension
     uint32_t second_dim = 1;
-    for (int i=0; i <shape.rank()-1; i++)
+    for (int64_t i = 0; i < static_cast<int64_t>(shape.rank()) - 1; ++i)
     {
         second_dim = second_dim * shape[i];
     }
@@ -241,8 +241,8 @@ ttnn::Tensor perform_reshape_on_2D_RM(
 
 ttnn::Shape tiling_reshape_corrector(const ttnn::Shape& shape, const uint32_t tile_first_dim, const uint32_t tile_second_dim) {
     //Apply the correct padding metadata to the target shape
-    auto padded = shape.with_tile_padding();
-    auto rank = shape.rank();
+    ttnn::Shape padded = shape.with_tile_padding();
+    int64_t rank = shape.rank();
     const int8_t correction_1 =(tile_first_dim - (int)padded[-1] % tile_first_dim) % tile_first_dim;
     if(rank == 1)
     {
@@ -310,10 +310,9 @@ ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& input_shape,
-    const std::optional<MemoryConfig> &memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     const uint8_t queue_id,
-    const std::optional<PadValue> &pad_value
-     ) {
+    const std::optional<PadValue>& pad_value) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.get_layout();
     auto tensor_shape = tensor.get_shape();
@@ -337,16 +336,16 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     //The following case should only be called for the device storage case, the rest is a bandaid
     //for issue 15317
 
-
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2]:1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2]:1;
 
     // Just edit shape if shape has a 0 dimension
     if (tensor.get_logical_volume() == 0) {
-        TT_FATAL(shape.logical_shape().volume() == 0 , "Tensor volume is 0, but shape's volume is not");
-        TT_FATAL((tensor.storage_type() != StorageType::MULTI_DEVICE &&
-                  tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
-                  "Reshaping a multi-device tensor with 0 volume is not supported");
+        TT_FATAL(shape.logical_shape().volume() == 0, "Tensor volume is 0, but shape's volume is not");
+        TT_FATAL(
+            (tensor.storage_type() != StorageType::MULTI_DEVICE &&
+             tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
+            "Reshaping a multi-device tensor with 0 volume is not supported");
         return tensor.reshape(shape);
     }
     TT_FATAL(shape.logical_shape().volume() != 0, "Tensor volume is not 0, but shape volume is 0");
@@ -366,20 +365,20 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     if (this_is_view) {
         return PerformView(tensor,shape, tile_first_dim, tile_second_dim);
     }
-    if(shape.logical_shape().volume() != tensor.get_logical_volume())
-    {
-        //This is completely incorrect but it is due to issue 15137 or issue 15558
+    if (shape.logical_shape().volume() != tensor.get_logical_volume()) {
+        // This is completely incorrect but it is due to issue 15137 or issue 15558
+        const auto& tile = tensor.tensor_spec().tile();
         bool tile_tensor_view_reshape_possible =
             (layout == ttnn::Layout::TILE and shape.with_tile_padding().rank() >= 2 and
-            shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0 and
-            shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0 and
-            tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]);
+             shape.with_tile_padding()[-2] % tile.get_height() == 0 and
+             shape.with_tile_padding()[-1] % tile.get_width() == 0 and
+             tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]);
 
         if (tile_tensor_view_reshape_possible) {
             // This case has been allowed in the past though it means introducing padding values to the data
             return tensor.reshape(shape);
         }
-        //This is a completely incorrect test but it is due to issue 15558
+        // This is a completely incorrect test but it is due to issue 15558
         TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
     }
     // Catch-all
@@ -402,21 +401,20 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         return invoke(tensor, shape,std::nullopt,0,std::nullopt);
      }
 
-ttnn::Tensor ReshapeViewOperation::invoke(
-    const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& shape,
-    const std::optional<MemoryConfig> &memory_config,
-    const uint8_t queue_id,
-    const std::optional<PadValue> &pad_value
-    ) {
-    return invoke(tensor, ttnn::Shape(shape.view()),memory_config,queue_id,pad_value);
-}
+     ttnn::Tensor ReshapeViewOperation::invoke(
+         const ttnn::Tensor& tensor,
+         const ttnn::SimpleShape& shape,
+         const std::optional<MemoryConfig>& memory_config,
+         const uint8_t queue_id,
+         const std::optional<PadValue>& pad_value) {
+         return invoke(tensor, ttnn::Shape(shape.view()), memory_config, queue_id, pad_value);
+     }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     const ttnn::SimpleShape& shape
     ) {
-    return invoke(tensor, ttnn::Shape(shape.view()),std::nullopt,0,std::nullopt);
+    return invoke(tensor, ttnn::Shape(shape.view()), std::nullopt, 0, std::nullopt);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(

@@ -8,6 +8,8 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::binary::utils {
 
 using ttnn::operations::unary::UnaryOpType;

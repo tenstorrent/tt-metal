@@ -928,6 +928,7 @@ void paged_read_into_cmddat_q(uint32_t read_ptr, PrefetchExecBufState& exec_buf_
     InterleavedAddrGen<true> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
 
     while (pages_at_once != 0) {
+        invalidate_l1_cache();
         uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
         noc_async_read(noc_addr, read_ptr, page_size);
         read_ptr += page_size;

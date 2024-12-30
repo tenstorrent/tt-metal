@@ -27,7 +27,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/program.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 
 namespace tt::tt_metal {
 
@@ -1019,7 +1019,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
         if (semaphore.core_type() == CoreType::WORKER) {
             uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
             std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                device->extract_dst_noc_multicast_info(
                     semaphore.core_range_set().ranges(), CoreType::WORKER);
             transfer_info transfer_info = {
                 .dst_base_addr = semaphore.offset(),
@@ -1111,7 +1111,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
             // TODO: add a bit in the hal that says if this core type is unicast/multicast
             if (core_type == CoreType::WORKER) {
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                    device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                    device->extract_dst_noc_multicast_info(
                         kernel_group.core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
                 for (int dispatch_class = 0; dispatch_class < kernel_group.kernel_ids.size(); dispatch_class++) {
@@ -1651,7 +1651,7 @@ uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_c
     // Semaphores across sub-devices are expected to have the same address
     TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = sub_device_ids[0].to_index();
-    uint32_t base_addr = device->using_fast_dispatch
+    uint32_t base_addr = device->using_fast_dispatch()
                              ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(
                                    programmable_core_type)
                              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
@@ -1673,7 +1673,7 @@ uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_co
     // Addresses are not the same across sub-devices
     TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = sub_device_ids[0].to_index();
-    uint32_t base_addr = device->using_fast_dispatch
+    uint32_t base_addr = device->using_fast_dispatch()
                              ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(
                                    programmable_core_type)
                              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);

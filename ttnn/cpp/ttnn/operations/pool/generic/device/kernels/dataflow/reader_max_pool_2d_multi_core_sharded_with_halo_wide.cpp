@@ -63,6 +63,8 @@ void kernel_main() {
 
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
 
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+
     // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
 
     constexpr uint32_t TILE_WIDTH = 32;
@@ -89,7 +91,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
 
-    uint32_t in_w_padded = in_w + 2 * pad_w;
+    uint32_t in_w_padded = in_w + 2 * pad_w + ceil_pad_w;
 
     uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
