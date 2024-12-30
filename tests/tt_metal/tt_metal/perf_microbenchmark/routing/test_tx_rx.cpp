@@ -9,6 +9,7 @@
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
 #include "utils.hpp"
+#include "tt_metal/llrt/llrt.hpp"
 
 using std::vector;
 using namespace tt;
