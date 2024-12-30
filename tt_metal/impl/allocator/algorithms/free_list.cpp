@@ -446,6 +446,24 @@ void FreeList::dump_blocks(std::ostream& out) const {
     out << "\n";
 }
 
+MemoryBlockTable FreeList::get_memory_block_table() const {
+    MemoryBlockTable blocks;
+    boost::local_shared_ptr<Block> curr_block = this->block_head_;
+
+    while (curr_block != nullptr) {
+        std::unordered_map<std::string, std::string> block_entry;
+
+        block_entry["address"] = std::to_string(curr_block->address + this->offset_bytes_);  // bytes
+        block_entry["size"] = std::to_string(curr_block->size);                              // bytes
+        block_entry["allocated"] = this->is_allocated(curr_block) ? "yes" : "no";
+
+        blocks.push_back(block_entry);
+        curr_block = curr_block->next_block;
+    }
+
+    return blocks;
+}
+
 void FreeList::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     if (shrink_size == 0) {
         return;
