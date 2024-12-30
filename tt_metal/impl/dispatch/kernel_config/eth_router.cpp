@@ -8,6 +8,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+namespace tt::tt_metal::dispatch {
+
 using namespace tt::tt_metal;
 
 void EthRouterKernel::GenerateStaticConfigs() {
@@ -292,3 +294,5 @@ void EthRouterKernel::CreateKernel() {
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(dispatch_kernel_file_names[PACKET_ROUTER_MUX], compile_args, defines, false, false, false);
 }
+
+};  // namespace tt::tt_metal::dispatch

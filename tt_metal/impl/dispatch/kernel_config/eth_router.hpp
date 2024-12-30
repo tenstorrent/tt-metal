@@ -4,6 +4,8 @@
 #pragma once
 #include "fd_kernel.hpp"
 
+namespace tt::tt_metal::dispatch {
+
 typedef struct eth_router_static_config {
     std::optional<uint32_t> vc_count;                   // Set from arch level
     std::optional<uint32_t> fwd_vc_count;               // # of VCs continuing on to the next chip
@@ -64,3 +66,5 @@ private:
     int placement_cq_id_;  // TODO: remove channel hard-coding for dispatch core manager
     bool as_mux_;
 };
+
+};  // namespace tt::tt_metal::dispatch

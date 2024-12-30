@@ -334,7 +334,8 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
+    // Reassign from previous run
+    fd_topology_kernels = tt::tt_metal::dispatch::populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     for (const auto& device_id : devices_to_activate) {
         if (not this->is_device_active(device_id)) {
             this->activate_device(device_id);

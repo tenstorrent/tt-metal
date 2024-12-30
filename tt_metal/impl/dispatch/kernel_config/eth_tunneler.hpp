@@ -4,6 +4,8 @@
 #pragma once
 #include "fd_kernel.hpp"
 
+namespace tt::tt_metal::dispatch {
+
 typedef struct eth_tunneler_static_config {
     std::optional<uint32_t> endpoint_id_start_index;
     std::optional<uint32_t> vc_count;  // Set from arch level
@@ -58,3 +60,5 @@ private:
     eth_tunneler_dependent_config_t dependent_config_;
     bool is_remote_;
 };
+
+};  // namespace tt::tt_metal::dispatch
