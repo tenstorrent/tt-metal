@@ -108,6 +108,18 @@ void py_device_module_types(py::module& m_device) {
     py::class_<SubDeviceId>(m_device, "SubDeviceId", "ID of a sub-device.");
 
     py::class_<SubDeviceManagerId>(m_device, "SubDeviceManagerId", "ID of a sub-device manager.");
+
+    py::class_<tt::tt_metal::detail::MemoryView>(
+        m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
+        .def_readonly("num_banks", &tt::tt_metal::detail::MemoryView::num_banks)
+        .def_readonly("total_bytes_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_per_bank)
+        .def_readonly(
+            "total_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_allocated_per_bank)
+        .def_readonly("total_bytes_free_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_free_per_bank)
+        .def_readonly(
+            "largest_contiguous_bytes_free_per_bank",
+            &tt::tt_metal::detail::MemoryView::largest_contiguous_bytes_free_per_bank)
+        .def_readonly("block_table", &tt::tt_metal::detail::MemoryView::block_table);
 }
 
 void device_module(py::module& m_device) {
@@ -534,6 +546,22 @@ void device_module(py::module& m_device) {
         +==================+==================================+=======================+=============+==========+
         | device           | Device to dump memory state for  | ttnn.Device           |             | Yes      |
         | prefix           | Dumped report filename prefix    | str                   |             | No       |
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+    )doc");
+
+    m_device.def(
+        "GetMemoryView",
+        &tt::tt_metal::detail::GetMemoryView,
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        R"doc(
+        Populates MemoryView for BufferType [dram, l1, l1 small, trace]. Used when storing to disk is not an option.
+
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                      | Data type             | Valid range | Required |
+        +==================+==================================+=======================+=============+==========+
+        | device           | Device to dump memory state for  | ttnn.Device           |             | Yes      |
+        | buffer_type      | Type of buffer for memory view   | ttnn.BufferType       |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 

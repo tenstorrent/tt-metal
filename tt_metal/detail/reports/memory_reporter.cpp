@@ -148,6 +148,23 @@ void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix) {
     MemoryReporter::inst().dump_memory_usage_state(device, std::move(prefix));
 }
 
+MemoryView MemoryReporter::get_memory_view(const IDevice* device, const BufferType& buffer_type) const {
+    auto stats = device->get_memory_allocation_statistics(buffer_type);
+    auto num_banks_ = device->num_banks(buffer_type);
+
+    return MemoryView{
+        .num_banks = num_banks_,
+        .total_bytes_per_bank = stats.total_allocatable_size_bytes,
+        .total_bytes_allocated_per_bank = stats.total_allocated_bytes,
+        .total_bytes_free_per_bank = stats.total_free_bytes,
+        .largest_contiguous_bytes_free_per_bank = stats.largest_free_block_bytes,
+        .block_table = device->get_memory_block_table(buffer_type)};
+}
+
+MemoryView GetMemoryView(const IDevice* device, const BufferType& buffer_type) {
+    return MemoryReporter::inst().get_memory_view(device, buffer_type);
+}
+
 bool MemoryReporter::enabled() { return is_enabled_; }
 
 void MemoryReporter::toggle(bool state) { is_enabled_ = state; }

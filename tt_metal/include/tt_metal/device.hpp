@@ -26,6 +26,13 @@
 namespace tt {
 
 namespace tt_metal {
+/*
+MemoryBlockTable is a list of memory blocks in the following format:
+[{"blockID": "0", "address": "0", "size": "0", "prevID": "0", "nextID": "0", "allocated": true}]
+address: bytes
+size: bytes
+*/
+using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
 enum class BufferType;
 
 inline namespace v0 {
@@ -161,6 +168,8 @@ public:
 
     virtual void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const = 0;
     virtual void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const = 0;
+
+    virtual MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const = 0;
 
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip

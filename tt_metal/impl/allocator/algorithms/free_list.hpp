@@ -38,6 +38,8 @@ public:
 
     void dump_blocks(std::ostream& out) const;
 
+    MemoryBlockTable get_memory_block_table() const;
+
     void shrink_size(DeviceAddr shrink_size, bool bottom_up = true);
 
     void reset_size();
