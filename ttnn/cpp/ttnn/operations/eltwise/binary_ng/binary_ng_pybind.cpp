@@ -124,7 +124,9 @@ void py_module(py::module& module) {
     detail::bind_binary_ng_operation(module, ttnn::experimental::add, "Binary Add Operation");
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::add_, "Binary Add In-place Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::sub, "Binary Sub Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::sub_, "Binary Subtract In-place Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::mul, "Binary Mul Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::mul_, "Binary Multiply In-place Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::div, "Binary Div Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::gt, "Binary Greater Than Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::lt, "Binary Less Than Operation");

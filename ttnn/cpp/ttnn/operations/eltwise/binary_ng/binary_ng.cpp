@@ -131,7 +131,6 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
 }
 
 template struct BinaryNg<BinaryOpType::ADD>;
-template struct InplaceBinaryNg<BinaryOpType::ADD>;
 template struct BinaryNg<BinaryOpType::SUB>;
 template struct BinaryNg<BinaryOpType::MUL>;
 template struct BinaryNg<BinaryOpType::DIV>;
@@ -149,5 +148,8 @@ template struct BinaryNg<BinaryOpType::LOGICAL_XOR>;
 template struct BinaryNg<BinaryOpType::LDEXP>;
 template struct BinaryNg<BinaryOpType::LOGADDEXP>;
 template struct BinaryNg<BinaryOpType::LOGADDEXP2>;
+template struct InplaceBinaryNg<BinaryOpType::ADD>;
+template struct InplaceBinaryNg<BinaryOpType::SUB>;
+template struct InplaceBinaryNg<BinaryOpType::MUL>;
 
 }  // namespace ttnn::operations::binary_ng

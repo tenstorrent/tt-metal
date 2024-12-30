@@ -88,10 +88,6 @@ constexpr auto add = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::add",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::ADD>>();
 
-constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::add_",
-    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::ADD>>();
-
 constexpr auto sub = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::sub",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::SUB>>();
@@ -159,5 +155,17 @@ constexpr auto logaddexp = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logaddexp2 = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::logaddexp2",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP2>>();
+
+constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::add_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::ADD>>();
+
+constexpr auto sub_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::sub_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::SUB>>();
+
+constexpr auto mul_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::mul_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::MUL>>();
 
 }  // namespace ttnn::experimental

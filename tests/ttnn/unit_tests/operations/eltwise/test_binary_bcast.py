@@ -43,6 +43,8 @@ from models.utility_functions import skip_for_grayskull
         ttnn.experimental.div,
         ttnn.experimental.bias_gelu,
         ttnn.experimental.add_,
+        ttnn.experimental.sub_,
+        ttnn.experimental.mul_,
     ],
 )
 def test_binary_scalar_ops(input_shapes, ttnn_fn, device):
@@ -91,6 +93,8 @@ def test_binary_scalar_ops(input_shapes, ttnn_fn, device):
         ttnn.experimental.div,
         ttnn.experimental.bias_gelu,
         ttnn.experimental.add_,
+        ttnn.experimental.sub_,
+        ttnn.experimental.mul_,
     ],
 )
 def test_binary_scalar_ops_invalid_bcast(input_shapes, ttnn_fn, device):
