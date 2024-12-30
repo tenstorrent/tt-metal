@@ -31,6 +31,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/demux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_tunneler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
