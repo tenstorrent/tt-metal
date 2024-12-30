@@ -93,6 +93,11 @@ public:
 
     bool is_initialized() const { return this->initialized_; }
 
+    // Returns true if the dispatch_s is enabled and it is on the same core as dispatch
+    bool dispatch_s_shared_core() const {
+        return this->dispatch_s_enabled() && dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER;
+    }
+
     int num_dram_channels() const;
     uint32_t l1_size_per_core() const;
     uint32_t dram_size_per_channel() const;

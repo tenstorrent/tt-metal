@@ -37,6 +37,20 @@ static std::vector<string> dispatch_kernel_file_names = {
     ""                                                       // COUNT
 };
 
+class FDKernel;  // Required by FDKernelGenerator
+
+// Default FD Kernel Generator
+class DefaultFDKernelGenerator {
+public:
+    FDKernel* Generate(
+        int node_id,
+        chip_id_t device_id,
+        chip_id_t servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        uint32_t type_id);
+};
+
 // Top-level class describing a Fast Dispatch Kernel (kernel running on a specific core). All FD kernels should inherit
 // from this class and implement the virtual functions as required.
 class FDKernel {
@@ -65,15 +79,6 @@ public:
     // after above functions and before FD kernels are launched.
     virtual void ConfigureCore() {};
 
-    // Generator function to create a kernel of a given type. New kernels need to be added here.
-    static FDKernel* Generate(
-        int node_id,
-        chip_id_t device_id,
-        chip_id_t servicing_device_id,
-        uint8_t cq_id,
-        noc_selection_t noc_selection,
-        tt::tt_metal::DispatchWorkerType type);
-
     // Register another kernel as upstream/downstream of this one
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
@@ -91,6 +96,8 @@ public:
     int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
     int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels_); }
     void AddDeviceAndProgram(tt::tt_metal::Device* device, tt::tt_metal::Program* program) {
+        TT_ASSERT(device != nullptr, "Cannot add null device to FDKernel");
+        TT_ASSERT(program != nullptr, "Cannot add null program to FDKernel");
         device_ = device;
         program_ = program;
     };

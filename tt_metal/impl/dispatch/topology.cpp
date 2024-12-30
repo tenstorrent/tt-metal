@@ -20,18 +20,7 @@
 
 using namespace tt::tt_metal;
 
-typedef struct {
-    int id;
-    chip_id_t device_id;                          // Device that this kernel is located on
-    chip_id_t servicing_device_id;                // Remote device that this kernel services, used for kernels on MMIO
-    uint8_t cq_id;                                // CQ this kernel implements
-    DispatchWorkerType kernel_type;               // Type of dispatch kernel this is
-    int upstream_ids[DISPATCH_MAX_UPSTREAM];      // Upstream dispatch kernels
-    int downstream_ids[DISPATCH_MAX_DOWNSTREAM];  // Downstream dispatch kernels
-    NOC my_noc;                                   // NOC this kernel uses to dispatch kernels
-    NOC upstream_noc;                             // NOC used to communicate upstream
-    NOC downstream_noc;                           // NOC used to communicate downstream
-} dispatch_kernel_node_t;
+namespace tt::tt_metal::dispatch {
 
 // For readablity, unset = x = -1
 #define x -1
@@ -389,8 +378,6 @@ static const std::vector<dispatch_kernel_node_t> galaxy_nine_chip_arch_2cq = {
     {135, 8, x, 1, DISPATCH_S, {130, x, x, x}, {132, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
-std::vector<FDKernel*> node_id_to_kernel;
-
 // Helper function to get the nodes for this platform
 std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
     // Select/generate the right input table, depends on (1) board [detected from total # of devices], and (2) number
@@ -519,41 +506,10 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
 // Populate node_id_to_kernel and set up kernel objects. Do this once at the beginning since they (1) don't need a valid
 // Device until fields are populated, (2) need to be connected to kernel objects for devices that aren't created yet,
 // and (3) the table to choose depends on total number of devices, not know at Device creation.
-void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
-    // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
-    if (!node_id_to_kernel.empty()) {
-        for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-            delete node_id_to_kernel[idx];
-        }
-        node_id_to_kernel.clear();
-    }
-
+std::vector<FDKernel*> populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
     // Read the input table, create configs for each node
     std::vector<dispatch_kernel_node_t> nodes = get_nodes(device_ids, num_hw_cqs);
-    for (const auto& node : nodes) {
-        TT_ASSERT(node_id_to_kernel.size() == node.id);
-        node_id_to_kernel.push_back(FDKernel::Generate(
-            node.id,
-            node.device_id,
-            node.servicing_device_id,
-            node.cq_id,
-            {node.my_noc, node.upstream_noc, node.downstream_noc},
-            node.kernel_type));
-    }
-
-    // Connect the graph with upstream/downstream kernels
-    for (const auto& node : nodes) {
-        for (int idx = 0; idx < DISPATCH_MAX_UPSTREAM; idx++) {
-            if (node.upstream_ids[idx] >= 0) {
-                node_id_to_kernel.at(node.id)->AddUpstreamKernel(node_id_to_kernel.at(node.upstream_ids[idx]));
-            }
-        }
-        for (int idx = 0; idx < DISPATCH_MAX_DOWNSTREAM; idx++) {
-            if (node.downstream_ids[idx] >= 0) {
-                node_id_to_kernel.at(node.id)->AddDownstreamKernel(node_id_to_kernel.at(node.downstream_ids[idx]));
-            }
-        }
-    }
+    auto node_id_to_kernel = connect_fd_graph_edges(nodes);
 
     // For kernels on mmio chip, need to confirm which remote device each is servicing
     std::map<chip_id_t, uint32_t> device_id_to_tunnel_stop;
@@ -659,12 +615,14 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
             device_id_to_remaining_routers[router_kernel->GetDeviceId()]--;
         }
     }
+
+    return node_id_to_kernel;
 }
 
-std::unique_ptr<Program> create_and_compile_cq_program(Device* device) {
+std::unique_ptr<Program> create_and_compile_cq_program(Device* device, std::vector<FDKernel*>& node_id_to_kernel) {
     TT_ASSERT(
         node_id_to_kernel.size() > 0,
-        "Tried to create CQ program without nodes populated (need to run populate_fd_kernels()");
+        "Tried to create CQ program without any nodes (nodes can get obtained from populate_fd_kernels()");
 
     // First pass, add device/program to all kernels for this device and generate static configs.
     auto cq_program_ptr = std::make_unique<Program>();
@@ -690,7 +648,7 @@ std::unique_ptr<Program> create_and_compile_cq_program(Device* device) {
     return cq_program_ptr;
 }
 
-void configure_dispatch_cores(Device* device) {
+void configure_dispatch_cores(Device* device, std::vector<FDKernel*>& node_id_to_kernel) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
@@ -748,3 +706,5 @@ void configure_dispatch_cores(Device* device) {
         }
     }
 }
+
+};  // namespace tt::tt_metal::dispatch

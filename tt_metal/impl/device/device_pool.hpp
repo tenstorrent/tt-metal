@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "dispatch/kernel_config/fd_kernel.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "impl/debug/dprint_server.hpp"
@@ -78,6 +79,8 @@ private:
     void initialize_device(tt_metal::v1::DeviceHandle dev) const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
     static DevicePool* _inst;
+
+    std::vector<FDKernel*> fd_topology_kernels;
 
     // TODO remove with v0
     tt_metal::v1::DeviceHandle get_handle(Device* device) const;

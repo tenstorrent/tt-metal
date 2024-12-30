@@ -56,18 +56,13 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
 
-        uint32_t dispatch_s_buffer_base = 0xff;
-        if (device_->dispatch_s_enabled()) {
-            uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
-            if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
-                dispatch_s_buffer_base =
-                    dispatch_buffer_base + (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
-                                               my_dispatch_constants.dispatch_buffer_pages();
-            } else {
-                // dispatch_d and dispatch_s are on different cores. No shared resources: dispatch_s CB starts at base.
-                dispatch_s_buffer_base = dispatch_buffer_base;
-            }
+        uint32_t dispatch_s_buffer_base = my_dispatch_constants.dispatch_buffer_base();
+        if (device_->dispatch_s_shared_core()) {
+            // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+            dispatch_s_buffer_base += (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
+                                      my_dispatch_constants.dispatch_buffer_pages();
+        } else {
+            // dispatch_d and dispatch_s are on different cores. No shared resources: dispatch_s CB starts at base.
         }
         static_config_.dispatch_s_buffer_base = dispatch_s_buffer_base;
         static_config_.my_dispatch_s_cb_sem_id = tt::tt_metal::CreateSemaphore(
@@ -157,18 +152,12 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
 
-        uint32_t dispatch_s_buffer_base = 0xff;
-        if (device_->dispatch_s_enabled() || true) {  // Just to make it match previous implementation
-            uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
-            if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
-                dispatch_s_buffer_base =
-                    dispatch_buffer_base + (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
-                                               my_dispatch_constants.dispatch_buffer_pages();
-            } else {
-                // dispatch_d and dispatch_s are on different cores. No shared resources: dispatch_s CB starts at base.
-                dispatch_s_buffer_base = dispatch_buffer_base;
-            }
+        uint32_t dispatch_s_buffer_base = my_dispatch_constants.dispatch_buffer_base();
+        if (device_->dispatch_s_shared_core() || true) {  // Just to make it match previous implementation
+            dispatch_s_buffer_base += (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
+                                      my_dispatch_constants.dispatch_buffer_pages();
+        } else {
+            // dispatch_d and dispatch_s are on different cores. No shared resources: dispatch_s CB starts at base.
         }
         static_config_.dispatch_s_buffer_base = dispatch_s_buffer_base;
         static_config_.my_dispatch_s_cb_sem_id = tt::tt_metal::CreateSemaphore(

@@ -17,6 +17,42 @@
 
 using namespace tt::tt_metal;
 
+FDKernel* DefaultFDKernelGenerator::Generate(
+    int node_id,
+    chip_id_t device_id,
+    chip_id_t servicing_device_id,
+    uint8_t cq_id,
+    noc_selection_t noc_selection,
+    uint32_t type) {
+    DispatchWorkerType worker_type = static_cast<DispatchWorkerType>(type);
+    switch (worker_type) {
+        case PREFETCH_HD:
+            return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true);
+        case PREFETCH_H:
+            return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, false);
+        case PREFETCH_D:
+            return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
+        case DISPATCH_HD:
+            return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true);
+        case DISPATCH_H:
+            return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, false);
+        case DISPATCH_D:
+            return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
+        case DISPATCH_S: return new DispatchSKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
+        case MUX_D: return new MuxKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
+        case DEMUX: return new DemuxKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
+        case US_TUNNELER_REMOTE:
+            return new EthTunnelerKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
+        case US_TUNNELER_LOCAL:
+            return new EthTunnelerKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
+        case PACKET_ROUTER_MUX:
+            return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
+        case PACKET_ROUTER_DEMUX:
+            return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
+        default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
+    }
+}
+
 // Helper function to get upstream device in the tunnel from current device, not valid for mmio
 chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -59,41 +95,6 @@ uint32_t FDKernel::GetTunnelStop(chip_id_t device_id) {
     }
     TT_ASSERT(false, "Could not find tunnel stop of Device {}", device_id);
     return 0;
-}
-
-FDKernel* FDKernel::Generate(
-    int node_id,
-    chip_id_t device_id,
-    chip_id_t servicing_device_id,
-    uint8_t cq_id,
-    noc_selection_t noc_selection,
-    DispatchWorkerType type) {
-    switch (type) {
-        case PREFETCH_HD:
-            return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true);
-        case PREFETCH_H:
-            return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, false);
-        case PREFETCH_D:
-            return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
-        case DISPATCH_HD:
-            return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true);
-        case DISPATCH_H:
-            return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, false);
-        case DISPATCH_D:
-            return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
-        case DISPATCH_S: return new DispatchSKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case MUX_D: return new MuxKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case DEMUX: return new DemuxKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case US_TUNNELER_REMOTE:
-            return new EthTunnelerKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
-        case US_TUNNELER_LOCAL:
-            return new EthTunnelerKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
-        case PACKET_ROUTER_MUX:
-            return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
-        case PACKET_ROUTER_DEMUX:
-            return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
-        default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
-    }
 }
 
 void FDKernel::configure_kernel_variant(
