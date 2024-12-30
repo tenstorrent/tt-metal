@@ -46,6 +46,10 @@ struct BinaryNg {
 
 }  // namespace ttnn::operations::binary_ng
 
+inline Tensor typecast_to(DataType dtype, const Tensor& input) {
+    return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
+}
+
 namespace ttnn::experimental {
 constexpr auto add = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::add",
