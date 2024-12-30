@@ -14,14 +14,7 @@ void MAIN {
     uint32_t has_other_grad = get_arg_val<uint32_t>(1);
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(2);
 
-    if (has_input_grad) {
-        init_bcast<ELWMUL, BroadcastType::SCALAR>(tt::CBIndex::c_2, tt::CBIndex::c_0, tt::CBIndex::c_16);
-    }
-
-    if (has_other_grad) {
-        init_bcast<ELWMUL, BroadcastType::SCALAR>(tt::CBIndex::c_1, tt::CBIndex::c_0, tt::CBIndex::c_17);
-    }
-
+    init_bcast<ELWMUL, BroadcastType::SCALAR>(tt::CBIndex::c_2, tt::CBIndex::c_0, tt::CBIndex::c_16);
     cb_wait_front(tt::CBIndex::c_0, onetile);
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         if (has_input_grad) {
