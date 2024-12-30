@@ -707,3 +707,52 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
 
     DPRINT << ENDL();
 }
+
+inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
+
+    uint32_t reg_addr = 0;
+    switch (reg_id) {
+        case 1:
+            reg_addr = PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32;
+            break;
+        case 2:
+            reg_addr = PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32;
+            break;
+        default:
+            DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 2)" << ENDL();
+            break;
+    }
+
+    // word 0 xy_stride
+    uint32_t word = cfg[reg_addr];
+    dprint_tensix_struct_field(word, 0xfff, 0, "x_stride");
+    dprint_tensix_struct_field(word, 0xfff000, 12, "y_stride");
+    
+    // word 1 zw_stride
+    word = cfg[reg_addr + 1];
+    dprint_tensix_struct_field(word, 0xfff, 0, "z_stride");
+    dprint_tensix_struct_field(word, 0xffff000, 12, "w_stride");
+}
+
+// Choose what register you want printed (1-2). 0 for all.
+inline void dprint_tensix_pack_strides(uint reg_id = 0) {
+
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+    if (reg_id) {
+        DPRINT << "REG_ID: " << reg_id << " ";
+        dprint_tensix_pack_strides_helper(reg_id, cfg);
+    }
+    // Print all registers
+    else {
+        for (uint i = 1; i < 3; i++) {
+            DPRINT << "REG_ID: " << i << " ";
+            dprint_tensix_pack_strides_helper(i, cfg);
+        }
+    }
+
+    DPRINT << ENDL();
+}
+
+
