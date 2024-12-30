@@ -21,6 +21,10 @@ autograd::TensorPtr memory_efficient_runner(
         return forward_impl(input, mask);
     }
 
+    // make a copy of a generator before running forward pass
+    auto generator = autograd::ctx().get_generator();
+
+    // running forward pass
     autograd::TensorPtr out;
     {
         auto scoped = ttml::core::Scoped(
@@ -28,7 +32,13 @@ autograd::TensorPtr memory_efficient_runner(
             []() { autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED); });
         out = forward_impl(input, mask);
     }
-    autograd::GradFunction grad = [input, mask, out, &forward_impl]() {
+
+    // define grad function and copy generator (in the state before forward pass)
+    autograd::GradFunction grad = [input, mask, out, &forward_impl, generator]() {
+        // after running forward + backward pass we need to restore generator state
+        auto current_generator = autograd::ctx().get_generator();
+        // reset generator to the original state before forward pass
+        autograd::ctx().set_generator(generator);
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
         // run forward pass again
@@ -38,6 +48,8 @@ autograd::TensorPtr memory_efficient_runner(
         output->backward();
         // reuse gradients from detached input
         input->add_grad(input_detached->get_grad());
+        // restore generator to the original state
+        autograd::ctx().set_generator(current_generator);
     };
 
     auto links = autograd::get_links(input);
@@ -171,13 +183,6 @@ TransformerConfig read_config(const YAML::Node& config) {
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
     transformer_config.positional_embedding_type = read_positional_embedding_type(config);
     transformer_config.runner_type = read_runner_type(config);
-
-    if (transformer_config.runner_type == RunnerType::MemoryEfficient && transformer_config.dropout_prob > 0.F) {
-        throw std::runtime_error(fmt::format(
-            "Memory efficient runner does not support dropout. Please set dropout_prob to 0.0. Dropout probability = "
-            "{}",
-            transformer_config.dropout_prob));
-    }
 
     if (auto experimental_config = config["experimental"]) {
         transformer_config.experimental.use_composite_layernorm =

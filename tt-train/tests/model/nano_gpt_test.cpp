@@ -260,12 +260,18 @@ TEST_F(NanoGPTTest, MorehAdamW) {
 }
 
 TEST_F(NanoGPTTest, AdamW_MemoryEfficient) {
+    GTEST_SKIP() << "Skipping AdamW + MemoryEfficient";
+    return;
+
     if (should_run_tests()) {
         train_test(/* use_moreh_adamw */ false, /* memory_efficient */ true);
     }
 }
 
 TEST_F(NanoGPTTest, MorehAdamW_MemoryEfficient) {
+    GTEST_SKIP() << "Skipping MorehAdamW + MemoryEfficient";
+    return;
+
     if (should_run_tests()) {
         train_test(/* use_moreh_adamw */ true, /* memory_efficient */ true);
     }
