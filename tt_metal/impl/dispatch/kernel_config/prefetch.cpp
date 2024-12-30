@@ -183,7 +183,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
 }
 
 void PrefetchKernel::GenerateDependentConfigs() {
-    auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         // Upstream
         TT_ASSERT(upstream_kernels_.size() == 0);

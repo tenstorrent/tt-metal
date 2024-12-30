@@ -179,7 +179,6 @@ void DispatchKernel::GenerateStaticConfigs() {
 }
 
 void DispatchKernel::GenerateDependentConfigs() {
-    auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         // Upstream
         TT_ASSERT(upstream_kernels_.size() == 1);
@@ -200,11 +199,10 @@ void DispatchKernel::GenerateDependentConfigs() {
             TT_ASSERT(downstream_kernels_.size() == 0);
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         }
-        dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;
-        dependent_config_.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base();
-        dependent_config_.downstream_cb_size =
-            (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * my_dispatch_constants.dispatch_buffer_pages();
-        dependent_config_.downstream_cb_sem_id = UNUSED_SEM_ID;
+        dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;  // Unused
+        dependent_config_.downstream_cb_base = 0;                         // Unused
+        dependent_config_.downstream_cb_size = 0;                         // Unused
+        dependent_config_.downstream_cb_sem_id = UNUSED_SEM_ID;           // Unused
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, expect DEMUX
         TT_ASSERT(upstream_kernels_.size() == 1);
@@ -228,10 +226,9 @@ void DispatchKernel::GenerateDependentConfigs() {
             prefetch_h_kernel->GetVirtualCore().x, prefetch_h_kernel->GetVirtualCore().y);
         dependent_config_.prefetch_h_local_downstream_sem_addr =
             prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id;
-        dependent_config_.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base();  // Unused
-        dependent_config_.downstream_cb_size = (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
-                                               my_dispatch_constants.dispatch_buffer_pages();  // Unused
-        dependent_config_.downstream_cb_sem_id = 0;                                            // Unused
+        dependent_config_.downstream_cb_base = 0;    // Unused
+        dependent_config_.downstream_cb_size = 0;    // Unused
+        dependent_config_.downstream_cb_sem_id = 0;  // Unused
     } else if (static_config_.is_d_variant.value()) {
         // Upstream, expect a PREFETCH_D
         TT_ASSERT(upstream_kernels_.size() == 1);
@@ -260,10 +257,12 @@ void DispatchKernel::GenerateDependentConfigs() {
         dependent_config_.downstream_logical_core = mux_kernel->GetLogicalCore();
         // Some configs depend on which port this kernel connects to on the downstream kernel
         int dispatch_d_idx = mux_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
-        dependent_config_.downstream_cb_size = (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
-                                               my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
-        dependent_config_.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base() +
-                                               dependent_config_.downstream_cb_size.value() * dispatch_d_idx;
+        dependent_config_.downstream_cb_size = mux_kernel->GetStaticConfig().rx_queue_size_words.value() << 4;
+        // MUX queue id is "dependent_config_.downstream_cb_size.value()"
+        // The address for that queue starts at "rx_queue_start_addr_words + i*rx_queue_size_words" (based on kernel
+        // code)
+        dependent_config_.downstream_cb_base = (mux_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
+                                               dispatch_d_idx * dependent_config_.downstream_cb_size.value();
         dependent_config_.downstream_cb_sem_id = dispatch_d_idx;
     } else {
         TT_FATAL(false, "DispatchKernel must be one of (or both) H and D variants");
