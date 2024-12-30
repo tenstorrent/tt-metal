@@ -166,7 +166,7 @@ Result conv_transpose2d(
 
         log_debug(LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
 
-        const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, {1, 1}, {input_pad_top + input_pad_bottom, input_pad_left + input_pad_right}, dilation, groups);
+        const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, {1, 1}, {input_pad_top + input_pad_bottom, input_pad_left + input_pad_right}, dilation, groups, conv_config);
 
         const auto compute_grid_size = device->compute_with_storage_grid_size();
 
@@ -281,6 +281,7 @@ Result conv_transpose2d(
                 opt_conv_op_block_config.act_block_w_ntiles,
                 opt_conv_op_block_config.out_subblock_w_ntiles,
                 parallel_config,
+                output_parallel_config,
                 device,
                 groups,
                 opt_conv_op_block_config.act_block_h_ntiles,
