@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "conv2d_utils.hpp"
+#include "common/assert.hpp"
 #include "common/constants.hpp"
 #include "common/logger.hpp"
 #include "impl/buffers/buffer_constants.hpp"
@@ -51,6 +52,18 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t st
     while ((padded_num - num) >= (int)(padded_num / divisor)) {
         divisor = divisor - 1;
         padded_num = round_up(num, divisor);
+    }
+    return divisor;
+}
+
+uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, uint32_t start_divisor, uint32_t mult) {
+    uint32_t divisor = start_divisor;
+    uint32_t big_divisor = divisor * mult;
+    uint32_t padded_num = round_up(num, big_divisor);
+    while ((padded_num - num) >= (int)(padded_num / big_divisor)) {
+        divisor = divisor - 1;
+        big_divisor = divisor * mult;
+        padded_num = round_up(num, big_divisor);
     }
     return divisor;
 }
@@ -137,24 +150,26 @@ ParallelConfig determine_parallel_config(
     const CoreCoord& compute_grid_size,
     ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
-    bool is_out_tiled) {
+    bool is_out_tiled,
+    uint32_t act_block_h_override) {
 
     uint32_t effective_tile_height = is_out_tiled ? tt::constants::TILE_HEIGHT : 1;
     uint32_t effective_tile_width = is_out_tiled ? tt::constants::TILE_WIDTH : 1;
     uint32_t out_nhw_ntiles = tt::round_up(batch_size * output_height * output_width, tt::constants::TILE_HEIGHT) / effective_tile_height;
     uint32_t input_channles_ntiles = tt::div_up(input_channels, effective_tile_width);
     uint32_t out_channels_ntiles = tt::div_up(output_channels, effective_tile_width);
+    uint32_t act_block_h_ntiles = act_block_h_override == 0 ? 1 : act_block_h_override / tt::constants::TILE_HEIGHT;
 
     // calculate num_core_nhw and the grid
     uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
     CoreRangeSet grid;
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding(out_nhw_ntiles, max_num_cores);
+        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(out_nhw_ntiles, max_num_cores, act_block_h_ntiles);
         grid = num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t start_divisor =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
-        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding(out_nhw_ntiles, start_divisor);
+        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(out_nhw_ntiles, start_divisor, act_block_h_ntiles);
         uint32_t start_divisor_c =
             block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
         uint32_t num_cores_c =
@@ -329,7 +344,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     const ParallelConfig& parallel_config,
     const OptimizedConvParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
-    uint32_t padded_output_height_ntiles,
+    uint32_t padded_output_height_ntiles_per_core,
     uint32_t act_block_h_override,
     uint32_t act_block_w_div,
     uint32_t window_h,
@@ -350,15 +365,17 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
             log_info(LogOp, "act_block_h_override is set, but ignored when Width Sharding is used");
         } else {
             uint32_t act_block_h_override_ntiles = act_block_h_override / constants::TILE_HEIGHT;
-            if (padded_output_height_ntiles % act_block_h_override_ntiles == 0) {
+             if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
                 act_block_h_ntiles = act_block_h_override_ntiles;
             } else {
+                act_block_h_ntiles = find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
                 log_info(
                     LogOp,
-                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles {}, override will "
-                    "be ignored",
+                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
+                    "instead {} was selected as closest valid option!",
                     act_block_h_override_ntiles,
-                    padded_output_height_ntiles);
+                    padded_output_height_ntiles_per_core,
+                    act_block_h_ntiles);
             }
         }
     }
@@ -572,7 +589,8 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
                 device->compute_with_storage_grid_size(),
                 block_shard_orientation,
                 !is_mm_conv,
-                !use_non_tile_height);
+                !use_non_tile_height,
+                conv_config.act_block_h_override);
         }
 
         if (conv_config.override_sharding_config) {
