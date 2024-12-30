@@ -87,7 +87,7 @@ def run_prod(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.prod(input_tensor_a, dim=dim, memory_config=output_memory_config)
+    result = ttnn.prod(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
