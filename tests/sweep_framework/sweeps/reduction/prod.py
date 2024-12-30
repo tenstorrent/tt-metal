@@ -123,5 +123,7 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert len(output_tensor.shape) == len(torch_output_tensor.shape)
+    assert output_tensor.shape == torch_output_tensor.shape
     # print(f"input_shape {input_shape} pcc {pcc}")
     return [pcc, e2e_perf]
