@@ -14,7 +14,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         return True, "Invalid combination"
 
-    if input_shape[dim] % num_devices != 0 or (dim == 3 and input_shape[dim] // num_devices % 32 != 0):
+    if input_shape[dim] % num_devices != 0:
         return True, "Unsupported test case"
     if tile != (32, 32) and input_dtype != ttnn.bfloat16:
         return True, "Tiny tile only supports bfloat16"
@@ -159,9 +159,9 @@ def run_all_gather_impl(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile)).to(layout).to(mesh_device.get_devices()[i], mem_config)
-        )
+        t = ttnn.from_torch(t, input_dtype, tile=ttnn.Tile(tile))
+        t = ttnn.to_layout(t, layout)
+        tt_input_tensors.append(t.to(mesh_device.get_devices()[i], mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     if trace_mode:
@@ -184,7 +184,7 @@ def run_all_gather_impl(
             logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        tt_output_tensor = ttnn.to_torch(t)
         if input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
@@ -328,6 +328,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         # (4, 2, [4, 1, 256, 32], 0, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
         (8, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 1, 32 * 8], 3, ttnn.TILE_LAYOUT),
         # (4, 2, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),      # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 2, [4, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
