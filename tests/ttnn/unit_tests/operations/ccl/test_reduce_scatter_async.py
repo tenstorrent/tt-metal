@@ -111,8 +111,8 @@ def run_reduce_scatter_test(
     mem_config,
     use_program_cache,
     function_level_defaults,
+    num_iters,
     enable_async=True,
-    num_iters=1,
     topology=ttnn.Topology.Ring,
     trace_mode=False,
 ):

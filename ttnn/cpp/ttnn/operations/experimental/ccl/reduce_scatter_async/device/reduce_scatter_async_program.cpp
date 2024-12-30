@@ -2106,8 +2106,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
             auto& worker_writer_runtime_args_by_core = GetRuntimeArgs(program, kernel_ids.writer);
             if (topology_config.is_at_end_of_line()) {
 
-                for (size_t i = 0; i < worker_cores.final_reducers_vec.size(); i++) {
-                    auto core = worker_cores.final_reducers_vec[i];
+                for (auto const& core : worker_cores.final_reducers_vec) {
                     auto &worker_reader_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
                     worker_reader_runtime_args.at(0) = partial_output_tensor[LineDirection::FORWARD]->buffer()->address();;
                     worker_reader_runtime_args.at(1) = partial_output_tensor[LineDirection::BACKWARD]->buffer()->address();;
@@ -2117,8 +2116,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
                 }
                 for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
                     bool is_start_of_line = topology_config.is_first_device_in_line(direction);
-                    for (size_t i = 0; i < worker_cores.partial_reducers_vec[direction].size(); i++) {
-                        auto core = worker_cores.partial_reducers_vec[direction][i];
+                    for (auto const& core : worker_cores.partial_reducers_vec[direction]) {
                         auto &worker_reader_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
                         worker_reader_runtime_args.at(0) = input_tensor.buffer()->address();
                         if (is_start_of_line) {
@@ -2135,8 +2133,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
                 }
             } else {
                 for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
-                    for (size_t i = 0; i < worker_cores.partial_reducers_vec[direction].size(); i++) {
-                        auto core = worker_cores.partial_reducers_vec[LineDirection::FORWARD][i];
+                    for (auto const &core : worker_cores.partial_reducers_vec[direction]) {
                         auto &worker_reader_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
                         auto& worker_writer_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
                         worker_reader_runtime_args.at(0) = input_tensor.buffer()->address();
@@ -2149,8 +2146,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
                     }
                 }
 
-                for (size_t i = 0; i < worker_cores.final_reducers_vec.size(); i++) {
-                    auto core = worker_cores.final_reducers_vec[i];
+                for (auto const& core : worker_cores.final_reducers_vec) {
                     auto &worker_reader_runtime_args = worker_reader_runtime_args_by_core[core.x][core.y];
 
                     worker_reader_runtime_args.at(0) = partial_output_tensor[LineDirection::FORWARD]->buffer()->address();
