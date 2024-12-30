@@ -49,7 +49,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (1,),
+    (1, 32),
 )
 @pytest.mark.parametrize(
     "max_seq_len",

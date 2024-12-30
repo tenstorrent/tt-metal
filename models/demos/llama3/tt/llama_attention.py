@@ -57,6 +57,25 @@ class TtLlamaAttention(LightweightModule):
                 col = i % 4  # This determines which group of 8 to select
                 weight[:, i, :, col * 8 : (col + 1) * 8] = torch.eye(8)
 
+            # Select batch_offset with create_qkv_heads_decode instead of selection matmul
+            batch_offset = [
+                0,
+                8,
+                16,
+                24,
+            ]  # TODO: batch offset is 8 for batch=32, this should be adjusted for variable batch_size
+            self.batch_offset_tt_tensor = ttnn.as_tensor(
+                torch.tensor(batch_offset, dtype=torch.int32).reshape(4, 1),
+                dtype=ttnn.int32,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device=mesh_device, dims=(None, 0), mesh_shape=list(mesh_device.shape)
+                ),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.slice_size = 8  # Slice size is 8 since we are consuming 8 users per chip
+
             self.slice_mat = ttnn.from_torch(
                 weight,
                 dtype=ttnn.bfloat4_b,
@@ -261,27 +280,29 @@ class TtLlamaAttention(LightweightModule):
             num_all_gather_links=self.num_all_gather_links,
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
             sharded=True,
-            dtype=self.ccl_dtype,
+            dtype=ttnn.bfloat16,  # self.ccl_dtype,
         )
 
         if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
-            xqkv_fused = ttnn.matmul(
-                self.slice_mat,
-                xqkv_fused,
-                dtype=ttnn.bfloat16,
-                memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
-            )
+            # xqkv_fused = ttnn.matmul(
+            #     self.slice_mat,
+            #     xqkv_fused,
+            #     dtype=ttnn.bfloat16,
+            #     memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
+            # )
+            xqkv_fused = ttnn.to_memory_config(xqkv_fused, self.model_config["CREATE_HEAD_INPUT_MEMCFG"])
+            # pass
         else:
             xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG)
 
         ttnn.deallocate(xqkv_fused_sharded)
 
         # Reshape such that true unpadded batch is tracked in shape
-        fqkv_shape = xqkv_fused.shape
-        xqkv_fused = ttnn.reshape(
-            xqkv_fused, ttnn.Shape((1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
-        )
+        # fqkv_shape = xqkv_fused.shape
+        # xqkv_fused = ttnn.reshape(
+        #     xqkv_fused, ttnn.Shape((1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
+        # )
 
         ###
         # Reshape and rotary embeddings
@@ -295,8 +316,12 @@ class TtLlamaAttention(LightweightModule):
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            batch_offset=self.batch_offset_tt_tensor,
+            slice_size=self.slice_size,
         )
-
+        # print(f'{q_heads_pre_rot_1BQD=}')
+        # print(f'{k_heads_pre_rot_1BKD=}')
+        # print(f'{v_heads_1BKD=}')
         ttnn.deallocate(xqkv_fused)
 
         # Q Rotary Embeddings
