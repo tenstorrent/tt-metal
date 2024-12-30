@@ -16,6 +16,7 @@
 
 #include "core_config.h"
 #include "circular_buffer.h"
+#include "dataflow_cmd_bufs.h"
 #include "debug/sanitize_noc.h"
 #include "debug/waypoint.h"
 #include "eth_l1_address_map.h"
@@ -47,32 +48,6 @@ extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 extern uint32_t tt_l1_ptr* rta_l1_base;
 extern uint32_t tt_l1_ptr* crta_l1_base;
 extern uint32_t tt_l1_ptr* sem_l1_base[];
-
-#if defined(KERNEL_BUILD)
-#if defined(COMPILE_FOR_BRISC)
-constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_RD_CMD_BUF : DYNAMIC_NOC_BRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF : DYNAMIC_NOC_BRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf =
-    NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_AT_CMD_BUF : DYNAMIC_NOC_BRISC_AT_CMD_BUF;
-#elif defined(COMPILE_FOR_NCRISC)
-constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_RD_CMD_BUF : DYNAMIC_NOC_NCRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf =
-    NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_AT_CMD_BUF : DYNAMIC_NOC_NCRISC_AT_CMD_BUF;
-#else  // use the default cmf buffers for compute/eth
-constexpr uint32_t read_cmd_buf = NCRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf = NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NCRISC_AT_CMD_BUF;
-#endif
-#else  // FW build
-constexpr uint32_t read_cmd_buf = NCRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf = NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NCRISC_AT_CMD_BUF;
-#endif
 
 /** @file */
 
