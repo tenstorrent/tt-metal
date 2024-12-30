@@ -44,8 +44,8 @@ void MAIN {
     //dprint_tensix_pack_config();
     //dprint_tensix_pack_relu_config();
     //dprint_tensix_dest_rd_ctrl();
-    //dprint_tensix_pck_edge_offset();
-    //dprint_tensix_pack_counters();
+    //dprint_tensix_pck_edge_offset(4);
+    //dprint_tensix_pack_counters(3);
 
     release_dst();
 }

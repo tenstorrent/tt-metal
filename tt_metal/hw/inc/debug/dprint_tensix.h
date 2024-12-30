@@ -215,7 +215,7 @@ inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t sha
 // UNPACKER CONFIG REGISTERS
 
 // GRAYSKULL
-inline void dprint_tensix_unpack_tile_descriptor_grayskull(){
+inline void dprint_tensix_unpack_tile_descriptor_grayskull() {
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
@@ -250,7 +250,7 @@ inline void dprint_tensix_unpack_tile_descriptor_grayskull(){
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_unpack_config_grayskull(){
+inline void dprint_tensix_unpack_config_grayskull() {
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
@@ -283,7 +283,7 @@ inline void dprint_tensix_unpack_config_grayskull(){
 }
 
 // WORMHOLE/BLACKHOLE
-inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole(){
+inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
@@ -316,7 +316,7 @@ inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole(){
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_unpack_config_wormhole_or_blackhole(){
+inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
@@ -359,16 +359,7 @@ inline void dprint_tensix_unpack_config_wormhole_or_blackhole(){
 
 // PACKER CONFIG REGISTERS
 
-inline void dprint_tensix_pack_config_grayskull() {
-    // HAS MULTIPLE REGISTERS
-    uint reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32;
-    // uint reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32;
-    // uint reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32;
-    // uint reg_addr = THCON_SEC1_REG8_Row_start_section_size_ADDR32;
-
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-
+inline void dprint_tensix_pack_config_grayskull(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg ) {
     // word 0
     uint32_t word = cfg[reg_addr];
     dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz");
@@ -402,20 +393,11 @@ inline void dprint_tensix_pack_config_grayskull() {
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_pack_config_wormhole(){
-    // HAS MULTIPLE REGISTERS
-    uint reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32;
-    // uint reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32;
-    // uint reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32;
-    // uint reg_addr = THCON_SEC1_REG8_Row_start_section_size_ADDR32;
-
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
-
+inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg ){
     // word 0
     uint32_t word = cfg[reg_addr];
-    dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "exp_sec_sz");
+    dprint_tensix_struct_field(word, 0xffff, 0, "r_p_s_sz");
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "e_s_sz");
 
     // word 1
     word = cfg[reg_addr + 1];
@@ -424,7 +406,7 @@ inline void dprint_tensix_pack_config_wormhole(){
     // word 2
     word = cfg[reg_addr + 2];
     dprint_tensix_struct_field(word, 0x1, 0, "uncmpr");
-    dprint_tensix_struct_field(word, 0x2, 1, "add_l1_dst_adr_ofs");
+    dprint_tensix_struct_field(word, 0x2, 1, "a_l1_d_a_o");
     dprint_tensix_struct_field(word, 0xc, 2, "r0");
     dprint_tensix_struct_field(word, 0xf0, 4, "out_frmt");
     dprint_tensix_struct_field(word, 0xf00, 8, "in_frmt");
@@ -446,16 +428,7 @@ inline void dprint_tensix_pack_config_wormhole(){
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_pack_config_blackhole() {
-    // HAS MULTIPLE REGISTERS0
-    uint reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32;
-    // uint reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32;
-    // uint reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32;
-    // uint reg_addr = THCON_SEC1_REG8_Row_start_section_size_ADDR32;
-
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-
+inline void dprint_tensix_pack_config_blackhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
     // word 0
     uint32_t word = cfg[reg_addr];
     dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz");
@@ -537,14 +510,42 @@ inline void dprint_tensix_unpack_config(){
 #endif
 }
 
-inline void dprint_tensix_pack_config(){
-#ifdef ARCH_GRAYSKULL
-    dprint_tensix_pack_config_grayskull();
-#elif  ARCH_WORMHOLE
-    dprint_tensix_pack_config_wormhole();
-#else
-    dprint_tensix_pack_config_blackhole();
-#endif
+// Choose what register you want printed with reg_id (1-4), ALL not implemented due to dprint buffer size restriction
+inline void dprint_tensix_pack_config(uint reg_id = 1){
+    
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+    if (reg_id) {
+        uint32_t reg_addr = 0;
+        switch (reg_id) {
+            case 1:
+                reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32;
+                break;
+            case 2:
+                reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32;
+                break;
+            case 3:
+                reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32;
+                break;
+            case 4:
+                reg_addr = THCON_SEC1_REG8_Row_start_section_size_ADDR32;
+                break;
+            default:
+                DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL();
+                return;
+        }
+
+    DPRINT << "REG_ID: " << reg_id << " ";
+
+    #ifdef ARCH_GRAYSKULL
+        dprint_tensix_pack_config_grayskull(reg_addr, cfg);
+    #elif  ARCH_WORMHOLE
+        dprint_tensix_pack_config_wormhole(reg_addr, cfg);
+    #else
+        dprint_tensix_pack_config_blackhole(reg_addr, cfg);
+    #endif
+    }
 }
 
 inline void dprint_tensix_pack_relu_config() {
@@ -597,20 +598,27 @@ inline void dprint_tensix_dest_rd_ctrl() {
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_pck_edge_offset() {
-#ifdef ARCH_GRAYSKULL
-    DPRINT << "GRAYSKULL HAS NO PACK EDGE OFFSET REGISTERS" << ENDL();
-    return;
-#endif
+inline void dprint_tensix_pck_edge_offset_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
 
-    // HAS MULTIPLE REGISTERS
-    uint reg_addr = PCK_EDGE_OFFSET_SEC0_mask_ADDR32;
-    // uint reg_addr = PCK_EDGE_OFFSET_SEC1_mask_ADDR32;
-    // uint reg_addr = PCK_EDGE_OFFSET_SEC2_mask_ADDR32;
-    // uint reg_addr = PCK_EDGE_OFFSET_SEC3_mask_ADDR32;
-
+    uint32_t reg_addr = 0;
+    switch (reg_id) {
+        case 1:
+            reg_addr = PCK_EDGE_OFFSET_SEC0_mask_ADDR32;
+            break;
+        case 2:
+            reg_addr = PCK_EDGE_OFFSET_SEC1_mask_ADDR32;
+            break;
+        case 3:
+            reg_addr = PCK_EDGE_OFFSET_SEC2_mask_ADDR32;
+            break;
+        case 4:
+            reg_addr = PCK_EDGE_OFFSET_SEC3_mask_ADDR32;
+            break;
+        default:
+            DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL();
+            return;
+    }
     // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
     uint32_t reg_val = cfg[reg_addr];
 
     dprint_tensix_struct_field(reg_val, 0xffff, 0, "mask");
@@ -619,28 +627,54 @@ inline void dprint_tensix_pck_edge_offset() {
     dprint_tensix_struct_field(reg_val, 0x180000, 19, "tile_row_set_select_pack1");
     dprint_tensix_struct_field(reg_val, 0x600000, 21, "tile_row_set_select_pack2");
     dprint_tensix_struct_field(reg_val, 0x1800000, 23, "tile_row_set_select_pack3");
-
-    // Can't write to reserved? -> always prints 0
-    // reg_val gets only last 4 bits
-    // dprint_tensix_struct_field(reg_val, 0xfe000000, 25, "reserved");
-
-    DPRINT << ENDL();
 }
 
-inline void dprint_tensix_pack_counters() {
+// Choose what register you want printed with reg_id (1-4), 0 for all
+inline void dprint_tensix_pck_edge_offset(uint reg_id = 0) {
 #ifdef ARCH_GRAYSKULL
-    DPRINT << "GRAYSKULL HAS NO PACK COUNTERS REGISTERS" << ENDL();
+    DPRINT << "GRAYSKULL HAS NO PACK EDGE OFFSET REGISTERS" << ENDL();
     return;
 #endif
 
-    // HAS MULTIPLE REGISTERS
-    uint reg_addr = PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32;
-    // uint reg_addr = PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32;
-    // uint reg_addr = PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32;
-    // uint reg_addr = PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32;
-
-    // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+    if (reg_id) {
+        DPRINT << "REG_ID: " << reg_id << " ";
+        dprint_tensix_pck_edge_offset_helper(reg_id, cfg);
+    }
+    // Print all registers
+    else {
+        for (uint i = 1; i < 5; i++) {
+            DPRINT << "REG_ID: " << i << " ";
+            dprint_tensix_pck_edge_offset_helper(i, cfg);
+        }
+    }
+
+    DPRINT << ENDL();
+
+}
+
+inline void dprint_tensix_pack_counters_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
+
+    uint32_t reg_addr = 0;
+    switch (reg_id) {
+        case 1:
+            reg_addr = PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32;
+            break;
+        case 2:
+            reg_addr = PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32;
+            break;
+        case 3:
+            reg_addr = PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32;
+            break;
+        case 4:
+            reg_addr = PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32;
+            break;
+        default:
+            DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL();
+            return;
+    }
+    // Get pointer to registers for current state ID
     uint32_t reg_val = cfg[reg_addr];
 
     dprint_tensix_struct_field(reg_val, 0xff, 0, "pack_per_xy_plane");
@@ -648,6 +682,28 @@ inline void dprint_tensix_pack_counters() {
     dprint_tensix_struct_field(reg_val, 0x7f0000, 16, "pack_xys_per_til");
     dprint_tensix_struct_field(reg_val, 0x800000, 23, "pack_yz_transposed");
     dprint_tensix_struct_field(reg_val, 0xff000000, 24, "pack_per_xy_plane_offset");
+}
+
+// Choose what register you want printed with reg_id (1-4), 0 for all
+inline void dprint_tensix_pack_counters(uint reg_id = 0) {
+#ifdef ARCH_GRAYSKULL
+    DPRINT << "GRAYSKULL HAS NO PACK COUNTERS REGISTERS" << ENDL();
+    return;
+#endif
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+    if (reg_id) {
+        DPRINT << "REG_ID: " << reg_id << " ";
+        dprint_tensix_pack_counters_helper(reg_id, cfg);
+    }
+    // Print all registers
+    else {
+        for (uint i = 1; i < 5; i++) {
+            DPRINT << "REG_ID: " << i << " ";
+            dprint_tensix_pack_counters_helper(i, cfg);
+        }
+    }
 
     DPRINT << ENDL();
 }
