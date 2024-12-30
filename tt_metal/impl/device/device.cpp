@@ -916,7 +916,7 @@ void Device::configure_command_queue_programs() {
     configure_dispatch_cores(this);
 
     // Run the cq program
-    command_queue_program.finalize(this);
+    program_dispatch::finalize_program_offsets(command_queue_program, this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
 }
@@ -1748,6 +1748,10 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data,
 
 LaunchMessageRingBufferState& Device::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
     return this->active_sub_device_manager_->get_worker_launch_message_buffer_state(sub_device_id);
+}
+
+CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
+    return this->hw_command_queues_[cq_id]->virtual_enqueue_program_dispatch_core;
 }
 
 // Main source to get NOC idx for dispatch core
