@@ -205,42 +205,12 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         DPRINT << name << " = " << HEX() << field_value << "; ";                                \
     }
 
-// Print content of the register field by field. Issue: No ENDL.
-inline void dprint_tensix_alu_config() {
-    // Get pointer to registers for current state ID
-
-#ifdef ARCH_GRAYSKULL
-    DPRINT << "GRAYSKULL HAS NO ALU CONFIG REGISTERS" << ENDL();
-    return
-#endif
-
-        volatile uint tt_reg_ptr * cfg = get_cfg_pointer();
-    uint32_t reg_val = cfg[ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32];
-
-    DPRINT << "RND_MODE: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Fpu_srnd_en, "Fpu_srnd_en");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Gasket_srnd_en, "Gasket_srnd_en");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Packer_srnd_en, "Packer_srnd_en");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Padding, "Padding");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_GS_LF, "GS_LF");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Bfp8_HF, "Bfp8_HF");
-    DPRINT << "FORMAT: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcAUnsigned, "SrcAUnsigned");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcBUnsigned, "SrcBUnsigned");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcA, "SrcA");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG1_SrcB, "SrcB");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG2_Dstacc, "Dstacc");
-    DPRINT << "ACC_CTRL: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Fp32_enabled, "Fp32_enabled");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_SFPU_Fp32_enabled, "SFPU_Fp32_enabled");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_INT8_math_enabled, "INT8_math_enabled");
-    DPRINT << ENDL();
-}
-
 inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t shamt, const char* name)
 {
     DPRINT << name << ": " << HEX() << ((word & mask) >> shamt) << "; ";
 }
+
+// HARDWARE SPECIFIC FUNCTIONS
 
 // UNPACKER CONFIG REGISTERS
 
@@ -520,7 +490,73 @@ inline void dprint_tensix_pack_config_blackhole() {
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_pack_relu_config_wormhole_or_blackhole() {
+// COMBINED FUNCTIONS
+
+// Print content of the register field by field. Issue: No ENDL.
+inline void dprint_tensix_alu_config() {
+// Only wormhole and blackhole have this register
+#ifdef ARCH_GRAYSKULL
+    DPRINT << "GRAYSKULL HAS NO ALU CONFIG REGISTERS" << ENDL();
+    return;
+#endif
+
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr * cfg = get_cfg_pointer();
+    uint32_t reg_val = cfg[ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32];
+
+    DPRINT << "RND_MODE: ";
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Fpu_srnd_en, "Fpu_srnd_en");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Gasket_srnd_en, "Gasket_srnd_en");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Packer_srnd_en, "Packer_srnd_en");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Padding, "Padding");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_GS_LF, "GS_LF");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Bfp8_HF, "Bfp8_HF");
+    DPRINT << "FORMAT: ";
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcAUnsigned, "SrcAUnsigned");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcBUnsigned, "SrcBUnsigned");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcA, "SrcA");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG1_SrcB, "SrcB");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG2_Dstacc, "Dstacc");
+    DPRINT << "ACC_CTRL: ";
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Fp32_enabled, "Fp32_enabled");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_SFPU_Fp32_enabled, "SFPU_Fp32_enabled");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_INT8_math_enabled, "INT8_math_enabled");
+    DPRINT << ENDL();
+}
+
+inline void dprint_tensix_unpack_tile_descriptor(){
+#ifdef ARCH_GRAYSKULL
+    dprint_tensix_unpack_tile_descriptor_grayskull();
+#else
+    dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
+#endif
+}
+
+inline void dprint_tensix_unpack_config(){
+#ifdef ARCH_GRAYSKULL
+    dprint_tensix_unpack_config_grayskull();
+#else
+    dprint_tensix_unpack_config_wormhole_or_blackhole();
+#endif
+}
+
+inline void dprint_tensix_pack_config(){
+#ifdef ARCH_GRAYSKULL
+    dprint_tensix_pack_config_grayskull();
+#elif  ARCH_WORMHOLE
+    dprint_tensix_pack_config_wormhole();
+#else
+    dprint_tensix_pack_config_blackhole();
+#endif
+}
+
+inline void dprint_tensix_pack_relu_config() {
+// Only wormhole and blackhole have this register
+#ifdef ARCH_GRAYSKULL
+    DPRINT << "GRAYSKULL HAS NO RELU CONFIG REGISTERS" << ENDL();
+    return;
+#endif
+
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
     uint32_t reg_val = cfg[ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32];
@@ -541,7 +577,12 @@ inline void dprint_tensix_pack_relu_config_wormhole_or_blackhole() {
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_dest_rd_ctrl_wormhole_or_blackhole() {
+inline void dprint_tensix_dest_rd_ctrl() {
+#ifdef ARCH_GRAYSKULL
+    DPRINT << "GRAYSKULL HAS NO DEST RD CTRL REGISTERS" << ENDL();
+    return;
+#endif
+
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
     uint32_t reg_val = cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32];
@@ -559,7 +600,12 @@ inline void dprint_tensix_dest_rd_ctrl_wormhole_or_blackhole() {
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_pck_edge_offset_wormhole_or_blackhole() {
+inline void dprint_tensix_pck_edge_offset() {
+#ifdef ARCH_GRAYSKULL
+    DPRINT << "GRAYSKULL HAS NO PACK EDGE OFFSET REGISTERS" << ENDL();
+    return;
+#endif
+
     // HAS MULTIPLE REGISTERS
     uint reg_addr = PCK_EDGE_OFFSET_SEC0_mask_ADDR32;
     // uint reg_addr = PCK_EDGE_OFFSET_SEC1_mask_ADDR32;
@@ -584,7 +630,12 @@ inline void dprint_tensix_pck_edge_offset_wormhole_or_blackhole() {
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_pack_counters_wormhole_or_blackhole() {
+inline void dprint_tensix_pack_counters() {
+#ifdef ARCH_GRAYSKULL
+    DPRINT << "GRAYSKULL HAS NO PACK COUNTERS REGISTERS" << ENDL();
+    return;
+#endif
+
     // HAS MULTIPLE REGISTERS
     uint reg_addr = PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32;
     // uint reg_addr = PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32;
