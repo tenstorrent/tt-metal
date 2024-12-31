@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
-#include <cstdint>
 #include <fstream>
 #include <memory>
 #include <span>
@@ -15,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "buffers/buffer.hpp"
 #include "common/env_lib.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -29,6 +27,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class CommandQueue;
+class BufferRegion;
 class Event;
 class Trace;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
