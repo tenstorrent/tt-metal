@@ -80,12 +80,21 @@ def test_demo(device):
         pipe.tokenizer_2,
         time_steps=pipe.transformer.time_text_embed.time_proj,
     )
+    while 1:
+        print("Enter the input prompt, or q to exit:")
+        new_prompt = input()
+        print("Enter the  num_inference_steps:")
+        num_inference_steps = int(input())
+        if len(new_prompt) > 0:
+            prompt = [new_prompt]
+        if prompt[0] == "q":
+            break
 
-    image = ttnn_pipe(
-        "A capybara holding a sign that reads Hello World",
-        num_inference_steps=40,
-        guidance_scale=4.5,
-        parameters_transformer=parameters,
-        device_ttnn=device,
-    ).images[0]
-    image.save("ttnn_capybara.png")
+        image = ttnn_pipe(
+            new_prompt,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=4.5,
+            parameters_transformer=parameters,
+            device_ttnn=device,
+        ).images[0]
+        image.save("ttnn_capybara.png")
