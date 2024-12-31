@@ -103,19 +103,16 @@ Tensor ProdOperation::invoke(
         temp = ttnn::permute(input_a, permute_dims, output_mem_config);
     }
     Tensor result = prod_nc(temp, dim, output_mem_config);
-    // Permute and unpad result for dim 2,3
+    // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
     auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
-    if (dim == 0 || dim == 1 || dim == -4 || dim == -3) {
-        // Dont return prematurely. We need to manipulate the result tensor based on keepdim flag
-        // return result;
-    } else if (dim == 2 || dim == -2) {
+    if (dim == 2 || dim == -2) {
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         const auto input_shape = input_a.get_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
         result = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
-    } else {  // dim 3
+    } else if (dim == 3 || dim == -1) {  // dim 3
         // permute
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
