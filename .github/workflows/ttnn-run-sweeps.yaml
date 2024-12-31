@@ -105,8 +105,8 @@ on:
           - eltwise.unary.neg.neg_pytorch2
           - eltwise.unary.neg.neg_forge
           - eltwise.unary.i0.i0
-          - eltwise.unary.reciprocal
-          - eltwise.unary.reciprocal_sharded
+          - eltwise.unary.reciprocal.reciprocal
+          - eltwise.unary.reciprocal.reciprocal_sharded
           - eltwise.unary.silu.silu
           - eltwise.unary.silu.silu_pytorch2
           - eltwise.unary.glu.glu
