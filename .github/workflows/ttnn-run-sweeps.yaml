@@ -210,6 +210,7 @@ on:
           - eltwise.unary_backward.frac_bw.frac_bw
           - eltwise.unary_backward.frac_bw.frac_bw_sharded
           - eltwise.unary_backward.i0_bw.i0_bw
+          - eltwise.unary_backward.i0_bw.i0_bw_sharded
           - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
           - eltwise.unary_backward.rad2deg_bw.rad2deg_bw_sharded
           - eltwise.unary_backward.relu_bw.relu_bw
