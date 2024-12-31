@@ -8,6 +8,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+using namespace tt::tt_metal;
+
 void EthRouterKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
     if (as_mux_) {
@@ -60,18 +62,13 @@ void EthRouterKernel::GenerateStaticConfigs() {
         dependent_config_.input_packetize_dst_endpoint = {0x0};
 
         static_config_.fwd_vc_count = this->static_config_.vc_count;
-        uint32_t created_semaphores = 0;
         for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
+            static_config_.output_depacketize_local_sem[idx] =
+                tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
             // Forwward VCs are the ones that don't connect to a prefetch
             if (auto pk = dynamic_cast<PrefetchKernel*>(downstream_kernels_[idx])) {
                 static_config_.fwd_vc_count = this->static_config_.fwd_vc_count.value() - 1;
-                static_config_.output_depacketize_local_sem[idx] =  // TODO: to match for now, init one per vc after
-                    tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
-                created_semaphores++;
             }
-        }
-        if (created_semaphores == 0) {  // Just to match previous implementation
-            tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         }
 
         for (int idx = 0; idx < static_config_.vc_count.value(); idx++) {
