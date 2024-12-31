@@ -455,7 +455,9 @@ def test_ttnn_sd3_transformer_2d_model(device, reset_seeds):
     ttnn_pooled_projections = ttnn.from_torch(
         pooled_projections, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
     )
-    ttnn_timestep = ttnn.from_torch(timestep, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_timestep = ttnn.from_torch(
+        reference_model.time_text_embed.time_proj(timestep), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
 
     ttnn_output = ttnn_model(
         ttnn_hidden_states,

@@ -79,9 +79,11 @@ def test_ttnn_combined_time_step_text_proj_embeddings(init_inputs, fwd_inputs, d
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_sub_module, device=device, custom_preprocessor=create_custom_preprocessor(device)
     )
-    timesteps = torch.tensor([100, 100], dtype=torch.int32)
+    timesteps = torch.tensor([1000, 1000], dtype=torch.int32)
     pooled_projection = torch.randn(fwd_inputs, dtype=torch.bfloat16)
-    tt_input_timesteps = ttnn.from_torch(timesteps, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_input_timesteps = ttnn.from_torch(
+        torch_sub_module.time_proj(timesteps), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+    )
     tt_input_pool_proj = ttnn.from_torch(pooled_projection, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     tt_sub_module = tt_module(embedding_dim=init_inputs[0], pooled_projection_dim=init_inputs[1], parameters=parameters)
     tt_out = tt_sub_module(timestep=tt_input_timesteps, pooled_projection=tt_input_pool_proj, device=device)

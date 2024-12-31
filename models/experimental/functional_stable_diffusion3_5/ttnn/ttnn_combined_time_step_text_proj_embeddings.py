@@ -17,7 +17,7 @@ class ttnn_CombinedTimestepTextProjEmbeddings:
         self.text_embedder = ttnn_PixArtAlphaTextProjection(parameters.text_embedder)
 
     def __call__(self, timestep, pooled_projection, device):
-        timesteps_proj = self.time_proj(timestep, device)
+        timesteps_proj = ttnn.clone(timestep)
         timesteps_emb = self.timestep_embedder(timesteps_proj, device)
         pooled_projections = self.text_embedder(pooled_projection, device)
         conditioning = ttnn.add(timesteps_emb, pooled_projections)

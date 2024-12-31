@@ -71,14 +71,15 @@ def test_demo(device):
     )
 
     ttnn_pipe = ttnnStableDiffusion3Pipeline(
-        ttnn_model, pipe.scheduler, pipe.vae, pipe.text_encoder, pipe.tokenizer, pipe.text_encoder_2, pipe.tokenizer_2
+        ttnn_model,
+        pipe.scheduler,
+        pipe.vae,
+        pipe.text_encoder,
+        pipe.tokenizer,
+        pipe.text_encoder_2,
+        pipe.tokenizer_2,
+        time_steps=pipe.transformer.time_text_embed.time_proj,
     )
-    # image = pipe(
-    #     "A capybara holding a sign that reads Hello World",
-    #     num_inference_steps=1,
-    #     guidance_scale=4.5,
-    # ).images[0]
-    # image.save("capybara_without_tokenizer3_iteration1.png")
 
     image = ttnn_pipe(
         "A capybara holding a sign that reads Hello World",
