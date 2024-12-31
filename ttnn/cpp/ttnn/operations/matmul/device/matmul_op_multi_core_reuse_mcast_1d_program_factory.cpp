@@ -1836,11 +1836,12 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     /* Kernel defines */
     std::map<string, string> mm_in1_kernel_defines;
+    std::map<string, string> mm_kernel_defines;
+
     if (use_global_cb) {
         mm_in1_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
+        mm_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
     }
-
-    std::map<string, string> mm_kernel_defines;
 
     if (fused_activation.has_value()) {
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
@@ -1909,20 +1910,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     CBHandle cb_src1;
     if (use_global_cb) {
-        uint32_t sync_cb_index = tt::CBIndex::c_3;
-        uint32_t sync_cb_size_bytes = 16;
-        tt_metal::CircularBufferConfig sync_cb_config =
-            tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
-                .set_page_size(sync_cb_index, sync_cb_size_bytes);
-        auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
-
-        uint32_t sync_cb2_index = tt::CBIndex::c_4;
-        uint32_t sync_cb2_size_bytes = 16;
-        tt_metal::CircularBufferConfig sync_cb2_config =
-            tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
-                .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
-        auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
-
         uint32_t in1_block_size_bytes = in1_single_tile_size * in1_block_num_tiles;
         uint32_t remote_cb_index = tt::CBIndex::c_31;
         tt_metal::CircularBufferConfig remote_cb_config =
@@ -1947,6 +1934,20 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .set_page_size(src2_cb_index, in2_single_tile_size)
             .set_tile_dims(src2_cb_index, in0_tile);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, ring_cores, src2_cb_config);
+
+    uint32_t sync_cb_index = tt::CBIndex::c_3;
+    uint32_t sync_cb_size_bytes = 16;
+    tt_metal::CircularBufferConfig sync_cb_config =
+        tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
+            .set_page_size(sync_cb_index, sync_cb_size_bytes);
+    auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
+
+    uint32_t sync_cb2_index = tt::CBIndex::c_4;
+    uint32_t sync_cb2_size_bytes = 16;
+    tt_metal::CircularBufferConfig sync_cb2_config =
+        tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
+            .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
+    auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_5;  // output operands start at index 16
     uint32_t interm0_cb_index = tt::CBIndex::c_6;

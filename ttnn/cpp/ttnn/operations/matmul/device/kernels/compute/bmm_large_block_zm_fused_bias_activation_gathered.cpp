@@ -167,6 +167,7 @@ void MAIN {
 
     constexpr uint32_t mm_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
+#ifdef ENABLE_GLOBAL_CB
     uint32_t in1_cb_start_addr = 0;
     uint32_t in1_rd_ptr_start_addr = 0;
     uint32_t curr_in1_block_index = 0;
@@ -180,6 +181,7 @@ void MAIN {
     UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_block_num_tiles * num_blocks * in1_tile_size)));
 
     UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_num_tiles * in1_tile_size, ring_idx, in1_tensor_split)));
+#endif
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -210,7 +212,7 @@ void MAIN {
             PACK((pack_reconfig_data_format(mm_partials_cb_id)));
         }
 
-        // cb_wait_front(in1_cb_id, in1_block_num_tiles * num_blocks);
+        // Wait to receive in1
         cb_wait_front(sync_cb2, 1);
         cb_pop_front(sync_cb2, 1);
 
@@ -226,6 +228,7 @@ void MAIN {
             }
 #endif
 
+            // Wait to receive in0 block
             if (block == 0) {
                 cb_reserve_back(input0_cb_id, in0_block_num_tiles);
                 cb_push_back(input0_cb_id, in0_block_num_tiles);
@@ -233,6 +236,7 @@ void MAIN {
 
             cb_wait_front(input0_cb_id, in0_block_num_tiles);
 
+#ifdef ENABLE_GLOBAL_CB
             UNPACK((calculate_next_block_index_and_update_rd_ptr(
                 in1_cb_id,
                 num_blocks,
@@ -243,10 +247,15 @@ void MAIN {
                 in1_tensor_split,
                 &next_in1_block_index,
                 &next_in1_rd_ptr_addr)));
+#endif
 
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+#ifdef ENABLE_GLOBAL_CB
                 int in1_index_subblock_offset = 0;
+#else
+                int in1_index_subblock_offset = in1_block_num_tiles * ((ring_idx + block) % num_blocks);
+#endif
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
                     if (enable_reload) {
@@ -301,10 +310,12 @@ void MAIN {
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
 
+#ifdef ENABLE_GLOBAL_CB
                         // Release in1
                         cb_reserve_back(sync_cb, 1);
                         cb_push_back(sync_cb, 1);
                         cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
+#endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                         PACK((pack_reconfig_data_format(mm_out_cb_id)));
@@ -369,8 +380,10 @@ void MAIN {
 #endif
 
             cb_pop_front(input0_cb_id, in0_block_num_tiles);
+#ifdef ENABLE_GLOBAL_CB
             curr_in1_block_index = next_in1_block_index;
             UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
+#endif
         }
 
         if constexpr (batch > 1) {
