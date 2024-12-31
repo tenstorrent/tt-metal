@@ -31,7 +31,7 @@ void BuilderTool::build_firmware() {
     fs::create_directories(firmware_output_dir_);
 
     const string& gpp_tool = device->build_env().get_gpp_tool();
-    JitBuildStateSet& firmware_build_states = device->firmware_build_states_;
+    const JitBuildStateSet& firmware_build_states(device->get_firmware_build_states());
 
     string log_file = firmware_output_dir_.string() + "build_output.log";
     for (auto& build_state : firmware_build_states) {

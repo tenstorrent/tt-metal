@@ -292,6 +292,9 @@ public:
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 
+    // Accessors for tt_builder
+    const JitBuildStateSet& get_firmware_build_states() const { return this->firmware_build_states_; }
+
 private:
     static_assert(detail::SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES, "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
