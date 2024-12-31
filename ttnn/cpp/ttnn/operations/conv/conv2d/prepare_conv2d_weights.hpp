@@ -5,10 +5,9 @@
 
 #pragma once
 #include <optional>
-
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 
 namespace ttnn::operations::sliding_window {
 struct ParallelConfig;
@@ -123,6 +122,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 template <typename T>
 bool check_non_tile_mul_width(T* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
 
+bool check_non_tile_height(const Conv2dConfig& conv_config, const uint32_t out_channels);
 }  // namespace conv2d
 }  // namespace operations::conv
 }  // namespace ttnn
