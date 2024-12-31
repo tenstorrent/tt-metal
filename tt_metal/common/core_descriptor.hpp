@@ -36,7 +36,7 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
-    bool targeting_sim = std::getenv("TT_METAL_SIMULATOR_EN") != nullptr;
+    bool targeting_sim = std::getenv("TT_METAL_SIMULATOR") != nullptr;
     if (targeting_sim) {
         switch (arch) {
             case tt::ARCH::Invalid:
