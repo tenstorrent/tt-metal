@@ -575,6 +575,7 @@ inline void dprint_tensix_pack_relu_config() {
     DPRINT << ENDL();
 }
 
+// Printing dest control bits
 inline void dprint_tensix_dest_rd_ctrl() {
 #ifdef ARCH_GRAYSKULL
     DPRINT << "GRAYSKULL HAS NO DEST RD CTRL REGISTERS" << ENDL();
@@ -598,6 +599,7 @@ inline void dprint_tensix_dest_rd_ctrl() {
     DPRINT << ENDL();
 }
 
+// Printing packer edge offset
 inline void dprint_tensix_pck_edge_offset_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
 
     uint32_t reg_addr = 0;
@@ -654,6 +656,7 @@ inline void dprint_tensix_pck_edge_offset(uint reg_id = 0) {
 
 }
 
+// Printing packer counters
 inline void dprint_tensix_pack_counters_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
 
     uint32_t reg_addr = 0;
@@ -708,6 +711,7 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
     DPRINT << ENDL();
 }
 
+// Printing packer strides
 inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
 
     uint32_t reg_addr = 0;
