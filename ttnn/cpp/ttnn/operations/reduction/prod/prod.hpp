@@ -18,6 +18,7 @@ struct ProdOperation {
         const Tensor& input,
         bool all_dimensions = false,
         int64_t dim = 0,
+        const bool keepdim = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
     static Tensor invoke(
