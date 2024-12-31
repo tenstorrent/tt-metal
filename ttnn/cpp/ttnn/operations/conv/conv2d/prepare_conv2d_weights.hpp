@@ -11,7 +11,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 
 namespace ttnn::operations::sliding_window {
-    struct ParallelConfig;
+struct ParallelConfig;
 }
 
 namespace ttnn {
@@ -26,7 +26,7 @@ ttnn::Tensor conv_bias_layout_convert(
     uint32_t weight_block_h_ntiles,
     uint32_t weight_block_w_ntiles,
     const sliding_window::ParallelConfig& parallel_config,
-    T * device,
+    T* device,
     uint32_t out_channels,
     bool is_non_tile_mul_width);
 
@@ -46,7 +46,7 @@ ttnn::Tensor prepare_conv_weights(
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    T *device,
+    T* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
@@ -65,7 +65,7 @@ ttnn::Tensor prepare_conv_bias(
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    T *device,
+    T* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
@@ -78,19 +78,16 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t weight_block_h_ntiles,
     uint32_t weight_block_w_ntiles,
     const sliding_window::ParallelConfig& parallel_config,
-    T * device,
+    T* device,
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device=true,
-    bool is_non_tile_mul_width=false);
+    const bool parameters_on_device = true,
+    bool is_non_tile_mul_width = false);
 
 template <typename T>
-bool check_non_tile_mul_width(
-    T* device,
-    const Conv2dConfig& conv_config,
-    const uint32_t in_channels);
+bool check_non_tile_mul_width(T* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
 
-} // namespace conv2d
-} // namespace operations::conv
-} // namespace ttnn
+}  // namespace conv2d
+}  // namespace operations::conv
+}  // namespace ttnn
