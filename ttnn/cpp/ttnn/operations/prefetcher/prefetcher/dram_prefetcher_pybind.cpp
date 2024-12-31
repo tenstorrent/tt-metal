@@ -20,7 +20,7 @@ void bind_dram_prefetcher_operation(py::module& module) {
 
             Args:
                 tensors (List[ttnn.Tensor]): A list of tensor objects to be pre-fetched.
-                tensor_addrs (ttnn.Tensor): A tensor (tile layout) that contains memory addresses
+                tensor_addrs (ttnn.Tensor): A tensor (row major layout) that contains memory addresses
                     corresponding to the tensor locations in DRAM. The format should be as follows:
                         [t1_l1, t2_l1, ..., t1_l2, t2_l2, ..., t1_l3, t2_l3, ...]
                 num_layers (int): The number of layers in the pipeline or the model
