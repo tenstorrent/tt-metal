@@ -24,6 +24,7 @@
 #include <ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp>        // NOLINT
 #include <ttnn/device.hpp>                                                                         // NOLINT
 #include <ttnn/distributed/api.hpp>                                                                // NOLINT
+#include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>                           // NOLINT
 #include <ttnn/operations/core/to_dtype/to_dtype_op.hpp>                                           // NOLINT
 #include <ttnn/operations/creation.hpp>                                                            // NOLINT
 #include <ttnn/operations/data_movement/concat/concat.hpp>                                         // NOLINT
@@ -66,5 +67,4 @@
 #include <ttnn/tensor/xtensor/partition.hpp>                                                       // NOLINT
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>                                            // NOLINT
 #include <ttnn/types.hpp>                                                                          // NOLINT
-
 #pragma GCC diagnostic pop
