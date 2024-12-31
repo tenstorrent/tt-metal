@@ -10,8 +10,6 @@
 #include "debug/dprint.h"
 
 void kernel_main() {
-    uint32_t rt_args_idx = 0;
-    uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
     // Compile time args
     constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(1);
@@ -25,9 +23,6 @@ void kernel_main() {
     constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;
 
-#ifdef ENABLE_GLOBAL_CB
-    uint32_t in1_num_blocks_wait = in1_block_num_tiles * ring_idx;
-#endif
     for (uint32_t b = 0; b < batch; ++b) {
         cb_reserve_back(sync_cb2, 1);
 #ifdef ENABLE_GLOBAL_CB
