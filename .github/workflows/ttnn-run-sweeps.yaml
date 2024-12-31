@@ -237,6 +237,7 @@ on:
           - eltwise.unary_backward.tanh_bw.tanh_bw
           - eltwise.unary_backward.sqrt_bw.sqrt_bw
           - eltwise.unary_backward.add_bw.add_bw
+          - eltwise.unary_backward.add_bw.add_bw_sharded
           - eltwise.unary_backward.assign_bw.assign_bw
           - eltwise.unary_backward.fill_bw.fill_bw
           - eltwise.unary_backward.fill_bw.fill_bw_sharded
@@ -371,7 +372,6 @@ on:
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
           - eltwise.binary_backward.hypot_bw.hypot_bw
           - eltwise.binary_backward.add_bw.add_bw
-          - eltwise.binary_backward.add_bw.add_bw_sharded
           - eltwise.binary_backward.sub_bw.sub_bw
           - eltwise.binary_backward.mul_bw.mul_bw
           - eltwise.binary_backward.div_bw.div_bw
