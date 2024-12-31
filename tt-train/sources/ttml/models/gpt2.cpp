@@ -35,16 +35,18 @@ autograd::TensorPtr memory_efficient_runner(
 
     // define grad function and copy generator (in the state before forward pass)
     autograd::GradFunction grad = [input, mask, out, &forward_impl, generator]() {
-        // set generator to the state before forward pass during construction
-        // restore generator state after grad function is executed
-        auto scoped = ttml::core::Scoped(
-            [&generator]() { autograd::ctx().set_generator(generator); },
-            [generator = autograd::ctx().get_generator()]() { autograd::ctx().set_generator(generator); });
-
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
         // run forward pass again
-        auto output = forward_impl(input_detached, mask);
+        autograd::TensorPtr output;
+        {
+            // set generator to the state before forward pass during construction
+            // restore generator state after grad function is executed
+            auto scoped = ttml::core::Scoped(
+                [&generator]() { autograd::ctx().set_generator(generator); },
+                [generator = autograd::ctx().get_generator()]() { autograd::ctx().set_generator(generator); });
+            output = forward_impl(input_detached, mask);
+        }
         // use gradients from new output
         output->set_grad(out->get_grad());
         output->backward();
