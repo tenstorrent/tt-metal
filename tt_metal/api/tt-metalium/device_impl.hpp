@@ -249,6 +249,9 @@ public:
     bool is_mmio_capable() const override;
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override { return tunnels_from_mmio_; }
 
+    // Accessors for tt_builder
+    const JitBuildStateSet& get_firmware_build_states() const { return this->firmware_build_states_; }
+
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
