@@ -143,8 +143,8 @@ on:
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.erfinv.erfinv_sharded
           - eltwise.unary.i0.i0
-          - eltwise.unary.reciprocal
-          - eltwise.unary.reciprocal_sharded
+          - eltwise.unary.reciprocal.reciprocal
+          - eltwise.unary.reciprocal.reciprocal_sharded
           - eltwise.unary.silu.silu
           - eltwise.unary.silu.silu_pytorch2
           - eltwise.unary.glu.glu
