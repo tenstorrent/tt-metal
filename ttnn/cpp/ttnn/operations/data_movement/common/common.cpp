@@ -21,34 +21,31 @@ ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor) {
         while (rank > 4) {
             squeezed = ttnn::squeeze(squeezed, 0);
             rank = squeezed.get_shape().rank();
-            printf("rank: %zu\n", rank);
         }
         return squeezed;
     }
 };
 
 ttnn::Shape squeeze_output_shape(ttnn::Shape output_shape) {
-    if (output_shape.rank() > 4) {
-        std::array<uint32_t, 4> output_shape_4d;
-        output_shape_4d[0] = 1;
-        int extra_rank = output_shape.rank() - 4;
-        for (int i = extra_rank; i >= 0; i--) {
-            output_shape_4d[0] *= output_shape[i];
-        }
-        output_shape_4d[1] = output_shape[1 + extra_rank];
-        output_shape_4d[2] = output_shape[2 + extra_rank];
-        output_shape_4d[3] = output_shape[3 + extra_rank];
-        return ttnn::Shape(output_shape_4d);
+    if (output_shape.rank() <= 4) {
+        return output_shape;
     }
-    return output_shape;
+    std::array<uint32_t, 4> output_shape_4d;
+    output_shape_4d[0] = 1;
+    int extra_rank = output_shape.rank() - 4;
+    for (int i = extra_rank; i >= 0; i--) {
+        output_shape_4d[0] *= output_shape[i];
+    }
+    output_shape_4d[1] = output_shape[1 + extra_rank];
+    output_shape_4d[2] = output_shape[2 + extra_rank];
+    output_shape_4d[3] = output_shape[3 + extra_rank];
+    return ttnn::Shape(output_shape_4d);
 }
 
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
     auto shape = tensor.get_shape();
     auto rank = shape.rank();
-    if (shape.rank() < 4) {
-        TT_THROW("Tensor has to be of rank larger than 4!");
-    }
+    TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4!", shape.rank());
     if (rank == 4) {
         return tensor;
     }
