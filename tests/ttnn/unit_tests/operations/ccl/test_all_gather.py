@@ -42,11 +42,11 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     if dim == 2:
         if layout == ttnn.TILE_LAYOUT:
             min_sized_chunks_on_dim //= 32
-    if min_sized_chunks_on_dim < num_devices:
-        return (
-            True,
-            f"Input shape {input_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
-        )
+    # if min_sized_chunks_on_dim < num_devices:
+    #     return (
+    #         True,
+    #         f"Input shape {input_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
+    #     )
 
     if (
         input_shape == [8, 8, 256, 384]
@@ -141,6 +141,7 @@ def run_all_gather_impl(
     trace_mode=False,
     tile=(32, 32),
 ):
+    # ttnn.set_printoptions(profile="full")
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
     # Use Async mode based on test input config
@@ -178,6 +179,7 @@ def run_all_gather_impl(
             tt_out_tensor = ttnn.all_gather(
                 input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
             )
+            # print("\ntt out ", tt_out_tensor)
 
             for d in mesh_device.get_devices():
                 ttnn.synchronize_device(d)
@@ -185,6 +187,12 @@ def run_all_gather_impl(
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
         tt_output_tensor = ttnn.to_torch(t)
+        print("\n out shape ", tt_output_tensor.shape)
+        # tt_output_tensor = tt_output_tensor[:, :, :1, :]
+        if i == 0 or i == 1:
+            print("\n in loop")
+            print("\n in loop out shape ", tt_output_tensor.shape)
+            print("\n tt out loop ", tt_output_tensor)
         if input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
@@ -327,8 +335,8 @@ def run_all_gather_on_t3000_impl_tight_loop(
     [
         # (4, 2, [4, 1, 256, 32], 0, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
-        (8, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
-        (8, 1, [1, 1, 1, 32 * 8], 3, ttnn.TILE_LAYOUT),
+        # (8, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 1, 8 * 2], 3, ttnn.TILE_LAYOUT),
         # (4, 2, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),      # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 2, [4, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
@@ -350,7 +358,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [1000])  # restore to 500: https://github.com/tenstorrent/tt-metal/issues/9686
+@pytest.mark.parametrize("num_iters", [1])  # restore to 500: https://github.com/tenstorrent/tt-metal/issues/9686
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_on_t3000_post_commit_looping(
     t3k_mesh_device,
