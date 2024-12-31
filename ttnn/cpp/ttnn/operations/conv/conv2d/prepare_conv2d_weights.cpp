@@ -3,16 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
-
-#include "tt_metal/common/work_split.hpp"
-
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-
 using namespace tt;
 namespace ttnn {
 namespace operations::conv {
@@ -96,7 +91,9 @@ static OptimizedConvBlockConfig get_opt_block_config(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t batch_size,
+    uint32_t input_height,
     uint32_t input_width,
+    uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     T* device,
@@ -106,7 +103,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
     const MemoryConfig& input_memory_config) {
     auto compute_grid_size = device->compute_with_storage_grid_size();
 
-    adjust_conv_op_config_for_auto_shard_if_necessary(
+    conv_config = determine_conv_config_for_auto_shard(
+        conv_config,
         mm_conv,
         batch_size,
         in_channels,
@@ -114,9 +112,12 @@ static OptimizedConvBlockConfig get_opt_block_config(
         output_height,
         output_width,
         kernel_size[1],
+        input_height,
         input_width,
+        groups,
+        kernel_size,
         device->compute_with_storage_grid_size(),
-        conv_config,
+        compute_config,
         input_tensor_layout,
         input_memory_config);
 
@@ -337,8 +338,7 @@ ttnn::Tensor prepare_conv_weights(
         !ttnn::is_tensor_on_device_or_multidevice(weight_tensor),
         "Error: weight tensor must be on host for preparation.");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
-        init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false));
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
     const uint32_t output_height =
         ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
@@ -351,7 +351,9 @@ ttnn::Tensor prepare_conv_weights(
         output_height,
         output_width,
         batch_size,
+        input_height,
         input_width,
+        groups,
         kernel_size,
         stride,
         device,
@@ -430,8 +432,7 @@ ttnn::Tensor prepare_conv_bias(
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
-        init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false));
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,
         in_channels,
@@ -439,7 +440,9 @@ ttnn::Tensor prepare_conv_bias(
         output_height,
         output_width,
         batch_size,
+        input_height,
         input_width,
+        groups,
         kernel_size,
         stride,
         device,
@@ -490,14 +493,16 @@ template OptimizedConvBlockConfig get_opt_block_config<Device>(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t batch_size,
+    uint32_t input_height,
     uint32_t input_width,
+    uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     Device* device,
     Conv2dConfig& conv_config,
     Layout input_tensor_layout,
     const DeviceComputeKernelConfig& compute_config,
-    const ttnn::MemoryConfig& input_memory_config);
+    const MemoryConfig& input_memory_config);
 
 template OptimizedConvBlockConfig get_opt_block_config<MeshDevice>(
     bool mm_conv,
@@ -506,14 +511,16 @@ template OptimizedConvBlockConfig get_opt_block_config<MeshDevice>(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t batch_size,
+    uint32_t input_height,
     uint32_t input_width,
+    uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     MeshDevice* device,
     Conv2dConfig& conv_config,
     Layout input_tensor_layout,
     const DeviceComputeKernelConfig& compute_config,
-    const ttnn::MemoryConfig& input_memory_config);
+    const MemoryConfig& input_memory_config);
 
 template ttnn::Tensor prepare_conv_weights<Device>(
     const ttnn::Tensor& weight_tensor,
