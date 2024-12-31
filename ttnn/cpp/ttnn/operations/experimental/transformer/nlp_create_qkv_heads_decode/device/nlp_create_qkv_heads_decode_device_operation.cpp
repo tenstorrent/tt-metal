@@ -27,13 +27,19 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     // input
     const uint32_t num_users_supported = 32;
     uint32_t num_users = input_shape[2];
-    TT_FATAL(input_shape[3] % TILE_WIDTH == 0, "Unsupported input shape");  // head_dim must be multiple of TILE_WIDTH
-    TT_FATAL(num_users <= num_users_supported, "Unsupported input shape");  // 32 users
-    TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
-    TT_FATAL(input_shape[0] == 1, "Unsupported input shape");
+    TT_FATAL(
+        input_shape[3] % TILE_WIDTH == 0,
+        "Unsupported input shape = {}",
+        input_shape);  // head_dim must be multiple of TILE_WIDTH
+    TT_FATAL(num_users <= num_users_supported, "Unsupported input shape = {}", input_shape);  // 32 users
+    TT_FATAL(input_shape[1] == 1, "Unsupported input shape = {}", input_shape);
+    TT_FATAL(input_shape[0] == 1, "Unsupported input shape = {}", input_shape);
     const auto QKV_memcfg = input_tensor.memory_config();
     if (input_tensor.is_sharded()) {
-        TT_FATAL(QKV_memcfg.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "input tensor must be width sharded");
+        TT_FATAL(
+            QKV_memcfg.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+            "Current input memory layout is {}. It must be width sharded",
+            QKV_memcfg.memory_layout);
         TT_FATAL(
             input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1],
             "Shard shape must be correct");
@@ -60,15 +66,23 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
 
     // Support maximum 32 heads for now
-    TT_FATAL(this->num_q_heads <= 32, "only 32 q heads supported");
-    TT_FATAL(this->num_q_heads >= this->num_kv_heads, "num_q_heads must be greater than or equal to num_kv_heads");
+    TT_FATAL(this->num_q_heads <= 32, "There are {} q heads only 32 are supported", this->num_q_heads);
+    TT_FATAL(
+        this->num_q_heads >= this->num_kv_heads,
+        "num_q_heads={} must be greater than or equal to num_kv_heads={}",
+        this->num_q_heads,
+        this->num_kv_heads);
 
     uint32_t num_cores = core_grid.x * core_grid.y;
     // 1 User Per Core Max and 32 users for now
     if (this->overlap_qk_coregrid) {
-        TT_FATAL(num_cores >= num_users, "Need at least 32 cores for decode");
+        TT_FATAL(num_cores >= num_users, "Grid Size is {}. Need at least 32 cores for decode", num_cores);
     } else {
-        TT_FATAL(num_cores >= 2 * num_users, "Need cores atleast double of num_users for decode when q and k heads are not overlapping coregrid");
+        TT_FATAL(
+            num_cores >= 2 * num_users,
+            "Grid Size is {}. Need cores atleast double of num_users for decode when q and k heads are not overlapping "
+            "coregrid",
+            num_cores);
     }
 }
 
