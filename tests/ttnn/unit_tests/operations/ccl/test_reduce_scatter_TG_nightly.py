@@ -8,7 +8,10 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-
+from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
+    create_and_load_sub_device_manager_with_fabric_interface,
+    teardown_fabric_interface,
+)
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 
@@ -136,6 +139,8 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         assert not create_persistent_fabric
         assert not teardown_persistent_fabric
         assert not enable_persistent_fabric
+    else:
+        assert enable_persistent_fabric, "Persistent fabric must be enabled for async reduce scatter"
 
     for d in mesh_device.get_devices():
         ttnn.enable_program_cache(d)
