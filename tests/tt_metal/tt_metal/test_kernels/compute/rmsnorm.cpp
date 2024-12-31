@@ -111,7 +111,7 @@ void MAIN {
          * compute E[(x)^2]
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_ex2);
         ACQ();
         cb_wait_front(cb_x2, Wt);
         // cb_wait_front(cb_xmm, Wt);
@@ -123,7 +123,7 @@ void MAIN {
             // reduce_tile(cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
         }
         cb_pop_front(cb_x2, Wt);
-        reduce_revert_delta();
+        reduce_revert_delta(cb_ex2);
         pack_tile(dst0, cb_ex2);
         REL();
 

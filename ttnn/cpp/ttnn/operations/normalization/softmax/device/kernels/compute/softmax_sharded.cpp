@@ -25,13 +25,13 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     reconfig_data_format(cb_in, cb_bcast_scaler);
     pack_reconfig_data_format(cb_max);
     cb_reserve_back(cb_max, 1);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>();
+    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_max);
     cb_wait_front(cb_bcast_scaler, 1);
     for (uint32_t w = 0; w < block_w; w++) {
         constexpr uint32_t bcast_scaler0 = 0;
         reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, w, bcast_scaler0, 0);
     }
-    reduce_revert_delta<ReduceDim::REDUCE_ROW>();
+    reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_max);
     pack_tile(0, cb_max);
     cb_push_back(cb_max, 1);
     REL();
@@ -203,7 +203,7 @@ void MAIN {
 
         // sum(exp(x))
         ACQ();
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_recipsumexps);
         cb_wait_front(cb_exps, block_w);
         cb_wait_front(cb_bcast_scaler, 1);
         cb_reserve_back(cb_recipsumexps, 1);
@@ -211,7 +211,7 @@ void MAIN {
             constexpr uint32_t bcast_scaler0 = 0;
             reduce_tile(cb_exps, cb_bcast_scaler, w, bcast_scaler0, dst0);
         }
-        reduce_revert_delta();
+        reduce_revert_delta(cb_recipsumexps);
         recip_tile_init();
         recip_tile(dst0);
         pack_tile(dst0, cb_recipsumexps);

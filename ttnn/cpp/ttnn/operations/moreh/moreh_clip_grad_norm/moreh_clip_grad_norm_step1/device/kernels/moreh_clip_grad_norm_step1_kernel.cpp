@@ -134,9 +134,9 @@ void MAIN {
     cb_wait_front(cb_xpowadd, onetile);
     cb_reserve_back(cb_y, onetile);
 
-    reduce_init_delta<false>();
+    reduce_init_delta<false>(cb_y);
     reduce_tile(cb_xpowadd, cb_one, 0, 0, dst0);
-    reduce_revert_delta();
+    reduce_revert_delta(cb_y);
     tile_regs_commit();
 
     tile_regs_wait();
