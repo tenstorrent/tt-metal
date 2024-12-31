@@ -9,6 +9,10 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/split/split.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "eth_l1_address_map.h"
 
 namespace ttnn {
@@ -226,13 +230,21 @@ namespace operations {
 namespace ccl {
 
 Tensor all_gather(
-    const Tensor& input_tensor,
+    const Tensor& input_tensorss,
     const int32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const ttnn::ccl::Topology topology) {
+    // tt::tt_metal::Array4D padded_shape = {1, 1, 32, 32};
+    std::cout << "before shape " << input_tensorss.get_logical_shape();
+    std::cout << "\n before pads shape " << input_tensorss.get_padded_shape();
+    uint32_t tot_ele = input_tensorss.get_logical_shape()[3];
+    ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+    const auto input_tensor = ttnn::pad(0, input_tensorss, padding, 3, false, std::nullopt);
+    // std::cout<<"pad shape "<<input_tensor.get_logical_shape();
+    // std::cout<<"\npads shape "<<input_tensor.get_padded_shape();
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
@@ -268,7 +280,15 @@ Tensor all_gather(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
+            auto& input_tensor_temp = input_tensors.at(0);
+            std::cout << "\ninside cpp";
+            input_tensor.print();
+            // std::cout<<"\n before pad";
+            // ttnn::SimpleShape pad_shape {1,1,1,32};
 
+            // std::cout<<"\n after pad";
+            // std::cout<<input_tensor_temps.get_logical_shape();
+            // input_tensor_temps.print();
             return operation::run(
                 ttnn::ccl::all_gather_detail::create_all_gather_struct(
                     input_tensor,
@@ -283,7 +303,39 @@ Tensor all_gather(
         },
         {input_tensor},
         output_tensors);
-    return output_tensors.at(0);
+    std::cout << "RETURN SHAPE " << output_tensors.at(0).get_logical_shape();
+    // int64_t num_splits = 8; // Number of splits
+    // int64_t split_dim = 3;
+    // std::vector<ttnn::Tensor> split_out = ttnn::split(output_tensors.at(0), num_splits, split_dim);
+    // for (size_t i = 0; i < split_out.size(); ++i) {
+    //     std::cout << "\n Tensor " << i << ":\n";
+
+    //     split_out[i].print();
+    // }
+    std::vector<Tensor> combined_tensors;
+
+    ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
+    ttnn::SmallVector<uint32_t> ends = {1, 1, 1, tot_ele};
+    ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};  // 0 - 64, 64 - 128, 128 - 192
+
+    for (int i = 0; i < 8; ++i) {
+        begins[3] = i * 32;
+        ends[3] = begins[3] + tot_ele;
+
+        ttnn::Tensor sliced_tensor = ttnn::slice(output_tensors.at(0), begins, ends, step);
+        std::cout << "\n sliced_tensor shape" << sliced_tensor.get_logical_shape();
+        std::cout << "\n*********\n";
+        sliced_tensor.print();
+        std::cout << "\n*********\n";
+        combined_tensors.push_back(sliced_tensor);
+    }
+
+    ttnn::Tensor concat_tensor = ttnn::concat(combined_tensors, 3);
+    std::cout << "\n CONCAT shape" << concat_tensor.get_logical_shape();
+    std::cout << "\n----------\n";
+    concat_tensor.print();
+    std::cout << "\n----------\n";
+    return concat_tensor;
 }
 
 Tensor all_gather(
