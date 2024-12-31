@@ -10,6 +10,10 @@ from transformers import (
     T5EncoderModel,
     T5TokenizerFast,
 )
+from models.utility_functions import (
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
+)
 
 from loguru import logger
 import inspect
@@ -572,6 +576,8 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
         parameters_transformer=None,
         device_ttnn=None,
     ):
+        disable_persistent_kernel_cache()
+        device_ttnn.enable_program_cache()
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
 
@@ -740,6 +746,8 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
+
+                enable_persistent_kernel_cache()
 
                 # if XLA_AVAILABLE:
                 #     xm.mark_step()
