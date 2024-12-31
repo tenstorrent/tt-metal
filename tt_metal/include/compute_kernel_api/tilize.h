@@ -207,7 +207,7 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 /**
  * Uninitialize the tilize operation along with re-configuring unpacker with the CB data types.
  */
-ALWI void tilize_uninit_with_dt(uint32_t old_icb = 0, uint32_t new_icb = 1, uint32_t ocb) {
+ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(old_icb)));
     UNPACK((llk_unpack_reconfig_data_format_srca(old_icb, new_icb)));
     MATH((llk_math_reconfig_data_format_srca(old_icb, new_icb)));
