@@ -159,7 +159,7 @@ def test_run_prefetcher(
     use_program_cache,
     function_level_defaults,
 ):
-    logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, input_shape={input_shapes[0]}")
+    logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, num_layers={num_layers}")
     assert len(input_shapes) == len(dtypes)
     assert num_tensors == len(input_shapes)
 
@@ -241,7 +241,6 @@ def test_run_prefetcher(
     tt_tensors = tt_tensors_all[:num_tensors]
 
     # Set up the tensor addrs
-    # TODO: Fix when number of tensor_addrs is greater than a tile size (ie, 32x32 = 1024)
     tensor_addrs = torch.tensor([x.buffer_address() for x in tt_tensors_all])
     tensor_addrs = tensor_addrs.repeat(len(dram_cores), 1)
     tensor_addrs_mem_config = ttnn.MemoryConfig(
