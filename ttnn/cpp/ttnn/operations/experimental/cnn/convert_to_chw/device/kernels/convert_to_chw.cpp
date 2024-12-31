@@ -42,7 +42,7 @@ void MAIN {
     constexpr uint32_t cb_transpose_in = get_compile_time_arg_val(1);
     constexpr uint32_t cb_out = get_compile_time_arg_val(2);
 
-    transpose_wh_init(cb_in);
+    transpose_wh_init(cb_in, cb_transpose_in);
     pack_untilize_init(cb_in, cb_transpose_in);
 
     for (uint32_t idx = 0; idx < total_tiles; idx++) {
