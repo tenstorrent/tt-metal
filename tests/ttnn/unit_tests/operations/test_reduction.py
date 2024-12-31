@@ -66,7 +66,7 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim):
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    output_tensor = ttnn.prod(input_tensor, dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.prod(input_tensor, dim=dim, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
