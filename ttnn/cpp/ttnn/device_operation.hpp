@@ -234,9 +234,17 @@ inline void log_operation(
 
 
 
-template <DeviceOperationConcept device_operation_t>
-void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
+template <DeviceOperationConcept device_operation_t, class TensorReturnValueT>
+void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, TensorReturnValueT &tensor_return_value, auto& device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
+
+    if constexpr (std::is_same_v<TensorReturnValueT, tt::tt_metal::Tensor>) {
+        std::cout << "We are running with Tensor" << std::endl;
+        if (tensor_return_value.get_logical_volume() == 0) {
+            std::cout << "Volume is zero" << std::endl;
+            return;
+        }
+    }
 
     auto& program_cache = device->get_program_cache();
 
@@ -267,6 +275,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         ZoneScopedN("Validate on Program Cache Miss");
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
     }
+
 
     const auto enqueue_or_launch_program = [=](tt::tt_metal::Program& program) {
         if (USE_FAST_DISPATCH) {
