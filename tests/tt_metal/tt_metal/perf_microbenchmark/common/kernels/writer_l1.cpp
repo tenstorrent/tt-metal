@@ -71,4 +71,5 @@ void kernel_main() {
         }
         layer++;
     }
+    experimental::update_remote_cb_config_in_l1(remote_cb_id);
 }

@@ -909,7 +909,7 @@ std::vector<std::vector<CoreCoord>> Program::logical_cores() const { return pimp
 
 void detail::Program_::set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const {
     const auto& kernel_defines = kernel->defines();
-    const std::string reserved_defines[] = {"ALIGN_LOCAL_CBS_TO_REMOTE_CBS", "UPDATE_REMOTE_CB_CONFIGS_IN_L1"};
+    const std::string reserved_defines[] = {"ALIGN_LOCAL_CBS_TO_REMOTE_CBS"};
     for (const auto& str : reserved_defines) {
         TT_FATAL(
             kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
@@ -943,14 +943,6 @@ void detail::Program_::set_remote_circular_buffer_init(const std::shared_ptr<Ker
     }
     if (!remote_cb_indices.empty()) {
         std::map<std::string, std::string> defines;
-        std::string update_code = fmt::format("experimental::update_remote_cb_configs_in_l1<{}>({{", remote_cb_indices.size());
-        for (auto buffer_index : remote_cb_indices) {
-            update_code += fmt::format("{},", buffer_index);
-        }
-        update_code.back() = '}';
-        update_code.append(");");
-        defines["UPDATE_REMOTE_CB_CONFIGS_IN_L1"] = update_code;
-
         if (!align_code.empty()) {
             defines["ALIGN_LOCAL_CBS_TO_REMOTE_CBS"] = align_code;
         }

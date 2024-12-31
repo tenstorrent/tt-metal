@@ -15,7 +15,7 @@
 
 #include "tools/profiler/kernel_profiler.hpp"
 
-#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS or defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
+#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "circular_buffer_init.h"
 #endif
 
@@ -58,8 +58,5 @@ void kernel_launch(uint32_t kernel_base_addr)
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     run_kernel();
-#if !defined(UCK_CHLKC_MATH) and defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
-    UPDATE_REMOTE_CB_CONFIGS_IN_L1
-#endif
 #endif
 }
