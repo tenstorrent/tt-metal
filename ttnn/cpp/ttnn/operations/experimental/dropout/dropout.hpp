@@ -13,6 +13,6 @@ struct DropoutOperation {
 }  // namespace ttnn::operations::experimental
 namespace ttnn::experimental {
 constexpr auto dropout = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::::experimental::dropout",
+    "ttnn::experimental::dropout",
     ttnn::operations::experimental::DropoutOperation>();
 }  // namespace ttnn::experimental
