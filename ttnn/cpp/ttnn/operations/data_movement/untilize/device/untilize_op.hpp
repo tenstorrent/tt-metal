@@ -22,6 +22,7 @@ struct Untilize {
     const bool use_multicore;
     const bool use_pack_untilize;
     const bool fp32_dest_acc_en;
+    const std::optional<CoreRangeSet> sub_core_grids;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
