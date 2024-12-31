@@ -14,6 +14,7 @@
 #include "noc/noc_parameters.h"  // DRAM_ALIGNMENT
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 

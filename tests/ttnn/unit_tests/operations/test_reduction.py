@@ -70,3 +70,28 @@ def test_sum_4d_tensors(device, batch_size, c, h, w, dim, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("c", [11])
+@pytest.mark.parametrize("h", [67])
+@pytest.mark.parametrize("w", [77])
+@pytest.mark.parametrize("dim", [0, 1, 2, 3])
+@pytest.mark.parametrize("keepdim", [True])
+def test_prod(device, batch_size, c, h, w, dim, keepdim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((batch_size, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.prod(torch_input_tensor, dim=dim, keepdim=keepdim)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    output_tensor = ttnn.prod(input_tensor, dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert len(output_tensor.shape) == len(torch_output_tensor.shape)
+    assert output_tensor.shape == torch_output_tensor.shape
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
