@@ -1357,8 +1357,12 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         // Write program binaries to device if it hasn't previously been cached
         program.allocate_kernel_bin_buf_on_device(device);
         if (program.get_program_transfer_info().binary_data.size()) {
+            const BufferRegion buffer_region(0, program.get_kernels_buffer(device)->size());
             this->enqueue_write_buffer(
-                *program.get_kernels_buffer(device), program.get_program_transfer_info().binary_data.data(), false);
+                *program.get_kernels_buffer(device),
+                program.get_program_transfer_info().binary_data.data(),
+                buffer_region,
+                false);
         }
         program.set_program_binary_status(device->id(), ProgramBinaryStatus::InFlight);
     }
