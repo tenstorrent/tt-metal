@@ -231,7 +231,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
-        // /* writer kernel */
+        /* writer kernel */
         std::vector<uint32_t> writer_rt_args;
         writer_rt_args.insert(writer_rt_args.end(), coalesced_page_sizes.begin(), coalesced_page_sizes.end());
         writer_rt_args.insert(writer_rt_args.end(), coalesced_num_pages.begin(), coalesced_num_pages.end());
@@ -244,14 +244,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 
-    auto override_runtime_arguments_callback = [reader_kernel_id, reader_core_range](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensor) {};
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = {}};
 }
 
 }  // namespace ttnn::operations::dram_prefetcher

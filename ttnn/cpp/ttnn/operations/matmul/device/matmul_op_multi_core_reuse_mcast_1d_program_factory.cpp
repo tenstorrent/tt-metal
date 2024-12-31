@@ -1993,7 +1993,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         bool send_to_hop_core = i == 0 && use_hop_cores;
-
         const auto& core = cores[i];
         const auto& core_noc = device->worker_core_from_logical_core(core);
 
@@ -2017,13 +2016,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             (std::uint32_t)false,  // end_of_hop
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
-
-        /* in1 */
-        std::vector<uint32_t> mm_in1_args = {
-            i,  // ring_idx
-        };
-
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
 
         /* compute */
         std::vector<uint32_t> mm_kernel_compute_args = {
@@ -2079,7 +2071,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
                 UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
             }
             if (src1_sharded) {
-                if (global_cb == nullptr) {  // TODO: Check if this is correct
+                if (global_cb == nullptr) {
                     UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
                 }
             }
