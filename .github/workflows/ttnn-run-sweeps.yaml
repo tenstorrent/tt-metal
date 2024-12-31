@@ -129,6 +129,10 @@ on:
           - eltwise.unary.neg.neg
           - eltwise.unary.sinh.sinh
           - eltwise.unary.asinh.asinh
+          - eltwise.unary.acosh.acosh
+          - eltwise.unary.acosh.acosh_sharded
+          - eltwise.unary.acos.acos
+          - eltwise.unary.acos.acos_sharded
           - eltwise.unary.cosh.cosh
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
