@@ -126,7 +126,10 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
 
-    DPRINT << "llk_unpack_AB_matmul, " << base_address_a << ", " << base_address_b << ", " << tile_index_a << ", " << tile_index_b << ", " << tile_size_a << ", " << tile_size_b << ", " << static_cast<uint32_t>(partial_face_a) << ", " << static_cast<uint32_t>(partial_face_b) << ", " << ct_dim << ", " << rt_dim << ", " << kt_dim << ENDL();
+    DPRINT << "llk_unpack_AB_matmul, " << base_address_a + 1 << ", " << base_address_b + 1 << ", " << tile_index_a
+           << ", " << tile_index_b << ", " << tile_size_a << ", " << tile_size_b << ", "
+           << static_cast<uint32_t>(partial_face_a) << ", " << static_cast<uint32_t>(partial_face_b) << ", " << ct_dim
+           << ", " << rt_dim << ", " << kt_dim << ENDL();
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(
