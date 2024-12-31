@@ -354,20 +354,16 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
         div_up(conv_op_parallel_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
 
     if (act_block_h_override > 0) {
-        if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
-            log_info(LogOp, "act_block_h_override is set, but ignored when Width Sharding is used");
+        uint32_t act_block_h_override_ntiles = act_block_h_override / constants::TILE_HEIGHT;
+        if (padded_output_height_ntiles % act_block_h_override_ntiles == 0) {
+            act_block_h_ntiles = act_block_h_override_ntiles;
         } else {
-            uint32_t act_block_h_override_ntiles = act_block_h_override / constants::TILE_HEIGHT;
-            if (padded_output_height_ntiles % act_block_h_override_ntiles == 0) {
-                act_block_h_ntiles = act_block_h_override_ntiles;
-            } else {
-                log_info(
-                    LogOp,
-                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles {}, override will "
-                    "be ignored",
-                    act_block_h_override_ntiles,
-                    padded_output_height_ntiles);
-            }
+            log_info(
+                LogOp,
+                "act_block_h_override {} is not a valid override for padded_output_height_ntiles {}, override will "
+                "be ignored",
+                act_block_h_override_ntiles,
+                padded_output_height_ntiles);
         }
     }
 
@@ -836,7 +832,7 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
         shard_orientation,
         compute_grid_size);
 
-    if (conv_config.act_block_h_override == 0 && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED) {
+    if (conv_config.act_block_h_override == 0) {
         if (in_channels <= constants::TILE_WIDTH / 2 && conv_config.input_channels_alignment == constants::TILE_WIDTH &&
             !is_mm_conv && conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
             input_tensor_layout == Layout::ROW_MAJOR) {

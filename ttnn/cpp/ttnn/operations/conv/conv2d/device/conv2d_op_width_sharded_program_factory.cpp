@@ -435,6 +435,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         bias_in_dram = bias_buffer->buffer_type() == BufferType::DRAM;
     }
 
+    uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
+    uint32_t num_blocks_act_h_per_core =
+        (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
+    uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
+    uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
+
     auto output_shape = sliding_window_config.get_output_shape();
     uint32_t conv_output_size_h = output_shape[1];
     uint32_t conv_output_size_w = output_shape[2];
@@ -482,6 +488,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         log_debug(LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
         log_debug(LogOp, "out_subblock_h_ntiles_padded: {}", out_subblock_h_ntiles_padded);
         log_debug(LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
+        log_debug(LogOp, "num_blocks_weight_w_per_core: {}", num_blocks_weight_w_per_core);
     }
 
     // For debug
@@ -576,6 +583,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         (uint32_t)act_block_h_datums,
         (uint32_t)act_block_num_tiles,
         (uint32_t)input_num_cores,
+        (uint32_t)num_blocks_act_h_per_core,
         (uint32_t)per_core_num_blocks_act_w,
         (uint32_t)act_mcast_sender_semaphore,
         (uint32_t)act_mcast_receiver_semaphore,
@@ -598,14 +606,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             per_core_num_blocks_act_w,
         input_num_cores,            // other_core_weight_height_blocks
         per_core_num_blocks_act_w,  // this_core_weight_height_blocks
+        num_blocks_act_h_per_core,
         bias_cb,
         bias_in_dram};
-
-    uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-    uint32_t num_blocks_act_h_per_core =
-        (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
-    uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
-    uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
 
     std::map<string, string> writer_defines;
     std::map<string, string> writer_mcast_sender_defines;
