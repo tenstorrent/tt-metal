@@ -98,7 +98,7 @@ void MAIN {
          */
         ACQ();
         cb_reserve_back(cb_ex, 1 * onetile);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
@@ -107,7 +107,7 @@ void MAIN {
             // we don't pop cb_x until we compute Ex
         }
         pack_tile(dst0, cb_ex);
-        reduce_revert_delta();
+        reduce_revert_delta(cb_ex);
         REL();
 
         cb_push_back(cb_ex, 1);
@@ -154,7 +154,7 @@ void MAIN {
          * TODO(AP): can save space here by reusing CB
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_ex2);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         // cb_wait_front(cb_xmm, Wt);
@@ -167,7 +167,7 @@ void MAIN {
         }
         cb_pop_front(cb_xmm2, Wt);
         pack_tile(dst0, cb_ex2);
-        reduce_revert_delta();
+        reduce_revert_delta(cb_ex2);
         REL();
 
         cb_push_back(cb_ex2, 1);

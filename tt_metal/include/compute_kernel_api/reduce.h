@@ -16,7 +16,7 @@
 namespace ckernel {
 
 template <bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16) {
+ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
     UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb, icb_scaler)));
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
 
@@ -30,14 +30,14 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16) {
 }
 
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_init_short(uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16) {
+ALWI void reduce_init_short(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
     PACK((llk_pack_reduce_config_v2<reduce_dim, false, false, DST_ACCUM_MODE>(ocb)));
 }
 
 template <bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_init_delta(uint32_t ocb = 16, uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void reduce_init_delta(uint32_t ocb, uint32_t icb0 = 0, uint32_t icb1 = 1) {
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb0, icb1)));
 
@@ -60,7 +60,7 @@ ALWI void reduce_init_delta_math() {
 }
 
 template <ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_revert_delta(uint32_t ocb = 16) {
+ALWI void reduce_revert_delta(uint32_t ocb) {
     PACK((llk_pack_reduce_config_v2<reduce_dim, false, true, DST_ACCUM_MODE>(ocb)));
 }
 
