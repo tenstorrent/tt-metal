@@ -1,6 +1,8 @@
 # TT-Metalium Distributed
 
-Authors: Joseph Chu (jchu@tenstorrent.com), Aditya Saigal (asaigal@tenstorrent.com)
+Authors: TT-Metalium Scale-Out Team
+
+For questions and comments please use the [TT-Metalium Scale-Out Discord Server](https://discord.com/channels/863154240319258674/1321621251269328956)
 
 ## Architecture Specification
 
@@ -58,9 +60,9 @@ Version 1.0
 
 This document presents a specification for **TT-Mesh** and **TT-Distributed**, Tenstorrent’s scale-up and scale-out infrastructure to natively support workloads on multiple Tenstorrent hardware accelerators, potentially spanning multiple host servers.
 
-TT-Metalium provides a flexible programming model over a mesh of Tensix cores. The TT-Mesh and TT-Distributed layers, built on top of TT-Fabric, extend this programming model to a grid of Tensix cores spanning multiple devices connected over ethernet and controlled by multiple host processors. Through this, users are exposed to the same programming model as a single-chip, when systems are scaled-out.
+TT-Metalium provides a flexible programming model over a mesh of Tensix cores. The TT-Mesh and TT-Distributed layers, built on top of TT-Fabric, extend this programming model to a grid of Tensix cores spanning multiple devices connected over ethernet and controlled by multiple host processors. Through this, users are exposed to the same programming model as a single device, when systems are scaled-out.
 
-This infrastructure exposes a multi-chip system as a large virtual device with a distributed memory space and a set of programmable Tensix cores. Unlike conventional architectures, programming cores distributed over multiple host machines will not fundamentally alter the programming model.
+The key idea is to present a multi-device multi-host system as: 1) a large virtual device that has, 2) a distributed shared memory space, and 3) a set of programmable Tensix cores. Unlike conventional architectures, programming cores distributed over multiple devices or multiple host machines will not fundamentally alter the programming model.
 
 ![A diagram of a computer Description automatically generated](images/image001.png)
 
@@ -1016,18 +1018,18 @@ Below, we include snippets from both the TT-Mesh and TT-Metal examples to illust
 MeshConfig mesh_config_0 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 0}, .type=mesh_type};
 MeshConfig mesh_config_1 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 4}, .type=mesh_type};
 
-DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_0, 2 /* num_cqs */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1 /* num_command_queues */);
-DeviceHandle virtual_mesh_1 = CreateMeshDevice(mesh_config_1, 2 /* num_cqs */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1 /* num_command_queues */);
+DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_0, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
+DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_1, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
 ```
 
 *Directly create raw handles to two Devices.*
 
 ```cpp
- DeviceHandle device_0 = CreateDevice(
-                                0, /* device_id */
-                                2, /* num_hw_cqs */
-                                DEFAULT_L1_SMALL_SIZE,
-                                DEFAULT_TRACE_REGION_SIZE);
+DeviceHandle device_0 = CreateDevice(
+                            0, /* device_id */
+                            2, /* num_hw_cqs */
+                            DEFAULT_L1_SMALL_SIZE,
+                            DEFAULT_TRACE_REGION_SIZE);
 DeviceHandle device_1 = CreateDevice(
                             1, /* device_id */
                             2, /* num_hw_cqs */
@@ -1070,7 +1072,7 @@ DeviceLocalLayoutConfig per_device_buffer_config {
 ShardedBufferConfig distributed_buffer_config_virtual_mesh_0 {
     .mesh_device = virtual_mesh_0;
     .buffer_type = BufferType::DRAM,
-    .global_tensor_shape = global_tensor_shape,
+    .global_buffer_shape = global_buffer_shape,
     .distributed_shard_shape = device_shard_shape,
     .global_buffer_size = distributed_buffer_size,
     .device_shard_layout = per_device_buffer_config
@@ -1079,7 +1081,7 @@ ShardedBufferConfig distributed_buffer_config_virtual_mesh_0 {
 ShardedBufferConfig distributed_buffer_config_virtual_mesh_1 {
     .mesh_device = virtual_mesh_1;
     .buffer_type = BufferType::DRAM,
-    .global_tensor_shape = global_tensor_shape,
+    .global_buffer_shape = global_buffer_shape,
     .distributed_shard_shape = device_shard_shape,
     .global_buffer_size = distributed_buffer_size,
     .device_shard_layout = per_device_buffer_config
