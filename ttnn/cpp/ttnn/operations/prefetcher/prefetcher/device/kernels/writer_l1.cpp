@@ -21,12 +21,8 @@ void kernel_main() {
     constexpr uint32_t local_cb_id = tt::CBIndex::c_0;
     constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
 
-    /*
-        Note: Coalesced sizes -> wrt to receiver cores
-              sizes -> wrt to dram reader cores
-    */
-
     // Runtime args
+    // Note: Coalesced sizes -> wrt to receiver cores, sizes -> wrt to dram reader cores
     uint32_t rt_args_idx = 0;
     const uint32_t* coalesced_page_sizes = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
     const uint32_t* coalesced_num_pages = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
