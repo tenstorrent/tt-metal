@@ -301,8 +301,8 @@ def run_all_gather_impl(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
     ],
 )
-@pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather(
     t3k_mesh_device,
     # pcie_mesh_device,
@@ -395,8 +395,8 @@ def test_all_gather(
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_sharded(
     t3k_mesh_device,
     # pcie_mesh_device,
@@ -525,7 +525,7 @@ def test_line_all_gather_async_on_T3K_cols_transient_fabric_post_commit(
         ttnn.BufferType.DRAM,
     ],
 )
-@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
 def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
     t3k_mesh_device,
@@ -594,7 +594,7 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [2])
-@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("enable_async", [True])
 def test_line_all_gather_async_on_T3K_rows_transient_fabric_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -665,7 +665,7 @@ def test_line_all_gather_async_on_T3K_rows_transient_fabric_post_commit(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [2])
-@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("enable_async", [True])
 def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -733,7 +733,7 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     ],
 )
 @pytest.mark.parametrize("replication_factor1", [4])
-@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize(
     "num_devices2, num_links2, per_chip_output_shape2, dim2, layout2",
     [

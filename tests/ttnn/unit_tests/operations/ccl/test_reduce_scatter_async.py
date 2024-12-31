@@ -353,10 +353,10 @@ def test_line_reduce_scatter_async_post_commit(
         ttnn.BufferType.DRAM,
     ],
 )
-@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-def test_line_reduce_scatter_async_on_TG_cols_post_commit(
+def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
@@ -392,6 +392,75 @@ def test_line_reduce_scatter_async_on_TG_cols_post_commit(
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=0,
+        use_reduce_scatter_async=True,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
+    )
+
+
+@pytest.mark.skip(
+    "persistent fabric test with cluster-axis API and multiple concurrent reduce_scatter instances not enabled yet"
+)
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, per_chip_output_shape, dim, layout",
+    [
+        (4, 1, [1, 4, 32, 1280], 1, ttnn.TILE_LAYOUT),
+        (4, 1, [4, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.DRAM,
+    ],
+)
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("replication_factor", [2])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    dim,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    replication_factor,
+    num_iters=1,
+):
+    if len(t3k_mesh_device.get_devices()) < 8:
+        pytest.skip("Not T3K!")
+
+    run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        dim,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        use_program_cache,
+        function_level_defaults,
+        enable_async=enable_async,
+        num_iters=num_iters,
+        num_reduce_scatter_instances=replication_factor,
+        cluster_axis=1,
         use_reduce_scatter_async=True,
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
