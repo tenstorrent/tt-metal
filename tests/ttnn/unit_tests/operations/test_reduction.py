@@ -55,7 +55,7 @@ def test_var(device, batch_size, h, w, dim):
 @pytest.mark.parametrize("h", [67])
 @pytest.mark.parametrize("w", [77])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
-@pytest.mark.parametrize("keepdim", [True])
+@pytest.mark.parametrize("keepdim", [True, False])
 def test_prod(device, batch_size, c, h, w, dim, keepdim):
     torch.manual_seed(0)
 
