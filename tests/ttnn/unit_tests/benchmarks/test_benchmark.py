@@ -9,7 +9,7 @@ import csv
 import pytest
 import torch
 import ttnn
-from models.utility_functions import run_for_wormhole_b0, is_grayskull, profiler
+from models.utility_functions import run_for_wormhole_b0, is_grayskull, profiler, is_blackhole, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from pathlib import Path
 import os
@@ -156,14 +156,12 @@ matmul_configs = [
 
 # @pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
-@pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf(
     device,
-    grid_size,
     tile_h,
     tile_w,
     num_warmup_iterations,
@@ -213,6 +211,14 @@ def test_matmul_2d_host_perf(
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
                 profiler.clear()
                 rm(profiler_log_path)
+
+                # TODO add support for BH full grid (14, 10) when dispatch from ETH is enabled
+                grid_size = (13, 10) if is_blackhole() else (8, 8)
+
+                # Scale input size to match compute grid size - input sizes are based on 8x8 compute grid
+                m = (m // 8) * grid_size[1]
+                n = (n // 8) * grid_size[0]
+                k = (k // 8) * grid_size[0]
 
                 in0_shape = [1, 1, m, k]
                 in1_shape = [1, 1, k, n]
@@ -384,7 +390,7 @@ def test_matmul_2d_host_perf(
                 utilization_full_grid_percentage = f"{utilization_full_grid * 100:.2f}%"
                 utilization_user_grid_percentage = f"{utilization_user_grid * 100:.2f}%"
                 logger.info(
-                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user grid): {utilization_user_grid_percentage}, utilization (vs 8x8 grid): {utilization_full_grid_percentage}"
+                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user grid): {utilization_user_grid_percentage}, utilization (vs {compute_grid_size.x}x{compute_grid_size.y} grid): {utilization_full_grid_percentage}"
                 )
 
                 output_tensor = ttnn.to_torch(output_t)
@@ -442,14 +448,12 @@ matmul_configs_oob = [
 
 # @pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
-@pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf_out_of_box(
     device,
-    grid_size,
     tile_h,
     tile_w,
     num_warmup_iterations,
@@ -498,6 +502,14 @@ def test_matmul_2d_host_perf_out_of_box(
             for m, k, n in matmul_shapes:
                 profiler.clear()
                 rm(profiler_log_path)
+
+                # TODO add support for BH full grid (14, 10) when dispatch from ETH is enabled
+                grid_size = (13, 10) if is_blackhole() else (8, 8)
+
+                # Scale input size to match compute grid size - input sizes are based on 8x8 compute grid
+                m = (m // 8) * grid_size[1]
+                n = (n // 8) * grid_size[0]
+                k = (k // 8) * grid_size[0]
 
                 in0_shape = [1, 1, m, k]
                 in1_shape = [1, 1, k, n]
@@ -571,7 +583,7 @@ def test_matmul_2d_host_perf_out_of_box(
                 utilization_full_grid_percentage = f"{utilization_full_grid * 100:.2f}%"
                 utilization_user_grid_percentage = f"{utilization_user_grid * 100:.2f}%"
                 logger.info(
-                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user grid): {utilization_user_grid_percentage}, utilization (vs 8x8 grid): {utilization_full_grid_percentage}"
+                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user grid): {utilization_user_grid_percentage}, utilization (vs {compute_grid_size.x}x{compute_grid_size.y} grid): {utilization_full_grid_percentage}"
                 )
 
                 output_tensor = ttnn.to_torch(output_t)
