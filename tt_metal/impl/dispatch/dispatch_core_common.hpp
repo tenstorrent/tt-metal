@@ -6,7 +6,6 @@
 
 #include "common/core_descriptor.hpp"
 #include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/kernels/data_types.hpp"
 #include "tt_metal/llrt/get_platform_architecture.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
@@ -32,10 +31,6 @@ enum DispatchWorkerType : uint32_t {
     PACKET_ROUTER_DEMUX = 16,
     COUNT = 17
 };
-
-// NOC ID used by dispatch kernels to communicate with downstream cores. This parameter
-// is required when setting up Command Queue objects on host.
-static constexpr NOC dispatch_downstream_noc = NOC::NOC_0;
 
 enum class DispatchCoreType : uint32_t { WORKER, ETH, COUNT };
 
