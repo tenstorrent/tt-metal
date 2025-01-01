@@ -15,7 +15,7 @@
 
 namespace tt::tt_metal {
 
-using KernelHandle = std::uint32_t;
+using KernelHandle = std::uint16_t;
 
 struct DataMovementConfig {
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;  // For data transfer kernels: NCRISC & BRISC

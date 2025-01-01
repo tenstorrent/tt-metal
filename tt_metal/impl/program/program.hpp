@@ -12,7 +12,6 @@
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
-#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
 #include "dev_msgs.h"
 
 namespace tt {
@@ -42,11 +41,6 @@ CBHandle CreateCircularBuffer(
 
 }  // namespace experimental
 }  // namespace v1
-
-namespace program_utils {
-    void assemble_device_commands(
-        ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id);
-} // namespace program_utils
 
 class EnqueueProgramCommand;
 class HWCommandQueue;
@@ -138,8 +132,7 @@ class Program {
     const std::vector< Semaphore > & semaphores() const;
 
     KernelGroup * kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index);
-    std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
-    std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
+    std::vector<KernelGroup>& get_kernel_groups(uint32_t programmable_core_type_index);
     void add_buffer(std::shared_ptr<Buffer> buf);
     void release_buffers();
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
@@ -157,8 +150,6 @@ class Program {
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
     void compile(Device * device, bool fd_bootloader_mode = false);
-
-    void generate_dispatch_commands(Device* device);
 
     void invalidate_circular_buffer_allocation();
 
@@ -183,7 +174,7 @@ class Program {
     void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
 
     const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
-    void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
+
    private:
     std::unique_ptr<detail::Program_> pimpl_;
 
@@ -209,23 +200,20 @@ class Program {
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
-    void set_launch_msg_sem_offsets();
-    void populate_dispatch_data(Device* device);
-    const ProgramTransferInfo &get_program_transfer_info() const noexcept;
-    std::shared_ptr<Buffer> get_kernels_buffer(Device* device) const noexcept;
-    std::vector<uint32_t> &get_program_config_sizes() const noexcept;
+    friend void detail::AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
+
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
-    std::unordered_map<uint64_t, ProgramCommandSequence> &get_cached_program_command_sequences() noexcept;
     bool kernel_binary_always_stored_in_ringbuffer();
-
-    friend void detail::AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
-    friend void program_utils::assemble_device_commands(
-        ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id);
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend detail::Internal_;
+
+    const ProgramTransferInfo &get_program_transfer_info() const noexcept;
+    std::shared_ptr<Buffer> get_kernels_buffer(Device* device) const noexcept;
+    const std::vector<uint32_t> &get_program_config_sizes() const noexcept;
+    std::unordered_map<uint64_t, ProgramCommandSequence> &get_cached_program_command_sequences() noexcept;
 };
 
 }  // namespace v0

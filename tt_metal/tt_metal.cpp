@@ -801,15 +801,15 @@ void WriteRuntimeArgsToDevice(Device* device, Program& program) {
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         uint32_t processor_classes = hal.get_processor_classes_count(index);
-        for (const auto& kg : program.get_kernel_groups(index)) {
-            uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
-            for (const CoreRange& core_range : kg->core_ranges.ranges()) {
+        for (auto& kg : program.get_kernel_groups(index)) {
+            uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base[index];
+            for (const CoreRange& core_range : kg.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core(x, y);
                         auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                         for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-                            auto& optional_id = kg->kernel_ids[dispatch_class];
+                            auto& optional_id = kg.kernel_ids[dispatch_class];
                             if (optional_id) {
                                 const auto& kernel = detail::GetKernel(program, optional_id.value());
                                 const auto& rt_args = kernel->runtime_args(logical_core);
@@ -817,7 +817,7 @@ void WriteRuntimeArgsToDevice(Device* device, Program& program) {
                                 if (rt_args.size() > 0) {
                                     auto rt_args_addr =
                                         kernel_config_base +
-                                        kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset;
+                                        kg.launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset;
                                     log_trace(
                                         tt::LogMetal,
                                         "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -835,7 +835,7 @@ void WriteRuntimeArgsToDevice(Device* device, Program& program) {
                                 if (common_rt_args.size() > 0) {
                                     auto common_rt_args_addr =
                                         kernel_config_base +
-                                        kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset;
+                                        kg.launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset;
                                     log_trace(
                                         tt::LogMetal,
                                         "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
