@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sdpa_decode_program_factory.hpp"
+#include "speculative_sdpa_decode_program_factory.hpp"
 
 #include <optional>
 
 #include "impl/buffers/buffer.hpp"
-#include "sdpa_decode_op.hpp"
+#include "speculative_sdpa_decode_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -18,23 +18,29 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::operations::experimental::transformer::detail {
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-operation::ProgramWithCallbacks sdpa_decode_multi_core(
+operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,
     std::optional<const Tensor> cur_pos_tensor,
     std::optional<const Tensor> page_table_tensor,
     std::optional<const Tensor> attn_mask,
-    const Tensor& output_tensor,
+    std::optional<const Tensor> priority_tensor,
+    const Tensor& full_output_tensor,
+    const Tensor& speculated_output_tensor,
+    const Tensor& l2_dist_tensor,
+    const Tensor& l2_norm_tensor,
     bool is_causal,
     const std::vector<uint32_t>& cur_pos_ids,
     std::optional<float> scale,
+    std::optional<float> lambda,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config,
     const uint32_t k_chunk_size,
+    const uint32_t speculative_chunk_size,
     std::optional<bool> share_cache) {
     /*
     Q: 1 x B x PNH x DH
@@ -71,8 +77,13 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t DHt = DH / TILE_WIDTH;
     uint32_t PNHt = PNH / TILE_HEIGHT;
     uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
+    uint32_t Spec_chunk_t = speculative_chunk_size / TILE_HEIGHT;
     bool is_q_sharded = input_tensor_q.is_sharded();
-    bool is_output_sharded = output_tensor.is_sharded();
+    bool is_output_sharded = full_output_tensor.is_sharded();
+    bool is_spec_output_sharded = speculated_output_tensor.is_sharded();
+    TT_FATAL(!is_output_sharded, "sharded output is not yet supported for speculative SDPA decode");
+    TT_FATAL(
+        is_output_sharded == is_spec_output_sharded, "Output and speculative output must have the same memory config");
     if (!share_cache.has_value()) {
         // default share_cache to false
         share_cache = false;
@@ -108,37 +119,47 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto q_buffer = input_tensor_q.buffer();
     auto k_buffer = input_tensor_k.buffer();
     auto v_buffer = input_tensor_v.buffer();
-    auto out0_buffer = output_tensor.buffer();
+    auto out0_buffer = full_output_tensor.buffer();
+    auto out1_buffer = speculated_output_tensor.buffer();
+    auto l2_dist_buffer = l2_dist_tensor.buffer();
+    auto l2_norm_buffer = l2_norm_tensor.buffer();
 
     bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     bool use_attention_mask = attn_mask.has_value();
+    bool use_priority_tensor = priority_tensor.has_value();
 
     log_debug("use_cur_pos_tensor: {}", use_cur_pos_tensor);
     log_debug("use_attention_mask: {}", use_attention_mask);
+    log_debug("use_priority_tensor: {}", use_priority_tensor);
 
     // Parallelization scheme
     // We will assign cores to batches
     // Split to cores
+    CoreCoord device_grid_size = device->compute_with_storage_grid_size();
+    TT_FATAL(device_grid_size.y >= 2, "Speculative SDPA decode requires at least 2 columns in devicecompute grid size");
+    CoreCoord ccl_core = CoreCoord(device_grid_size.x, device_grid_size.y);  // dedicate the last column for ccl
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
-                                                     : device->compute_with_storage_grid_size();
+                                                     : CoreCoord(device_grid_size.x, device_grid_size.y - 1);
+    log_info("device_grid_size: {}", device_grid_size);
+    log_info("grid_size: {}", grid_size);
+    log_info("ccl_core: {}", ccl_core);
 
+    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores_available = grid_size.x * grid_size.y;
 
-    CoreRangeSet core_grid;
-    bool on_subcoregrid = false;
-    if (program_config.has_value() && program_config->sub_core_grids.has_value()) {
-        core_grid = program_config->sub_core_grids.value();
-        TT_FATAL(
-            core_grid.num_cores() == num_cores_available,
-            "Number of cores in sub_core_grids must match the number of cores available");
-        on_subcoregrid = true;
-    } else {
-        core_grid = CoreRangeSet(std::vector{CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1})});
-    }
-
-    uint32_t num_cores_in_grid = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
-    TT_FATAL(num_cores_available <= num_cores_in_grid, "Expected number of cores available to be less than or equal to the number of cores in the grid, got {} and {}", num_cores_available, num_cores_in_grid);
-    TT_FATAL(num_cores_available >= B, "Expect number of cores available to be greater or equal to batch size, got {} and {}", num_cores_available, B);
+    uint32_t num_cores_in_grid =
+        device->compute_with_storage_grid_size().x * (device->compute_with_storage_grid_size().y - 1);
+    TT_FATAL(
+        num_cores_available <= num_cores_in_grid,
+        "Expected number of cores available to be less than or equal to the number of cores in the available compute "
+        "grid (note that the last column is dedicated for ccl), got {} and {}",
+        num_cores_available,
+        num_cores_in_grid);
+    TT_FATAL(
+        num_cores_available >= B,
+        "Expect number of cores available to be greater or equal to batch size, got {} and {}",
+        num_cores_available,
+        B);
 
     // balance the number of cores to use based on batch
     uint32_t max_num_cores_for_compute = program_config->max_cores_per_head_batch * B * num_kv_heads;
@@ -153,6 +174,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     num_cores_per_batch = num_active_cores / B;
 
     TT_FATAL(
+        num_heads_per_core == 1,
+        "num_heads_per_core must be 1, got {}. > 1 heads per core is not supported yet for speculative SDPA decode",
+        num_heads_per_core);
+
+    TT_FATAL(
         ((num_cores_per_head >= 1) && (num_heads_per_core == 1)) ||
             ((num_cores_per_head == 1) && (num_heads_per_core >= 1)),
         "This assertion should always be true, unless core assignment logic is wrong");
@@ -165,67 +191,46 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // h_worker2) head_reducer2 to head_reducerk then send the result to head_reducer1, which is also the batch_output1
     std::vector<CoreCoord> core_group;
     std::vector<CoreCoord> core_group_idle;
-    if (on_subcoregrid) {
-        if (is_q_sharded || is_output_sharded) {
-            auto cores_vec = corerange_to_cores(core_grid, num_cores_available, true);
-            int reducer_idx = 0;
-            int worker_idx = num_output_cores;
-            for (int i = 0; i < num_cores_available; ++i) {
-                if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
-                    i < num_active_cores ? core_group.push_back(cores_vec[reducer_idx])
-                                         : core_group_idle.push_back(cores_vec[reducer_idx]);
-                    reducer_idx++;
-                } else {
-                    i < num_active_cores ? core_group.push_back(cores_vec[worker_idx])
-                                         : core_group_idle.push_back(cores_vec[worker_idx]);
-                    worker_idx++;
-                }
+    if (is_q_sharded || is_output_sharded) {
+        int reducer_idx = 0;
+        int worker_idx = num_output_cores;
+
+        for (int i = 0; i < num_cores_available; ++i) {
+            CoreCoord core;
+            if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
+                core = {reducer_idx % grid_size.x, reducer_idx / grid_size.x};
+                reducer_idx++;
+            } else {
+                core = {worker_idx % grid_size.x, worker_idx / grid_size.x};
+                worker_idx++;
             }
-        } else {
-            TT_FATAL(false, "We only support SDPA on subcoregrids with sharded Q and sharded output");
+            if (i < num_active_cores) {
+                core_group.push_back(core);
+            } else {
+                core_group_idle.push_back(core);
+            }
         }
     } else {
-        if (is_q_sharded || is_output_sharded) {
-            int reducer_idx = 0;
-            int worker_idx = num_output_cores;
-
-            for (int i = 0; i < num_cores_available; ++i) {
-                CoreCoord core;
-                if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
-                    core = {reducer_idx % grid_size.x, reducer_idx / grid_size.x};
-                    reducer_idx++;
-                } else {
-                    core = {worker_idx % grid_size.x, worker_idx / grid_size.x};
-                    worker_idx++;
-                }
-                if (i < num_active_cores) {
-                    core_group.push_back(core);
-                } else {
-                    core_group_idle.push_back(core);
-                }
-            }
-        } else {
-            for (int i = 0; i < num_cores_available; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
-                if (i < num_active_cores) {
-                    core_group.push_back(core);
-                } else {
-                    core_group_idle.push_back(core);
-                }
+        for (int i = 0; i < num_cores_available; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+            if (i < num_active_cores) {
+                core_group.push_back(core);
+            } else {
+                core_group_idle.push_back(core);
             }
         }
     }
 
-    log_debug("Parallelization scheme:");
-    log_debug("num_cores_available: {}", num_cores_available);
-    log_debug("num_cores_per_batch: {}", num_cores_per_batch);
-    log_debug("num_cores_per_head: {}", num_cores_per_head);
-    log_debug("num_heads_per_core: {}", num_heads_per_core);
-    log_debug("num_active_cores: {}", num_active_cores);
-    log_debug("num_reducer_cores: {}", num_reducer_cores);
-    log_debug("num_output_cores: {}", num_output_cores);
-    log_debug("core_group: {}", core_group);
-    log_debug("core_group_idle: {}", core_group_idle);
+    log_info("Parallelization scheme:");
+    log_info("num_cores_available: {}", num_cores_available);
+    log_info("num_cores_per_batch: {}", num_cores_per_batch);
+    log_info("num_cores_per_head: {}", num_cores_per_head);
+    log_info("num_heads_per_core: {}", num_heads_per_core);
+    log_info("num_active_cores: {}", num_active_cores);
+    log_info("num_reducer_cores: {}", num_reducer_cores);
+    log_info("num_output_cores: {}", num_output_cores);
+    log_info("core_group: {}", core_group);
+    log_info("core_group_idle: {}", core_group_idle);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = PNHt * DHt;
@@ -321,7 +326,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     tt::DataFormat mask_df = use_attention_mask
                                  ? tt_metal::datatype_to_dataformat_converter(attn_mask.value().get_dtype())
                                  : tt::DataFormat::Float16_b;
-    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(full_output_tensor.get_dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;
     // tt::DataFormat im_df = tt::DataFormat::Float16_b;
@@ -335,7 +340,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t scalar_tile_size = tt_metal::detail::TileSize(scalar_df);
     uint32_t im_tile_size = tt_metal::detail::TileSize(im_df);
     uint32_t stats_tile_size = tt_metal::detail::TileSize(stats_df);
-    uint32_t intermed_output_tiles = (out0_t + 2 * PNHt) * (num_cores_per_batch - 1);
+    uint32_t intermed_output_tiles = (out0_t + 2 * PNHt) * (num_cores_per_batch - 1 + 1 /* +1 for speculative output*/);
 
     uint32_t pos_tensor_tile_size = 0;
     uint32_t log2_page_size = 0;
@@ -363,8 +368,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         page_table_stick_size = page_table_buffer->aligned_page_size();
 
         // cb page_table
-        auto c_in9_config = CircularBufferConfig(page_table_stick_size, {{CBIndex::c_9, page_table_df}})
-                                .set_page_size(CBIndex::c_9, page_table_stick_size);
+        auto c_in9_config = CircularBufferConfig(page_table_tile_size, {{CBIndex::c_9, page_table_df}})
+                                .set_page_size(CBIndex::c_9, page_table_tile_size);
         auto cb_in9_id = CreateCircularBuffer(program, core_grid, c_in9_config);
     }
 
@@ -515,6 +520,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     } scale_union;
     scale_union.f = scale.value_or(1.0f);
 
+    union {
+        float f;
+        uint32_t u;
+    } lambda_union;
+    lambda_union.f = lambda.value_or(0.2f);
+
     // Create core groups for reduce cores
     std::vector<uint32_t> reduce_core_physical_xs;
     std::vector<uint32_t> reduce_core_physical_ys;
@@ -567,6 +578,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug("output_core_physical_xs: {}", output_core_physical_xs);
     log_debug("output_core_physical_ys: {}", output_core_physical_ys);
 
+    /*
+    TODO:
+    - Add compile time args for speculative compute (Done)
+    - speculative core assignment (dynamic rt args), actually, this could be done in the kernel as well. (minimal
+    functional)
+    - resizing buffers for intermediates (Done)
+    */
+
     // Common Compile time Args
     auto reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
     auto output_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
@@ -591,7 +610,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_output_cores,
         is_causal,
         use_attention_mask,
-    };
+        Spec_chunk_t,
+        output_semaphore_id,
+        is_output_sharded};
 
     std::vector<uint32_t> writer_compile_time_args_common = {
         B,
@@ -613,9 +634,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_heads_per_core,
         num_reducer_cores,
         num_output_cores,
-        output_tensor.element_size(),
+        full_output_tensor.element_size(),
         is_causal,
-    };
+        Spec_chunk_t,
+        use_priority_tensor,
+        lambda_union.u};
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
@@ -640,7 +663,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_heads_per_core,
         is_causal,
         use_attention_mask,
-    };
+        Spec_chunk_t,
+        num_q_heads};
 
     std::map<string, string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -656,7 +680,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // Compute
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/compute/"
+        "speculative_sdpa_flash_decode.cpp",
         core_grid,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -668,14 +693,16 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // Reader
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/dataflow/"
+        "speculative_reader_decode_all.cpp",
         core_grid,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common, defines));
 
     // Writer
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/dataflow/"
+        "speculative_writer_decode_all.cpp",
         core_grid,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args_common, defines));
 
@@ -685,7 +712,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
     uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
     uint32_t attn_mask_addr = use_attention_mask ? attn_mask.value().buffer()->address() : 0;
+    uint32_t priority_addr = use_priority_tensor ? priority_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
+    uint32_t out_spec_addr = out1_buffer->address();
+    uint32_t l2_dist_addr = l2_dist_buffer->address();
+    uint32_t l2_norm_addr = l2_norm_buffer->address();
 
     // Set rt args
     for (uint32_t i = 0; i < num_active_cores; ++i) {
@@ -721,6 +752,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             pos_addr,
             page_table_addr,
             attn_mask_addr,
+            out_addr,
+            out_spec_addr,
             page_table_stick_size,
             do_reduce,
             do_output,
@@ -735,6 +768,10 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         // writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             out_addr,
+            out_spec_addr,
+            l2_dist_addr,
+            l2_norm_addr,
+            priority_addr,
             worker_id_for_reduce,
             worker_id_for_output,
             do_reduce,
@@ -775,114 +812,129 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         }
     }
 
-    auto override_runtime_arguments_callback =
-        [num_active_cores,
-         core_group,
-         reader_kernels_id,
-         writer_kernels_id,
-         compute_kernels_id,
-         num_cores_per_batch,
-         num_cores_per_head,
-         num_output_cores,
-         is_output_sharded,
-         cb_out4_id,
-         B,
-         use_cur_pos_tensor,
-         use_attention_mask,
-         is_paged_attention,
-         is_causal](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const auto cur_pos_ids =
-                static_cast<const ttnn::operations::transformer::ScaledDotProductAttentionDecode*>(operation)->cur_pos;
+    auto override_runtime_arguments_callback = [num_active_cores,
+                                                core_group,
+                                                reader_kernels_id,
+                                                writer_kernels_id,
+                                                compute_kernels_id,
+                                                num_cores_per_batch,
+                                                num_cores_per_head,
+                                                num_output_cores,
+                                                is_output_sharded,
+                                                cb_out4_id,
+                                                B,
+                                                use_cur_pos_tensor,
+                                                use_attention_mask,
+                                                is_paged_attention,
+                                                is_causal,
+                                                use_priority_tensor](
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&
+                                                       optional_input_tensors,
+                                                   const std::vector<Tensor>& output_tensors) {
+        const auto cur_pos_ids =
+            static_cast<const ttnn::operations::experimental::transformer::SpeculativeScaledDotProductAttentionDecode*>(
+                operation)
+                ->cur_pos;
 
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
+        auto q_buffer = input_tensors.at(0).buffer();
+        auto k_buffer = input_tensors.at(1).buffer();
+        auto v_buffer = input_tensors.at(2).buffer();
 
-            auto out0_buffer = output_tensors.at(0).buffer();
-            uint32_t q_addr = q_buffer->address();
-            uint32_t k_addr = k_buffer->address();
-            uint32_t v_addr = v_buffer->address();
-            uint32_t pos_addr = use_cur_pos_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-            uint32_t page_table_addr =
-                is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
-            uint32_t attn_mask_addr = use_attention_mask ? optional_input_tensors.at(2).value().buffer()->address() : 0;
-            auto page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
-            uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
-            uint32_t out_addr = out0_buffer->address();
+        auto out0_buffer = output_tensors.at(0).buffer();
+        auto out1_buffer = output_tensors.at(1).buffer();
+        auto l2_dist_buffer = output_tensors.at(2).buffer();
+        auto l2_norm_buffer = output_tensors.at(3).buffer();
+        uint32_t q_addr = q_buffer->address();
+        uint32_t k_addr = k_buffer->address();
+        uint32_t v_addr = v_buffer->address();
+        uint32_t pos_addr = use_cur_pos_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
+        uint32_t page_table_addr = is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
+        uint32_t attn_mask_addr = use_attention_mask ? optional_input_tensors.at(2).value().buffer()->address() : 0;
+        uint32_t priority_addr = use_priority_tensor ? optional_input_tensors.at(3).value().buffer()->address() : 0;
+        auto page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
+        uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
+        uint32_t out_addr = out0_buffer->address();
+        uint32_t out_spec_addr = out1_buffer->address();
+        uint32_t l2_dist_addr = l2_dist_buffer->address();
+        uint32_t l2_norm_addr = l2_norm_buffer->address();
 
-            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-            auto& compute_args_by_core = GetRuntimeArgs(program, compute_kernels_id);
+        auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
+        auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
+        auto& compute_args_by_core = GetRuntimeArgs(program, compute_kernels_id);
 
-            // Set rt args
-            for (uint32_t i = 0; i < num_active_cores; ++i) {
-                CoreCoord core = core_group[i];
-                uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : i % num_cores_per_head - 1;
-                uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
-                bool do_reduce = (worker_id_for_reduce == -1);
-                bool do_output = (worker_id_for_output == -1);
-                uint32_t cur_head = (num_cores_per_head == 0) ? 0 : (i % num_cores_per_batch) / num_cores_per_head;
-                uint32_t cur_batch = i / num_cores_per_batch;
-                uint32_t core_num_in_reduce = (num_cores_per_head == 0) ? 0 : i % num_cores_per_head;
-                uint32_t core_num_in_output = i % num_cores_per_batch;
-                uint32_t cur_pos = (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at(cur_batch);
+        // Set rt args
+        for (uint32_t i = 0; i < num_active_cores; ++i) {
+            CoreCoord core = core_group[i];
+            uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : i % num_cores_per_head - 1;
+            uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
+            bool do_reduce = (worker_id_for_reduce == -1);
+            bool do_output = (worker_id_for_output == -1);
+            uint32_t cur_head = (num_cores_per_head == 0) ? 0 : (i % num_cores_per_batch) / num_cores_per_head;
+            uint32_t cur_batch = i / num_cores_per_batch;
+            uint32_t core_num_in_reduce = (num_cores_per_head == 0) ? 0 : i % num_cores_per_head;
+            uint32_t core_num_in_output = i % num_cores_per_batch;
+            uint32_t cur_pos = (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at(cur_batch);
 
-                auto& reader_args = reader_args_by_core[core.x][core.y];
-                auto& writer_args = writer_args_by_core[core.x][core.y];
-                auto& compute_args = compute_args_by_core[core.x][core.y];
+            auto& reader_args = reader_args_by_core[core.x][core.y];
+            auto& writer_args = writer_args_by_core[core.x][core.y];
+            auto& compute_args = compute_args_by_core[core.x][core.y];
 
-                // reader runtime args
-                uint32_t arg_idx = 0;
-                reader_args[arg_idx++] = q_addr;
-                reader_args[arg_idx++] = k_addr;
-                reader_args[arg_idx++] = v_addr;
-                reader_args[arg_idx++] = pos_addr;
-                reader_args[arg_idx++] = page_table_addr;
-                reader_args[arg_idx++] = attn_mask_addr;
-                reader_args[arg_idx++] = page_table_stick_size;
-                reader_args[arg_idx++] = do_reduce;
-                reader_args[arg_idx++] = do_output;
-                reader_args[arg_idx++] = cur_head;
-                reader_args[arg_idx++] = cur_batch;
-                reader_args[arg_idx++] = core_num_in_reduce;
-                reader_args[arg_idx++] = core_num_in_output;
-                reader_args[arg_idx++] = cur_pos;
+            // reader runtime args
+            uint32_t arg_idx = 0;
+            reader_args[arg_idx++] = q_addr;
+            reader_args[arg_idx++] = k_addr;
+            reader_args[arg_idx++] = v_addr;
+            reader_args[arg_idx++] = pos_addr;
+            reader_args[arg_idx++] = page_table_addr;
+            reader_args[arg_idx++] = attn_mask_addr;
+            reader_args[arg_idx++] = out_addr;
+            reader_args[arg_idx++] = out_spec_addr;
+            reader_args[arg_idx++] = page_table_stick_size;
+            reader_args[arg_idx++] = do_reduce;
+            reader_args[arg_idx++] = do_output;
+            reader_args[arg_idx++] = cur_head;
+            reader_args[arg_idx++] = cur_batch;
+            reader_args[arg_idx++] = core_num_in_reduce;
+            reader_args[arg_idx++] = core_num_in_output;
+            reader_args[arg_idx++] = cur_pos;
 
-                // writer runtime args
-                arg_idx = 0;
-                writer_args[arg_idx++] = out_addr;
-                writer_args[arg_idx++] = worker_id_for_reduce;
-                writer_args[arg_idx++] = worker_id_for_output;
-                writer_args[arg_idx++] = do_reduce;
-                writer_args[arg_idx++] = do_output;
-                writer_args[arg_idx++] = cur_head;
-                writer_args[arg_idx++] = cur_batch;
-                writer_args[arg_idx++] = core_num_in_reduce;
-                writer_args[arg_idx++] = core_num_in_output;
-                writer_args[arg_idx++] = cur_pos;
+            // writer runtime args
+            arg_idx = 0;
+            writer_args[arg_idx++] = out_addr;
+            writer_args[arg_idx++] = out_spec_addr;
+            writer_args[arg_idx++] = l2_dist_addr;
+            writer_args[arg_idx++] = l2_norm_addr;
+            writer_args[arg_idx++] = priority_addr;
+            writer_args[arg_idx++] = worker_id_for_reduce;
+            writer_args[arg_idx++] = worker_id_for_output;
+            writer_args[arg_idx++] = do_reduce;
+            writer_args[arg_idx++] = do_output;
+            writer_args[arg_idx++] = cur_head;
+            writer_args[arg_idx++] = cur_batch;
+            writer_args[arg_idx++] = core_num_in_reduce;
+            writer_args[arg_idx++] = core_num_in_output;
+            writer_args[arg_idx++] = cur_pos;
 
-                // compute runtime args
-                arg_idx = 0;
-                compute_args[arg_idx++] = do_reduce;
-                compute_args[arg_idx++] = do_output;
-                compute_args[arg_idx++] = cur_head;
-                compute_args[arg_idx++] = cur_batch;
-                compute_args[arg_idx++] = core_num_in_reduce;
-                compute_args[arg_idx++] = core_num_in_output;
-                compute_args[arg_idx++] = cur_pos;
-            }
+            // compute runtime args
+            arg_idx = 0;
+            compute_args[arg_idx++] = do_reduce;
+            compute_args[arg_idx++] = do_output;
+            compute_args[arg_idx++] = cur_head;
+            compute_args[arg_idx++] = cur_batch;
+            compute_args[arg_idx++] = core_num_in_reduce;
+            compute_args[arg_idx++] = core_num_in_output;
+            compute_args[arg_idx++] = cur_pos;
+        }
 
-            if (is_output_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_out4_id, *out0_buffer);
-            }
-        };
+        if (is_output_sharded) {
+            UpdateDynamicCircularBufferAddress(program, cb_out4_id, *out0_buffer);
+        }
+    };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace ttnn::operations::transformer::detail
+}  // namespace ttnn::operations::experimental::transformer::detail

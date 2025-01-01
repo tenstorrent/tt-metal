@@ -68,6 +68,49 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     cb_push_back(out_cb, num_tiles);
 }
 
+template <uint32_t p>
+void pow_block_inplace(uint32_t in0, uint32_t num_tiles) {
+    // inputs come in full, outputs go out full
+    copy_tile_to_dst_init_short(in0);
+    power_tile_init();
+
+    constexpr uint32_t dst_reg_0 = 0;
+    cb_wait_front(in0, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        acquire_dst();
+        copy_tile(in0, 0, dst_reg_0);
+        cb_pop_front(in0, 1);
+        cb_reserve_back(in0, 1);
+        power_tile(dst_reg_0, p);
+        pack_tile(dst_reg_0, in0);
+        cb_push_back(in0, 1);
+        release_dst();
+    }
+}
+
+template <bool pop_in1>
+void sub_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    // Precondition: in0_cb and in1_cb have num_tiles produced
+    // Postcondition: in0_cb has num_tiles produced
+    // Postcondition: in1_cb has num_tiles consumed
+
+    sub_tiles_init();
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        sub_tiles(in0_cb, in1_cb, 0, i, 0);
+        cb_pop_front(in0_cb, 1);
+        cb_reserve_back(in0_cb, 1);
+        pack_tile(0, in0_cb);
+        cb_push_back(in0_cb, 1);
+        release_dst();
+    }
+    if (pop_in1) {
+        cb_pop_front(in1_cb, num_tiles);
+    }
+}
+
 template <
     PoolType pool_type,
     ReduceDim reduce_dim,
@@ -274,6 +317,25 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 }
 
+void mul_block_inplace_reuse_in1(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    // Precondition: in0_cb and in1_cb have num_tiles produced
+    // Postcondition: in0_cb has num_tiles produced
+    // Postcondition: in1_cb has num_tiles produced
+
+    mul_tiles_init();
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, 1);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        mul_tiles(in0_cb, in1_cb, 0, 0, 0);
+        cb_pop_front(in0_cb, 1);
+        cb_reserve_back(in0_cb, 1);
+        pack_tile(0, in0_cb);
+        cb_push_back(in0_cb, 1);
+        release_dst();
+    }
+}
+
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
@@ -437,6 +499,8 @@ template <
     uint32_t DHt,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
+    uint32_t qk_chunk_tiles,
+    uint32_t out_chunk_tiles,
     // QK matmul block parameters
     uint32_t qk_in0_block_w,
     uint32_t qk_subblock_w,
@@ -477,8 +541,8 @@ void flash_attention_loop(
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
     bool do_reduce,
-    uint32_t qk_chunk_tiles,
-    uint32_t out_chunk_tiles) {
+    bool apply_mask_at_last_chunk  // for causal mode, optionally apply mask at the last chunk
+) {
     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
         /* QK = Q_CHUNK @ K_CHUNK */
         reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
@@ -502,8 +566,8 @@ void flash_attention_loop(
         mul_block_bcast_scalar_inplace(cb_qk_im, cb_scale_in, qk_chunk_tiles);
 
         if constexpr (is_causal) {
-            // For decode, we only apply mask at the last chunk on reducer core for causal mode
-            if (k_chunk == k_chunk_end - 1 && do_reduce) {
+            // For decode, we only apply mask at the last chunk for causal mode
+            if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles);
