@@ -69,7 +69,7 @@ def get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, out_sharded=False, fp
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, clear_profiler_runtime_artifacts
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, rm
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
@@ -82,6 +82,7 @@ def get_device_freq():
     return freq
 
 
+# (m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w)
 matmul_shapes_bfloat16 = [
     (512, 512, 512, True, True, 1, 1, 1),
     (512, 1024, 1024, True, True, 1, 1, 1),
@@ -100,6 +101,7 @@ matmul_shapes_bfloat16 = [
     (16384, 16384, 16384, False, False, 4, 8, 8),
 ]
 
+# (m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w)
 matmul_shapes_bfloat8_b = [
     (512, 512, 512, True, True, 1, 1, 1),
     (512, 1024, 1024, True, True, 1, 1, 1),
@@ -118,6 +120,7 @@ matmul_shapes_bfloat8_b = [
     (16384, 16384, 16384, False, False, 4, 8, 8),
 ]
 
+# (m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w)
 matmul_shapes_bfloat4_b = [
     (512, 512, 512, True, True, 1, 1, 1),
     (512, 1024, 1024, True, True, 1, 1, 1),
@@ -136,6 +139,7 @@ matmul_shapes_bfloat4_b = [
     (16384, 16384, 16384, False, False, 4, 4, 4),
 ]
 
+# (dtype, math_fidelity, use_trace)
 matmul_configs = [
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
@@ -208,7 +212,7 @@ def test_matmul_2d_host_perf(
                 matmul_shapes = matmul_shapes_bfloat4_b
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
                 profiler.clear()
-                clear_profiler_runtime_artifacts()
+                rm(profiler_log_path)
 
                 in0_shape = [1, 1, m, k]
                 in1_shape = [1, 1, k, n]
@@ -229,7 +233,9 @@ def test_matmul_2d_host_perf(
                     in0_storage_type = "L1"
                 else:
                     in0_storage_type = "DRAM"
+
                 in1_storage_type = "DRAM"
+
                 if out_sharded:
                     out_storage_type = "L1"
                 else:
@@ -252,6 +258,7 @@ def test_matmul_2d_host_perf(
                     device=device,
                     memory_config=in0_memory_config,
                 )
+
                 in1_t = ttnn.from_torch(
                     in1,
                     tile=ttnn.Tile((32, tile_w)),
@@ -286,6 +293,7 @@ def test_matmul_2d_host_perf(
                         fp32_dest_acc_en=False,
                         packer_l1_acc=True,
                     )
+
                 if out_sharded:
                     out_mem_config = ttnn.MemoryConfig(
                         memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -293,6 +301,7 @@ def test_matmul_2d_host_perf(
                     )
                 else:
                     out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
                 if out_sharded:
                     output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
                 else:
@@ -431,7 +440,7 @@ matmul_configs_oob = [
 ]
 
 
-@pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
+# @pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
@@ -488,7 +497,7 @@ def test_matmul_2d_host_perf_out_of_box(
                 math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:
                 profiler.clear()
-                clear_profiler_runtime_artifacts()
+                rm(profiler_log_path)
 
                 in0_shape = [1, 1, m, k]
                 in1_shape = [1, 1, k, n]
