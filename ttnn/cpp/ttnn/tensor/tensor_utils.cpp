@@ -485,6 +485,7 @@ const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Sp
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
     bool has_zero = false;
+
     for (auto index = 0; index < shape.size(); ++index) {
         if (shape[index] == -1) {
             if (index_of_negative_1 != -1) {
@@ -503,6 +504,7 @@ const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Sp
             new_volume *= shape[index];
         }
     }
+
     if (has_zero && index_of_negative_1 != -1) {
         std::string error_msg = "cannot reshape tensor of 0 elements into shape (";
         for(auto & s: shape) {
@@ -514,10 +516,35 @@ const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Sp
 
     ttnn::SmallVector<uint32_t> new_shape(shape.size());
     std::copy(shape.begin(), shape.end(), new_shape.begin());
+
     if (index_of_negative_1 == -1) {
-        TT_FATAL(new_volume == old_volume, "Invalid arguments to reshape");
+        if (new_volume != old_volume) {
+            std::string error_msg = "Invalid arguments to reshape: Input shape (";
+            ttnn::Shape input_tensor_shape = tensor.get_shape().value;
+            for (std::size_t dim_index=0;dim_index<input_tensor_shape.rank();dim_index++) {
+                error_msg += std::to_string(input_tensor_shape[dim_index]) + ",";
+            }
+            error_msg += ") with volume " + std::to_string(old_volume) + ", and output shape (";
+            for (auto& s : shape) {
+                error_msg += std::to_string(s) + ",";
+            }
+            error_msg += ") with volume " + std::to_string(new_volume) + ".";
+            TT_FATAL(false, "{}", error_msg);
+        }
     } else {
-        TT_FATAL(old_volume % new_volume == 0, "Invalid arguments to reshape");
+        if (old_volume % new_volume != 0) {
+            std::string error_msg = "Invalid arguments to reshape: Input shape (";
+            ttnn::Shape input_tensor_shape = tensor.get_shape().value;
+            for (std::size_t dim_index=0;dim_index<input_tensor_shape.rank();dim_index++) {
+                error_msg += std::to_string(input_tensor_shape[dim_index]) + ",";
+            }
+            error_msg += ") with volume " + std::to_string(old_volume) + ", and output shape (";
+            for (auto& s : shape) {
+                error_msg += std::to_string(s) + ",";
+            }
+            error_msg += ") with partial volume " + std::to_string(new_volume) + ".";
+            TT_FATAL(false, "{}", error_msg);
+        }
         new_shape[index_of_negative_1] = old_volume / new_volume;
     }
 
