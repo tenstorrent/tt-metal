@@ -800,7 +800,8 @@ def test_matmul_single_core_sharded(
         # Get device frequency in MHz
         dev_freq_mhz = get_device_freq()
         logger.info("cycle: " + str(cycle))
-        num_op = vec[0] * vec[1] * vec[2] * 2
+        # TODO check if multiplication with num_blocks is correct assumption
+        num_op = vec[0] * vec[1] * vec[2] * 2 * num_blocks
         # Calculate execution time in us
         time_us = cycle / dev_freq_mhz
         # Calcualte throughput in TFLOPs
