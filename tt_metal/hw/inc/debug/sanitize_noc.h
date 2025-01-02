@@ -29,6 +29,7 @@
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
 #include "noc_nonblocking_api.h"
+#include "hostdevcommon/common_runtime_address_map.h"
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -128,7 +129,7 @@ inline bool debug_valid_reg_addr(uint64_t addr, uint64_t len) {
            (len == 4);
 }
 
-inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len) {
+inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write) {
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
@@ -138,6 +139,12 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len) {
     if (addr + len > MEM_L1_BASE + MEM_L1_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
+
+#if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
+    if (write && (addr < MEM_MAP_END)) {
+        return DebugSanitizeNocAddrUnderflow;
+    }
+#endif
     return DebugSanitizeNocOK;
 }
 
@@ -343,7 +350,7 @@ uint32_t debug_sanitize_noc_addr(
                 multicast,
                 dir,
                 DEBUG_SANITIZE_NOC_TARGET,
-                debug_valid_worker_addr(noc_local_addr, noc_len));
+                debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
         }
     } else {
         // Bad XY
@@ -381,7 +388,7 @@ void debug_sanitize_noc_and_worker_addr(
             multicast,
             dir,
             DEBUG_SANITIZE_NOC_LOCAL,
-            debug_valid_worker_addr(worker_addr, len));
+            debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ));
 
         if ((worker_addr & alignment_mask) != (noc_addr & alignment_mask)) {
             debug_sanitize_post_noc_addr_and_hang(
