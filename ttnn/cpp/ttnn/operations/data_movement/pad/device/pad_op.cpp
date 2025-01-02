@@ -6,6 +6,7 @@
 #include "pad_op.hpp"
 #include "pad_program_factory.hpp"
 
+using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 void Pad::validate_with_output_tensors(

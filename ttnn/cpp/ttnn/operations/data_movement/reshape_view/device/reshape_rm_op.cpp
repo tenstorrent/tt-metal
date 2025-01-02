@@ -7,6 +7,8 @@
 
 #include <cstdint>
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 
 void RM_RESHAPE_STRUCT::validate(const std::vector<Tensor>& input_tensors) const {
