@@ -130,7 +130,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
     use_non_tile_height = use_non_tile_height && conv_config.input_channels_alignment != 16;
 
     ParallelConfig parallel_config;
-    if (input_memory_config.is_sharded()) {
+    if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
             .grid = input_memory_config.shard_spec.value().grid,
             .shard_scheme = input_memory_config.memory_layout,
@@ -367,7 +367,7 @@ ttnn::Tensor prepare_conv_weights(
     use_non_tile_height = use_non_tile_height && conv_config.input_channels_alignment != 16;
 
     ParallelConfig parallel_config;
-    if (input_memory_config.is_sharded()) {
+    if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
             .grid = input_memory_config.shard_spec.value().grid,
             .shard_scheme = input_memory_config.memory_layout,
@@ -463,7 +463,7 @@ ttnn::Tensor prepare_conv_bias(
     use_non_tile_height = use_non_tile_height && conv_config.input_channels_alignment != 16;
 
     ParallelConfig parallel_config;
-    if (input_memory_config.is_sharded()) {
+    if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
             .grid = input_memory_config.shard_spec.value().grid,
             .shard_scheme = input_memory_config.memory_layout,
