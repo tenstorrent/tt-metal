@@ -91,8 +91,8 @@ static Tensor reduce_impl(
                     int adjusted_dim = offset + i_dim;
                     int reduce_dim = adjusted_dim;
                     if (transpose) {
-                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -2, memory_config);
-                        reduce_dim = -2;
+                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, 2, memory_config);
+                        reduce_dim = 2;
                     }
                     if (use_reduce_type) {
                         output_tensor = reduce_impl<reduce_type>(
