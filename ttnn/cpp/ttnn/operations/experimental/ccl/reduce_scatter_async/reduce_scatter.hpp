@@ -44,7 +44,11 @@ struct ExecuteReduceScatter {
 } // namespace experimental
 } // namespace operations
 
-constexpr auto reduce_scatter_async =
-    ttnn::register_operation<"ttnn::reduce_scatter_async", ttnn::operations::experimental::ccl::ExecuteReduceScatter>();
+namespace experimental {
 
+constexpr auto reduce_scatter_async = ttnn::register_operation<
+    "ttnn::experimental::reduce_scatter_async",
+    ttnn::operations::experimental::ccl::ExecuteReduceScatter>();
+
+}  // namespace experimental
 }  // namespace ttnn
