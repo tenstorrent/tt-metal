@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_fabric/control_plane.hpp"
-// #include <tt-metalium/cq_commands.hpp>
+// #include "tt_metal/impl/dispatch/cq_commands.hpp"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/tt_fabric_traffic_gen_test.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
-#include "eth_l1_address_map.h"
+#include "tt_metal/hw/inc/wormhole/eth_l1_address_map.h"
 #include "tt_fabric/hw/inc/tt_fabric_interface.h"
 
 using std::vector;
@@ -38,8 +38,8 @@ int main(int argc, char** argv) {
     constexpr uint32_t default_routing_table_start_addr = 0x7EC00;
     constexpr uint32_t default_tx_queue_start_addr = 0x80000;
     constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
-    constexpr uint32_t default_rx_queue_start_addr = 0xa0000;
-    constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
+    constexpr uint32_t default_rx_queue_start_addr = 0x80000;
+    constexpr uint32_t default_rx_queue_size_bytes = 0x10000;
     constexpr uint32_t default_tx_signal_address = 0x70000;
 
     constexpr uint32_t default_test_results_addr = 0x100000;
@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
-            std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+            std::filesystem::path(tt::llrt::OptionsG.get_root_dir()) /
             "tt_fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
 
@@ -242,7 +242,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Invalid Device Id.");
         }
 
-        std::map<chip_id_t, IDevice*> device_map;
+        std::map<chip_id_t, tt_metal::Device*> device_map;
 
         std::vector<chip_id_t> chip_ids;
         for (unsigned int id = 4; id < 36; id++) {
@@ -262,7 +262,7 @@ int main(int argc, char** argv) {
 
         std::map<chip_id_t, std::vector<CoreCoord>> device_router_map;
 
-        auto const& device_active_eth_cores = device_map[test_device_id_l]->get_active_ethernet_cores();
+        const auto& device_active_eth_cores = device_map[test_device_id_l]->get_active_ethernet_cores();
 
         if (device_active_eth_cores.size() == 0) {
             log_info(
@@ -299,14 +299,14 @@ int main(int argc, char** argv) {
         uint32_t routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
         uint32_t gk_interface_addr = routing_table_addr + sizeof(tt::tt_fabric::fabric_router_l1_config_t) * 4;
         uint32_t client_interface_addr = routing_table_addr + sizeof(tt::tt_fabric::fabric_router_l1_config_t) * 4;
-        ;
+        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(tt_fabric_client_interface_t);
         uint32_t socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
         log_info(LogTest, "GK Routing Table Addr = 0x{:08X}", routing_table_addr);
         log_info(LogTest, "GK Info Addr = 0x{:08X}", gk_interface_addr);
         log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
 
         for (auto device : device_map) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(device.second->id());
+            auto neighbors = device.second->get_ethernet_connected_device_ids();
             std::vector<CoreCoord> device_router_cores;
             std::vector<CoreCoord> device_router_phys_cores;
             uint32_t router_mask = 0;
@@ -424,7 +424,7 @@ int main(int argc, char** argv) {
                 atomic_increment,
                 tx_signal_address,
                 client_interface_addr,
-
+                client_pull_req_buf_addr,
             };
 
             // setup runtime args
@@ -442,7 +442,7 @@ int main(int argc, char** argv) {
             log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
                 program_map[test_device_id_l],
-                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_tx.cpp",
+                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_tx_socket.cpp",
                 {core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -451,6 +451,45 @@ int main(int argc, char** argv) {
                     .defines = defines});
 
             tt_metal::SetRuntimeArgs(program_map[test_device_id_l], kernel, core, runtime_args);
+        }
+
+        std::vector<CoreCoord> rx_phys_core;
+        for (uint32_t i = 0; i < num_dest_endpoints; i++) {
+            CoreCoord core = {rx_x + i, rx_y};
+            rx_phys_core.push_back(device_map[test_device_id_r]->worker_core_from_logical_core(core));
+            CoreCoord rx_gk_phys_core = device_map[test_device_id_r]->worker_core_from_logical_core(gk_core);
+
+            std::vector<uint32_t> compile_args = {
+                prng_seed,                                             // 0: prng seed
+                data_kb_per_tx,                                        // 1: total data kb
+                max_packet_size_words,                                 // 2: max packet size (in words)
+                fabric_command,                                        // 3: fabric command
+                target_address,                                        // 4: target address
+                atomic_increment,                                      // 5: atomic increment
+                test_results_addr,                                     // 6: test results addr
+                test_results_size,                                     // 7: test results size in bytes
+                gk_interface_addr,                                     // 8: gk_message_addr_l
+                (rx_gk_phys_core.y << 10) | (rx_gk_phys_core.x << 4),  // 9: gk_message_addr_h
+                client_interface_addr,                                 // 10:
+                client_pull_req_buf_addr,                              // 11:
+                rx_queue_start_addr,                                   // 12: queue_start_addr_words
+                (rx_queue_size_bytes >> 4),                            // 13: queue_size_words
+            };
+
+            std::vector<uint32_t> runtime_args = {(dev_l_mesh_id << 16 | dev_l_chip_id)};
+
+            log_info(LogTest, "run socket rx at x={},y={}", core.x, core.y);
+            auto kernel = tt_metal::CreateKernel(
+                program_map[test_device_id_r],
+                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_rx_socket.cpp",
+                {core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = compile_args,
+                    .defines = defines});
+
+            tt_metal::SetRuntimeArgs(program_map[test_device_id_r], kernel, core, runtime_args);
         }
 
         if (check_txrx_timeout) {
@@ -597,7 +636,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::llrt::OptionsG.set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");
