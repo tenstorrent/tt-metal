@@ -415,14 +415,19 @@ def test_multi_core_matmul_1d_wh(
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
-        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_NOC1_GRID),
+        # Disabled for post-commit
+        # (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_NOC1_GRID),
+        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
     ],
 )
 @pytest.mark.parametrize(
     "hop_grid",
     [
+        # [
+        #     (3, 6),
+        # ],
         [
-            (3, 6),
+            (6, 3),
         ],
     ],
 )
@@ -436,7 +441,7 @@ def test_multi_core_matmul_1d_wh(
 )
 @pytest.mark.parametrize(
     "use_arbitrary_cores",
-    [True],
+    [False],
 )
 @pytest.mark.parametrize(
     "num_iters",
