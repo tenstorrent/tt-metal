@@ -20,7 +20,11 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 void get_max_page_size_and_num_pages(
-    uint32_t num_tiles, uint32_t num_datums_per_tile, uint32_t& page_size, uint32_t& num_pages) {
+    uint32_t max_page_size,
+    uint32_t num_tiles,
+    uint32_t num_datums_per_tile,
+    uint32_t& page_size,
+    uint32_t& num_pages) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * num_datums_per_tile;
 
     page_size = (8192 / num_datums_per_tile) * num_datums_per_tile;
@@ -79,7 +83,10 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tensor_tile_sizes.push_back(tensor_tiles[t].get_tile_size(tensor_data_formats[t]));
     }
     uint32_t max_block_tiles = *std::max_element(tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
-    uint32_t max_tile_size = *std::max_element(tensor_tile_sizes.begin(), tensor_tile_sizes.end());
+    auto max_tile_size_iterator = std::max_element(tensor_tile_sizes.begin(), tensor_tile_sizes.end());
+    uint32_t max_tile_size = *max_tile_size_iterator;
+    uint32_t max_tile_size_tensor_idx = max_tile_size_iterator - tensor_tile_sizes.begin();
+    tt::DataFormat max_tile_size_df = tensor_data_formats[max_tile_size_tensor_idx];
 
     std::vector<uint32_t> block_sizes;
     for (uint32_t i = 0; i < num_tensors; i++) {
@@ -98,26 +105,16 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     auto receiver_core_range = global_cb->receiver_cores();
 
     /* read cb setup */
-    uint32_t reader_cb_single_tile_size = max_tile_size;  // bfloat16 tile size
+    uint32_t reader_cb_single_tile_size = max_tile_size;
     const uint32_t total_num_blocks_in_buffer = 3;        // reader cb is triple buffered
     uint32_t reader_cb_size = max_block_size_per_reader_core * total_num_blocks_in_buffer;
 
     TT_FATAL(reader_cb_size <= global_cb->size(), "reader_cb_size must not be larger than global cb");
 
-    tt::DataFormat reader_cb_data_format = tt::DataFormat::Float16_b;  // TODO: update?
-    if (max_tile_size == 2048) {
-        reader_cb_data_format = tt::DataFormat::Float16_b;
-    } else if (max_tile_size == 1088) {
-        reader_cb_data_format = tt::DataFormat::Bfp8_b;
-    } else {
-        reader_cb_data_format = tt::DataFormat::Bfp4_b;
-    }
-
     uint32_t reader_cb_index = tt::CBIndex::c_0;
-    CircularBufferConfig reader_cb_config =
-        CircularBufferConfig(reader_cb_size, {{reader_cb_index, reader_cb_data_format}})
-            .set_page_size(reader_cb_index, reader_cb_single_tile_size)
-            .set_globally_allocated_address(global_cb_buffer);
+    CircularBufferConfig reader_cb_config = CircularBufferConfig(reader_cb_size, {{reader_cb_index, max_tile_size_df}})
+                                                .set_page_size(reader_cb_index, reader_cb_single_tile_size)
+                                                .set_globally_allocated_address(global_cb_buffer);
     auto reader_cb = CreateCircularBuffer(program, reader_core_range, reader_cb_config);
 
     /* tensor addresses cb setup */
@@ -144,7 +141,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     CircularBufferConfig remote_cb_config = CircularBufferConfig(remote_cb_size);
     remote_cb_config.remote_index(remote_cb_index)
         .set_page_size(remote_cb_single_tile_size)
-        .set_data_format(tt::DataFormat::Float16_b);
+        .set_data_format(max_tile_size_df);
     auto remote_cb =
         tt::tt_metal::v1::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, *global_cb);
 
@@ -188,13 +185,18 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     for (uint32_t t = 0; t < num_tensors; t++) {
         uint32_t page_size, num_pages;
         get_max_page_size_and_num_pages(
-            tensor_block_num_tiles[t], tt::tt_metal::detail::TileSize(tensor_data_formats[t]), page_size, num_pages);
+            max_tile_size,
+            tensor_block_num_tiles[t],
+            tt::tt_metal::detail::TileSize(tensor_data_formats[t]),
+            page_size,
+            num_pages);
         page_sizes.push_back(page_size);
         block_num_pages.push_back(num_pages);
 
         uint32_t coalesced_page_size, coalesced_num_page;
         uint32_t block_width_in_tiles = tensor_shapes[t][1];
         get_max_page_size_and_num_pages(
+            max_tile_size,
             block_width_in_tiles / num_receivers_per_reader,
             tt::tt_metal::detail::TileSize(tensor_data_formats[t]),
             coalesced_page_size,

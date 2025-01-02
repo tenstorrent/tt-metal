@@ -10,8 +10,7 @@
 #include "mod_div_lib.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "remote_circular_buffer_api.h"
-// #include "debug/dprint.h"
+// #include "remote_circular_buffer_api.h"
 
 namespace NAMESPACE {
 
@@ -145,15 +144,16 @@ void MAIN {
         get_compile_time_arg_val(4);  // outer column block size (in inner column blocks)
     constexpr uint32_t in1_block_num_tiles =
         get_compile_time_arg_val(5);                                  // out_subblock_w*in0_block_w* in1_num_subblocks;
-    constexpr uint32_t in1_per_core_w = get_compile_time_arg_val(6);  // out_subblock_w*in1_num_subblocks
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(7);      // outer inner dim (in inner dim blocks)
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(8);  // inner row block size in tiles
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(9);  // inner column block size in tiles
-    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10);  // out_subblock_h * out_subblock_w;
-    constexpr uint32_t batch = get_compile_time_arg_val(11);                   // batch dim
-    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(12);     // number of tiles in out_block
-    constexpr bool untilize_out = get_compile_time_arg_val(13);                // untilize output
-    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(14);
+    constexpr uint32_t in1_block_size_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_tensor_size_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t in1_per_core_w = get_compile_time_arg_val(8);           // out_subblock_w*in1_num_subblocks
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(9);               // outer inner dim (in inner dim blocks)
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(10);          // inner row block size in tiles
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);          // inner column block size in tiles
+    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);  // out_subblock_h * out_subblock_w;
+    constexpr uint32_t batch = get_compile_time_arg_val(13);                   // batch dim
+    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
+    constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
@@ -178,9 +178,9 @@ void MAIN {
     UNPACK((in1_cb_start_addr = get_local_cb_start_addr(in1_cb_id)));
     UNPACK((in1_rd_ptr_start_addr = get_local_cb_rd_ptr(in1_cb_id)));
     UNPACK((curr_in1_block_index = ring_idx));
-    UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_block_num_tiles * num_blocks * in1_tile_size)));
+    UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_tensor_size_bytes)));
 
-    UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_num_tiles * in1_tile_size, ring_idx, in1_tensor_split)));
+    UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_size_bytes, ring_idx, in1_tensor_split)));
 #endif
 
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -216,7 +216,6 @@ void MAIN {
         cb_wait_front(sync_cb2, 1);
         cb_pop_front(sync_cb2, 1);
 
-        // cb_pop_front(in1_cb_id, in1_block_num_tiles * ring_idx);
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
             bool last_out = block == (num_blocks - 1);
@@ -239,7 +238,7 @@ void MAIN {
             UNPACK((calculate_next_block_index_and_update_rd_ptr(
                 in1_cb_id,
                 num_blocks,
-                in1_block_num_tiles * in1_tile_size,
+                in1_block_size_bytes,
                 curr_in1_block_index,
                 in1_cb_start_addr,
                 in1_rd_ptr_start_addr,
