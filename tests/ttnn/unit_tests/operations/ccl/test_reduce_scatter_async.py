@@ -185,7 +185,7 @@ def run_reduce_scatter_test(
     else:
         logger.info(f"Running {num_iters} iterations of reduce scatter")
         for i in range(num_iters):
-            output_tensor_mesh = ttnn.reduce_scatter_async(
+            output_tensor_mesh = ttnn.experimental.reduce_scatter_async(
                 input_tensor_mesh,
                 dim=dim,
                 math_op=math_op,
@@ -330,9 +330,6 @@ def test_line_reduce_scatter_async_post_commit(
     )
 
 
-@pytest.mark.skip(
-    "persistent fabric test with cluster-axis API and multiple concurrent reduce_scatter instances not enabled yet"
-)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
@@ -399,9 +396,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     )
 
 
-@pytest.mark.skip(
-    "persistent fabric test with cluster-axis API and multiple concurrent reduce_scatter instances not enabled yet"
-)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
