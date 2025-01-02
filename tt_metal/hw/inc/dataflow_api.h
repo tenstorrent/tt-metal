@@ -1280,12 +1280,12 @@ struct shard_coord_info get_width_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
     struct shard_coord_info coord_info;
     uint32_t page_row = page_num / total_pages_last_dim;
-    uint32_t page_col = page_num - page_row * total_pages_last_dim;
+    uint32_t page_col = page_num - page_row * total_pages_last_dim;  // page_num%total_pages_last_dim
     uint32_t w_core_id = page_col / columns_per_shard;
-    uint32_t w_offset_within_core = page_col - w_core_id * columns_per_shard;
+    uint32_t w_offset = page_col - w_core_id * columns_per_shard;
     coord_info.core_num = w_core_id;
-    coord_info.page_num = page_row * columns_per_shard + w_offset_within_core;
-    coord_info.num_contiguous_pages = columns_per_shard - w_offset_within_core;
+    coord_info.page_num = page_row * columns_per_shard + w_offset;
+    coord_info.num_contiguous_pages = columns_per_shard - w_offset;
     return coord_info;
 }
 
@@ -1498,6 +1498,13 @@ struct InterleavedAddrGen {
     }
 
     FORCE_INLINE
+    std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
+        const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        std::pair<uint64_t, uint32_t> ret_val = (this->get_noc_add(id, offset, noc), 1);
+        return ret_val;
+    }
+
+    FORCE_INLINE
     void noc_async_read_page(
         const uint32_t id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         noc_async_read(this->get_noc_addr(id, offset), dest_addr, page_size, noc);
@@ -1533,6 +1540,13 @@ struct InterleavedPow2AddrGen {
         uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
         return noc_addr;
     }
+
+    FORCE_INLINE
+    std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
+        const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        std::pair<uint64_t, uint32_t> ret_val = (this->get_noc_add(id, offset, noc), 1);
+        return ret_val;
+    }
 };
 
 template <bool DRAM, uint32_t tile_hw = 1024>
@@ -1561,6 +1575,13 @@ struct InterleavedAddrGenFast {
 
         uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
         return noc_addr;
+    }
+
+    FORCE_INLINE
+    std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
+        const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        std::pair<uint64_t, uint32_t> ret_val = (this->get_noc_add(id, offset, noc), 1);
+        return ret_val;
     }
 
     FORCE_INLINE
@@ -1647,6 +1668,13 @@ struct InterleavedPow2AddrGenFast {
 
         uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
         return noc_addr;
+    }
+
+    FORCE_INLINE
+    std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
+        const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        std::pair<uint64_t, uint32_t> ret_val = (this->get_noc_add(id, offset, noc), 1);
+        return ret_val;
     }
 
     FORCE_INLINE
@@ -1743,6 +1771,12 @@ FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const T& s, uint32_t 
         API for getting the noc address when we are reading using a swizzled layout.
     */
     return s.get_noc_addr(id, offset, noc);
+}
+
+template <typename T>
+FORCE_INLINE std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
+    const uint32_t id, const T& s, const uint32_t offset = 0, uint8_t noc = noc_index) {
+    return s.get_contiguous_noc_addr(id, offset, noc);
 }
 
 template <typename T>
