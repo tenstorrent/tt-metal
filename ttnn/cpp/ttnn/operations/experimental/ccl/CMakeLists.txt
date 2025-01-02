@@ -16,6 +16,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/all_gather_async_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/device/all_gather_async_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/device/all_gather_async_program.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/ccl_global_semaphore_creation.cpp
     CACHE INTERNAL
     "CCL Experimental sources to reuse in ttnn build"
 )

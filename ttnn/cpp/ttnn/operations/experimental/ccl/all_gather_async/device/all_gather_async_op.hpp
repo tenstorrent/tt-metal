@@ -92,7 +92,7 @@ AllGatherAsync create_all_gather_async_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<Device*>& devices,
     const ccl::Topology topology,
-    const std::optional<std::vector<GlobalSemaphore>>& semaphores,
+    const std::optional<std::vector<const GlobalSemaphore>>& semaphore_handles,
     bool enable_persistent_fabric_mode);
 }  // namespace all_gather_async_detail
 }  // namespace ccl

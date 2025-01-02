@@ -711,9 +711,6 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     )
 
 
-@pytest.mark.skip(
-    "persistent fabric test with cluster-axis API and multiple concurrent all-gather instances not enabled yet"
-)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices1, num_links1, per_chip_output_shape1, dim1, layout1",
@@ -738,7 +735,7 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     ],
 )
 @pytest.mark.parametrize("replication_factor1", [4])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize(
     "num_devices2, num_links2, per_chip_output_shape2, dim2, layout2",
     [
