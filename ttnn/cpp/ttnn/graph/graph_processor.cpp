@@ -105,7 +105,8 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
             {kType, buffer->is_dram() ? "DRAM" : "L1"},
             {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
             {kPageSize, std::to_string(buffer->page_size())},
-            {kNumCores, std::to_string(buffer->num_cores().value_or(0))} // use 0 for interleaved
+            {kNumCores, std::to_string(buffer->num_cores().value_or(0))}, // use 0 for interleaved
+            {kDeviceId, std::to_string(buffer->device()->id())}
     };
     {
         graph.push_back(Vertex{
@@ -127,7 +128,8 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
             {kType, buffer->is_dram() ? "DRAM" : "L1"},
             {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
             {kPageSize, std::to_string(buffer->page_size())},
-            {kNumCores, std::to_string(buffer->num_cores().value_or(0))} // use 0 for interleaved
+            {kNumCores, std::to_string(buffer->num_cores().value_or(0))}, // use 0 for interleaved
+            {kDeviceId, std::to_string(buffer->device()->id())}
     };
     {
         graph.push_back(Vertex{
@@ -141,13 +143,15 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
 
 }
 
-void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated) {
+void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated, const tt::tt_metal::Device* device) {
+    TT_ASSERT(device);
     const std::lock_guard<std::mutex> lock(mutex);
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(size)},
         {kAddress, std::to_string(addr)},
         {kCoreRangeSet, core_range_set.str()},
-        {kGloballyAllocated, std::to_string(is_globally_allocated)}
+        {kGloballyAllocated, std::to_string(is_globally_allocated)},
+        {kDeviceId, std::to_string(device->id())}
     };
     auto counter = graph.size();
     {
@@ -162,23 +166,28 @@ void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint6
 
 }
 
-void GraphProcessor::track_deallocate_cb() {
+void GraphProcessor::track_deallocate_cb(const tt::tt_metal::Device* device) {
+    TT_ASSERT(device);
     const std::lock_guard<std::mutex> lock(mutex);
     auto counter = graph.size();
     {
         graph.push_back(Vertex{
             .counter = counter,
             .node_type = kNodeCBDeallocateAll,
-            .params = {},
+            .params = {
+                {kDeviceId, std::to_string(device->id())}
+            },
             .connections = {current_op_id.top()}
         });
         graph[current_op_id.top()].connections.push_back(counter);
     }
 }
 
-void GraphProcessor::track_program(tt::tt_metal::Program* program) {
+void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_metal::Device* device) {
+    TT_ASSERT(device);
+
     // All previous CBs are deallocated before a new program run
-    track_deallocate_cb();
+    track_deallocate_cb(device);
 
     if (run_mode == RunMode::NORMAL) {
         // we will track real buffer allocations during program run
@@ -186,7 +195,7 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program) {
     }
 
     for (auto& cb : program->circular_buffers()) {
-        track_allocate_cb(cb->core_ranges(), 0, cb->size(), cb->globally_allocated());
+        track_allocate_cb(cb->core_ranges(), 0, cb->size(), cb->globally_allocated(), device);
     }
 }
 

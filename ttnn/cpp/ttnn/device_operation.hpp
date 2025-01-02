@@ -285,7 +285,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
         program.set_runtime_id(device_operation_id);
 
-        tt::tt_metal::GraphTracker::instance().track_program(&program);
+        tt::tt_metal::GraphTracker::instance().track_program(&program, device);
         if(tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
             return;
         }
@@ -314,7 +314,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
         program->set_runtime_id(device_operation_id);
 
-        tt::tt_metal::GraphTracker::instance().track_program(program.get());
+        tt::tt_metal::GraphTracker::instance().track_program(program.get(), device);
         if(tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }

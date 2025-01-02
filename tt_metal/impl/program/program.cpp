@@ -801,7 +801,7 @@ void detail::Program_::allocate_circular_buffers(const Device *device) {
                 }
             }
         }
-        tt::tt_metal::GraphTracker::instance().track_allocate_cb(circular_buffer->core_ranges(), computed_addr, circular_buffer->size(), circular_buffer->globally_allocated());
+        tt::tt_metal::GraphTracker::instance().track_allocate_cb(circular_buffer->core_ranges(), computed_addr, circular_buffer->size(), circular_buffer->globally_allocated(), device);
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
     this->local_circular_buffer_allocation_needed_ = false;
