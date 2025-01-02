@@ -95,7 +95,7 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
 void py_bind_reduce_scatter_async(pybind11::module& module) {
     detail::bind_reduce_scatter(
         module,
-        ttnn::reduce_scatter_async,
+        ttnn::experimental::reduce_scatter_async,
         R"doc(
 
         Performs an reduce_scatter operation on multi-device :attr:`input_tensor` across all devices.  This operation requires a persistent
