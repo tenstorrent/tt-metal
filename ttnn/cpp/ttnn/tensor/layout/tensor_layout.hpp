@@ -14,7 +14,7 @@
 
 namespace tt::tt_metal {
 
-using Strides = ttnn::SmallVector<uint32_t>;
+using Strides = std::vector<size_t>;
 
 // TensorLayout describes how a tensor is laid out in memory
 // It takes datatype, layout (eg. TILE vs. RM), memory (eg. DRAM vs. L1), sharding (ie. how you want to cut your logical
