@@ -21,6 +21,7 @@ ExternalProject_Add(
     TMP_DIR ${PROJECT_BINARY_DIR}/tmp/tracy_tmp
     INSTALL_COMMAND ${CMAKE_COMMAND} -E copy tracy-capture ${PROJECT_BINARY_DIR}/tools/profiler/bin/capture-release
 )
+
 ExternalProject_Add(
     tracy-csvexport
     SOURCE_DIR ${TRACY_HOME}/csvexport
