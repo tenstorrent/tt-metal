@@ -1260,8 +1260,8 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> resolve_core_grid(uint32_t linear_cor
                     start_x_2,
                     start_y_2,
                     width_2,
-                    height_1,
-                    grid1_vol>(linear_core_id - halfway_volume);
+                    height_2,
+                    grid2_vol>(linear_core_id - halfway_volume);
             } else {
                 return resolve_within_grid<transposed, start_x_0, start_y_0, width_0, height_0>(linear_core_id);
             }
@@ -1269,25 +1269,57 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> resolve_core_grid(uint32_t linear_cor
     }
 }
 
-template <uint32_t page_size, uint32_t pages_per_shard_x>
-std::pair<uint32_t, uint32_t> get_width_sharded_coordinates(uint32_t page_num) {
+struct shard_coord_info {
+    uint32_t core_num;
+    uint32_t page_num;
+    uint32_t num_contiguous_pages;
+};
+
+template <uint32_t page_size, uint32_t columns_per_shard, uint32_t total_pages_last_dim>
+struct shard_coord_info get_width_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
-    std::pair<uint32_t, uint32_t> coordinates(0, 0);
-    return coordinates;
+    struct shard_coord_info coord_info;
+    uint32_t page_row = page_num / total_pages_last_dim;
+    uint32_t page_col = page_num - page_row * total_pages_last_dim;
+    uint32_t w_core_id = page_col / columns_per_shard;
+    uint32_t w_offset_within_core = page_col - w_core_id * columns_per_shard;
+    coord_info.core_num = w_core_id;
+    coord_info.page_num = page_row * columns_per_shard + w_offset_within_core;
+    coord_info.num_contiguous_pages = columns_per_shard - w_offset_within_core;
+    return coord_info;
 }
 
-template <uint32_t page_size, uint32_t pages_per_shard_x>
-std::pair<uint32_t, uint32_t> get_height_sharded_coordinates(uint32_t page_num) {
+template <uint32_t page_size, uint32_t rows_per_shard, uint32_t total_pages_last_dim>
+struct shard_coord_info get_height_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
-    std::pair<uint32_t, uint32_t> coordinates(0, 0);
-    return coordinates;
+    struct shard_coord_info coord_info;
+    constexpr uint32_t num_pages_per_core = total_pages_last_dim * rows_per_shard;
+    coord_info.core_num = page_num / num_pages_per_core;
+    coord_info.page_num = page_num - coord_info.core_num * num_pages_per_core;
+    coord_info.num_contiguous_pages = num_pages_per_core - coord_info.page_num;
+    return coord_info;
 }
 
-template <uint32_t page_size, uint32_t pages_per_shard_x, uint32_t pages_per_shard_y>
-std::pair<uint32_t, uint32_t> get_block_sharded_coordinates(uint32_t page_num) {
+template <uint32_t page_size, uint32_t columns_per_shard, uint32_t rows_per_shard, uint32_t total_pages_last_dim>
+struct shard_coord_info get_block_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
-    std::pair<uint32_t, uint32_t> coordinates(0, 0);
-    return coordinates;
+    // Calculate how many cores are in the sharding grid
+    constexpr uint32_t cores_per_block_row = (total_pages_last_dim - 1) / columns_per_shard + 1;
+    struct shard_coord_info coord_info;
+    // Get row and column ID of this page
+    uint32_t page_row = page_num / total_pages_last_dim;
+    uint32_t page_col = page_num - page_row * total_pages_last_dim;  // page_col = page_num%total_pages_last_dim;
+    // Find the w direction core and the offset within it
+    uint32_t w_core_id = page_col / columns_per_shard;
+    uint32_t w_offset = page_col - w_core_id * columns_per_shard;  // w_offset = page_col%columns_per_shard;
+    // Find the h direction core and the offset within it
+    uint32_t h_core_id = page_row / rows_per_shard;
+    uint32_t h_offset = page_row - h_core_id * rows_per_shard;  // h_offset = page_row%rows_per_shard;
+    // Find the coord_info
+    coord_info.core_num = w_core_id + h_core_id * cores_per_block_row;
+    coord_info.page_num = w_offset + h_offset * columns_per_shard;
+    coord_info.num_contiguous_pages = columns_per_shard - w_offset;
+    return coord_info;
 }
 
 template <
@@ -1297,6 +1329,7 @@ template <
     uint32_t page_size,
     uint32_t pages_per_shard_x,
     uint32_t pages_per_shard_y,
+    uint32_t pages_last_shard_dim,
     uint32_t start_x_0 = 0,
     uint32_t start_y_0 = 0,
     uint32_t width_0 = 0,
@@ -1358,14 +1391,25 @@ struct ShardedAddrGen {
 
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        return this->get_contiguous_noc_addr(id, offset, noc).first;
+    }
+    FORCE_INLINE
+    std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
+        const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        // Returns the noc address AND the number of contiguous pages after.
         // Resolve linear core id and the page num within that core
-        std::pair<uint32_t, uint32_t> sharding_coordinates;
+        struct shard_coord_info sharding_coordinates;
+        // TODO turn sharding coordinates to struct with 3 elements.
         if constexpr (shard_type == 0) {
-            sharding_coordinates = get_width_sharded_coordinates<page_size, pages_per_shard_x>(id);
+            sharding_coordinates =
+                get_width_sharded_coordinates<page_size, pages_per_shard_x, pages_last_shard_dim>(id);
         } else if constexpr (shard_type == 1) {
-            sharding_coordinates = get_height_sharded_coordinates<page_size, pages_per_shard_y>(id);
+            sharding_coordinates =
+                get_height_sharded_coordinates<page_size, pages_per_shard_y, pages_last_shard_dim>(id);
         } else {
-            sharding_coordinates = get_block_sharded_coordinates<page_size, pages_per_shard_x, pages_per_shard_y>(id);
+            sharding_coordinates =
+                get_block_sharded_coordinates<page_size, pages_per_shard_x, pages_per_shard_y, pages_last_shard_dim>(
+                    id);
         }
         uint32_t linear_core_id = 0;
         uint32_t page_num = 0;
@@ -1411,9 +1455,12 @@ struct ShardedAddrGen {
             start_y_7,
             width_7,
             height_7,
-            grid7_vol>(sharding_coordinates.first);
+            grid7_vol>(sharding_coordinates.core_num);
         // return get_addr
-        return get_addr(core_index.first, core_index.second, sharding_coordinates.second, offset, noc);
+        std::pair<uint64_t, uint32_t> return_val =
+            (get_addr(core_index.first, core_index.second, sharding_coordinates.page_num, offset, noc),
+             sharding_coordinates.num_contiguous_pages);
+        return return_val;
     }
 
     FORCE_INLINE
