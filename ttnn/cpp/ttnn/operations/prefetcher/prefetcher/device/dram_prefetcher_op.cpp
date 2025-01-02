@@ -70,8 +70,13 @@ std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::
 }
 std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     auto output_tensor = create_device_tensor(
-        {32, 32}, input_tensors[0].dtype(), input_tensors[0].layout(), input_tensors[0].device(), MemoryConfig{});
-    return {output_tensor};
+        ttnn::SimpleShape{32, 32},
+        input_tensors[0].dtype(),
+        input_tensors[0].layout(),
+        input_tensors[0].device(),
+        MemoryConfig{});
+    std::vector<Tensor> output_tensors = {output_tensor};
+    return output_tensors;
 }
 operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {

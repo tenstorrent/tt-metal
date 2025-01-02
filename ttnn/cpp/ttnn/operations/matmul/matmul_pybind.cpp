@@ -150,7 +150,7 @@ void py_module(py::module& module) {
                     std::move(fused_activation),
                     mcast_in0,
                     gather_in0,
-                    hop_cores,
+                    std::move(hop_cores),
                     num_global_cb_receivers);
             }),
             py::kw_only(),
