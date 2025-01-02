@@ -334,7 +334,7 @@ uint32_t debug_sanitize_noc_addr(
         }
 #endif
     } else if (core_type == AddressableCoreType::TENSIX) {
-        if (!debug_valid_reg_addr(noc_local_addr, noc_len) && !debug_valid_worker_addr(noc_local_addr, noc_len)) {
+        if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(
                 noc_id,
                 noc_addr,
