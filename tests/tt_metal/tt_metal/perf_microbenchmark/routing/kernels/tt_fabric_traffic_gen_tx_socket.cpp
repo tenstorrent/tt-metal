@@ -48,7 +48,8 @@ constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
 constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
 constexpr uint32_t test_command = get_compile_time_arg_val(18);
 
-uint32_t base_target_address = get_compile_time_arg_val(19);
+constexpr uint32_t base_target_address = get_compile_time_arg_val(19);
+uint32_t target_address = base_target_address;
 
 // atomic increment for the ATOMIC_INC command
 constexpr uint32_t atomic_increment = get_compile_time_arg_val(20);
@@ -57,14 +58,17 @@ uint32_t dest_device;
 
 constexpr uint32_t signal_address = get_compile_time_arg_val(21);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(22);
+constexpr uint32_t client_pull_req_buf_addr = get_compile_time_arg_val(23);
 
 uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
-volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
-tt_l1_ptr volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table =
+volatile local_pull_request_t* local_pull_request = (volatile local_pull_request_t*)(data_buffer_start_addr - 1024);
+volatile tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(routing_table_start_addr);
 volatile tt_fabric_client_interface_t* client_interface = (volatile tt_fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr chan_req_buf* client_pull_req_buf =
+    reinterpret_cast<tt_l1_ptr chan_req_buf*>(client_pull_req_buf_addr);
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
@@ -73,12 +77,10 @@ uint64_t xy_local_addr;
 
 packet_header_t packet_header __attribute__((aligned(16)));
 
-uint32_t target_address;
 uint32_t noc_offset;
-uint32_t rx_addr_hi;
 
 // generates packets with random size and payload on the input side
-inline bool test_buffer_handler_async_wr() {
+inline bool test_buffer_handler_dsocket_wr(socket_handle_t* socket_handle) {
     if (input_queue_state.all_packets_done()) {
         return true;
     }
@@ -96,34 +98,28 @@ inline bool test_buffer_handler_async_wr() {
     uint32_t byte_wr_addr = test_producer.get_local_buffer_write_addr();
     uint32_t words_to_init = std::min(free_words, test_producer.words_before_local_buffer_wrap());
     uint32_t words_initialized = 0;
-    uint32_t curr_payload_bytes = 0;
     while (words_initialized < words_to_init) {
         if (input_queue_state.all_packets_done()) {
             break;
         }
 
-        if (!input_queue_state.packet_active()) { // start of a new packet
-            input_queue_state.next_packet(num_dest_endpoints, dest_endpoint_start_id, max_packet_size_words, max_packet_size_mask, total_data_words);
+        if (!input_queue_state.packet_active()) {  // start of a new packet
+            input_queue_state.next_packet(
+                num_dest_endpoints,
+                dest_endpoint_start_id,
+                max_packet_size_words,
+                max_packet_size_mask,
+                total_data_words);
 
             tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
-            curr_payload_bytes =
-                (input_queue_state.curr_packet_size_words - PACKET_HEADER_SIZE_WORDS) * PACKET_WORD_SIZE_BYTES;
-
-            // check for wrap
-            // if the size of fvc buffer is greater than the rx buffer size and/or rx is slow
-            // data validation on rx could fail as tx could overwrite data
-            // explicit sync is needed to ensure data validation in all scenarios
-            if (target_address + curr_payload_bytes > rx_addr_hi) {
-                target_address = base_target_address;
-            }
 
             packet_header.routing.flags = FORWARD;
             packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
             packet_header.routing.dst_mesh_id = dest_device >> 16;
             packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
-            packet_header.session.command = ASYNC_WR;
-            packet_header.session.target_offset_l = target_address;
-            packet_header.session.target_offset_h = noc_offset;
+            packet_header.session.command = DSOCKET_WR;
+            packet_header.session.target_offset_l = (uint32_t)socket_handle->pull_notification_adddr;
+            packet_header.session.target_offset_h = socket_handle->pull_notification_adddr >> 32;
             target_address += packet_header.routing.packet_size_bytes - PACKET_HEADER_SIZE_BYTES;
             packet_header.packet_parameters.misc_parameters.words[1] = input_queue_state.packet_rnd_seed;
             tt_fabric_add_header_checksum(&packet_header);
@@ -135,7 +131,7 @@ inline bool test_buffer_handler_async_wr() {
             }
 
             for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
-                header_ptr[i] = ((uint32_t *)&packet_header)[i];
+                header_ptr[i] = ((uint32_t*)&packet_header)[i];
             }
 
             words_initialized += header_words_to_init;
@@ -143,7 +139,8 @@ inline bool test_buffer_handler_async_wr() {
             byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
         } else {
             uint32_t words_remaining = words_to_init - words_initialized;
-            uint32_t packet_words_initialized = input_queue_state.curr_packet_size_words - input_queue_state.curr_packet_words_remaining;
+            uint32_t packet_words_initialized =
+                input_queue_state.curr_packet_size_words - input_queue_state.curr_packet_words_remaining;
             if (packet_words_initialized < PACKET_HEADER_SIZE_WORDS) {
                 tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
                 uint32_t header_words_initialized = packet_words_initialized;
@@ -151,7 +148,7 @@ inline bool test_buffer_handler_async_wr() {
                 uint32_t header_dword_index = header_words_initialized * PACKET_WORD_SIZE_BYTES / 4;
                 header_words_to_init = std::min(words_remaining, header_words_to_init);
                 for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
-                    header_ptr[i] = ((uint32_t *)&packet_header)[i + header_dword_index];
+                    header_ptr[i] = ((uint32_t*)&packet_header)[i + header_dword_index];
                 }
                 words_initialized += header_words_to_init;
                 words_remaining = words_to_init - words_initialized;
@@ -165,9 +162,9 @@ inline bool test_buffer_handler_async_wr() {
 
             uint32_t num_words = std::min(words_remaining, input_queue_state.curr_packet_words_remaining);
             if constexpr (!skip_pkt_content_gen) {
-                uint32_t start_val =
-                (input_queue_state.packet_rnd_seed & 0xFFFF0000) +
-                (input_queue_state.curr_packet_size_words - input_queue_state.curr_packet_words_remaining - PACKET_HEADER_SIZE_WORDS);
+                uint32_t start_val = (input_queue_state.packet_rnd_seed & 0xFFFF0000) +
+                                     (input_queue_state.curr_packet_size_words -
+                                      input_queue_state.curr_packet_words_remaining - PACKET_HEADER_SIZE_WORDS);
                 fill_packet_data(reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr), num_words, start_val);
             }
             words_initialized += num_words;
@@ -281,6 +278,7 @@ inline bool test_buffer_handler_fvcc() {
             packet_header.session.target_offset_h = noc_offset;
             packet_header.packet_parameters.misc_parameters.words[1] = 0;
             packet_header.packet_parameters.misc_parameters.words[2] = 0;
+
             tt_fabric_add_header_checksum(&packet_header);
             uint32_t words_left = words_to_init - words_initialized;
             bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
@@ -316,14 +314,15 @@ inline bool test_buffer_handler_fvcc() {
     return false;
 }
 
-bool test_buffer_handler() {
-    if constexpr (test_command == ASYNC_WR) {
-        return test_buffer_handler_async_wr();
+bool test_buffer_handler(socket_handle_t* socket_handle) {
+    if constexpr (test_command == DSOCKET_WR) {
+        return test_buffer_handler_dsocket_wr(socket_handle);
     } else if constexpr (test_command == ATOMIC_INC) {
         return test_buffer_handler_atomic_inc();
     } else if constexpr (test_command == SOCKET_OPEN) {
         return test_buffer_handler_fvcc();
     }
+    return true;
 }
 
 void kernel_main() {
@@ -335,33 +334,35 @@ void kernel_main() {
     uint32_t router_x = get_arg_val<uint32_t>(2);
     uint32_t router_y = get_arg_val<uint32_t>(3);
     dest_device = get_arg_val<uint32_t>(4);
-    uint32_t rx_buf_size = get_arg_val<uint32_t>(5);
 
     if (ASYNC_WR == test_command) {
-        base_target_address = get_arg_val<uint32_t>(6);
+        target_address = get_arg_val<uint32_t>(5);
     }
-    target_address = base_target_address;
-    rx_addr_hi = base_target_address + rx_buf_size;
 
-    uint64_t router_config_addr =
-        NOC_XY_ADDR(NOC_X(router_x), NOC_Y(router_y), eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
+    uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
     noc_async_read_one_packet(
         router_config_addr, routing_table_start_addr, sizeof(tt::tt_fabric::fabric_router_l1_config_t));
     noc_async_read_barrier();
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_STATUS_INDEX+1] = (uint32_t) local_pull_request;
+    test_results[PQ_TEST_STATUS_INDEX + 1] = (uint32_t)local_pull_request;
 
     test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
     test_results[PQ_TEST_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
 
-    zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
+    zero_l1_buf(
+        reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
     zero_l1_buf((uint32_t*)client_interface, sizeof(tt_fabric_client_interface_t));
-    client_interface->gk_msg_buf_addr =
-        (((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf);
+    zero_l1_buf((uint32_t*)client_pull_req_buf, sizeof(chan_req_buf));
+    client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
+    client_interface->gk_msg_buf_addr = client_interface->gk_interface_addr + offsetof(gatekeeper_info_t, gk_msg_buf);
+    client_interface->pull_req_buf_addr = xy_local_addr | client_pull_req_buf_addr;
+
+    // make sure fabric node gatekeeper is available.
+    fabric_endpoint_init();
 
     if constexpr (pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM) {
         input_queue_state.init(src_endpoint_id, prng_seed);
@@ -389,7 +390,7 @@ void kernel_main() {
 
     // wait till test sends start signal. This is set by test
     // once tt_fabric kernels have been launched on all the test devices.
-    while (*(tt_l1_ptr volatile uint32_t*)signal_address == 0);
+    while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
 
@@ -407,6 +408,20 @@ void kernel_main() {
     uint32_t curr_packet_words_sent = 0;
     uint32_t packet_count = 0;
 
+    socket_handle_t* socket_handle = fabric_socket_open(
+        3,                      // the network plane to use for this socket
+        2,                      // Temporal epoch for which the socket is being opened
+        1,                      // Socket Id to open
+        SOCKET_TYPE_DGRAM,      // Unicast, Multicast, SSocket, DSocket
+        SOCKET_DIRECTION_SEND,  // Send or Receive
+        dest_device >> 16,      // Remote mesh/device that is the socket data sender/receiver.
+        dest_device & 0xFFFF,
+        0  // fabric virtual channel.
+    );
+
+    fabric_socket_connect(socket_handle);
+    DPRINT << "Socket 1 connected. Handle = " << (uint32_t)socket_handle << ENDL();
+
     while (true) {
         iter++;
 #ifdef CHECK_TIMEOUT
@@ -419,7 +434,7 @@ void kernel_main() {
         }
 #endif
 
-        bool all_packets_initialized = test_buffer_handler();
+        bool all_packets_initialized = test_buffer_handler(socket_handle);
 
         if (test_producer.get_curr_packet_valid()) {
             curr_packet_size =
@@ -458,6 +473,13 @@ void kernel_main() {
         }
     }
 
+    /*
+        fabric_socket_open(3, 4, 2, SOCKET_TYPE_DGRAM, SOCKET_DIRECTION_SEND, dest_device >> 16, dest_device & 0xFFFF,
+       0); fabric_socket_open(3, 6, 3, SOCKET_TYPE_DGRAM, SOCKET_DIRECTION_SEND, dest_device >> 16, dest_device &
+       0xFFFF, 0); fabric_socket_open(3, 8, 4, SOCKET_TYPE_DGRAM, SOCKET_DIRECTION_SEND, dest_device >> 16, dest_device
+       & 0xFFFF, 0); fabric_socket_open(3, 10, 5, SOCKET_TYPE_DGRAM, SOCKET_DIRECTION_SEND, dest_device >> 16,
+       dest_device & 0xFFFF, 0);
+    */
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
     uint64_t num_packets = input_queue_state.get_num_packets();
