@@ -51,7 +51,7 @@ jobs:
       LOGURU_LEVEL: INFO
     runs-on:
       - ${{ inputs.runner-label }}
-      - issue-15821
+      - in-service
       - cloud-virtual-machine
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main

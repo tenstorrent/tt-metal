@@ -15,7 +15,7 @@ jobs:
             {
               name: "Common models GS",
               arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              runs-on: ["cloud-virtual-machine", "E150", "issue-15821"],
               cmd: tests/scripts/single_card/nightly/run_common_models.sh,
               timeout: 40
             },
@@ -163,7 +163,7 @@ jobs:
       ARCH_NAME: wormhole_b0
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ["cloud-virtual-machine", "issue-15821", "${{ matrix.card }}"]
+    runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - uses: ./.github/actions/retry-command

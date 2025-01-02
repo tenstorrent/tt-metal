@@ -52,7 +52,7 @@ jobs:
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
-      - issue-15821
+      - in-service
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
