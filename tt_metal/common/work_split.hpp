@@ -53,6 +53,9 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     const CoreCoord grid_size, const uint32_t units_to_divide, const bool row_wise = false);
 
+std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
+    const CoreRangeSet& core_grid, const uint32_t units_to_divide, const bool row_wise = false);
+
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores_aligned(
     const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment);
 
