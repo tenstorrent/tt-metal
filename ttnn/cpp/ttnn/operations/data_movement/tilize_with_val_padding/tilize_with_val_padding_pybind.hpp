@@ -61,7 +61,7 @@ void bind_tilize_with_val_padding(py::module& module) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
-            py::arg("use_multicore") = false,
+            py::arg("use_multicore") = true,
             py::arg("queue_id") = 0,
         }
 
@@ -105,7 +105,7 @@ void bind_tilize_with_zero_padding(py::module& module) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_dtype") = std::nullopt,
-            py::arg("use_multicore") = false,
+            py::arg("use_multicore") = true,
             py::arg("queue_id") = 0,
         });
 }
