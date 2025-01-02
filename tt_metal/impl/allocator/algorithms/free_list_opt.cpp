@@ -466,6 +466,28 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
     }
 }
 
+std::vector<std::unordered_map<std::string, std::string>> FreeListOpt::get_block_table() const {
+    std::vector<std::unordered_map<std::string, std::string>> blocks;
+
+    for (size_t i = 0; i < block_address_.size(); i++) {
+        std::unordered_map<std::string, std::string> blockEntry;
+
+        if (!meta_block_is_allocated_[i]) {
+            continue;
+        }
+
+        blockEntry["blockID"] = std::to_string(i);
+        blockEntry["address"] = std::to_string(block_address_[i]);  // bytes
+        blockEntry["size"] = std::to_string(block_size_[i]);        // bytes
+        blockEntry["prevID"] = std::to_string(block_prev_block_[i]);
+        blockEntry["nextID"] = std::to_string(block_next_block_[i]);
+        blockEntry["allocated"] = block_is_allocated_[i] ? "yes" : "no";
+        blocks.push_back(blockEntry);
+    }
+
+    return blocks;
+}
+
 void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     if (shrink_size == 0) {
         return;

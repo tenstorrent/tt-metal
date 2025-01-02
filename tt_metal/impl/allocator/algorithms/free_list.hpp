@@ -38,6 +38,8 @@ public:
 
     void dump_blocks(std::ostream& out) const;
 
+    std::vector<std::unordered_map<std::string, std::string>> get_block_table() const;
+
     void shrink_size(DeviceAddr shrink_size, bool bottom_up = true);
 
     void reset_size();

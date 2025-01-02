@@ -446,6 +446,24 @@ void FreeList::dump_blocks(std::ostream& out) const {
     out << "\n";
 }
 
+std::vector<std::unordered_map<std::string, std::string>> FreeList::get_block_table() const {
+    std::vector<std::unordered_map<std::string, std::string>> blocks;
+    boost::local_shared_ptr<Block> curr_block = this->block_head_;
+
+    while (curr_block != nullptr) {
+        std::unordered_map<std::string, std::string> blockEntry;
+
+        blockEntry["address"] = std::to_string(curr_block->address + this->offset_bytes_);  /// bytes
+        blockEntry["size"] = std::to_string(curr_block->size);                              // bytes
+        blockEntry["allocated"] = this->is_allocated(curr_block) ? "yes" : "no";
+
+        blocks.push_back(blockEntry);
+        curr_block = curr_block->next_block;
+    }
+
+    return blocks;
+}
+
 void FreeList::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     if (shrink_size == 0) {
         return;
