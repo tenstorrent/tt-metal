@@ -226,13 +226,13 @@ private:
         uint32_t prefetch_dispatch_unreserved_base =
             device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(
                 CommandQueueDeviceAddrType::UNRESERVED)];
-        cmddat_q_base_ = prefetch_dispatch_unreserved_base +
-                         ((prefetch_q_size_ + pcie_alignment - 1) / pcie_alignment * pcie_alignment);
-        scratch_db_base_ = cmddat_q_base_ + ((cmddat_q_size_ + pcie_alignment - 1) / pcie_alignment * pcie_alignment);
+        cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + prefetch_q_size_, pcie_alignment);
+        scratch_db_base_ = align(cmddat_q_base_ + cmddat_q_size_, pcie_alignment);
+
         const uint32_t l1_size = core_type == CoreType::WORKER ? HAL_MEM_L1_SIZE : HAL_MEM_ETH_SIZE;
         TT_ASSERT(scratch_db_base_ + scratch_db_size_ < l1_size);
-        dispatch_buffer_base_ =
-            ((prefetch_dispatch_unreserved_base - 1) | ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) + 1;
+        dispatch_buffer_base_ = align(prefetch_dispatch_unreserved_base, (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE));
+
         dispatch_buffer_block_size_pages_ =
             dispatch_buffer_block_size / (1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) / DISPATCH_BUFFER_SIZE_BLOCKS;
         dispatch_buffer_pages_ = dispatch_buffer_block_size_pages_ * DISPATCH_BUFFER_SIZE_BLOCKS;
