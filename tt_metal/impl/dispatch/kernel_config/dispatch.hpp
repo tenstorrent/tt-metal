@@ -65,8 +65,24 @@ public:
         bool h_variant,
         bool d_variant) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
+        TT_FATAL(
+            noc_selection.downstream_noc == dispatch_downstream_noc,
+            "Invalid downstream NOC specified for Dispatcher kernel");
+        TT_FATAL(
+            noc_selection.upstream_noc != noc_selection.downstream_noc,
+            "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
         static_config_.is_h_variant = h_variant;
         static_config_.is_d_variant = d_variant;
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+        if (h_variant && d_variant) {
+            this->logical_core_ = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
+        } else if (h_variant) {
+            channel = tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id);
+            this->logical_core_ =
+                dispatch_core_manager::instance().dispatcher_core(servicing_device_id, channel, cq_id);
+        } else if (d_variant) {
+            this->logical_core_ = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
+        }
     }
     void CreateKernel() override;
     void GenerateStaticConfigs() override;

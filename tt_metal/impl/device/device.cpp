@@ -938,7 +938,7 @@ void Device::init_command_queue_host() {
     this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     hw_command_queues_.resize(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, NOC::NOC_0);
+        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc);
         // Need to do this since CommandQueue constructor is private
         sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
     }
@@ -1750,6 +1750,7 @@ LaunchMessageRingBufferState& Device::get_worker_launch_message_buffer_state(Sub
     return this->active_sub_device_manager_->get_worker_launch_message_buffer_state(sub_device_id);
 }
 
+// Main source to get NOC idx for dispatch core
 NOC Device::dispatch_go_signal_noc() const {
     return this->dispatch_s_enabled() ? NOC::NOC_1 : NOC::NOC_0;
 }

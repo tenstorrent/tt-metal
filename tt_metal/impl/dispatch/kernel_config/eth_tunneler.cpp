@@ -54,7 +54,7 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
             } else if (auto tk = dynamic_cast<EthTunnelerKernel*>(k)) {
                 tunneler_kernel = tk;
             } else {
-                TT_FATAL(false, "Unexpected kernelt tyoe downstream of TUNNELER");
+                TT_FATAL(false, "Unexpected kernel type upstream of TUNNELER");
             }
         }
         TT_ASSERT(tunneler_kernel && !tunneler_kernel->IsRemote());
@@ -175,7 +175,7 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
             } else if (auto tk = dynamic_cast<EthTunnelerKernel*>(k)) {
                 ds_tunneler_kernel = tk;
             } else {
-                TT_FATAL(false, "Unexpected kernelt tyoe downstream of TUNNELER");
+                TT_FATAL(false, "Unexpected kernel type downstream of TUNNELER");
             }
         }
         TT_ASSERT(ds_tunneler_kernel && ds_tunneler_kernel == tunneler_kernel);
