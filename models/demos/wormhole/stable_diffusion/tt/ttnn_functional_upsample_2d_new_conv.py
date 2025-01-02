@@ -141,9 +141,9 @@ class upsample2d:
 
         [tt_out, [self.conv_weight_tensor, self.conv_bias_tensor]] = ttnn.conv2d(
             input_tensor=tt_out,
-            **conv_kwargs,
             weight_tensor=self.conv_weight_tensor,
             bias_tensor=self.conv_bias_tensor,
+            **conv_kwargs,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
             return_output_dim=False,

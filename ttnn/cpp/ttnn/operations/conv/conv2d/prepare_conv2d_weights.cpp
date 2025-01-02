@@ -145,6 +145,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
             out_channels,
             device->compute_with_storage_grid_size(),
             shard_orientation,
+            !mm_conv,
             !use_non_tile_height);
     }
     ParallelConfig output_parallel_config =
@@ -202,6 +203,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     validate_weight_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
+
+    std::cout << weight_block_h_ntiles << " " << weight_block_w_ntiles << " " << act_block_h_ntiles << std::endl;
+    std::cout << "parallel config -> " << parallel_config.grid.num_cores() << " " << (int)parallel_config.shard_scheme
+              << " " << (int)parallel_config.shard_orientation << std::endl;
 
     auto original_weights_shape = weight_tensor.get_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
@@ -368,6 +373,7 @@ ttnn::Tensor prepare_conv_weights(
 
     ParallelConfig parallel_config;
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
+        std::cout << "should not come here " << std::endl;
         parallel_config = {
             .grid = input_memory_config.shard_spec.value().grid,
             .shard_scheme = input_memory_config.memory_layout,
@@ -382,6 +388,7 @@ ttnn::Tensor prepare_conv_weights(
             out_channels,
             device->compute_with_storage_grid_size(),
             shard_orientation,
+            !mm_conv,
             !use_non_tile_height);
     }
 
@@ -478,6 +485,7 @@ ttnn::Tensor prepare_conv_bias(
             out_channels,
             device->compute_with_storage_grid_size(),
             shard_orientation,
+            !mm_conv,
             !use_non_tile_height);
     }
 
