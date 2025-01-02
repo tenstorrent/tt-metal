@@ -24,8 +24,7 @@ GlobalSemaphore::GlobalSemaphore(
     const CoreRangeSet& cores,
     uint32_t initial_value,
     BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    Private) :
+    tt::stl::Span<const SubDeviceId> sub_device_ids) :
     device_(device), cores_(cores) {
     this->setup_buffer(initial_value, buffer_type, sub_device_ids);
 }
@@ -35,8 +34,7 @@ GlobalSemaphore::GlobalSemaphore(
     CoreRangeSet&& cores,
     uint32_t initial_value,
     BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    Private) :
+    tt::stl::Span<const SubDeviceId> sub_device_ids) :
     device_(device), cores_(std::move(cores)) {
     this->setup_buffer(initial_value, buffer_type, sub_device_ids);
 }
@@ -64,29 +62,12 @@ void GlobalSemaphore::setup_buffer(
     this->reset_semaphore_value(initial_value, sub_device_ids);
 }
 
-std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
-    Device* device,
-    const CoreRangeSet& cores,
-    uint32_t initial_value,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return std::make_shared<GlobalSemaphore>(device, cores, initial_value, buffer_type, sub_device_ids, Private());
-}
-std::shared_ptr<GlobalSemaphore> GlobalSemaphore::create(
-    Device* device,
-    CoreRangeSet&& cores,
-    uint32_t initial_value,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return std::make_shared<GlobalSemaphore>(
-        device, std::move(cores), initial_value, buffer_type, sub_device_ids, Private());
-}
-
 Device* GlobalSemaphore::device() const { return device_; }
 
 DeviceAddr GlobalSemaphore::address() const { return buffer_->address(); }
 
-void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void GlobalSemaphore::reset_semaphore_value(
+    uint32_t reset_value, tt::stl::Span<const SubDeviceId> sub_device_ids) const {
     // Write the initial value to the semaphore to the device
     // Only block for the slow dispatch case
     auto* device = this->device_;

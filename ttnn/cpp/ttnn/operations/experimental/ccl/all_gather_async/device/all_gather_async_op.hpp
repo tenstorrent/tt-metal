@@ -34,7 +34,7 @@ struct AllGatherAsync {
     const uint32_t ring_index;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
-    std::optional<std::shared_ptr<const GlobalSemaphore>> semaphore_handle;
+    const std::optional<GlobalSemaphore> semaphore;
     bool enable_persistent_fabric_mode;
 
     AllGatherAsync(
@@ -46,7 +46,7 @@ struct AllGatherAsync {
         uint32_t ring_index,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        std::optional<std::shared_ptr<const GlobalSemaphore>> semaphore_handle,
+        std::optional<GlobalSemaphore> semaphore,
         bool enable_persistent_fabric_mode) :
         forward_device(forward_device),
         backward_device(backward_device),
@@ -56,7 +56,7 @@ struct AllGatherAsync {
         ring_index(ring_index),
         output_mem_config(output_mem_config),
         topology(topology),
-        semaphore_handle(semaphore_handle),
+        semaphore(semaphore),
         enable_persistent_fabric_mode(enable_persistent_fabric_mode) {}
 
     // Add attributes method for reflection
@@ -70,7 +70,7 @@ struct AllGatherAsync {
         attrs.emplace_back("ring_index", ring_index);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore_handle", semaphore_handle.has_value() ? semaphore_handle.value().get() : nullptr);
+        attrs.emplace_back("semaphore", semaphore);
 
         return attrs;
     }
@@ -92,7 +92,7 @@ AllGatherAsync create_all_gather_async_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<Device*>& devices,
     const ccl::Topology topology,
-    const std::optional<std::vector<GlobalSemaphore>>& semaphore_handles,
+    const std::optional<std::vector<GlobalSemaphore>>& semaphores,
     bool enable_persistent_fabric_mode);
 }  // namespace all_gather_async_detail
 }  // namespace ccl
@@ -108,7 +108,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::optional<std::shared_ptr<const GlobalSemaphore>>& semaphore_handle_opt,
+    const std::optional<GlobalSemaphore>& semaphore_opt,
     bool enable_persistent_fabric_mode);
 
 namespace operations {

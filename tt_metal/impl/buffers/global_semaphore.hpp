@@ -20,57 +20,35 @@ class Buffer;
 class Device;
 
 class GlobalSemaphore {
-    struct Private {
-        explicit Private() = default;
-    };
-
 public:
-    static std::shared_ptr<GlobalSemaphore> create(
+    GlobalSemaphore(
         Device* device,
         const CoreRangeSet& cores,
         uint32_t initial_value,
         BufferType buffer_type = BufferType::L1,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-    static std::shared_ptr<GlobalSemaphore> create(
+    GlobalSemaphore(
         Device* device,
         CoreRangeSet&& cores,
         uint32_t initial_value,
         BufferType buffer_type = BufferType::L1,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-    GlobalSemaphore(const GlobalSemaphore&) = delete;
-    GlobalSemaphore& operator=(const GlobalSemaphore&) = delete;
+    GlobalSemaphore(const GlobalSemaphore&) = default;
+    GlobalSemaphore& operator=(const GlobalSemaphore&) = default;
 
-    GlobalSemaphore(GlobalSemaphore&&) noexcept = delete;
-    GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = delete;
+    GlobalSemaphore(GlobalSemaphore&&) noexcept = default;
+    GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = default;
 
     Device* device() const;
 
     DeviceAddr address() const;
 
-    void reset_semaphore_value(uint32_t reset_value, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void reset_semaphore_value(uint32_t reset_value, tt::stl::Span<const SubDeviceId> sub_device_ids = {}) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("cores");
     const auto attribute_values() const { return std::make_tuple(this->cores_); }
-
-    // "Private" constructor to prevent direct instantiation
-    // Use GlobalSemaphore::create instead
-    GlobalSemaphore(
-        Device* device,
-        const CoreRangeSet& cores,
-        uint32_t initial_value,
-        BufferType buffer_type,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        Private);
-
-    GlobalSemaphore(
-        Device* device,
-        CoreRangeSet&& cores,
-        uint32_t initial_value,
-        BufferType buffer_type,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        Private);
 
 private:
     void setup_buffer(uint32_t initial_value, BufferType buffer_type, tt::stl::Span<const SubDeviceId> sub_device_ids);
