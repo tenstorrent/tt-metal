@@ -95,13 +95,14 @@ inline void run_slave_eriscs(dispatch_core_processor_masks enables) {
 inline void wait_slave_eriscs(uint32_t &heartbeat) {
     WAYPOINT("SEW");
     while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+        invalidate_l1_cache();
         RISC_POST_HEARTBEAT(heartbeat);
     }
     WAYPOINT("SED");
 }
 
 int main() {
-    conditionally_disable_l1_cache();
+    configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
     do_crt1((uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -128,8 +129,8 @@ int main() {
         init_sync_registers();
         // Wait...
         WAYPOINT("GW");
-        while (mailboxes->go_message.signal != RUN_MSG_GO)
-        {
+        while (mailboxes->go_message.signal != RUN_MSG_GO) {
+            invalidate_l1_cache();
             RISC_POST_HEARTBEAT(heartbeat);
         };
         WAYPOINT("GD");

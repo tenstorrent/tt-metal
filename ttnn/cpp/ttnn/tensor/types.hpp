@@ -61,15 +61,9 @@ consteval inline DataType convert_to_data_type() {
     }
 }
 
-inline bool is_floating_point(DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16:
-        case DataType::FLOAT32:
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return true;
-        default: return false;
-    }
-}
+bool is_floating_point(DataType dtype);
+
+bool is_block_float(DataType dtype);
 
 enum class StorageType {
     OWNED,
@@ -206,13 +200,14 @@ class LegacyShape {
         }
     }
     explicit LegacyShape(tt::stl::Span<const uint32_t> shape, tt::stl::Span<const uint32_t> shape_with_tile_padding) :
-        rank_(shape_with_tile_padding.size()), dimensions_{}, padding_{shape_with_tile_padding.size()} {
-        for (int index = 0; index < shape_with_tile_padding.size(); index++) {
-            int shape_index = index + static_cast<int>(shape.size()) - static_cast<int>(shape_with_tile_padding.size());
-            int dimension = shape_index >= 0 ? shape[shape_index] : 1;
-            int padded_dimension = shape_with_tile_padding[index];
+        rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
+        TT_ASSERT(
+            shape.size() == shape_with_tile_padding.size(),
+            "Shape and shape_with_tile_padding must have the same size");
+        for (auto index = 0; index < shape.size(); index++) {
+            auto padded_dimension = shape_with_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
-            this->padding_[index] = {.front = 0, .back = static_cast<size_t>(padded_dimension - dimension)};
+            this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
     }
     explicit LegacyShape(const ttnn::SmallVector<uint32_t>& shape, const ttnn::SmallVector<uint32_t>& shape_with_tile_padding)

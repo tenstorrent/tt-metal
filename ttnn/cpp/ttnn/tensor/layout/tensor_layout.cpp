@@ -4,8 +4,6 @@
 
 #include "tensor_layout.hpp"
 
-#include "ttnn/tensor/tensor_utils.hpp"
-
 namespace tt::tt_metal {
 
 namespace {
@@ -21,17 +19,17 @@ size_t round_up(size_t value, size_t multiple) {
 
 Alignment legacyShapeToAlignment(
     const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::SimpleShape& legacy_padded_shape,
     const PageConfig& page_config,
     const MemoryConfig& memory_config) {
-    if (logical_shape == padded_shape) {
+    if (logical_shape == legacy_padded_shape) {
         return Alignment{};
     }
 
-    const auto rank = padded_shape.rank();
+    const int padded_rank = legacy_padded_shape.rank();
     bool alignment_can_be_2D = true;
-    for (int i = rank - 3; i >= 0; i--) {
-        alignment_can_be_2D &= logical_shape[i] == padded_shape[i];
+    for (int i = -3; i >= -padded_rank; i--) {
+        alignment_can_be_2D &= logical_shape[i] == legacy_padded_shape[i];
     }
 
     // SHARDED
@@ -40,7 +38,7 @@ Alignment legacyShapeToAlignment(
             alignment_can_be_2D,
             "Tensor with shape {} ({}) cannot be sharded because alignment will have rank greater than 2!",
             logical_shape,
-            padded_shape);
+            legacy_padded_shape);
         if (page_config.get_layout() == Layout::ROW_MAJOR) {
             const auto& shard_spec = memory_config.shard_spec.value();
             if (shard_spec.physical_shard_shape.has_value()) {
@@ -53,13 +51,13 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with only height/width padding
     if (alignment_can_be_2D) {
-        ttnn::SmallVector<uint32_t> values(std::min((int)rank, 2));
+        ttnn::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
         const auto alignment_size = values.size();
         if (alignment_size >= 1) {
-            values[alignment_size - 1] = padded_shape[-1];
+            values[alignment_size - 1] = legacy_padded_shape[-1];
         }
         if (alignment_size == 2) {
-            values[alignment_size - 2] = padded_shape[-2];
+            values[alignment_size - 2] = legacy_padded_shape[-2];
         }
         Alignment result(std::move(values));
         return result;
@@ -67,12 +65,12 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with (deprecated) non-height/width padding
     // NOTE: Rank > 2 is guaranteed in this case
-    ttnn::SmallVector<uint32_t> values(rank);
-    values[rank - 1] = padded_shape[-1];
-    values[rank - 2] = padded_shape[-2];
+    ttnn::SmallVector<uint32_t> values(padded_rank);
+    values[padded_rank - 1] = legacy_padded_shape[-1];
+    values[padded_rank - 2] = legacy_padded_shape[-2];
 
-    for (int i = rank - 3; i >= 0; i--) {
-        values[i] = padded_shape[i] * values[i + 1];
+    for (int i = padded_rank - 3; i >= 0; i--) {
+        values[i] = legacy_padded_shape[i] * values[i + 1];
     }
 
     for (auto& value : values) {
@@ -137,7 +135,6 @@ void TensorLayout::initialize_alignment() {
         size_t result_idx = i + result.size() - default_alignment.size();
         result[result_idx] = CMAKE_UNIQUE_NAMESPACE::round_up(result[result_idx], default_alignment[i]);
     }
-
     alignment_ = Alignment(std::move(result));
 }
 
@@ -338,9 +335,18 @@ Size TensorLayout::compute_page_shape(const Size& physical_size) const {
     return page_config_.get_page_shape(physical_size, dtype_, memory_config_, physical_shard_shape);
 }
 
-Strides TensorLayout::compute_strides(const ttnn::SimpleShape& shape) const {
-    auto padded_shape = compute_padded_shape(shape);
-    return tt::tt_metal::compute_strides(padded_shape);
+Strides TensorLayout::compute_strides(const ttnn::SimpleShape& logical_shape) const {
+    const int rank = static_cast<int>(logical_shape.rank());
+    const int alignment_rank = static_cast<int>(alignment_.size());
+    Strides strides(rank, 1);
+    for (int i = rank - 2; i >= 0; i--) {
+        strides[i] = strides[i + 1] * logical_shape[i + 1];
+        const int alignment_index = i - (rank - alignment_rank) + 1;
+        if (alignment_index >= 0) {
+            strides[i] = CMAKE_UNIQUE_NAMESPACE::round_up(strides[i], alignment_[alignment_index]);
+        }
+    }
+    return strides;
 }
 
 ttnn::SimpleShape TensorLayout::compute_padded_shape(const ttnn::SimpleShape& shape) const {
@@ -354,7 +360,6 @@ ttnn::SimpleShape TensorLayout::compute_padded_shape(const ttnn::SimpleShape& sh
         uint32_t shape_value = rank_index >= 0 ? shape[rank_index] : 1;
         uint32_t alignment_value = alignment_[alignment_index];
         uint32_t& padded_shape_value = padded_shape[padded_shape_index];
-
         // The last 2 dimensions of a shape are special
         if (rank_index >= static_cast<int>(shape.rank()) - 2) {
             padded_shape_value = CMAKE_UNIQUE_NAMESPACE::round_up(shape_value, alignment_value);

@@ -98,31 +98,31 @@ ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjc
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
 
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
-ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu
+ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @jvegaTT
 ttnn/cpp/ttnn/operations/pool/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/conv/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/sliding_window/ @mywoodstock @sankarmanoj-tt @pavlejosipovic
-ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @jaykru-tt @yugi957 @jvegaTT @llongTT
+ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @jaykru-tt @yugi957 @jvegaTT @llongTT @nardoTT
 ttnn/cpp/ttnn/operations/data_movement/fold/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @asandhupatlaTT
-ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT
+ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @asandhupatlaTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @asandhupatlaTT @sjameelTT
 ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho @asandhupatlaTT @bbradelTT
-ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT
+ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT
 ttnn/cpp/ttnn/operations/embedding_backward/ @TT-BrianLiu @yan-zaretskiy
 ttnn/ttnn/operations/eltwise @patrickroberts @yan-zaretskiy @eyonland
 tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu
-tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT
+tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 tests/sweep_framework/sweeps/conv2d/  @nkpatel-tt @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
-tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @jaykru-tt @yugi957 @llongTT @jvegaTT
+tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @jaykru-tt @yugi957 @llongTT @jvegaTT @nardoTT
 tests/sweep_framework/sweeps/fused/  @bbradelTT @asandhupatlaTT @sjameelTT
 tests/sweep_framework/sweeps/matmul/  @bbradelTT @asandhupatlaTT @sjameelTT
 tests/sweep_framework/sweeps/reduction/  @bbradelTT @asandhupatlaTT @sjameelTT

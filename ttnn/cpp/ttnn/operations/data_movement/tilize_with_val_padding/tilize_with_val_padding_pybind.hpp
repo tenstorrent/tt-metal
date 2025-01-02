@@ -53,13 +53,7 @@ void bind_tilize_with_val_padding(py::module& module) {
                bool use_multicore,
                uint8_t queue_id) {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    Shape(output_tensor_shape).padded_shape(),
-                    value,
-                    memory_config,
-                    output_dtype,
-                    use_multicore);
+                    queue_id, input_tensor, output_tensor_shape, value, memory_config, output_dtype, use_multicore);
             },
             py::arg("input_tensor"),
             py::arg("output_tensor_shape"),
@@ -67,7 +61,7 @@ void bind_tilize_with_val_padding(py::module& module) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
-            py::arg("use_multicore") = false,
+            py::arg("use_multicore") = true,
             py::arg("queue_id") = 0,
         }
 
@@ -111,7 +105,7 @@ void bind_tilize_with_zero_padding(py::module& module) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_dtype") = std::nullopt,
-            py::arg("use_multicore") = false,
+            py::arg("use_multicore") = true,
             py::arg("queue_id") = 0,
         });
 }
