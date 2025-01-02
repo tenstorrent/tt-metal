@@ -88,7 +88,7 @@ void MAIN {
          * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
          * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
          */
-        reduce_init_delta<false>(cb_stats_reduced);
+        reduce_init_delta<false>(cb_stats_reduced, cb_stats, cb_reduce);
         cb_wait_front(cb_stats, stats_tiles_cols);
         cb_reserve_back(cb_stats_reduced, stats_tile_stride);
 #ifdef RMSNORM

@@ -122,7 +122,7 @@ void MAIN {
          */
         ACQ();
         cb_reserve_back(cb_ex, onetile);
-        reduce_init_delta<false>(cb_ex);
+        reduce_init_delta<false>(cb_ex, cb_x, cb_scaler);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
@@ -193,7 +193,7 @@ void MAIN {
             reconfig_data_format(cb_xmm2, cb_scaler);
         }
         cb_reserve_back(cb_ex2, 1);
-        reduce_init_delta<false>(cb_ex2);
+        reduce_init_delta<false>(cb_ex2, cb_xmm2, cb_scaler);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         // cb_wait_front(cb_xmm, Wt);

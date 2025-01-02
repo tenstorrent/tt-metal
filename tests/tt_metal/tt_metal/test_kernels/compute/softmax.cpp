@@ -125,7 +125,7 @@ void MAIN {
 
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init_delta<false>(cb_recipsumexps);
+        reduce_init_delta<false>(cb_recipsumexps, cb_exps, cb_bcast_scaler);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
