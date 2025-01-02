@@ -34,9 +34,9 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     uint32_t num_input_tiles = input_tensor.volume() / TILE_HW;
     uint32_t num_value_tiles = value_tensor.volume() / TILE_HW;
 
-    auto input_shape = input_tensor.get_legacy_shape();
-    uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
-    uint32_t Wt = input_shape[3] / TILE_WIDTH;
+    auto input_shape = input_tensor.get_tensor_spec().physical_shape();
+    uint32_t Ht = input_shape.height() / TILE_HEIGHT;
+    uint32_t Wt = input_shape.width() / TILE_WIDTH;
     // for streaming in input
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
