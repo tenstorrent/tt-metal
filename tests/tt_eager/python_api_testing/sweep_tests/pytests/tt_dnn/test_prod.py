@@ -30,6 +30,7 @@ mem_configs = [
     (3, 2, 1, 0, -1, -2, -3, -4),
 )
 @pytest.mark.parametrize("all_dimensions", [False, True])
+@pytest.mark.parametrize("keepdim", [False, True])
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -50,6 +51,7 @@ class TestProd:
         self,
         all_dimensions,
         dim,
+        keepdim,
         input_shapes,
         dst_mem_config,
         device,
@@ -62,6 +64,7 @@ class TestProd:
             {
                 "all_dimensions": all_dimensions,
                 "dim": dim,
+                "keepdim": keepdim,
             }
         )
         test_args.update({"output_mem_config": dst_mem_config})

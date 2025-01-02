@@ -74,7 +74,11 @@ def test_prod_dims(input_shape, dims, device):
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_output_cpu = (
-        ttnn.prod(tt_input, tt_output, dims=dims).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
+        ttnn.prod(tt_input, tt_output, dims=dims, keepdim=True)
+        .cpu()
+        .to(cpu_layout)
+        .unpad_from_tile(output_shape)
+        .to_torch()
     )
 
     rtol = atol = 0.1
