@@ -17,7 +17,7 @@ void MAIN {
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
 
-    transpose_wh_init(cb_id_in);
+    transpose_wh_init(cb_id_in, cb_id_out);
 
     // transpose a row-major block:
     // - uses reader_unary_transpose_wh
