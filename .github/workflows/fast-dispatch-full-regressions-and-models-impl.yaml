@@ -15,7 +15,7 @@ jobs:
             {
               name: "Common models GS",
               arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "issue-15821"],
+              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_common_models.sh,
               timeout: 40
             },
