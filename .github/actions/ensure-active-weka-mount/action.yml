@@ -12,6 +12,4 @@ runs:
     - name: Ensure active weka mount
       shell: bash
       run: |
-        sudo systemctl restart mnt-MLPerf.mount
-        sudo /etc/rc.local
-        ls -al /mnt/MLPerf/bit_error_tests
+        timeout --preserve-status 300 ./.github/scripts/cloud_utils/mount_weka.sh
