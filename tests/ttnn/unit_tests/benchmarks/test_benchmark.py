@@ -13,6 +13,7 @@ from models.utility_functions import run_for_wormhole_b0, is_grayskull, profiler
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from pathlib import Path
 import os
+import shutil
 
 
 SUBBLOCK_HW_CHOICES = [
@@ -159,6 +160,8 @@ matmul_configs = [
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
+@pytest.mark.parametrize("dump_profiler_log", [False])
+@pytest.mark.parametrize("dump_profiler_log_iteration", [False])
 def test_matmul_2d_host_perf(
     device,
     tile_h,
@@ -166,6 +169,8 @@ def test_matmul_2d_host_perf(
     num_warmup_iterations,
     num_measurement_iterations,
     use_program_cache,
+    dump_profiler_log,
+    dump_profiler_log_iteration,
 ):
     ENVS = dict(os.environ)
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
@@ -177,6 +182,10 @@ def test_matmul_2d_host_perf(
         pytest.skip(
             f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
         )
+    if dump_profiler_log:
+        profiler_log_dump_path = PROFILER_LOGS_DIR / "matmul_sweep_log"
+        rm(profiler_log_dump_path)
+
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
     HiFi3_cycle = LoFi_cycle * 3
@@ -215,6 +224,12 @@ def test_matmul_2d_host_perf(
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
                 profiler.clear()
                 rm(profiler_log_path)
+
+                if dump_profiler_log:
+                    # Create directory for profiler dump
+                    dir_name = f"{dtype}_{math_fidelity}_{use_trace}_{m}_{k}_{n}_{in0_sharded}_{out_sharded}_{in0_block_w_div}_{num_out_blocks_h}_{num_out_blocks_w}"
+                    profiler_dump_dir = profiler_log_dump_path / dir_name
+                    profiler_dump_dir.mkdir(parents=True, exist_ok=True)
 
                 # TODO add support for BH full grid (14, 10) when dispatch from ETH is enabled
                 grid_size = (13, 10) if is_blackhole() else (8, 8)
@@ -373,6 +388,10 @@ def test_matmul_2d_host_perf(
 
                 ttnn.DumpDeviceProfiler(device)
 
+                if dump_profiler_log == True and dump_profiler_log_iteration == False:
+                    profiler_log_dump = profiler_dump_dir / "all_iterations.csv"
+                    shutil.copy(profiler_log_path, profiler_log_dump)
+
                 inference_time_avg = profiler.get("run") / num_measurement_iterations
                 tflops = 2 * m * k * n / 1e12 / inference_time_avg
                 if math_fidelity == ttnn.MathFidelity.LoFi:
@@ -455,6 +474,8 @@ matmul_configs_oob = [
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
+@pytest.mark.parametrize("dump_profiler_log", [False])
+@pytest.mark.parametrize("dump_profiler_log_iteration", [False])
 def test_matmul_2d_host_perf_out_of_box(
     device,
     tile_h,
@@ -462,6 +483,8 @@ def test_matmul_2d_host_perf_out_of_box(
     num_warmup_iterations,
     num_measurement_iterations,
     use_program_cache,
+    dump_profiler_log,
+    dump_profiler_log_iteration,
 ):
     ENVS = dict(os.environ)
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
@@ -473,6 +496,10 @@ def test_matmul_2d_host_perf_out_of_box(
         pytest.skip(
             f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
         )
+    if dump_profiler_log:
+        profiler_log_dump_path = PROFILER_LOGS_DIR / "matmul_sweep_log_out_of_box"
+        rm(profiler_log_dump_path)
+
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
     HiFi3_cycle = LoFi_cycle * 3
@@ -510,6 +537,12 @@ def test_matmul_2d_host_perf_out_of_box(
             for m, k, n in matmul_shapes:
                 profiler.clear()
                 rm(profiler_log_path)
+
+                if dump_profiler_log:
+                    # Create directory for profiler dump
+                    dir_name = f"{dtype}_{use_trace}_{m}_{k}_{n}"
+                    profiler_dump_dir = profiler_log_dump_path / dir_name
+                    profiler_dump_dir.mkdir(parents=True, exist_ok=True)
 
                 # TODO add support for BH full grid (14, 10) when dispatch from ETH is enabled
                 grid_size = (13, 10) if is_blackhole() else (8, 8)
@@ -569,6 +602,10 @@ def test_matmul_2d_host_perf_out_of_box(
                     profiler.end(f"run")
 
                 ttnn.DumpDeviceProfiler(device)
+
+                if dump_profiler_log == True and dump_profiler_log_iteration == False:
+                    profiler_log_dump = profiler_dump_dir / "all_iterations.csv"
+                    shutil.copy(profiler_log_path, profiler_log_dump)
 
                 inference_time_avg = profiler.get("run") / num_measurement_iterations
                 tflops = 2 * m * k * n / 1e12 / inference_time_avg
