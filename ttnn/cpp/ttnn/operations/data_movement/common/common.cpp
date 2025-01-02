@@ -45,11 +45,12 @@ ttnn::Shape squeeze_output_shape(ttnn::Shape output_shape) {
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
     auto shape = tensor.get_shape();
     auto rank = shape.rank();
-    TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4!", shape.rank());
+    TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4! Instead is {}", shape.rank());
     if (rank == 4) {
         return tensor;
     }
     int i = 0;
+    // This is a workaround for now, it will be fixed in another PR
     if (shape[i] == 1) {
         auto squeezed = tensor;
         while (rank > 4 && shape[i] == 1) {
