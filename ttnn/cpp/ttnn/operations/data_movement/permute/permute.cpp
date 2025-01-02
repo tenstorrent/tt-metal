@@ -34,8 +34,13 @@ ttnn::Tensor permute_impl(
 
     // Get the device
     Device* device = a.device();
+    uint32_t rank = a.get_shape().rank();
+    if (rank > 4) {
+        if (a.get_layout() == Layout::TILE && ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2)) ||
+            (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
+            return ttnn::prim::permute(a, dims, output_mem_config, std::nullopt);
+        }
 
-    if (a.get_shape().rank() > 4) {
         auto input = a.get_layout() == Layout::TILE
                          ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr)
                          : a;
