@@ -47,7 +47,7 @@ void MAIN {
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
-                    reduce_init_delta<false>(cb_accum_dst);
+                    reduce_init_delta<false>(cb_accum_dst, cb_input, cb_scaler);
                     reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
                     reduce_revert_delta(cb_accum_dst);
 
@@ -104,7 +104,7 @@ void MAIN {
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(cb_input, cb_scaler);
 #endif
-            reduce_init_delta<false>(cb_out);
+            reduce_init_delta<false>(cb_out, cb_input, cb_scaler);
             reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
             reduce_revert_delta(cb_out);
             tile_regs_commit();

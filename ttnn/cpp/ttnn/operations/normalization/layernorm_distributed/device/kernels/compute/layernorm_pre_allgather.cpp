@@ -68,7 +68,7 @@ void MAIN {
          */
         reconfig_data_format(cb_x2, cb_reduce);
         pack_reconfig_data_format(cb_out);
-        reduce_init_delta<false>(cb_out);
+        reduce_init_delta<false>(cb_out, cb_x2, cb_reduce);
         cb_wait_front(cb_x2, Wt);
         cb_reserve_back(cb_out, onetile);
         ACQ();
@@ -89,7 +89,7 @@ void MAIN {
          */
         reconfig_data_format(cb_inp, cb_reduce);
         pack_reconfig_data_format(cb_out);
-        reduce_init_delta<false>(cb_out);
+        reduce_init_delta<false>(cb_out, cb_inp, cb_reduce);
         cb_reserve_back(cb_out, onetile);
         ACQ();
         for (uint32_t wtr = 0; wtr < Wt; wtr++) {

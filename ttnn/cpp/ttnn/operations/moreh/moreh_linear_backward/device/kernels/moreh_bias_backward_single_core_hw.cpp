@@ -101,7 +101,7 @@ void MAIN {
 #if defined FP32_DEST_ACC_EN
                 reconfig_data_format(cb_reduce, cb_scaler);
 #endif
-                reduce_init_delta<false>(cb_out0);
+                reduce_init_delta<false>(cb_out0, cb_reduce, cb_scaler);
                 reduce_tile((do_mask) ? (cb_intermed0) : (cb_in0), cb_scaler, 0, 0, 0);
                 reduce_revert_delta(cb_out0);
 
