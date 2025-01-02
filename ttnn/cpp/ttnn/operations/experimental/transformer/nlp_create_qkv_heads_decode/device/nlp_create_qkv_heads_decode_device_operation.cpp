@@ -56,11 +56,14 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
                 "We don't support partial heads in shards when q and k heads are not overlapping coregrid");
         }
         TT_FATAL(
-            !(batch_offset.has_value() ^ this->slice_size.has_value()),
+            !(this->batch_offset.has_value() ^ this->slice_size.has_value()),
             "Both batch_offset and slice_size must be provided or neither");
-        if (batch_offset.has_value() && this->slice_size.has_value()) {
-            TT_FATAL(batch_offset.value().get_logical_shape()[0] == 1, "batch_offset must be unary tensor");
-            num_users = this->slice_size.value();
+        if (this->batch_offset.has_value() && this->slice_size.has_value()) {
+            TT_FATAL(this->batch_offset.value().get_shape()[0] == 1, "batch_offset must be unary tensor");
+            uint32_t device_batch_offset = static_cast<uint32_t>(this->batch_offset.value().to_vector<int32_t>()[0]);
+            TT_FATAL(
+                device_batch_offset + this->slice_size.value() <= num_users,
+                "Batch offset + slice size should be less than or equal to num_users");
         }
 
     } else {
@@ -109,8 +112,8 @@ std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_outpu
     const auto& input_tensor = input_tensors.at(0);
     const auto& input_shape = input_tensor.get_logical_shape();
 
-    auto batch = input_shape[2];
-    if (this->slice_size.has_value()) {
+    auto batch = input_tensor.get_shape()[2];
+    if (this->batch_offset.has_value() && this->slice_size.has_value()) {
         batch = this->slice_size.value();
     }
 
@@ -187,7 +190,7 @@ operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_prog
         this->head_dim,
         this->overlap_qk_coregrid,
         this->input_on_subcoregrids,
-        batch_offset,
+        this->batch_offset,
         this->slice_size,
         output_tensors,
         compute_with_storage_grid_size);

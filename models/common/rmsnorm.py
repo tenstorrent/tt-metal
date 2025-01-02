@@ -83,18 +83,17 @@ class RMSNorm(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
-        if self.is_distributed:
-            self.weight_distributed = ttnn.as_tensor(
-                torch_weight,
-                device=device,
-                dtype=weight_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=weight_memory_config,
-                cache_file_name=cache_name,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
-                if is_mesh_device
-                else None,
-            )
+        self.weight_distributed = ttnn.as_tensor(
+            torch_weight,
+            device=device,
+            dtype=weight_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=weight_memory_config,
+            cache_file_name=cache_name,
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
+            if is_mesh_device
+            else None,
+        )
 
         self.sharded_output_config = sharded_output_config
         self.sharded_program_config = sharded_program_config

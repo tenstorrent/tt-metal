@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
     const uint32_t head_dim,
     const bool overlap_qk_coregrid,
     const bool input_on_subcoregrids,
-    const std::optional<const Tensor>& batch_offset,
+    const std::optional<const Tensor> batch_offset,
     std::optional<const uint32_t> slice_size,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size) {
@@ -32,7 +32,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
                 num_kv_heads,
                 head_dim,
                 overlap_qk_coregrid,
-                batch_offset,
+                std::move(batch_offset),
                 slice_size,
                 output,
                 compute_with_storage_grid_size);
@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
                 num_kv_heads,
                 head_dim,
                 overlap_qk_coregrid,
-                batch_offset,
+                std::move(batch_offset),
                 slice_size,
                 output,
                 compute_with_storage_grid_size);
@@ -217,7 +217,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     const uint32_t num_kv_heads,
     const uint32_t head_dim,
     const bool overlap_qk_coregrid,
-    const std::optional<const Tensor>& batch_offset,
+    const std::optional<const Tensor> batch_offset,
     std::optional<const uint32_t> slice_size,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size) {
@@ -403,102 +403,126 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
 
     uint32_t q_start_addr = q_base_addr;
     uint32_t device_batch_offset = 0;
-    bool use_batch_offset = batch_offset.has_value();
-
-    for (uint32_t i = 0; i < q_num_cores; ++i) {
-        const auto& core = q_cores_vector[i];
-        std::vector<uint32_t> q_reader_runtime_args;
-        q_reader_runtime_args.reserve(3 + in_num_cores_x + in_num_cores_y);
-        q_reader_runtime_args = {q_start_addr, use_batch_offset ? batch_offset.value().buffer()->address() : 0, i};
-        q_reader_runtime_args.insert(q_reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
-        q_reader_runtime_args.insert(q_reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
-
-        tt_metal::SetRuntimeArgs(program, q_reader_kernel_id, core, q_reader_runtime_args);
-        tt_metal::SetRuntimeArgs(program, q_writer_kernel_id, core, q_reader_runtime_args);
+    if (batch_offset.has_value()) {
+        device_batch_offset = static_cast<uint32_t>(batch_offset.value().to_vector<int32_t>()[0]);
     }
 
-    if (!overlap_qk_coregrid) {
-        for (uint32_t i = 0; i < k_num_cores; ++i) {
-            const auto& core = k_cores_vector[i];
-            std::vector<uint32_t> k_reader_runtime_args;
-            k_reader_runtime_args.reserve(3 + in_num_cores_x + in_num_cores_y);
-            k_reader_runtime_args = {q_start_addr, use_batch_offset ? batch_offset.value().buffer()->address() : 0, i};
-            k_reader_runtime_args.insert(k_reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
-            k_reader_runtime_args.insert(k_reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
+        for (uint32_t i = 0; i < q_num_cores; ++i) {
+            uint32_t device_batch_idx = i + device_batch_offset;
+            uint32_t in_tile_offset_by_batch = device_batch_idx < 16
+                                                   ? device_batch_idx * sub_tile_line_bytes
+                                                   : (device_batch_idx - 16) * sub_tile_line_bytes + 512 * element_size;
 
-            tt_metal::SetRuntimeArgs(program, k_reader_kernel_id, core, k_reader_runtime_args);
-            tt_metal::SetRuntimeArgs(program, k_writer_kernel_id, core, k_reader_runtime_args);
+            const auto& core = q_cores_vector[i];
+            std::vector<uint32_t> q_reader_runtime_args;
+            q_reader_runtime_args.reserve(2 + in_num_cores_x + in_num_cores_y);
+            q_reader_runtime_args = {
+                in_tile_offset_by_batch,
+                q_start_addr,
+            };
+            q_reader_runtime_args.insert(q_reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
+            q_reader_runtime_args.insert(q_reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
+
+            tt_metal::SetRuntimeArgs(program, q_reader_kernel_id, core, q_reader_runtime_args);
+            tt_metal::SetRuntimeArgs(program, q_writer_kernel_id, core, q_reader_runtime_args);
+        }
+
+        if (!overlap_qk_coregrid) {
+            for (uint32_t i = 0; i < k_num_cores; ++i) {
+                uint32_t device_batch_idx = i + device_batch_offset;
+                uint32_t in_tile_offset_by_batch =
+                    device_batch_idx < 16 ? device_batch_idx * sub_tile_line_bytes
+                                          : (device_batch_idx - 16) * sub_tile_line_bytes + 512 * element_size;
+
+                const auto& core = k_cores_vector[i];
+                std::vector<uint32_t> k_reader_runtime_args;
+                k_reader_runtime_args.reserve(2 + in_num_cores_x + in_num_cores_y);
+                k_reader_runtime_args = {
+                    in_tile_offset_by_batch,
+                    q_start_addr,
+                };
+                k_reader_runtime_args.insert(k_reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
+                k_reader_runtime_args.insert(k_reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
+
+                tt_metal::SetRuntimeArgs(program, k_reader_kernel_id, core, k_reader_runtime_args);
+                tt_metal::SetRuntimeArgs(program, k_writer_kernel_id, core, k_reader_runtime_args);
+            }
         }
     }
 
-    auto override_runtime_arguments_callback =
-        [q_reader_kernel_id,
-         q_writer_kernel_id,
-         k_reader_kernel_id,
-         k_writer_kernel_id,
-         q_num_cores,
-         k_num_cores,
-         cb_q_output,
-         cb_k_output,
-         cb_v_output,
-         q_cores_vector,
-         k_cores_vector,
-         element_size,
-         sub_tile_line_bytes,
-         overlap_qk_coregrid,
-         slice_size,
-         use_batch_offset](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
+        auto override_runtime_arguments_callback =
+            [q_reader_kernel_id,
+             q_writer_kernel_id,
+             k_reader_kernel_id,
+             k_writer_kernel_id,
+             q_num_cores,
+             k_num_cores,
+             cb_q_output,
+             cb_k_output,
+             cb_v_output,
+             q_cores_vector,
+             k_cores_vector,
+             element_size,
+             sub_tile_line_bytes,
+             overlap_qk_coregrid,
+             batch_offset,
+             slice_size](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                auto src_buffer = input_tensors.at(0).buffer();
 
-            uint32_t src_kv_buffer_addr = 0;
+                uint32_t src_kv_buffer_addr = 0;
 
-            auto dst_buffer_query = output_tensors.at(0).buffer();
-            auto dst_buffer_key = output_tensors.at(1).buffer();
-            auto dst_buffer_value = output_tensors.at(2).buffer();
+                auto dst_buffer_query = output_tensors.at(0).buffer();
+                auto dst_buffer_key = output_tensors.at(1).buffer();
+                auto dst_buffer_value = output_tensors.at(2).buffer();
 
-            UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
-            UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
-            UpdateDynamicCircularBufferAddress(program, cb_v_output, *dst_buffer_value);
+                UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
+                UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
+                UpdateDynamicCircularBufferAddress(program, cb_v_output, *dst_buffer_value);
 
-            uint32_t q_base_addr = input_tensors[0].buffer()->address();
-            uint32_t q_start_addr = q_base_addr;
+                uint32_t q_base_addr = input_tensors[0].buffer()->address();
+                uint32_t q_start_addr = q_base_addr;
 
-            uint32_t device_batch_offset = 0;
-            for (uint32_t i = 0; i < q_num_cores; ++i) {
-                const auto& core = q_cores_vector[i];
-                auto& runtime_args = GetRuntimeArgs(program, q_reader_kernel_id, core);
-                runtime_args[0] = q_start_addr;
-                runtime_args[1] = use_batch_offset ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-                runtime_args[2] = i;
-
-                auto& runtime_args_writer = GetRuntimeArgs(program, q_writer_kernel_id, core);
-                runtime_args_writer[0] = q_start_addr;
-                runtime_args_writer[1] =
-                    use_batch_offset ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-                runtime_args_writer[2] = i;
-            }
-
-            if (!overlap_qk_coregrid) {
-                for (uint32_t i = 0; i < k_num_cores; ++i) {
-                    const auto& core = k_cores_vector[i];
-                    auto& runtime_args = GetRuntimeArgs(program, k_reader_kernel_id, core);
-                    runtime_args[0] = q_start_addr;
-                    runtime_args[1] = use_batch_offset ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-                    runtime_args[2] = i;
-
-                    auto& runtime_args_writer = GetRuntimeArgs(program, k_writer_kernel_id, core);
-                    runtime_args_writer[0] = q_start_addr;
-                    runtime_args_writer[1] =
-                        use_batch_offset ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-                    runtime_args_writer[2] = i;
+                uint32_t device_batch_offset = 0;
+                if (batch_offset.has_value()) {
+                    device_batch_offset = static_cast<uint32_t>(batch_offset.value().to_vector<int32_t>()[0]);
                 }
-            }
-        };
+                for (uint32_t i = 0; i < q_num_cores; ++i) {
+                    uint32_t device_batch_idx = i + device_batch_offset;
+                    uint32_t in_tile_offset_by_batch =
+                        device_batch_idx < 16 ? device_batch_idx * sub_tile_line_bytes
+                                              : (device_batch_idx - 16) * sub_tile_line_bytes + 512 * element_size;
+                    const auto& core = q_cores_vector[i];
+                    auto& runtime_args = GetRuntimeArgs(program, q_reader_kernel_id, core);
+                    runtime_args[0] = in_tile_offset_by_batch;
+                    runtime_args[1] = q_start_addr;
+
+                    auto& runtime_args_writer = GetRuntimeArgs(program, q_writer_kernel_id, core);
+                    runtime_args_writer[0] = in_tile_offset_by_batch;
+                    runtime_args_writer[1] = q_start_addr;
+                }
+
+                if (!overlap_qk_coregrid) {
+                    for (uint32_t i = 0; i < k_num_cores; ++i) {
+                        uint32_t device_batch_idx = i + device_batch_offset;
+                        uint32_t in_tile_offset_by_batch =
+                            device_batch_idx < 16 ? device_batch_idx * sub_tile_line_bytes
+                                                  : (device_batch_idx - 16) * sub_tile_line_bytes + 512 * element_size;
+                        const auto& core = k_cores_vector[i];
+                        auto& runtime_args = GetRuntimeArgs(program, k_reader_kernel_id, core);
+                        runtime_args[0] = in_tile_offset_by_batch;
+                        runtime_args[1] = q_start_addr;
+
+                        auto& runtime_args_writer = GetRuntimeArgs(program, k_writer_kernel_id, core);
+                        runtime_args_writer[0] = in_tile_offset_by_batch;
+                        runtime_args_writer[1] = q_start_addr;
+                    }
+                }
+            };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 
@@ -510,7 +534,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     const uint32_t num_kv_heads,
     const uint32_t head_dim,
     const bool overlap_qk_coregrid,
-    const std::optional<const Tensor>& batch_offset,
+    const std::optional<const Tensor> batch_offset,
     std::optional<const uint32_t> slice_size,
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size) {
@@ -694,9 +718,16 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
 
     uint32_t q_start_addr = q_base_addr;
     uint32_t device_batch_offset = 0;
-    bool use_batch_offset = batch_offset.has_value();
+    if (batch_offset.has_value()) {
+        device_batch_offset = static_cast<uint32_t>(batch_offset.value().to_vector<int32_t>()[0]);
+    }
 
     for (uint32_t i = 0; i < q_num_cores; ++i) {
+        uint32_t device_batch_idx = i + device_batch_offset;
+        uint32_t in_tile_offset_by_batch = device_batch_idx < 16
+                                               ? device_batch_idx * sub_tile_line_bytes
+                                               : (device_batch_idx - 16) * sub_tile_line_bytes + 512 * element_size;
+
         const auto& core = q_cores_vector[i];
         std::vector<uint32_t> q_reader_runtime_args;
         q_reader_runtime_args.reserve(3 + 2 * in_num_cores);
@@ -709,6 +740,11 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
 
     if (!overlap_qk_coregrid) {
         for (uint32_t i = 0; i < k_num_cores; ++i) {
+            uint32_t device_batch_idx = i + device_batch_offset;
+            uint32_t in_tile_offset_by_batch = device_batch_idx < 16
+                                                   ? device_batch_idx * sub_tile_line_bytes
+                                                   : (device_batch_idx - 16) * sub_tile_line_bytes + 512 * element_size;
+
             const auto& core = k_cores_vector[i];
             std::vector<uint32_t> k_reader_runtime_args;
             k_reader_runtime_args.reserve(3 + 2 * in_num_cores);
@@ -735,8 +771,8 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
          element_size,
          sub_tile_line_bytes,
          overlap_qk_coregrid,
-         slice_size,
-         use_batch_offset](
+         batch_offset,
+         slice_size](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -756,12 +792,20 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
 
             uint32_t q_base_addr = input_tensors[0].buffer()->address();
             uint32_t q_start_addr = q_base_addr;
+            uint32_t device_batch_offset = 0;
+            if (batch_offset.has_value()) {
+                device_batch_offset = static_cast<uint32_t>(batch_offset.value().to_vector<int32_t>()[0]);
+            }
 
             auto& q_reader_args_by_core = GetRuntimeArgs(program, q_reader_kernel_id);
             auto& q_writer_args_by_core = GetRuntimeArgs(program, q_writer_kernel_id);
 
             uint32_t device_batch_offset = 0;
             for (uint32_t i = 0; i < q_num_cores; ++i) {
+                uint32_t device_batch_idx = i + device_batch_offset;
+                uint32_t in_tile_offset_by_batch =
+                    device_batch_idx < 16 ? device_batch_idx * sub_tile_line_bytes
+                                          : (device_batch_idx - 16) * sub_tile_line_bytes + 512 * element_size;
                 const auto& core = q_cores_vector[i];
                 auto& runtime_args = q_reader_args_by_core[core.x][core.y];
                 runtime_args[0] = q_start_addr;
@@ -780,6 +824,10 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
                 auto& k_writer_args_by_core = GetRuntimeArgs(program, k_writer_kernel_id);
 
                 for (uint32_t i = 0; i < k_num_cores; ++i) {
+                    uint32_t device_batch_idx = i + device_batch_offset;
+                    uint32_t in_tile_offset_by_batch =
+                        device_batch_idx < 16 ? device_batch_idx * sub_tile_line_bytes
+                                              : (device_batch_idx - 16) * sub_tile_line_bytes + 512 * element_size;
                     const auto& core = k_cores_vector[i];
                     auto& runtime_args = k_reader_args_by_core[core.x][core.y];
                     runtime_args[0] = q_start_addr;
