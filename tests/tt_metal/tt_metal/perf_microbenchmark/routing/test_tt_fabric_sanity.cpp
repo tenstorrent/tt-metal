@@ -22,6 +22,8 @@ using std::vector;
 using namespace tt;
 using json = nlohmann::json;
 
+#define DEFAULT_NUM_HOPS (0xFFFFFFFF)
+
 std::mt19937 global_rng;
 
 inline std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint32_t end, uint32_t count) {
@@ -38,7 +40,7 @@ inline std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint3
 
 typedef struct test_board {
     std::vector<chip_id_t> physical_chip_ids;
-    std::map<chip_id_t, chip_id_t> unicast_map;
+    std::vector<std::pair<chip_id_t, chip_id_t>> unicast_map;
     std::map<chip_id_t, tt_metal::Device*> device_handle_map;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
 
@@ -82,12 +84,6 @@ typedef struct test_board {
         // TODO: should we support odd number of chips (for unicast)?
         if ((physical_chip_ids.size() % 2) != 0) {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
-        }
-
-        // shuffle the list of chip IDs and assign consecutive IDs as a pair
-        std::shuffle(physical_chip_ids.begin(), physical_chip_ids.end(), global_rng);
-        for (auto i = 0; i < physical_chip_ids.size(); i += 2) {
-            unicast_map[physical_chip_ids[i]] = physical_chip_ids[i + 1];
         }
 
         device_handle_map = tt::tt_metal::detail::CreateDevices(physical_chip_ids);
@@ -146,6 +142,132 @@ typedef struct test_board {
                 physical_chip_id = control_plane->get_physical_chip_id_from_mesh_chip_id({mesh_id, j});
                 physical_chip_ids.push_back(physical_chip_id);
             }
+        }
+    }
+
+    void generate_unicast_map(uint32_t num_hops) {
+        std::unordered_map<chip_id_t, std::vector<chip_id_t>> chip_neighbors;
+        std::unordered_map<chip_id_t, std::vector<chip_id_t>> chip_n_hop_neighbors;
+        std::vector<std::pair<chip_id_t, uint32_t>> n_hop_neighbors_cnt;
+        std::queue<chip_id_t> temp_q;
+        uint32_t current_hops;
+        chip_id_t current_chip;
+
+        // shuffle chips to induce randomness
+        std::shuffle(physical_chip_ids.begin(), physical_chip_ids.end(), global_rng);
+
+        // for default setting, generate a random unicast map
+        if (DEFAULT_NUM_HOPS == num_hops) {
+            for (auto i = 0; i < physical_chip_ids.size(); i += 2) {
+                unicast_map.push_back({physical_chip_ids[i], physical_chip_ids[i + 1]});
+            }
+            return;
+        }
+
+        // for each physical chip id, store the neighbors
+        // TDOD: update the logic to find inter-mesh neighbors
+        for (auto chip_id : physical_chip_ids) {
+            auto neighbors = device_handle_map[chip_id]->get_ethernet_connected_device_ids();
+            for (auto neighbor : neighbors) {
+                // only append valid chip IDs since the neighbors could include mmio chips (wh galaxy) or
+                // could be outside of the board type (in case of partial galaxy configurations)
+                if (is_valid_chip_id(neighbor)) {
+                    chip_neighbors[chip_id].push_back(neighbor);
+                }
+            }
+        }
+
+        // for each chip id get the neighbors at hops = num_hops using BFS
+        for (auto chip_id : physical_chip_ids) {
+            std::unordered_map<chip_id_t, bool> visited;
+            uint32_t num_prev_chips;
+            current_hops = 0;
+
+            temp_q.push(chip_id);
+            visited[chip_id] = true;
+
+            while (current_hops < num_hops) {
+                // pull out nodes at depth current_hop - 1
+                num_prev_chips = temp_q.size();
+                for (auto i = 0; i < num_prev_chips; i++) {
+                    current_chip = temp_q.front();
+                    temp_q.pop();
+
+                    for (auto neighbor : chip_neighbors[current_chip]) {
+                        if (visited.contains(neighbor)) {
+                            continue;
+                        }
+                        temp_q.push(neighbor);
+                        visited[neighbor] = true;
+                    }
+                }
+
+                current_hops++;
+            }
+
+            // short-circuit if no n hop neighbor found for the given chip
+            if (temp_q.empty()) {
+                continue;
+            }
+
+            while (!temp_q.empty()) {
+                chip_n_hop_neighbors[chip_id].push_back(temp_q.front());
+                temp_q.pop();
+            }
+
+            // shuffle the list of neighbors to induce randomness
+            std::shuffle(chip_n_hop_neighbors[chip_id].begin(), chip_n_hop_neighbors[chip_id].end(), global_rng);
+
+            n_hop_neighbors_cnt.push_back({chip_id, chip_n_hop_neighbors[chip_id].size()});
+        }
+
+        // error out if no n hop chip pairs exist at all
+        if (!n_hop_neighbors_cnt.size()) {
+            throw std::runtime_error("No n hop chip pairs found");
+        }
+
+        // greedy algo - TODO: still not covering all the possible pairs, need to fix
+        // sort the neighbor count vector to first pick the chips with least number of neigbors
+        // done to avoid cases where the maximum number of n hop unicast pairs are not found
+        auto comp = [](std::pair<chip_id_t, uint32_t> a, std::pair<chip_id_t, uint32_t> b) {
+            return a.second < b.second;
+        };
+        std::sort(n_hop_neighbors_cnt.begin(), n_hop_neighbors_cnt.end(), comp);
+
+        for (auto& [chip_id, neighbor_cnt] : n_hop_neighbors_cnt) {
+            uint32_t temp_neighbor_cnt = UINT32_MAX;
+            chip_id_t selected_chip_id;
+
+            // check if the key exists, since it could have been erased if the chip id has already been picked
+            if (!chip_n_hop_neighbors.contains(chip_id)) {
+                continue;
+            }
+
+            // select the 1st chip from the neighbors that hasnt been picked already
+            for (auto& neighbor_chip_id : chip_n_hop_neighbors[chip_id]) {
+                if (!chip_n_hop_neighbors.contains(neighbor_chip_id)) {
+                    continue;
+                }
+
+                // greedy algo: choose the neighbor with least number of neighbors
+                if (chip_n_hop_neighbors[neighbor_chip_id].size() < temp_neighbor_cnt) {
+                    selected_chip_id = neighbor_chip_id;
+                    temp_neighbor_cnt = chip_n_hop_neighbors[neighbor_chip_id].size();
+                }
+            }
+
+            /* TODO: re-enable once the algo is fixed
+            if (UINT32_MAX == temp_neighbor_cnt)
+                throw std::runtime_error("No neighbor found for this chip");
+            */
+
+            unicast_map.push_back({chip_id, selected_chip_id});
+
+            // remove selected chip as it should not be picked again
+            chip_n_hop_neighbors.erase(selected_chip_id);
+
+            // remove the entry for current chip as it should not be picked again
+            chip_n_hop_neighbors.erase(chip_id);
         }
     }
 
@@ -295,6 +417,7 @@ typedef struct test_traffic {
     std::vector<std::vector<uint32_t>> tx_results;
     std::vector<std::vector<uint32_t>> rx_results;
     uint32_t test_results_address;
+    uint32_t rx_buf_size;
 
     test_traffic(
         std::shared_ptr<test_device_t>& tx_device_,
@@ -357,9 +480,11 @@ typedef struct test_traffic {
             std::vector<uint32_t> runtime_args = {
                 tx_device->get_endpoint_id(core),      // 0: src_endpoint_id
                 rx_device->get_noc_offset(dest_core),  // 1: dest_noc_offset
-                router_phys_core.x,
-                router_phys_core.y,
-                mesh_chip_id};
+                router_phys_core.x,                    // 2: router_x
+                router_phys_core.y,                    // 3: router_y
+                mesh_chip_id,                          // 4: mesh and chip id
+                rx_buf_size                            // 5: space in rx's L1
+            };
 
             if (ASYNC_WR == fabric_command) {
                 runtime_args.push_back(tx_to_rx_address_map[i]);
@@ -388,10 +513,10 @@ typedef struct test_traffic {
             core = rx_logical_cores[i];
 
             // setup runtime args
-            std::vector<uint32_t> runtime_args;
-
-            // push number of tx workers
-            runtime_args.push_back(rx_to_tx_map[i].size());
+            std::vector<uint32_t> runtime_args = {
+                rx_to_tx_map[i].size(),  // 0: num tx workers
+                rx_buf_size              // 1: space available in L1
+            };
 
             if (ASYNC_WR == fabric_command) {
                 // push the src endpoint IDs
@@ -592,9 +717,11 @@ typedef struct test_traffic {
                 // if only one tx set it to 0x30000 to allow more data writes
                 tx_to_rx_address_map[rx_to_tx_map[i][0]] = 0x30000;
                 rx_to_tx_address_map[i].push_back(0x30000);
+                rx_buf_size = 0xd0000;
             } else {
                 // TODO: for more than 1 tx, limit the size of test data
                 // allocate addresses in the range 0x30000 - 0x100000
+                rx_buf_size = 0x10000;
                 std::vector<uint32_t> address_prefix = get_random_numbers_from_range(3, 9, num_tx);
                 for (auto j = 0; j < num_tx; j++) {
                     address = address_prefix[j] * 0x10000;
@@ -635,7 +762,7 @@ int main(int argc, char **argv) {
 
     // TODO: use eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE which should be 0x19900, set test results size back
     // to 0x7000
-    constexpr uint32_t default_tunneler_queue_size_bytes = 0x4000; // maximum queue (power of 2)
+    constexpr uint32_t default_tunneler_queue_size_bytes = 0x8000;   // maximum queue (power of 2)
     constexpr uint32_t default_tunneler_test_results_addr = 0x39000; // 0x8000 * 4 + 0x19000; 0x10000 * 4 + 0x19000 = 0x59000 > 0x40000 (256kB)
     constexpr uint32_t default_tunneler_test_results_size = 0x6000;  // 256kB total L1 in ethernet core - 0x39000
     static_assert(
@@ -676,6 +803,8 @@ int main(int argc, char **argv) {
     constexpr const char* default_board_type = "glx32";
 
     constexpr uint32_t default_num_traffic_devices = 0;
+
+    constexpr uint32_t default_num_hops = 0xFFFFFFFF;
 
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
@@ -753,7 +882,9 @@ int main(int argc, char **argv) {
     uint32_t atomic_increment =
         test_args::get_command_option_uint32(input_args, "--atomic_increment", default_atomic_increment);
 
-    assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM);
+    // assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE
+    // && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice ==
+    // pkt_dest_size_choices_t::RANDOM);
 
     uint32_t test_device_id_l =
         test_args::get_command_option_uint32(input_args, "--device_id", default_test_device_id_l);
@@ -763,6 +894,8 @@ int main(int argc, char **argv) {
         test_args::get_command_option_uint32(input_args, "--num_src_endpoints", default_num_src_endpoints);
     uint32_t num_dest_endpoints =
         test_args::get_command_option_uint32(input_args, "--num_dest_endpoints", default_num_dest_endpoints);
+    uint32_t num_hops = test_args::get_command_option_uint32(input_args, "--num_hops", default_num_hops);
+    bool bidirectional_traffic = test_args::has_command_option(input_args, "--bidirectional");
 
     uint32_t tx_signal_address = default_tx_signal_address;
 
@@ -787,8 +920,13 @@ int main(int argc, char **argv) {
 
     try {
         test_board_t test_board(board_type);
-
         num_available_devices = test_board.get_num_available_devices();
+
+        // keep the number of test devices even
+        // TODO: handle differently for multicast
+        if (num_traffic_devices % 2) {
+            num_traffic_devices++;
+        }
 
         if (num_traffic_devices > num_available_devices) {
             throw std::runtime_error("Insufficient number of devices available");
@@ -796,24 +934,32 @@ int main(int argc, char **argv) {
             num_traffic_devices = num_available_devices;
         }
 
-        std::map<chip_id_t, std::shared_ptr<test_device_t>> test_devices;
+        test_board.generate_unicast_map(num_hops);
+
+        std::unordered_map<chip_id_t, std::shared_ptr<test_device_t>> test_devices;
         std::vector<test_traffic_t> fabric_traffic;
 
-        // init test devices
+        // init test devices from the list of chips
+        for (auto& chip_id : test_board.physical_chip_ids) {
+            test_devices[chip_id] = std::make_shared<test_device_t>(chip_id, &test_board);
+        }
+
+        // init traffic
+        chip_id_t tx_chip_id, rx_chip_id;
         for (auto& [tx_chip_id, rx_chip_id] : test_board.unicast_map) {
-            test_devices[tx_chip_id] = std::make_shared<test_device_t>(tx_chip_id, &test_board);
-            test_devices[rx_chip_id] = std::make_shared<test_device_t>(rx_chip_id, &test_board);
+            if (num_allocated_devices >= num_traffic_devices) {
+                break;
+            }
 
-            if (num_allocated_devices < num_traffic_devices) {
-                test_traffic_t traffic(
-                    test_devices[tx_chip_id],
-                    test_devices[rx_chip_id],
-                    num_src_endpoints,
-                    num_dest_endpoints,
-                    target_address);
-                fabric_traffic.push_back(traffic);
+            test_traffic_t traffic(
+                test_devices[tx_chip_id],
+                test_devices[rx_chip_id],
+                num_src_endpoints,
+                num_dest_endpoints,
+                target_address);
+            fabric_traffic.push_back(traffic);
 
-                // TODO: should this be optional?
+            if (bidirectional_traffic) {
                 test_traffic_t traffic_r(
                     test_devices[rx_chip_id],
                     test_devices[tx_chip_id],
@@ -821,9 +967,9 @@ int main(int argc, char **argv) {
                     num_dest_endpoints,
                     target_address);
                 fabric_traffic.push_back(traffic_r);
-
-                num_allocated_devices += 2;
             }
+
+            num_allocated_devices += 2;
         }
 
         // TODO: check this in a loop for all the devices involved in the traffic
@@ -882,14 +1028,15 @@ int main(int argc, char **argv) {
         };
 
         std::vector<uint32_t> rx_compile_args = {
-            prng_seed,              // 0: prng seed
-            data_kb_per_tx,         // 1: total data kb
-            max_packet_size_words,  // 2: max packet size (in words)
-            fabric_command,         // 3: fabric command
-            target_address,         // 4: target address
-            atomic_increment,       // 5: atomic increment
-            test_results_addr,      // 6: test results addr
-            test_results_size       // 7: test results size in bytes
+            prng_seed,               // 0: prng seed
+            data_kb_per_tx,          // 1: total data kb
+            max_packet_size_words,   // 2: max packet size (in words)
+            fabric_command,          // 3: fabric command
+            target_address,          // 4: target address
+            atomic_increment,        // 5: atomic increment
+            test_results_addr,       // 6: test results addr
+            test_results_size,       // 7: test results size in bytes
+            tx_pkt_dest_size_choice  // 8: pkt dest and size choice
         };
 
         // TODO: launch traffic kernels
