@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "graph_processor.hpp"
+#include "graph_consts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "ttnn/types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
@@ -322,7 +323,8 @@ int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
         std::unordered_map<std::string, std::string> params = {
             {kSize, std::to_string(buffer->size())},
             {kType, buffer->is_dram() ? "DRAM" : "L1"},
-            {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())}
+            {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
+            {kDeviceId, std::to_string(buffer->device()->id())}
         };
 
         graph.push_back(Vertex{
