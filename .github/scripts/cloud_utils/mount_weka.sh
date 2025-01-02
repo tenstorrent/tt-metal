@@ -18,7 +18,7 @@ fi
 # Wait until the hugepages are written as the above are not blocking
 hugepages_check_start=$(date +%s)
 hugepages_check_timeout=60
-while [[ "$(cat "$FILE")" -eq 0 ]]; do
+while [[ "$(cat "/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages")" -eq 0 ]]; do
   sleep 1
   if (( $(date +%s) - hugepages_check_start > hugepages_check_timeout )); then
     echo "::error title=weka-mount-hugepages-not-set::nr_hugepages is still 0 after $hugepages_check_timeout seconds. Please let infra team know via issue."
