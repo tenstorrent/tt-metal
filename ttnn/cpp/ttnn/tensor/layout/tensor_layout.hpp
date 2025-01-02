@@ -31,6 +31,13 @@ public:
         const PageConfig& page_config,
         const MemoryConfig& memory_config,
         const ttnn::Shape& legacy_shape);
+    [[deprecated("Use of Padded Shape is deprecated")]]
+    static TensorLayout fromPaddedShape(
+        DataType dtype,
+        const PageConfig& page_config,
+        const MemoryConfig& memory_config,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape);
 
     Layout get_layout() const { return page_config_.get_layout(); }
     PageConfig get_page_config() const { return page_config_; }

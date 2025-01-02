@@ -18,16 +18,17 @@ size_t round_up(size_t value, size_t multiple) {
 };
 
 Alignment legacyShapeToAlignment(
-    const ttnn::Shape& shape, const PageConfig& page_config, const MemoryConfig& memory_config) {
-    const auto& logical_shape = shape.logical_shape();
-    const auto& legacy_padded_shape = shape.padded_shape();
+    const ttnn::SimpleShape& logical_shape,
+    const ttnn::SimpleShape& legacy_padded_shape,
+    const PageConfig& page_config,
+    const MemoryConfig& memory_config) {
     if (logical_shape == legacy_padded_shape) {
         return Alignment{};
     }
 
-    const auto rank = legacy_padded_shape.rank();
+    const int padded_rank = legacy_padded_shape.rank();
     bool alignment_can_be_2D = true;
-    for (int i = rank - 3; i >= 0; i--) {
+    for (int i = -3; i >= -padded_rank; i--) {
         alignment_can_be_2D &= logical_shape[i] == legacy_padded_shape[i];
     }
 
@@ -35,8 +36,9 @@ Alignment legacyShapeToAlignment(
     if (memory_config.shard_spec.has_value()) {
         TT_FATAL(
             alignment_can_be_2D,
-            "Tensor with shape {} cannot be sharded because alignment will have rank greater than 2!",
-            shape);
+            "Tensor with shape {} ({}) cannot be sharded because alignment will have rank greater than 2!",
+            logical_shape,
+            legacy_padded_shape);
         if (page_config.get_layout() == Layout::ROW_MAJOR) {
             const auto& shard_spec = memory_config.shard_spec.value();
             if (shard_spec.physical_shard_shape.has_value()) {
@@ -49,7 +51,7 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with only height/width padding
     if (alignment_can_be_2D) {
-        ttnn::SmallVector<uint32_t> values(std::min((int)rank, 2));
+        ttnn::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
         const auto alignment_size = values.size();
         if (alignment_size >= 1) {
             values[alignment_size - 1] = legacy_padded_shape[-1];
@@ -63,11 +65,11 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with (deprecated) non-height/width padding
     // NOTE: Rank > 2 is guaranteed in this case
-    ttnn::SmallVector<uint32_t> values(rank);
-    values[rank - 1] = legacy_padded_shape[-1];
-    values[rank - 2] = legacy_padded_shape[-2];
+    ttnn::SmallVector<uint32_t> values(padded_rank);
+    values[padded_rank - 1] = legacy_padded_shape[-1];
+    values[padded_rank - 2] = legacy_padded_shape[-2];
 
-    for (int i = rank - 3; i >= 0; i--) {
+    for (int i = padded_rank - 3; i >= 0; i--) {
         values[i] = legacy_padded_shape[i] * values[i + 1];
     }
 
@@ -101,15 +103,39 @@ TensorLayout TensorLayout::fromLegacyPaddedShape(
         dtype,
         page_config,
         memory_config,
-        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(legacy_shape, page_config, memory_config));
+        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(
+            legacy_shape.logical_shape(), legacy_shape.padded_shape(), page_config, memory_config));
+}
+
+TensorLayout TensorLayout::fromPaddedShape(
+    DataType dtype,
+    const PageConfig& page_config,
+    const MemoryConfig& memory_config,
+    const ttnn::SimpleShape& logical_shape,
+    const ttnn::SimpleShape& padded_shape) {
+    return TensorLayout(
+        dtype,
+        page_config,
+        memory_config,
+        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
 }
 
 void TensorLayout::initialize_alignment() {
-    if (!alignment_.empty()) {
+    auto default_alignment = page_config_.create_default_alignment(dtype_, memory_config_);
+    if (alignment_.empty()) {
+        alignment_ = default_alignment;
         return;
     }
 
-    alignment_ = page_config_.create_default_alignment(dtype_, memory_config_);
+    ttnn::SmallVector<uint32_t> result(std::max(alignment_.size(), default_alignment.size()), 1);
+    for (size_t i = 0; i < alignment_.size(); i++) {
+        result[i + result.size() - alignment_.size()] = alignment_[i];
+    }
+    for (size_t i = 0; i < default_alignment.size(); i++) {
+        size_t result_idx = i + result.size() - default_alignment.size();
+        result[result_idx] = CMAKE_UNIQUE_NAMESPACE::round_up(result[result_idx], default_alignment[i]);
+    }
+    alignment_ = Alignment(std::move(result));
 }
 
 void TensorLayout::validate_alignment() const {
@@ -309,40 +335,40 @@ Size TensorLayout::compute_page_shape(const Size& physical_size) const {
     return page_config_.get_page_shape(physical_size, dtype_, memory_config_, physical_shard_shape);
 }
 
-Strides TensorLayout::compute_strides(const ttnn::SimpleShape& shape) const {
-    const int rank = static_cast<int>(shape.rank());
+Strides TensorLayout::compute_strides(const ttnn::SimpleShape& logical_shape) const {
+    const int rank = static_cast<int>(logical_shape.rank());
     const int alignment_rank = static_cast<int>(alignment_.size());
-
     Strides strides(rank, 1);
     for (int i = rank - 2; i >= 0; i--) {
-        strides[i] = strides[i + 1] * shape[i + 1];
-
+        strides[i] = strides[i + 1] * logical_shape[i + 1];
         const int alignment_index = i - (rank - alignment_rank) + 1;
         if (alignment_index >= 0) {
             strides[i] = CMAKE_UNIQUE_NAMESPACE::round_up(strides[i], alignment_[alignment_index]);
         }
     }
-
     return strides;
 }
 
 ttnn::SimpleShape TensorLayout::compute_padded_shape(const ttnn::SimpleShape& shape) const {
-    ttnn::SmallVector<uint32_t> padded_shape(shape.rank());
+    ttnn::SmallVector<uint32_t> padded_shape(std::max(shape.rank(), alignment_.size()));
     int rank_index = static_cast<int>(shape.rank()) - 1;
     int alignment_index = static_cast<int>(alignment_.size()) - 1;
+    int padded_shape_index = static_cast<int>(padded_shape.size() - 1);
     size_t accum_alignment = 1;
 
-    for (; rank_index >= 0 && alignment_index >= 0; rank_index--, alignment_index--) {
+    for (; alignment_index >= 0; rank_index--, alignment_index--, padded_shape_index--) {
+        uint32_t shape_value = rank_index >= 0 ? shape[rank_index] : 1;
+        uint32_t alignment_value = alignment_[alignment_index];
+        uint32_t& padded_shape_value = padded_shape[padded_shape_index];
         // The last 2 dimensions of a shape are special
         if (rank_index >= static_cast<int>(shape.rank()) - 2) {
-            padded_shape[rank_index] = CMAKE_UNIQUE_NAMESPACE::round_up(shape[rank_index], alignment_[alignment_index]);
+            padded_shape_value = CMAKE_UNIQUE_NAMESPACE::round_up(shape_value, alignment_value);
         } else {
-            if (accum_alignment % alignment_[alignment_index] == 0) {
+            if (accum_alignment % alignment_value == 0) {
                 // Alignment for this dimension is redundant, ignoring
-                padded_shape[rank_index] = shape[rank_index];
-            } else if (alignment_[alignment_index] % accum_alignment == 0) {
-                padded_shape[rank_index] =
-                    CMAKE_UNIQUE_NAMESPACE::round_up(shape[rank_index], alignment_[alignment_index] / accum_alignment);
+                padded_shape_value = shape_value;
+            } else if (alignment_value % accum_alignment == 0) {
+                padded_shape_value = CMAKE_UNIQUE_NAMESPACE::round_up(shape_value, alignment_value / accum_alignment);
             } else {
                 TT_THROW(
                     "Padded shape can't be deducted from TensorLayout parameters {} and Shape {}", alignment_, shape);
@@ -351,11 +377,11 @@ ttnn::SimpleShape TensorLayout::compute_padded_shape(const ttnn::SimpleShape& sh
 
         // Alignment doesn't accumulate on the last dimension of a shape
         if (rank_index != static_cast<int>(shape.rank()) - 1) {
-            accum_alignment *= padded_shape[rank_index];
+            accum_alignment *= padded_shape_value;
         }
     }
-    for (; rank_index >= 0; rank_index--) {
-        padded_shape[rank_index] = shape[rank_index];
+    for (; rank_index >= 0; rank_index--, padded_shape_index--) {
+        padded_shape[padded_shape_index] = shape[rank_index];
     }
     return ttnn::SimpleShape(std::move(padded_shape));
 }
