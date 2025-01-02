@@ -1793,6 +1793,8 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
     uint32_t in1_num_subblocks = per_core_N / out_subblock_w;
     uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
+    uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size;
+    uint32_t in1_tensor_size_bytes = in1_block_num_tiles * num_blocks * in1_single_tile_size;
     uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
@@ -1819,9 +1821,11 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         in0_block_num_tiles,     // in0_block_num_tiles
         in0_subblock_num_tiles,  // in0_subblock_num_tiles
 
-        in1_num_subblocks,    // in1_num_subblocks
-        in1_block_num_tiles,  // in1_block_num_tiles
-        in1_per_core_w,       // in1_per_core_w
+        in1_num_subblocks,      // in1_num_subblocks
+        in1_block_num_tiles,    // in1_block_num_tiles
+        in1_block_size_bytes,   // in1_block_size_bytes
+        in1_tensor_size_bytes,  // in1_tensor_size_bytes
+        in1_per_core_w,         // in1_per_core_w
 
         num_blocks,  // num_blocks
 
@@ -1832,7 +1836,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out
-        in1_single_tile_size};
+    };
 
     /* Kernel defines */
     std::map<string, string> mm_in1_kernel_defines;
