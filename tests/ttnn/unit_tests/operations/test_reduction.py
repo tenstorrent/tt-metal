@@ -75,6 +75,29 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim):
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@pytest.mark.parametrize("dim_1", [3])
+@pytest.mark.parametrize("dim_2", [5])
+@pytest.mark.parametrize("dim_3", [37])
+@pytest.mark.parametrize("dim_4", [44])
+@pytest.mark.parametrize("dim_5", [63])
+@pytest.mark.parametrize("dim", [[1, 4]])
+@pytest.mark.parametrize("keepdim", [True])
+def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keepdim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((dim_1, dim_2, dim_3, dim_4, dim_5), dtype=torch.bfloat16)
+    torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
 @pytest.mark.parametrize("batch_size", [3])
 @pytest.mark.parametrize("c", [5])
 @pytest.mark.parametrize("h", [37])
