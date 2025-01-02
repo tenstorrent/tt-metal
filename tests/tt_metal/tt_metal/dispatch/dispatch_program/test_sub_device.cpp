@@ -81,7 +81,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
             EXPECT_TRUE(std::equal(input_1_it, input_1_it + page_size_1 / sizeof(uint32_t), readback.begin()));
             input_1_it += page_size_1 / sizeof(uint32_t);
         }
-        auto sem_addr = global_semaphore->address();
+        auto sem_addr = global_semaphore.address();
         auto physical_syncer_core = device->worker_core_from_logical_core(syncer_core);
         tt::llrt::write_hex_vec_to_core(device->id(), physical_syncer_core, std::vector<uint32_t>{1}, sem_addr);
 

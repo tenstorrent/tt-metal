@@ -54,42 +54,41 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("enable_persistent_fabric_mode") = false,
             py::arg("create_semaphore_handles") = true},
 
-        ttnn::
-            pybind_overload_t{
-                [](const ccl_operation_t& self,
-                   const ttnn::Tensor& input_tensor,
-                   const int32_t dim,
-                   const uint32_t cluster_axis,
-                   const MeshDevice& mesh_device,
-                   const ttnn::ccl::Topology topology,
-                   const std::optional<size_t> num_preferred_links,
-                   const std::optional<MemoryConfig>& memory_config,
-                   std::optional<SubDeviceId> subdevice_id,
-                   bool enable_persistent_fabric_mode,
-                   bool create_semaphore_handles) -> ttnn::Tensor {
-                    return self(
-                        input_tensor,
-                        dim,
-                        cluster_axis,
-                        mesh_device,
-                        topology,
-                        memory_config,// = std::nullopt,
-                        num_preferred_links,// = std::nullopt,
-                        subdevice_id,// = std::nullopt,
-                        enable_persistent_fabric_mode,// = false,
-                        create_semaphore_handles);
-                },
-                py::arg("input_tensor"),
-                py::arg("dim"),
-                py::arg("cluster_axis"),
-                py::arg("mesh_device"),
-                py::arg("topology"),
-                py::kw_only(),
-                py::arg("num_links") = std::nullopt,
-                py::arg("memory_config") = std::nullopt,
-                py::arg("subdevice_id") = std::nullopt,
-                py::arg("enable_persistent_fabric_mode") = false,
-                py::arg("create_semaphore_handles") = true});
+        ttnn::pybind_overload_t{
+            [](const ccl_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               const int32_t dim,
+               const uint32_t cluster_axis,
+               const MeshDevice& mesh_device,
+               const ttnn::ccl::Topology topology,
+               const std::optional<size_t> num_preferred_links,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SubDeviceId> subdevice_id,
+               bool enable_persistent_fabric_mode,
+               bool create_semaphore_handles) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    dim,
+                    cluster_axis,
+                    mesh_device,
+                    topology,
+                    memory_config,                  // = std::nullopt,
+                    num_preferred_links,            // = std::nullopt,
+                    subdevice_id,                   // = std::nullopt,
+                    enable_persistent_fabric_mode,  // = false,
+                    create_semaphore_handles);
+            },
+            py::arg("input_tensor"),
+            py::arg("dim"),
+            py::arg("cluster_axis"),
+            py::arg("mesh_device"),
+            py::arg("topology"),
+            py::kw_only(),
+            py::arg("num_links") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("enable_persistent_fabric_mode") = false,
+            py::arg("create_semaphore_handles") = true});
 }
 
 }  // namespace detail

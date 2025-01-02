@@ -80,7 +80,7 @@ void get_max_page_size_and_num_pages(
     num_pages = total_size / page_size;
 }
 
-std::tuple<std::vector<tt_metal::Program>,std::shared_ptr<tt_metal::v1::experimental::GlobalCircularBuffer>>
+std::tuple<std::vector<tt_metal::Program>, tt_metal::v1::experimental::GlobalCircularBuffer>
 create_programs(
     tt_metal::Device* device,
     const CoreRangeSet& dram_reader_core,
@@ -146,7 +146,7 @@ create_programs(
     tt_metal::CircularBufferConfig writer_cb_config = tt_metal::CircularBufferConfig(receiver_cb_size);
     writer_cb_config.remote_index(writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
     auto writer_cb =
-        tt_metal::v1::experimental::CreateCircularBuffer(sender_program, dram_reader_core, writer_cb_config, *global_cb);
+        tt_metal::v1::experimental::CreateCircularBuffer(sender_program, dram_reader_core, writer_cb_config, global_cb);
 
     // mixed cb dataformat
     uint32_t next_layer_num_blocks = num_blocks * 2;
@@ -178,7 +178,7 @@ create_programs(
     tt_metal::CircularBufferConfig receiver_cb_config = tt_metal::CircularBufferConfig(receiver_cb_size);
     receiver_cb_config.remote_index(receiver_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
     auto receiver_cb = tt_metal::v1::experimental::CreateCircularBuffer(
-        receiver_program, l1_receiver_cores, receiver_cb_config, *global_cb);
+        receiver_program, l1_receiver_cores, receiver_cb_config, global_cb);
 
     log_info("reader_cb_size: {}", reader_cb_size);
     log_info("receiver_cb_size: {}", receiver_cb_size);
@@ -846,7 +846,7 @@ int main(int argc, char** argv) {
                 tt::DataFormat::Bfp8_b,
                 l1_receiver_core,
                 num_receivers,
-                global_cb->buffer_address());
+                global_cb.buffer_address());
 
         } else {
             // output
@@ -860,7 +860,7 @@ int main(int argc, char** argv) {
                 tt::DataFormat::Float16_b,
                 l1_receiver_core,
                 num_receivers,
-                global_cb->buffer_address());
+                global_cb.buffer_address());
         }
 
         ////////////////////////////////////////////////////////////////////////////

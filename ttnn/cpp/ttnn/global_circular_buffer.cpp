@@ -14,23 +14,17 @@ MultiDeviceGlobalCircularBuffer::MultiDeviceGlobalCircularBuffer(MeshDevice* mes
     TT_ASSERT(
         mesh_device != nullptr,
         "Must provide a valid mesh_device when initializing a global circular buffer on multiple devices.");
-    this->global_circular_buffers = std::vector<std::shared_ptr<GlobalCircularBuffer>>(mesh_device->num_devices());
+    this->global_circular_buffers.reserve(mesh_device->num_devices());
 }
 
-std::shared_ptr<GlobalCircularBuffer> create_global_circular_buffer(
+GlobalCircularBuffer create_global_circular_buffer(
     Device* device,
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    std::shared_ptr<GlobalCircularBuffer> global_cb;
-    device->push_work(
-        [device, &sender_receiver_core_mapping, size, buffer_type, sub_device_ids, &global_cb]() {
-            global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
-                device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
-        },
-        /*blocking=*/true);
-    return global_cb;
+    return tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+        device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
 }
 
 MultiDeviceGlobalCircularBuffer create_global_circular_buffer(
@@ -40,17 +34,12 @@ MultiDeviceGlobalCircularBuffer create_global_circular_buffer(
     BufferType buffer_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     MultiDeviceGlobalCircularBuffer multi_device_global_cb(mesh_device);
+    auto& global_circular_buffers = multi_device_global_cb.global_circular_buffers;
     const auto& devices = mesh_device->get_devices();
     for (uint32_t i = 0; i < devices.size(); ++i) {
         auto* device = devices[i];
-        auto& global_cb = multi_device_global_cb.global_circular_buffers[i];
-        device->push_work([device, &sender_receiver_core_mapping, size, buffer_type, sub_device_ids, &global_cb]() {
-            global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
-                device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
-        });
-    }
-    for (auto* device : devices) {
-        device->synchronize();
+        global_circular_buffers.push_back(
+            create_global_circular_buffer(device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids));
     }
     return multi_device_global_cb;
 }

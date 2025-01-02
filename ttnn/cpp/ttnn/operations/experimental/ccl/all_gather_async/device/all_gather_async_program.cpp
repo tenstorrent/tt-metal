@@ -130,14 +130,14 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::optional<std::shared_ptr<const GlobalSemaphore>>& semaphore_handle_opt,
+    const std::optional<GlobalSemaphore>& semaphore_opt,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
 
-    TT_FATAL(semaphore_handle_opt.has_value(), "Semaphore handle is required for compile time");
+    TT_FATAL(semaphore_opt.has_value(), "Semaphore is required for compile time");
 
-    auto semaphore_handle = semaphore_handle_opt.value();
+    const auto& semaphore = semaphore_opt.value();
 
     Device* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
@@ -320,21 +320,13 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_write_cb_to_tensor_slice(
             output_worker_slice_v2, src0_cb_index, mcast_dest_args));
         // 2, mcast the semaphore to all dest for teardown
-        TT_FATAL(
-            semaphore_handle != nullptr,
-            "Internal error during all-=gather fatcory. Global semaphore for fabric teardown not properly "
-            "initialized for non-persistent fabric mode");
         writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_multicast_semaphore_inc(
-            semaphore_handle.get(),
-            ttnn::ccl::cmd::CclCommandAtomicInc{1},
-            drain_sync_core.x,
-            drain_sync_core.y,
-            mcast_dest_args));
+            &semaphore, ttnn::ccl::cmd::CclCommandAtomicInc{1}, drain_sync_core.x, drain_sync_core.y, mcast_dest_args));
         if (!enable_async_output_tensor) {
             // 3, wait for n_chip*num_links number of semaphore at teardown semaphore address for first chip, and
             // n_chip*num_links+1 for other chips
             writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_semaphore_wait(
-                semaphore_handle.get(),
+                &semaphore,
                 is_first_chip ? ring_size * num_links : ring_size * num_links + !enable_persistent_fabric_mode));
         }
 
@@ -343,7 +335,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             // 4, send semaphore unicast to forward device except for the last chip
             if (!is_last_chip) {
                 writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_unicast_semaphore_inc(
-                    semaphore_handle.get(),
+                    &semaphore,
                     ttnn::ccl::cmd::CclCommandAtomicInc{1},
                     drain_sync_core.x,
                     drain_sync_core.y,
@@ -359,7 +351,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
                     info.edm_noc_x, info.edm_noc_y, info.termination_addr, 1));
             }
             // 6. (drain sync core) reset semaphore to 0
-            writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_core_semaphore_set(semaphore_handle.get(), 0));
+            writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_core_semaphore_set(&semaphore, 0));
         }
 
         // set the rt args
@@ -382,7 +374,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore_handle, sender_worker_cores](
+        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,

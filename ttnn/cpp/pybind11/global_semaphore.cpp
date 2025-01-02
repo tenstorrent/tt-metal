@@ -46,7 +46,7 @@ void py_module(py::module& module) {
 
     module.def(
         "get_global_semaphore_address",
-        py::overload_cast<const std::shared_ptr<GlobalSemaphore>&>(&get_global_semaphore_address),
+        py::overload_cast<const GlobalSemaphore&>(&get_global_semaphore_address),
         py::arg("global_semaphore"),
         R"doc(
             Get the address of the global semaphore.
@@ -57,7 +57,7 @@ void py_module(py::module& module) {
 
     module.def(
         "reset_global_semaphore_value",
-        [](const std::shared_ptr<GlobalSemaphore>& global_semaphore,
+        [](const GlobalSemaphore& global_semaphore,
            uint32_t reset_value,
            const std::vector<SubDeviceId>& sub_device_ids) {
             ttnn::global_semaphore::reset_global_semaphore_value(global_semaphore, reset_value, sub_device_ids);

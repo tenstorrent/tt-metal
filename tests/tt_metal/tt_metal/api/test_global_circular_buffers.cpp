@@ -25,8 +25,8 @@ TEST_F(DispatchFixture, TensixCreateGlobalCircularBuffers) {
         sender_receiver_core_mapping[CoreCoord(0, 0)] = cores;
         auto global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
             device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
-        auto buffer_address = global_cb->buffer_address();
-        auto config_address = global_cb->config_address();
+        auto buffer_address = global_cb.buffer_address();
+        auto config_address = global_cb.config_address();
     }
     {
         std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
@@ -84,14 +84,14 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
         EXPECT_THROW(global_cb_config.remote_index(2), std::exception);
         EXPECT_THROW(
             tt::tt_metal::v1::experimental::CreateCircularBuffer(
-                program, CoreRangeSet(CoreRange({3, 3})), global_cb_config, *global_cb),
+                program, CoreRangeSet(CoreRange({3, 3})), global_cb_config, global_cb),
             std::exception);
         auto remote_cb =
-            tt::tt_metal::v1::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, *global_cb);
+            tt::tt_metal::v1::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         tt::tt_metal::detail::CompileProgram(device, program);
         program.finalize(device);
-        tt::tt_metal::v1::experimental::UpdateDynamicCircularBufferAddress(program, remote_cb, *global_cb);
-        EXPECT_THROW(UpdateDynamicCircularBufferAddress(program, remote_cb, *dummy_global_cb), std::exception);
+        tt::tt_metal::v1::experimental::UpdateDynamicCircularBufferAddress(program, remote_cb, global_cb);
+        EXPECT_THROW(UpdateDynamicCircularBufferAddress(program, remote_cb, dummy_global_cb), std::exception);
     }
     {
         tt::tt_metal::Program program = CreateProgram();
@@ -107,7 +107,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
         global_cb_config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
         global_cb_config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
         auto remote_cb =
-            tt::tt_metal::v1::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, *global_cb);
+            tt::tt_metal::v1::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         tt::tt_metal::detail::CompileProgram(device, program);
         EXPECT_THROW(program.finalize(device), std::exception);
     }
