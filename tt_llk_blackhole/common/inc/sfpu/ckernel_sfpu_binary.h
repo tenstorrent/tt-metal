@@ -17,14 +17,14 @@ namespace ckernel
 namespace sfpu
 {
 
-enum {
-    ADD_BINARY = 0,
-    SUB_BINARY = 1,
-    MUL_BINARY = 2,
-    DIV_BINARY = 3,
-    RSUB_BINARY = 4,
-    POW_BINARY = 5
-};  // BINOP_MODE
+enum class BinaryOp : uint8_t {
+    ADD = 0,
+    SUB = 1,
+    MUL = 2,
+    DIV = 3,
+    RSUB = 4,
+    POW = 5
+};
 
 sfpi_inline vFloat _calculate_sfpu_binary_power_(vFloat base, vFloat pow)
 {
@@ -93,7 +93,7 @@ sfpi_inline vFloat _calculate_sfpu_binary_power_(vFloat base, vFloat pow)
     return result;
 }
 
-template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8>
 inline void _calculate_sfpu_binary_(const uint dst_offset)
 {
     // SFPU microcode
@@ -103,13 +103,13 @@ inline void _calculate_sfpu_binary_(const uint dst_offset)
         vFloat in1 = dst_reg[dst_offset * dst_tile_size];
         vFloat result = 0.0f;
 
-        if constexpr (BINOP_MODE == ADD_BINARY) {
+        if constexpr (BINOP == BinaryOp::ADD) {
             result = in0 + in1;
-        } else if constexpr (BINOP_MODE == SUB_BINARY) {
+        } else if constexpr (BINOP == BinaryOp::SUB) {
             result = in0 - in1;
-        } else if constexpr (BINOP_MODE == MUL_BINARY) {
+        } else if constexpr (BINOP == BinaryOp::MUL) {
             result = in0 * in1;
-        } else if constexpr (BINOP_MODE == DIV_BINARY) {
+        } else if constexpr (BINOP == BinaryOp::DIV) {
             v_if (in1 == 0) {
                 v_if (in0 == 0) {
                     result = std::numeric_limits<float>::quiet_NaN();
@@ -124,14 +124,22 @@ inline void _calculate_sfpu_binary_(const uint dst_offset)
                 result = in0 * setsgn(_sfpu_reciprocal_<4>(in1), in1);
             }
             v_endif;
-        } else if constexpr (BINOP_MODE == RSUB_BINARY) {
+        } else if constexpr (BINOP == BinaryOp::RSUB) {
             result = in1 - in0;
-        } else if constexpr (BINOP_MODE == POW_BINARY) {
+        } else if constexpr (BINOP == BinaryOp::POW) {
             result = _calculate_sfpu_binary_power_(in0, in1);
         }
 
         dst_reg[0] = result;
         dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
+inline void _sfpu_binary_init_()
+{
+    if constexpr (BINOP == BinaryOp::DIV) {
+        _init_reciprocal_<APPROXIMATION_MODE>();
     }
 }
 
