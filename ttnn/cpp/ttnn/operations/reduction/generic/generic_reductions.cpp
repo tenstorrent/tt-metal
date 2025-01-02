@@ -49,6 +49,38 @@ ttnn::SmallVector<int> generate_reduce_dim(
     return dim;
 }
 
+Tensor reshape_nd_to_4d_for_transpose(const Tensor& input_tensor_arg, int& dim1, int& dim2) {
+    auto input_shape = input_tensor_arg.get_shape();
+    auto rank = input_shape.size();
+    auto input_tensor = input_tensor_arg;
+    if (dim1 < 0) {
+        dim1 += rank;
+    }
+    if (dim2 < 0) {
+        dim2 += rank;
+    }
+    if (rank > 4) {
+        auto new_shape = ttnn::SmallVector<uint32_t>(4, 1);
+        int insert_idx = 0;
+        for (int i = 0; i < rank; i++) {
+            if (i == dim1 || i == dim2) {
+                insert_idx++;
+                new_shape[insert_idx] = input_shape[i];
+                if (i == dim1) {
+                    dim1 = insert_idx;
+                } else {
+                    dim2 = insert_idx;
+                }
+                insert_idx++;
+                continue;
+            }
+            new_shape[insert_idx] *= input_shape[i];
+        }
+        input_tensor = ttnn::reshape(input_tensor, ttnn::SimpleShape{new_shape});
+    }
+    return input_tensor;
+}
+
 template <ReduceType reduce_type>
 static Tensor reduce_impl(
     const Tensor& input_tensor_arg,
@@ -62,6 +94,7 @@ static Tensor reduce_impl(
     auto input_shape = input_tensor_arg.get_logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
+    const bool is_rank_le_4d = rank <= 4;
 
     ttnn::SmallVector<uint32_t> output_shape;
     for (int axis = 0; axis < input_shape.size(); axis++) {
@@ -75,46 +108,51 @@ static Tensor reduce_impl(
         }
     }
 
-    auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_arg);
+    auto input_tensor = is_rank_le_4d ? ttnn::unsqueeze_to_4D(input_tensor_arg) : input_tensor_arg;
 
     Tensor output_tensor;
     bool single_reduce_op = (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
-                            (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
+                            (dim.size() == 2 && dim[0] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
         auto reduce_4d_loop = [&](const bool use_reduce_type) -> Tensor {
             Tensor output_tensor = input_tensor;
-            int offset = 4 - rank;
+            int offset = is_rank_le_4d ? 4 - rank : 0;
             for (int i_dim = rank - 1; i_dim >= 0; i_dim--) {
-                bool found = std::find(dim.begin(), dim.end(), i_dim) != dim.end();
-                if (found) {
-                    bool transpose = i_dim < rank - 2;
-                    int adjusted_dim = offset + i_dim;
-                    int reduce_dim = adjusted_dim;
-                    if (transpose) {
-                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, 2, memory_config);
-                        reduce_dim = 2;
-                    }
-                    if (use_reduce_type) {
-                        output_tensor = reduce_impl<reduce_type>(
-                            output_tensor,
-                            {reduce_dim},
-                            /*keepdim=*/true,
-                            memory_config,
-                            compute_kernel_config,
-                            scalar,
-                            /*reshape=*/false);
-                    } else {
-                        output_tensor = reduce_impl<ReduceType::Sum>(
-                            output_tensor,
-                            {reduce_dim},
-                            /*keepdim=*/true,
-                            memory_config,
-                            compute_kernel_config,
-                            scalar,
-                            /*reshape=*/false);
-                    }
-                    if (transpose) {
-                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -2, memory_config);
+                if (std::find(dim.begin(), dim.end(), i_dim) == dim.end()) {
+                    continue;
+                }
+                bool transpose = i_dim < rank - 2;
+                int adjusted_dim = offset + i_dim;
+                int reduce_dim = adjusted_dim;
+                if (transpose) {
+                    output_tensor =
+                        is_rank_le_4d ? output_tensor : reshape_nd_to_4d_for_transpose(output_tensor, adjusted_dim, -1);
+                    output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -1, memory_config);
+                    reduce_dim = output_tensor.get_shape().size() - 1;
+                }
+                if (use_reduce_type) {
+                    output_tensor = reduce_impl<reduce_type>(
+                        output_tensor,
+                        {reduce_dim},
+                        /*keepdim=*/true,
+                        memory_config,
+                        compute_kernel_config,
+                        scalar,
+                        /*reshape=*/false);
+                } else {
+                    output_tensor = reduce_impl<ReduceType::Sum>(
+                        output_tensor,
+                        {reduce_dim},
+                        /*keepdim=*/true,
+                        memory_config,
+                        compute_kernel_config,
+                        scalar,
+                        /*reshape=*/false);
+                }
+                if (transpose) {
+                    output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -1, memory_config);
+                    if (!is_rank_le_4d) {
+                        output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape{output_shape});
                     }
                 }
             }
