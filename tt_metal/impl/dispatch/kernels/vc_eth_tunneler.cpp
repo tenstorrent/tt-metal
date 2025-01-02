@@ -173,6 +173,7 @@ constexpr DispatchRemoteNetworkType remote_sender_network_type[MAX_TUNNEL_LANES]
 
 constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(44);
 constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(45);
+constexpr bool debug_info = kernel_status_buf_addr_arg > 0;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
@@ -184,12 +185,14 @@ constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(47);
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 1, 0xbb000000);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 2, 0xAABBCCDD);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 3, 0xDDCCBBAA);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 4, endpoint_id_start_index);
+    if constexpr (debug_info) {
+        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 1, 0xbb000000);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 2, 0xAABBCCDD);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 3, 0xDDCCBBAA);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 4, endpoint_id_start_index);
+    }
 
     for (uint32_t i = 0; i < tunnel_lanes; i++) {
         input_queues[i].init(
@@ -216,11 +219,11 @@ void kernel_main() {
     }
 
     if (!wait_all_src_dest_ready(input_queues, tunnel_lanes, output_queues, tunnel_lanes, timeout_cycles)) {
-        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
+        if constexpr (debug_info) write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
 
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
+    if constexpr (debug_info) write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
 
     bool all_outputs_finished = false;
     uint64_t data_words_sent = 0;
@@ -228,15 +231,19 @@ void kernel_main() {
     uint64_t start_timestamp = get_timestamp();
     uint32_t switch_counter = 0;
     while (!all_outputs_finished) {
-        iter++;
+        if constexpr (debug_info) iter++;
         switch_counter++;
         all_outputs_finished = switch_counter >= SWITCH_THRESHOLD;
         for (uint32_t i = 0; i < tunnel_lanes; i++) {
             if (input_queues[i].get_curr_packet_valid()) {
                 bool full_packet_sent;
-                uint32_t words_sent =
+                const uint32_t words_sent =
                     output_queues[i].forward_data_from_input(0, full_packet_sent, input_queues[i].get_end_of_cmd());
-                data_words_sent += words_sent;
+
+                if constexpr (debug_info) {
+                    data_words_sent += words_sent;
+                }
+
                 if (words_sent > 0) {
                     switch_counter = 0;
                     all_outputs_finished = false;
@@ -271,18 +278,20 @@ void kernel_main() {
 
     }
 
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
+    if constexpr (debug_info) write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
     for (uint32_t i = 0; i < tunnel_lanes; i++) {
         output_queues[i].output_barrier();
     }
 
-    uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
+    if constexpr (debug_info) {
+        uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
 
-    set_64b_result(kernel_status, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
-    set_64b_result(kernel_status, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
-    set_64b_result(kernel_status, iter, PQ_TEST_ITER_INDEX);
+        set_64b_result(kernel_status, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
+        set_64b_result(kernel_status, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
+        set_64b_result(kernel_status, iter, PQ_TEST_ITER_INDEX);
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
+        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
+    }
 }

@@ -380,17 +380,19 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr, uint32_t& local_downs
     // grab what we need in one chunk
     cb_acquire_pages<my_noc_xy, RelayInlineState::my_downstream_cb_sem>(npages);
 
-    uint32_t remaining = cmddat_q_end - data_ptr;
-    if (cmddat_wrap_enable && length > remaining) {
-        // wrap cmddat
-        write_downstream<RelayInlineState::downstream_cb_base_addr>(
-            data_ptr,
-            local_downstream_data_ptr,
-            remaining,
-            RelayInlineState::downstream_cb_end_addr,
-            RelayInlineState::downstream_noc_encoding);
-        length -= remaining;
-        data_ptr = cmddat_q_base;
+    if constexpr (cmddat_wrap_enable) {
+        uint32_t remaining = cmddat_q_end - data_ptr;
+        if (length > remaining) {
+            // wrap cmddat
+            write_downstream<RelayInlineState::downstream_cb_base_addr>(
+                data_ptr,
+                local_downstream_data_ptr,
+                remaining,
+                RelayInlineState::downstream_cb_end_addr,
+                RelayInlineState::downstream_noc_encoding);
+            length -= remaining;
+            data_ptr = cmddat_q_base;
+        }
     }
 
     write_downstream<RelayInlineState::downstream_cb_base_addr>(
@@ -422,13 +424,16 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr, uint32_t& dis
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
     }
-    uint32_t remaining = cmddat_q_end - data_ptr;
-    if (cmddat_wrap_enable && length > remaining) {
-        // wrap cmddat
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
-        dispatch_data_ptr += remaining;
-        length -= remaining;
-        data_ptr = cmddat_q_base;
+
+    if constexpr (cmddat_wrap_enable) {
+        uint32_t remaining = cmddat_q_end - data_ptr;
+        if (length > remaining) {
+            // wrap cmddat
+            noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+            dispatch_data_ptr += remaining;
+            length -= remaining;
+            data_ptr = cmddat_q_base;
+        }
     }
     noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
     dispatch_data_ptr += length;
@@ -802,16 +807,18 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream__
     // DPRINT << "paged_packed: " << total_length << " " << cmd->relay_paged_packed.stride << ENDL();
 
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
-    uint32_t remaining = cmddat_q_end - data_ptr;
     uint32_t* l1_cache_pos = l1_cache;
-    if (cmddat_wrap_enable && sub_cmds_length > remaining) {
-        // wrap cmddat
-        uint32_t amt = remaining / sizeof(uint32_t);
-        careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
-            (volatile uint32_t tt_l1_ptr*)(data_ptr), amt, l1_cache_pos);
-        sub_cmds_length -= remaining;
-        data_ptr = cmddat_q_base;
-        l1_cache_pos += amt;
+    if constexpr (cmddat_wrap_enable) {
+        uint32_t remaining = cmddat_q_end - data_ptr;
+        if (sub_cmds_length > remaining) {
+            // wrap cmddat
+            uint32_t amt = remaining / sizeof(uint32_t);
+            careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+                (volatile uint32_t tt_l1_ptr*)(data_ptr), amt, l1_cache_pos);
+            sub_cmds_length -= remaining;
+            data_ptr = cmddat_q_base;
+            l1_cache_pos += amt;
+        }
     }
 
     uint32_t amt = sub_cmds_length / sizeof(uint32_t);
@@ -1158,7 +1165,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_PAGED_PACKED:
             // DPRINT << "relay paged packed" << ENDL();
-            if (exec_buf) {
+            if constexpr (exec_buf) {
                 stride =
                     process_exec_buf_relay_paged_packed_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
             } else {
@@ -1189,7 +1196,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             // DPRINT << "inline no flush" << ENDL();
-            if (exec_buf) {
+            if constexpr (exec_buf) {
                 stride = process_exec_buf_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr, exec_buf_state);
             } else {
                 stride = process_relay_inline_noflush_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr);
@@ -1199,7 +1206,7 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_EXEC_BUF:
             // DPRINT << "exec buf: " << cmd_ptr << ENDL();
             ASSERT(!exec_buf);
-            if (is_h_variant) {
+            if constexpr (is_h_variant) {
                 ASSERT(stall_state == STALLED);  // ExecBuf must be preceded by a prefetcher stall
             }
             stride = process_exec_buf_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
@@ -1222,7 +1229,7 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_DEBUG:
             // DPRINT << "debug" << ENDL();
             //  Splitting debug cmds not implemented for exec_bufs (yet)
-            if (exec_buf) {
+            if constexpr (exec_buf) {
                 ASSERT(0);
             }
             stride = process_debug_cmd(cmd_ptr);
@@ -1444,11 +1451,11 @@ void kernel_main_hd() {
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
 
-    if (is_h_variant and is_d_variant) {
+    if constexpr (is_h_variant and is_d_variant) {
         kernel_main_hd();
-    } else if (is_h_variant) {
+    } else if constexpr (is_h_variant) {
         kernel_main_h();
-    } else if (is_d_variant) {
+    } else if constexpr (is_d_variant) {
         kernel_main_d();
     } else {
         ASSERT(0);
