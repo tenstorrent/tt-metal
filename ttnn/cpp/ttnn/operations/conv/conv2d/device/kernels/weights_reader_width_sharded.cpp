@@ -54,11 +54,11 @@ void kernel_main() {
         .bank_base_address = bias_addr_dram_base, .page_size = bias_pagesize, .data_format = bias_df};
 
 #endif
+    bool to_load_bias = true;
 
     for (uint32_t act_block_h_index = 0; act_block_h_index < act_num_blocks_h; act_block_h_index++) {
         uint32_t weight_start_tile_id = init_weight_start_tile_id;
         uint32_t bias_start_tile_id = init_weight_start_tile_id;
-        bool to_load_bias = true;
 
         // Outer most loop is each core's block width.
         // This interleaves reader/tilization with compute. Hopefully better perf.
@@ -109,6 +109,7 @@ void kernel_main() {
             weight_start_tile_id += weight_next_block_this_core_stride_h;
             if (to_load_bias) {
 #ifdef FUSE_BIAS
+                cb_reserve_back(bias_cb_id, weight_block_width_ntiles);
                 uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
                 for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
                     s_bias.noc_async_read_tile(bias_start_tile_id, bias_l1_addr);
