@@ -183,24 +183,6 @@ class TtAsymmetricAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Reshape and split QKV
-        # NOTE: This reshape is illegal because it's 5D
-        # qkv_y = ttnn.reshape(qkv_y, (batch_size, seq_len, 3, self.num_heads, self.head_dim))
-        # NOTE: This unpack may not work and may lead to strange error messages
-        # q_y, k_y, v_y = ttnn.split(qkv_y, 3, dim=2)
-        # q_y = ttnn.reshape(
-        #     qkv_y[:, :, : self.num_heads * self.head_dim],
-        #     (qkv_y.shape[0], qkv_y.shape[1], self.num_heads, self.head_dim),
-        # )
-        # k_y = ttnn.reshape(
-        #     qkv_y[:, :, self.num_heads * self.head_dim : 2 * self.num_heads * self.head_dim],
-        #     (qkv_y.shape[0], qkv_y.shape[1], self.num_heads, self.head_dim),
-        # )
-        # v_y = ttnn.reshape(
-        #     qkv_y[:, :, 2 * self.num_heads * self.head_dim :],
-        #     (qkv_y.shape[0], qkv_y.shape[1], self.num_heads, self.head_dim),
-        # )
-
         # Use nlp_create_qkv_heads here as well because text will be concatenated on the sequence dimension
         q_y, k_y, v_y = ttnn.experimental.nlp_create_qkv_heads(
             qkv_y,
@@ -227,8 +209,6 @@ class TtAsymmetricAttention(LightweightModule):
         rope_sin: ttnn.Tensor,
         max_seqlen_in_batch: int,
         trans_mat: ttnn.Tensor,
-        x_len: int,
-        y_len: int,
     ):
         """Prepare QKV tensors for attention computation.
 
@@ -300,8 +280,8 @@ class TtAsymmetricAttention(LightweightModule):
 
         # Process text features if present
         if B == 1:
-            text_seqlen = max_seqlen_in_batch - x_len
-            if text_seqlen > 0:
+            text_padded_seqlen = max_seqlen_in_batch - N
+            if text_padded_seqlen > 0:
                 # Process text features
                 # TODO: Removing until we support padded sequences
                 # y = y[:, :text_seqlen] # Remove padding tokens
@@ -309,26 +289,17 @@ class TtAsymmetricAttention(LightweightModule):
                 q_y, k_y, v_y = self.run_qkv_y(y)
 
                 # Concatenate visual and text features on the sequence dimension
-                # Unpad visual features
-                print(f"x_len: {x_len}, y_len: {y_len}")
-                print(f"q_x: {q_x.shape}, k_x: {k_x.shape}, v_x: {v_x.shape}")
-                print(f"q_y: {q_y.shape}, k_y: {k_y.shape}, v_y: {v_y.shape}")
-                breakpoint()
-                q_x = q_x[:, :, :x_len, :]
-                k_x = k_x[:, :, :x_len, :]
-                v_x = v_x[:, :, :x_len, :]
-                print(f"q_x: {q_x.shape}, k_x: {k_x.shape}, v_x: {v_x.shape}")
-                # Unpad text features
-                q_y = q_y[:, :, :y_len, :]
-                k_y = k_y[:, :, :y_len, :]
-                v_y = v_y[:, :, :y_len, :]
-                print(f"q_y: {q_y.shape}, k_y: {k_y.shape}, v_y: {v_y.shape}")
-                breakpoint()
-
-                # TODO: Pad up to necessary length
                 q = ttnn.concat([q_x, q_y], dim=2)
                 k = ttnn.concat([k_x, k_y], dim=2)
                 v = ttnn.concat([v_x, v_y], dim=2)
+
+                # # TODO: Pad up to necessary length
+                attn_padded_len = 44 * 1024  # TODO: GENERALIZE!
+                q = ttnn.pad(q, [q.shape[0], q.shape[1], attn_padded_len, q.shape[3]], [0, 0, 0, 0], value=0)
+                k = ttnn.pad(k, [k.shape[0], k.shape[1], attn_padded_len, k.shape[3]], [0, 0, 0, 0], value=0)
+                v = ttnn.pad(v, [v.shape[0], v.shape[1], attn_padded_len, v.shape[3]], [0, 0, 0, 0], value=0)
+                print("after pad")
+                print(f"q: {q.shape}, k: {k.shape}, v: {v.shape}")
             else:
                 assert False, "Not supporting empty prompt"
                 q, k, v = q_x, k_x, v_x
@@ -377,7 +348,7 @@ class TtAsymmetricAttention(LightweightModule):
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=256,  # TODO: Make this dynamic
-            k_chunk_size=256,
+            k_chunk_size=512,
             exp_approx_mode=False,
         )
 
@@ -430,9 +401,10 @@ class TtAsymmetricAttention(LightweightModule):
         if B == 1:
             # out = ttnn.reshape(out, (B, -1, local_dim))
             if out.shape[2] > N:
+                print(f"in post_attention: {out.shape=}")
                 # Split into visual and text features
                 x = out[:, :, :N, :]  # (B, N, local_dim)
-                y = out[:, :, N:, :]  # (B, <=L, local_dim)
+                y = out[:, :, N : N + L, :]  # (B, <=L, local_dim)
                 # Pad text features if needed
                 if y.shape[2] < L:
                     raise ValueError("Not supporting padded text features")
@@ -489,8 +461,6 @@ class TtAsymmetricAttention(LightweightModule):
         trans_mat: ttnn.Tensor,
         packed_indices,
         attn_mask,
-        x_len,
-        y_len,
     ) -> ttnn.Tensor:
         B, L = y.shape[1], y.shape[2]
         M = x.shape[2]
@@ -504,8 +474,6 @@ class TtAsymmetricAttention(LightweightModule):
             rope_sin=rope_sin,
             max_seqlen_in_batch=packed_indices["max_seqlen_in_batch_kv"],
             trans_mat=trans_mat,
-            x_len=x_len,
-            y_len=y_len,
         )
 
         # Self-attention is expensive, so don't checkpoint it.
@@ -515,8 +483,6 @@ class TtAsymmetricAttention(LightweightModule):
             v,
             B=B,
             attn_mask=attn_mask,
-            x_len=x_len,
-            y_len=y_len,
         )
 
         x, y = self.post_attention(
@@ -525,8 +491,6 @@ class TtAsymmetricAttention(LightweightModule):
             M=M,
             L=L,
             dtype=out.dtype,
-            x_len=x_len,
-            y_len=y_len,
         )
 
         return x, y
