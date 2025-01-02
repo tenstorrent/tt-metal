@@ -17,13 +17,13 @@ namespace ckernel
 namespace sfpu
 {
 
-enum {
-    AND_BINARY = 0,
-    OR_BINARY = 1,
-    XOR_BINARY = 2,
-};  // BITWISE_MODE
+enum class BinaryBitwiseOp : uint8_t {
+    AND = 0,
+    OR = 1,
+    XOR = 2,
+};
 
-template <bool APPROXIMATION_MODE, int BITWISE_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, BinaryBitwiseOp BITWISE_OP, int ITERATIONS = 8>
 inline void _calculate_sfpu_binary_bitwise_(const uint dst_offset)
 {
     // SFPU microcode
@@ -33,11 +33,11 @@ inline void _calculate_sfpu_binary_bitwise_(const uint dst_offset)
         TTI_SFPLOAD(0,4,3,0);
         TT_SFPLOAD(1,4,3,dst_offset*dst_tile_size);
 
-        if constexpr (BITWISE_MODE == AND_BINARY) {
+        if constexpr (BITWISE_OP == BinaryBitwiseOp::AND) {
             TTI_SFPAND(0,1,0,0);
-        } else if constexpr (BITWISE_MODE == OR_BINARY) {
+        } else if constexpr (BITWISE_OP == BinaryBitwiseOp::OR) {
             TTI_SFPOR(0,1,0,0);
-        } else if constexpr (BITWISE_MODE == XOR_BINARY) {
+        } else if constexpr (BITWISE_OP == BinaryBitwiseOp::XOR) {
             TTI_SFPXOR(0,1,0,0);
         }
 
