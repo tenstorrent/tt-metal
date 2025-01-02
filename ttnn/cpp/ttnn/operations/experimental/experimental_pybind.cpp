@@ -35,6 +35,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
+#include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
@@ -74,7 +75,7 @@ void py_module(py::module& module) {
     matmul::detail::bind_group_attn_matmul(module);
 
     plusone::detail::bind_experimental_plusone_operation(module);
-
+    dropout::detail::bind_experimental_dropout_operation(module);
     // CCL ops
     auto m_experimental_ccl =
         module.def_submodule("ccl_experimental", "experimental collective communication operations");

@@ -111,7 +111,7 @@ Pointwise Unary
    ttnn.cosh
    ttnn.deg2rad
    ttnn.digamma
-   ttnn.dropout
+   ttnn.experimental.dropout
    ttnn.elu
    ttnn.eqz
    ttnn.erf
