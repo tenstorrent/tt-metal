@@ -748,7 +748,7 @@ inline uint32_t get_num_words_to_pull(volatile pull_request_t* pull_request, fvc
 
     uint32_t fvc_space_before_wptr_wrap = fvc_consumer_state->words_before_local_buffer_wrap();
     num_words_to_pull = std::min(num_words_to_pull, fvc_space_before_wptr_wrap);
-    num_words_to_pull = std::min(num_words_to_pull, DEFAULT_MAX_NOC_SEND_WORDS);
+    num_words_to_pull = std::min(num_words_to_pull, fvc_consumer_state->buffer_size / 2);
 
     return num_words_to_pull;
 }
@@ -928,7 +928,7 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
     // This will happen, if the producer did not have all the availale data in its buffer when
     // the pull request was first issued. In this case, as the producer gets more data in its buffer,
     // it updates write pointer in the consumer request buffer pull request entry.
-    uint64_t wr_ptr_addr = noc_addr = offsetof(pull_request_t, wr_ptr);
+    uint64_t wr_ptr_addr = noc_addr + offsetof(pull_request_t, wr_ptr);
     return wr_ptr_addr;
 }
 
