@@ -1,10 +1,10 @@
-/// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async_op.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include "ttnn/cpp/ttnn/global_semaphore.hpp"
 
 #include "tt_metal/host_api.hpp"
 
@@ -23,19 +23,19 @@ AllGatherAsync create_all_gather_async_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<Device*>& devices,
     const ttnn::ccl::Topology topology,
-    const std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>>& semaphore_handles,
+    const std::optional<std::vector<GlobalSemaphore>>& semaphores,
     bool enable_persistent_fabric_mode) {
     uint32_t num_devices = devices.size();
 
     std::optional<Device*> forward_device = std::nullopt;
     std::optional<Device*> backward_device = std::nullopt;
-    std::shared_ptr<const GlobalSemaphore> semaphore_handle = nullptr;
+    std::optional<GlobalSemaphore> semaphore = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == input_tensor.device()) {
             device_index = i;
-            if (semaphore_handles.has_value()) {
-                semaphore_handle = semaphore_handles.value().at(i);  // Get raw pointer
+            if (semaphores.has_value()) {
+                semaphore = semaphores.value().at(i);  // Get raw pointer
             }
             if (i != 0) {
                 backward_device = devices.at(i - 1);
@@ -55,40 +55,40 @@ AllGatherAsync create_all_gather_async_struct(
         device_index,
         memory_config.value_or(input_tensor.memory_config()),
         topology,
-        semaphore_handle,
+        semaphore,
         enable_persistent_fabric_mode};
 }
 
-std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> get_global_semaphores(
+std::optional<std::vector<GlobalSemaphore>> get_global_semaphores(
     const std::vector<Device*>& devices,
     const CoreRange& core_range,
     std::optional<SubDeviceId> subdevice_id,
     bool create_semaphore_handles) {
-    std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> semaphore_handles_opt;
+    std::optional<std::vector<GlobalSemaphore>> semaphores_opt;
     if (create_semaphore_handles) {
-        std::vector<std::shared_ptr<GlobalSemaphore>> semaphore_handles;
+        std::vector<GlobalSemaphore> semaphores;
         for (const auto& device : devices) {
             auto worker_subdevice_id =
                 subdevice_id.has_value() ? std::vector<SubDeviceId>{subdevice_id.value()} : std::vector<SubDeviceId>{};
 
-            auto handle = GlobalSemaphore::create(device, core_range, 0, BufferType::L1, worker_subdevice_id);
-            log_trace(
-                tt::LogOp, "Created semaphore handle at address {} for device {}", handle->address(), device->id());
-            semaphore_handles.push_back(handle);
+            auto sem =
+                global_semaphore::create_global_semaphore(device, core_range, 0, BufferType::L1, worker_subdevice_id);
+            log_trace(tt::LogOp, "Created semaphore at address {} for device {}", sem.address(), device->id());
+            semaphores.push_back(std::move(sem));
         }
-        // HACK: assert every handle address is the same
+        // HACK: assert every address is the same
         TT_FATAL(
             std::all_of(
-                semaphore_handles.begin(),
-                semaphore_handles.end(),
-                [&](const auto& handle) { return handle->address() == semaphore_handles.front()->address(); }),
-            "[Hack] All semaphore handles should have the same address");
-        semaphore_handles_opt = semaphore_handles;
+                semaphores.begin(),
+                semaphores.end(),
+                [&](const auto& sem) { return sem.address() == semaphores.front().address(); }),
+            "[Hack] All semaphores should have the same address");
+        semaphores_opt = std::move(semaphores);
     } else {
-        semaphore_handles_opt = std::nullopt;
+        semaphores_opt = std::nullopt;
     }
 
-    return semaphore_handles_opt;
+    return semaphores_opt;
 }
 
 }  // namespace all_gather_detail
@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks AllGatherAsync::create_program(
         this->ring_size,
         this->ring_index,
         this->topology,
-        this->semaphore_handle,
+        this->semaphore,
         this->enable_persistent_fabric_mode);
 }
 
@@ -219,7 +219,7 @@ Tensor all_gather_async(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
-    std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> semaphore_handles_opt =
+    std::optional<std::vector<GlobalSemaphore>> semaphores_opt =
         ttnn::ccl::all_gather_detail::get_global_semaphores(devices, core_grid, subdevice_id, create_semaphore_handles);
 
     operation::launch_op(
@@ -229,7 +229,7 @@ Tensor all_gather_async(
          memory_config,
          devices,
          ccl_topology,
-         semaphore_handles_opt,
+         semaphores_opt,
          enable_persistent_fabric_mode](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -244,7 +244,7 @@ Tensor all_gather_async(
                     memory_config,
                     devices,
                     ccl_topology,
-                    semaphore_handles_opt,
+                    semaphores_opt,
                     enable_persistent_fabric_mode),
                 {input_tensor});
         },
@@ -285,7 +285,7 @@ Tensor all_gather_async(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    std::optional<std::vector<std::shared_ptr<GlobalSemaphore>>> semaphore_handles_opt =
+    std::optional<std::vector<GlobalSemaphore>> semaphores_opt =
         ttnn::ccl::all_gather_detail::get_global_semaphores(devices, core_grid, subdevice_id, create_semaphore_handles);
 
     operation::launch_op(
@@ -296,7 +296,7 @@ Tensor all_gather_async(
          cluster_axis,
          num_devices,
          topology,
-         semaphore_handles_opt,
+         semaphores_opt,
          enable_persistent_fabric_mode](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -317,10 +317,9 @@ Tensor all_gather_async(
                     memory_config,
                     devices,
                     topology,
-                    semaphore_handles_opt,
+                    semaphores_opt,
                     enable_persistent_fabric_mode),
                 {input_tensor});
-
         },
         {input_tensor},
         output_tensors);
