@@ -77,6 +77,10 @@ void execute_trace(Device* device, const uint32_t tid, const uint8_t cq_id, bool
 
 void release_trace(Device* device, const uint32_t tid);
 
+void light_metal_begin_capture(Device* device);
+
+std::vector<uint8_t> light_metal_end_capture(Device* device);
+
 // Trace APIs - Multi Device
 uint32_t begin_trace_capture(MeshDevice* device, const uint8_t cq_id = ttnn::DefaultQueueId);
 

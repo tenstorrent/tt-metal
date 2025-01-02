@@ -262,6 +262,8 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
+
+    log_info(tt::LogMetal, "KCM Not a HostAPI Buffer::{}", __FUNCTION__);
     auto* bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, sub_device_id, true /* owns data */, Private());
     // Using a custom deleter to properly clean up the owned datas
     auto buffer = std::shared_ptr<Buffer>(bufferPtr, deleter);

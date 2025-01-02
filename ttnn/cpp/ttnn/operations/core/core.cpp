@@ -161,6 +161,18 @@ void release_trace(Device* device, const uint32_t tid) {
     device->push_work([device, tid]() mutable { device->release_trace(tid); });
 }
 
+void light_metal_begin_capture(Device* device) {
+    device->push_work([device]() mutable { device->light_metal_begin_capture(); });
+}
+
+std::vector<uint8_t> light_metal_end_capture(Device* device) {
+    std::vector<uint8_t> blob;
+    device->push_work([device, &blob]() mutable { blob = device->light_metal_end_capture(); });
+    // Must block to ensure tid is valid before returning.
+    device->synchronize();
+    return blob;
+}
+
 // Trace APIs - Multi Device
 uint32_t begin_trace_capture(MeshDevice* device, const uint8_t cq_id) {
     ZoneScoped;

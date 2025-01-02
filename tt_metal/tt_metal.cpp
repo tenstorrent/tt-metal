@@ -897,6 +897,7 @@ DeviceAddr AllocateBuffer(Buffer* buffer) {
 }
 
 void DeallocateBuffer(Buffer* buffer) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     TRACE_FUNCTION_CALL(captureDeallocateBuffer, buffer);
     GraphTracker::instance().track_deallocate(buffer);
     if (GraphTracker::instance().hook_deallocate(buffer)) {
@@ -982,6 +983,7 @@ bool CloseDevice(Device* device) {
 
 Program CreateProgram() {
     auto program = Program();
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     TRACE_FUNCTION_CALL(captureCreateProgram, program);
     return program;
 }
@@ -1070,6 +1072,7 @@ KernelHandle CreateKernel(
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     KernelHandle kernel = std::visit(
         [&](auto&& cfg) -> KernelHandle {
             CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
@@ -1094,6 +1097,7 @@ KernelHandle CreateKernelFromString(
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     return std::visit(
         [&](auto&& cfg) -> KernelHandle {
             CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
@@ -1214,10 +1218,12 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
         std::nullopt,
         std::nullopt);
 
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     TRACE_FUNCTION_CALL(captureCreateBuffer, buffer, config);
     return buffer;
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     return Buffer::create(
         config.device,
         address,
@@ -1229,6 +1235,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, Devi
         std::nullopt);
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     return Buffer::create(
         config.device,
         config.size,
@@ -1240,6 +1247,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubD
         sub_device_id);
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     return Buffer::create(
         config.device,
         config.size,
@@ -1251,6 +1259,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
         std::nullopt);
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     return Buffer::create(
         config.device,
         address,
@@ -1263,6 +1272,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAd
         std::nullopt);
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     return Buffer::create(
         config.device,
         config.size,
@@ -1274,7 +1284,10 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
         sub_device_id);
 }
 
-void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
+void DeallocateBuffer(Buffer& buffer) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
+    buffer.deallocate();
+}
 
 void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program) {
     detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
@@ -1286,6 +1299,7 @@ void SetRuntimeArgs(
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     stl::Span<const uint32_t> runtime_args) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     TRACE_FUNCTION_CALL(captureSetRuntimeArgs, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
     TT_FATAL(
@@ -1300,6 +1314,7 @@ void SetRuntimeArgs(
     KernelHandle kernel,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     ZoneScoped;
     TT_FATAL(
         not CommandQueue::async_mode_set(),
@@ -1321,6 +1336,7 @@ void SetRuntimeArgs(
     const std::shared_ptr<Kernel>& kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     std::shared_ptr<RuntimeArgs> runtime_args) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     detail::DispatchStateCheck(not device->using_slow_dispatch());
     TRACE_FUNCTION_CALL(captureSetRuntimeArgs1, device, kernel, core_spec, runtime_args);
     SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, std::move(runtime_args), false);
@@ -1331,6 +1347,7 @@ void SetRuntimeArgs(
     const std::shared_ptr<Kernel>& kernel,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
         "Mismatch between number of cores {} and number of runtime args {} getting updated",
@@ -1373,13 +1390,15 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
 }
 
 uint32_t BeginTraceCapture(Device* device, const uint8_t cq_id) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     const uint32_t tid = Trace::next_id();
     device->begin_trace(cq_id, tid);
     return tid;
 }
 
-void EndTraceCapture(Device* device, const uint8_t cq_id, const uint32_t tid) { 
-    device->end_trace(cq_id, tid); 
+void EndTraceCapture(Device* device, const uint8_t cq_id, const uint32_t tid) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
+    device->end_trace(cq_id, tid);
     // When light metal tracing is enabled, TraceDescriptor will be serialized via end_trace() and this
     // will serialize the LightMetalLoadTraceId call to be used during replay to load trace back to device.
     TRACE_FUNCTION_CALL(captureLoadTrace, device, cq_id, tid);
@@ -1392,6 +1411,7 @@ void ReplayTrace(Device* device, const uint8_t cq_id, const uint32_t tid, const 
 }
 
 void ReleaseTrace(Device* device, const uint32_t tid) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     TRACE_FUNCTION_CALL(captureReleaseTrace, device, tid);
     device->release_trace(tid);
 }
@@ -1440,6 +1460,7 @@ CBHandle CreateCircularBuffer(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const CircularBufferConfig& config,
     const GlobalCircularBuffer& global_circular_buffer) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     return program.add_circular_buffer(core_ranges, config, global_circular_buffer);
 }

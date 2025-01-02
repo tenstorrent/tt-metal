@@ -2253,6 +2253,8 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
 
 void HWCommandQueue::enqueue_write_buffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, HostDataType src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+
+    log_info(tt::LogMetal, "KCM Not HostAPI: {}", __FUNCTION__);
     // Top level API to accept different variants for buffer and src
     // For shared pointer variants, object lifetime is guaranteed at least till the end of this function
     auto data = std::visit([&](auto&& data) -> const void* {
@@ -2279,6 +2281,7 @@ CoreType HWCommandQueue::get_dispatch_core_type() {
 }
 
 void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    log_info(tt::LogMetal, "KCM Not HostAPI: {}", __FUNCTION__);
     ZoneScopedN("HWCommandQueue_write_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
 
@@ -2912,6 +2915,7 @@ void HWCommandQueue::read_completion_queue() {
 }
 
 void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    log_info(tt::LogMetal, "KCM Not a HostAPI : HWCommandQueue::{}", __FUNCTION__);
     ZoneScopedN("HWCommandQueue_finish");
     tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id);
     std::shared_ptr<Event> event = std::make_shared<Event>();
@@ -3127,6 +3131,7 @@ void EnqueueWriteBuffer(
     std::vector<uint32_t>& src,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     // TODO(agrebenisan): Move to deprecated
     EnqueueWriteBuffer(cq, std::move(buffer), src.data(), blocking, sub_device_ids);
 }
@@ -3137,6 +3142,7 @@ void EnqueueReadBuffer(
     void* dst,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     TRACE_FUNCTION_CALL(captureEnqueueReadBuffer, cq, buffer, dst, blocking); // KCM_FIXME sub_device_ids added recently
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
@@ -3149,6 +3155,7 @@ void EnqueueWriteBuffer(
     HostDataType src,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     TRACE_FUNCTION_CALL(captureEnqueueWriteBuffer, cq, buffer, src, blocking); // KCM_FIXME sub_device_ids added recently
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
@@ -3157,6 +3164,7 @@ void EnqueueWriteBuffer(
 
 void EnqueueProgram(
     CommandQueue& cq, Program& program, bool blocking) {
+    log_info(tt::LogMetal, "KCM HostAPI {}", __FUNCTION__);
     TRACE_FUNCTION_CALL(captureEnqueueProgram, cq, program, blocking);
     detail::DispatchStateCheck(true);
     cq.run_command(
@@ -3264,6 +3272,7 @@ void EnqueueWriteBufferImpl(
     HostDataType src,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    log_info(tt::LogMetal, "KCM Not HostAPI: {}", __FUNCTION__);
     cq.hw_command_queue().enqueue_write_buffer(std::move(buffer), std::move(src), blocking, sub_device_ids);
 }
 

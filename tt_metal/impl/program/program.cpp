@@ -332,7 +332,9 @@ detail::Program_::Program_() :
     program_config_sizes_[programmable_core_count] = 1;
 }
 
-Program::Program() : pimpl_(std::make_unique<detail::Program_>()) {}
+Program::Program() : pimpl_(std::make_unique<detail::Program_>()) {
+    log_info(tt::LogMetal, "KCM Inside Program Constructor");
+}
 
 KernelHandle detail::Program_::add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType &programmable_core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);

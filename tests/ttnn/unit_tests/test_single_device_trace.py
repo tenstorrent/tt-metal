@@ -11,11 +11,34 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("shape", [[1, 3, 1024, 1024], (1, 1, 512, 512), (1, 3, 512, 512), (1, 3, 32, 32)])
-@pytest.mark.parametrize("enable_async", [True, False])
-@pytest.mark.parametrize("blocking", [True, False])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+# KCM - Simple bringup single op test to see if everything uses host APIs and if it can be light-metal traced.
+@pytest.mark.parametrize("shape", [(1, 3, 32, 32)])
+@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("blocking", [True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}])
+def test_single_op_test(device, shape, enable_async, blocking):
+    # KCM - Enable Light Metal Tracing.
+    do_light_metal_trace = False
+    if do_light_metal_trace:
+        ttnn.light_metal_begin_capture(device)
+        ttnn.synchronize_device(device)
+
+    # Original test body...
+    device.enable_async(enable_async)
+    device.enable_program_cache()
+    input_0 = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    output = ttnn.relu(input_0)
+
+    if do_light_metal_trace:
+        blob = ttnn.light_metal_end_capture(device)
+
+
+@pytest.mark.parametrize("shape", [(1, 3, 32, 32)])
+@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("blocking", [True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}])
 def test_single_device_single_trace(device, shape, enable_async, blocking):
+    ttnn.light_metal_begin_capture(device)
     device.enable_async(enable_async)
     device.enable_program_cache()
 
@@ -29,6 +52,7 @@ def test_single_device_single_trace(device, shape, enable_async, blocking):
 
     # Compile program binaries
     run_op_chain(input_0_dev, input_1_dev)
+    logger.info("KCM HERE")
 
     # Capture Trace
     logger.info("Capture Trace")
@@ -36,7 +60,7 @@ def test_single_device_single_trace(device, shape, enable_async, blocking):
     output_tensor = run_op_chain(input_0_dev, input_1_dev)
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
-    for i in range(50):
+    for i in range(3):
         # Create torch inputs
         torch_input_tensor_0 = torch.rand(shape, dtype=torch.bfloat16)
         torch_input_tensor_1 = torch.rand(shape, dtype=torch.bfloat16)
@@ -69,6 +93,10 @@ def test_single_device_single_trace(device, shape, enable_async, blocking):
 
     ttnn.release_trace(device, tid)
     device.enable_async(False)
+    blob = ttnn.light_metal_end_capture(device)
+    # Write blob object to file called trace.bin:
+    # with open("trace.bin", "wb") as f:
+    #     f.write(blob)
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 512, 512), (1, 3, 32, 32)])

@@ -222,6 +222,8 @@ begin_trace_capture = ttnn._ttnn.operations.core.begin_trace_capture
 end_trace_capture = ttnn._ttnn.operations.core.end_trace_capture
 execute_trace = ttnn._ttnn.operations.core.execute_trace
 release_trace = ttnn._ttnn.operations.core.release_trace
+light_metal_begin_capture = ttnn._ttnn.operations.core.light_metal_begin_capture
+light_metal_end_capture = ttnn._ttnn.operations.core.light_metal_end_capture
 
 
 from ttnn.decorators import (

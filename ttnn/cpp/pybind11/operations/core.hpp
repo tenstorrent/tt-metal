@@ -295,6 +295,16 @@ void py_module(py::module& module) {
         py::arg("trace_id"));
 
     module.def(
+        "light_metal_begin_capture",
+        py::overload_cast<Device*>(&ttnn::operations::core::light_metal_begin_capture),
+        py::arg("device"));
+
+    module.def(
+        "light_metal_end_capture",
+        py::overload_cast<Device*>(&ttnn::operations::core::light_metal_end_capture),
+        py::arg("device"));
+
+    module.def(
         "begin_trace_capture",
         py::overload_cast<MeshDevice*, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
         py::arg("mesh_device"),
