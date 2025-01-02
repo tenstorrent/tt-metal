@@ -153,7 +153,7 @@ Tensor to_layout_impl(
                             "TILE_SIZE!");
                     }
                 }
-                validate_nd_support(tensor_arg, layout);
+                // validate_nd_support(tensor_arg, layout);
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
                 throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
@@ -198,7 +198,7 @@ Tensor to_layout_impl(
                     {0, padded_output_shape[2] - output_shape[2]},
                     {0, padded_output_shape[3] - output_shape[3]}};
                 tensor = ttnn::pad(0, tensor, padding, 0, true, std::nullopt);
-                validate_nd_support(tensor_arg, layout);
+                // validate_nd_support(tensor_arg, layout);
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
                 PadValue pad_value_variant;
@@ -208,7 +208,7 @@ Tensor to_layout_impl(
                     pad_value_variant = (uint32_t)0;
                 }
 
-                validate_nd_support(tensor_arg, layout);
+                // validate_nd_support(tensor_arg, layout);
                 tensor = ttnn::tilize_with_val_padding(
                     tensor, padded_output_shape, pad_value_variant, output_memory_config, dtype, use_multicore_tilize);
             }
