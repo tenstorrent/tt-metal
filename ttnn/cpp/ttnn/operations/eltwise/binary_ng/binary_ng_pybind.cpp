@@ -98,11 +98,20 @@ void bind_inplace_binary_ng_operation(py::module& module, T op, const std::strin
                const ttnn::Tensor& input_tensor_a,
                const float scalar,
                const std::optional<const DataType>& dtype,
-               const uint8_t& queue_id) -> ttnn::Tensor { return self(queue_id, input_tensor_a, scalar, dtype); },
+               const ttnn::SmallVector<unary::UnaryOpType>& lhs_activations,
+               const ttnn::SmallVector<unary::UnaryOpType>& rhs_activations,
+               const ttnn::SmallVector<unary::UnaryOpType>& post_activations,
+               const uint8_t& queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id, input_tensor_a, scalar, dtype, lhs_activations, rhs_activations, post_activations);
+            },
             py::arg("input_tensor_a"),
             py::arg("scalar"),
             py::kw_only(),
             py::arg("dtype") = std::nullopt,
+            py::arg("lhs_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
+            py::arg("rhs_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
+            py::arg("post_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
             py::arg("queue_id") = 0},
 
         // tensor and tensor
@@ -111,11 +120,26 @@ void bind_inplace_binary_ng_operation(py::module& module, T op, const std::strin
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
                const std::optional<const DataType>& dtype,
-               uint8_t queue_id) -> ttnn::Tensor { return self(queue_id, input_tensor_a, input_tensor_b, dtype); },
+               const ttnn::SmallVector<unary::UnaryOpType>& lhs_activations,
+               const ttnn::SmallVector<unary::UnaryOpType>& rhs_activations,
+               const ttnn::SmallVector<unary::UnaryOpType>& post_activations,
+               uint8_t queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor_a,
+                    input_tensor_b,
+                    dtype,
+                    lhs_activations,
+                    rhs_activations,
+                    post_activations);
+            },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
             py::arg("dtype") = std::nullopt,
+            py::arg("lhs_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
+            py::arg("rhs_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
+            py::arg("post_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
             py::arg("queue_id") = 0});
 }
 }  // namespace detail

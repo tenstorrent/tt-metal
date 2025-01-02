@@ -111,14 +111,20 @@ struct BinaryNgDeviceOperation {
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         BinaryOpType binary_op_type,
-        const std::optional<const DataType>& output_dtype);
+        const std::optional<const DataType>& output_dtype,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations,
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations,
+        tt::stl::Span<const unary::UnaryOpType> post_activations);
 
     // tensor-scalar inplace invocation
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor_a_arg,
         float scalar,
         BinaryOpType binary_op_type,
-        const std::optional<const DataType>& output_dtype);
+        const std::optional<const DataType>& output_dtype,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations,
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations,
+        tt::stl::Span<const unary::UnaryOpType> post_activations);
 };
 
 }  // namespace ttnn::operations::binary_ng

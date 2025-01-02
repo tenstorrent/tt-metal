@@ -62,23 +62,35 @@ struct InplaceBinaryNg {
         uint8_t queue_id,
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt);
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 
     static Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
         const float scalar,
-        const std::optional<const DataType>& output_dtype = std::nullopt);
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt);
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 
     static Tensor invoke(
         const Tensor& input_tensor,
         const float scalar,
-        const std::optional<const DataType>& output_dtype = std::nullopt);
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 };
 
 }  // namespace ttnn::operations::binary_ng

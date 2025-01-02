@@ -105,14 +105,37 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& output_dtype) {
-    return ttnn::prim::binary_ng(queue_id, input_tensor_a, input_tensor_b, binary_op_type, output_dtype);
+    const std::optional<const DataType>& output_dtype,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    return ttnn::prim::binary_ng(
+        queue_id,
+        input_tensor_a,
+        input_tensor_b,
+        binary_op_type,
+        output_dtype,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceBinaryNg<binary_op_type>::invoke(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<const DataType>& output_dtype) {
-    return invoke(DefaultQueueId, input_tensor_a, input_tensor_b, output_dtype);
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    return invoke(
+        DefaultQueueId,
+        input_tensor_a,
+        input_tensor_b,
+        output_dtype,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
 }
 
 template <BinaryOpType binary_op_type>
@@ -120,14 +143,31 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor_a,
     const float scalar,
-    const std::optional<const DataType>& output_dtype) {
-    return ttnn::prim::binary_ng(queue_id, input_tensor_a, scalar, binary_op_type, output_dtype);
+    const std::optional<const DataType>& output_dtype,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    return ttnn::prim::binary_ng(
+        queue_id,
+        input_tensor_a,
+        scalar,
+        binary_op_type,
+        output_dtype,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceBinaryNg<binary_op_type>::invoke(
-    const Tensor& input_tensor_a, const float scalar, const std::optional<const DataType>& output_dtype) {
-    return invoke(DefaultQueueId, input_tensor_a, scalar, output_dtype);
+    const Tensor& input_tensor_a,
+    const float scalar,
+    const std::optional<const DataType>& output_dtype,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    return invoke(
+        DefaultQueueId, input_tensor_a, scalar, output_dtype, lhs_activations, rhs_activations, post_activations);
 }
 
 template struct BinaryNg<BinaryOpType::ADD>;

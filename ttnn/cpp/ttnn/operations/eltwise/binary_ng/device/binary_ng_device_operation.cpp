@@ -261,7 +261,10 @@ BinaryNgDeviceOperation::invoke(
     const Tensor& input_tensor_a_arg,
     const Tensor& input_tensor_b_arg,
     BinaryOpType binary_op_type,
-    const std::optional<const DataType>& output_dtype) {
+    const std::optional<const DataType>& output_dtype,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
     auto subtile_broadcast_type = get_subtile_broadcast_type(
         input_tensor_a_arg.get_logical_shape()[-2],
         input_tensor_a_arg.get_logical_shape()[-1],
@@ -271,6 +274,9 @@ BinaryNgDeviceOperation::invoke(
     return {
         operation_attributes_t{
             binary_op_type,
+            {lhs_activations.begin(), lhs_activations.end()},
+            {rhs_activations.begin(), rhs_activations.end()},
+            {post_activations.begin(), post_activations.end()},
             std::nullopt,
             input_tensor_a_arg.memory_config(),
             input_tensor_a_arg.get_dtype(),
@@ -285,10 +291,16 @@ BinaryNgDeviceOperation::invoke(
     const Tensor& input_tensor_a_arg,
     float scalar,
     BinaryOpType binary_op_type,
-    const std::optional<const DataType>& output_dtype) {
+    const std::optional<const DataType>& output_dtype,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
     return {
         operation_attributes_t{
             binary_op_type,
+            {lhs_activations.begin(), lhs_activations.end()},
+            {rhs_activations.begin(), rhs_activations.end()},
+            {post_activations.begin(), post_activations.end()},
             scalar,
             input_tensor_a_arg.memory_config(),
             input_tensor_a_arg.get_dtype(),
