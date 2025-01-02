@@ -6,13 +6,13 @@ sudo systemctl restart mnt-MLPerf.mount
 ls -al /mnt/MLPerf/bit_error_tests
 
 check_hugepages_service_status=0 && ( sudo systemctl status tenstorrent-hugepages.service ) || check_hugepages_service_status=$?
-if [ $check_hugepages_service_status -eq 0 ]; then
-    echo "::notice title=weka-mount-hugepages-service-found::Hugepages service found. Restarting it so we can ensure hugepages are available"
-    sudo systemctl restart tenstorrent-hugepages.service
-else
-    echo "::warning title=weka-mount-hugepages-service-not-found::Hugepages service found. Restarting it so we can ensure hugepages are available"
-    echo "Hugepages service not found. Using old rc.local method"
+# Exit code 4 for systemctl means not found
+if [ $check_hugepages_service_status -eq 4 ]; then
+    echo "::warning title=weka-mount-hugepages-service-not-found::Hugepages service not found. Using old rc.local method"
     sudo /etc/rc.local
+else
+    echo "::notice title=weka-mount-hugepages-service-found::Hugepages service found. Command returned with exit code $check_hugepages_service_status. Restarting it so we can ensure hugepages are available"
+    sudo systemctl restart tenstorrent-hugepages.service
 fi
 
 # Wait until the hugepages are written as the above are not blocking
