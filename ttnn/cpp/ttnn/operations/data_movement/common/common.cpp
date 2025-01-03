@@ -52,45 +52,6 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
     return ttnn::reshape(tensor, squeeze_shape_to_4D(shape));
 }
 
-ttnn::Shape squeeze_output_shape(ttnn::Shape output_shape) {
-    if (output_shape.rank() <= 4) {
-        return output_shape;
-    }
-    std::array<uint32_t, 4> output_shape_4d;
-    output_shape_4d[0] = 1;
-    int extra_rank = output_shape.rank() - 4;
-    for (int i = extra_rank; i >= 0; i--) {
-        output_shape_4d[0] *= output_shape[i];
-    }
-    output_shape_4d[1] = output_shape[1 + extra_rank];
-    output_shape_4d[2] = output_shape[2 + extra_rank];
-    output_shape_4d[3] = output_shape[3 + extra_rank];
-    return ttnn::Shape(output_shape_4d);
-}
-
-ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
-    auto shape = tensor.get_shape();
-    auto rank = shape.rank();
-    TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4!", shape.rank());
-    if (rank == 4) {
-        return tensor;
-    }
-    int i = 0;
-    if (shape[i] == 1) {
-        auto squeezed = tensor;
-        while (rank > 4 && shape[i] == 1) {
-            squeezed = ttnn::squeeze(squeezed, 0);
-            rank = squeezed.get_shape().rank();
-            i++;
-        }
-        if (rank <= 4) {
-            return squeezed;
-        }
-        return ttnn::reshape(squeezed, squeeze_output_shape(shape));
-    }
-    return ttnn::reshape(tensor, squeeze_output_shape(shape));
-}
-
 ttnn::Tensor pad_to_tile_vol(
     uint8_t queue_id,
     const ttnn::Tensor& tensor,
