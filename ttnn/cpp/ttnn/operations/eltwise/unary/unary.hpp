@@ -75,6 +75,21 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Recip {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static ComplexTensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
+};
+
 struct Sigmoid_accurate {
     static Tensor invoke(
         uint8_t queue_id,
@@ -323,7 +338,6 @@ REGISTER_UNARY_OPERATION(logical_not, LOGICAL_NOT_UNARY);
 REGISTER_UNARY_OPERATION(ltz, LTZ);
 REGISTER_UNARY_OPERATION(neg, NEG);
 REGISTER_UNARY_OPERATION(nez, NEZ);
-REGISTER_UNARY_OPERATION_OVERLOAD(reciprocal, RECIP);
 REGISTER_UNARY_OPERATION(relu, RELU);
 REGISTER_UNARY_OPERATION(relu6, RELU6);
 REGISTER_UNARY_OPERATION(sigmoid, SIGMOID);
@@ -379,6 +393,7 @@ constexpr auto prelu_sfpu =
 
 constexpr auto sigmoid_accurate =
     ttnn::register_operation_with_auto_launch_op<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
+constexpr auto reciprocal = ttnn::register_operation<"ttnn::reciprocal", ttnn::operations::unary::Recip>();
 constexpr auto unary_chain =
     ttnn::register_operation_with_auto_launch_op<"ttnn::unary_chain", ttnn::operations::unary::Unary_chain>();
 

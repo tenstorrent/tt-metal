@@ -11,6 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -74,9 +75,38 @@ Tensor ExecuteUnary<UnaryOpType::ABS>::invoke(
     return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
 }
 
-template <>
-ComplexTensor ExecuteUnary<UnaryOpType::RECIP>::invoke(
-    const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+Tensor Recip::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    if (input_tensor.get_dtype() == DataType::BFLOAT8_B) {
+        Tensor input = ttnn::where(ttnn::eqz(input_tensor), 1.0f, input_tensor);
+        Tensor result = detail::unary_impl(
+            queue_id, input, {UnaryWithParam{UnaryOpType::RECIP}}, memory_config, optional_output_tensor);
+        return ttnn::where(ttnn::eqz(input_tensor), 0, result);
+    } else {
+        return detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{UnaryOpType::RECIP}}, memory_config, optional_output_tensor);
+    }
+}
+
+Tensor Recip::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    if (input_tensor.get_dtype() == DataType::BFLOAT8_B) {
+        Tensor input = ttnn::where(ttnn::eqz(input_tensor), 1.0f, input_tensor);
+        Tensor result = detail::unary_impl(
+            DefaultQueueId, input, {UnaryWithParam{UnaryOpType::RECIP}}, memory_config, optional_output_tensor);
+        return ttnn::where(ttnn::eqz(input_tensor), 0, result);
+    } else {
+        return detail::unary_impl(
+            DefaultQueueId, input_tensor, {UnaryWithParam{UnaryOpType::RECIP}}, memory_config, optional_output_tensor);
+    }
+}
+
+ComplexTensor Recip::invoke(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     Tensor a_plus_b = ttnn::add(input[0], input[1], std::nullopt, output_mem_config);
     Tensor a_minus_b = ttnn::subtract(input[0], input[1], std::nullopt, output_mem_config);
     Tensor asqr_plus_bsqr = ttnn::add(
@@ -116,7 +146,6 @@ template struct ExecuteUnary<UnaryOpType::LOGICAL_NOT_UNARY>;
 template struct ExecuteUnary<UnaryOpType::LTZ>;
 template struct ExecuteUnary<UnaryOpType::NEG>;
 template struct ExecuteUnary<UnaryOpType::NEZ>;
-template struct ExecuteUnary<UnaryOpType::RECIP>;
 template struct ExecuteUnary<UnaryOpType::RELU>;
 template struct ExecuteUnary<UnaryOpType::RELU6>;
 template struct ExecuteUnary<UnaryOpType::SIGMOID>;
