@@ -15,53 +15,6 @@ TIMEOUT = 10
 # seed for random
 random.seed(0)
 
-
-def extract_brackets_content(line):
-    # Function to extract the content inside brackets
-    brackets_content = []
-    open_brackets = 0
-    current_content = ""
-
-    for char in line:
-        if char == "[":
-            open_brackets += 1
-            if open_brackets > 0:
-                current_content = ""  # Reset content inside the brackets
-        elif char == "]":
-            if open_brackets > 0:
-                brackets_content.append(current_content.strip())
-            open_brackets -= 1
-        elif open_brackets > 0:
-            current_content += char
-
-    return brackets_content
-
-
-def parse_md_file_simple_no_regex(file_path):
-    view_specs = []
-    i = 0
-    with open(file_path, "r") as file:
-        for line in file:
-            # Extract all sets of content inside brackets
-            brackets_content = extract_brackets_content(line)
-
-            if len(brackets_content) >= 3:  # Ensure we have both shape and size
-                shape_str = brackets_content[0]  # First set of brackets for shape
-                size_str = brackets_content[2]  # Third set of brackets for size
-
-                # Convert the shape and size strings to lists of integers
-                if "s" in shape_str or "s" in size_str:
-                    continue
-                shape = list(map(int, shape_str.split(",")))
-                size = list(map(int, size_str.split(",")))
-
-                # Append the dictionary to the list
-                view_specs.append({"shape": shape, "size": size})
-            i += 1
-
-    return view_specs
-
-
 parameters = {
     "nightly": {
         "embedding_specs": [
@@ -142,26 +95,19 @@ parameters = {
             {"weight_shape": [81, 768], "indices_shape": [1, 24], "padding_idx": 1},
         ],
         "dtype": [ttnn.bfloat16],
-        "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        "indices_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        "weight_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        "output_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }
-
-
-# Invalidate vector is called during the generation phase where each vector will be passed in.
-# If invalidated, the vector will still be stored but will be skipped.
-# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        if test_vector["dtype"] == ttnn.bfloat8_b:
-            return True, "bfloat8_b not supported with ROW_MAJOR_LAYOUT"
-
-    return False, None
 
 
 def run(
     embedding_specs,
     dtype,
-    layout,
+    indices_layout,
+    weight_layout,
+    output_layout,
     *,
     device,
 ):
@@ -181,8 +127,8 @@ def run(
     torch_output_tensor = torch_embedding(indices)
 
     # Convert the weight and indices to ttnn tensor format
-    ttnn_weight = ttnn.from_torch(weight, device=device, layout=layout, dtype=dtype)
-    ttnn_indices = ttnn.from_torch(indices, device=device, layout=layout, dtype=ttnn.uint32)
+    ttnn_weight = ttnn.from_torch(weight, device=device, layout=weight_layout, dtype=dtype)
+    ttnn_indices = ttnn.from_torch(indices, device=device, layout=indices_layout, dtype=ttnn.uint32)
 
     # Measure performance of the embedding operation in ttnn
     start_time = start_measuring_time()
@@ -192,7 +138,7 @@ def run(
         ttnn_indices,
         ttnn_weight,
         padding_idx=padding_idx,
-        layout=layout,
+        layout=output_layout,
         embeddings_type=ttnn.EmbeddingsType.GENERIC,  # Default embeddings type
         dtype=dtype,
         output_tensor=None,  # No preallocated output tensor
