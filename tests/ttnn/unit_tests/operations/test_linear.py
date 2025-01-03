@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random, is_wormhole_b0
+from models.utility_functions import torch_random, is_wormhole_b0, skip_for_grayskull
 
 
 @pytest.mark.parametrize("batch_sizes", [(1,)])
@@ -310,3 +310,34 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.997)
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
+
+
+@skip_for_grayskull()
+def test_linear_with_fp32_dest_acc_and_bias(device):
+    torch.manual_seed(0)
+    torch_input_tensor_a = torch.rand([64, 1, 256, 384])
+    torch_input_tensor_b = torch.rand([1, 1, 1152, 384])
+    torch_input_tensor_c = torch.rand([1, 1, 1, 1152])
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch.transpose(torch_input_tensor_b, -1, -2))
+    torch_output_tensor += torch_input_tensor_c
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    input_tensor_c = ttnn.from_torch(torch_input_tensor_c, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+
+    output1 = ttnn.linear(
+        input_tensor_a,
+        input_tensor_b,
+        bias=input_tensor_c,
+        compute_kernel_config=compute_kernel_config,
+        core_grid=ttnn.CoreGrid(y=8, x=7),
+        transpose_b=True,
+    )
+    output_tensor = ttnn.to_torch(output1)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)

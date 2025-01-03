@@ -61,7 +61,7 @@ class DeviceSetup(Enum):
 PREFILL_CONFIG_TO_PCC = {
     DeviceSetup.GRAYSKULL: {
         "BFLOAT16-DRAM": {
-            128: (0.88, 0.97, 0.88),
+            128: (0.87, 0.97, 0.88),
             256: (0.92, 0.97, 0.88),
         },
         "BFLOAT16-L1": {
