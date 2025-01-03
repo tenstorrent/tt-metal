@@ -149,7 +149,12 @@ void Tensor::TensorAttributes::update_main_thread_ref_count(Device* worker, uint
 }
 
 Tensor::Tensor(
-    Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) {
+    Storage storage,
+    const ttnn::SimpleShape& logical_shape,
+    const ttnn::SimpleShape& padded_shape,
+    DataType dtype,
+    Layout layout,
+    const std::optional<Tile>& tile) {
     using namespace tt::constants;
 
     if (tile.has_value() and  //
@@ -169,9 +174,14 @@ Tensor::Tensor(
     init(
         std::move(storage),
         TensorSpec(
-            shape.logical_shape(),
-            TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout, tile), memory_config, shape)));
+            logical_shape,
+            TensorLayout::fromPaddedShape(
+                dtype, PageConfig(layout, tile), memory_config, logical_shape, padded_shape)));
 }
+
+Tensor::Tensor(
+    Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
+    Tensor(std::move(storage), shape.logical_shape(), shape.padded_shape(), dtype, layout, tile) {}
 
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec) { init(std::move(storage), std::move(tensor_spec)); }
 
@@ -768,10 +778,8 @@ const std::string Tensor::write_to_string() const { return tensor_impl::to_strin
 void Tensor::print() const { tensor_ops::tensor_print(*this); }
 
 Tensor Tensor::pad(
-    const tt::tt_metal::LegacyShape& output_tensor_shape,
-    const ttnn::SimpleShape& input_tensor_start,
-    float pad_value) const {
-    return tensor_ops::tensor_pad(*this, output_tensor_shape, input_tensor_start, pad_value);
+    const ttnn::SimpleShape& output_padded_shape, const ttnn::SimpleShape& input_tensor_start, float pad_value) const {
+    return tensor_ops::tensor_pad(*this, output_padded_shape, input_tensor_start, pad_value);
 }
 
 Tensor Tensor::unpad(const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) const {
