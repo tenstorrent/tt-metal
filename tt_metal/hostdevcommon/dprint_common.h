@@ -227,11 +227,11 @@ static inline constexpr bool is_supported_format(const CommonDataFormat& format)
         case CommonDataFormat::Float16_b: return true;
         case CommonDataFormat::Float32: return true;
         case CommonDataFormat::Int8:
-        case CommonDataFormat::Lf8:
         case CommonDataFormat::UInt8:
         case CommonDataFormat::UInt16:
         case CommonDataFormat::UInt32:
-        case CommonDataFormat::Int32:
+        case CommonDataFormat::Int32: return true;
+        case CommonDataFormat::Lf8:
         case CommonDataFormat::Invalid:
         default: return false;
     }

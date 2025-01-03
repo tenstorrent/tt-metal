@@ -317,6 +317,31 @@ static void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
                     *stream << *reinterpret_cast<float*>(&bit_val);
                     break;
                 }
+                case tt::DataFormat::Int8: {
+                    int8_t* data_ptr = reinterpret_cast<int8_t*>(data);
+                    *stream << (int)data_ptr[i];
+                    break;
+                }
+                case tt::DataFormat::UInt8: {
+                    uint8_t* data_ptr = reinterpret_cast<uint8_t*>(data);
+                    *stream << (unsigned int)data_ptr[i];
+                    break;
+                }
+                case tt::DataFormat::UInt16: {
+                    uint16_t* data_ptr = reinterpret_cast<uint16_t*>(data);
+                    *stream << (unsigned int)data_ptr[i];
+                    break;
+                }
+                case tt::DataFormat::Int32: {
+                    int32_t* data_ptr = reinterpret_cast<int32_t*>(data);
+                    *stream << (int)data_ptr[i];
+                    break;
+                }
+                case tt::DataFormat::UInt32: {
+                    uint32_t* data_ptr = reinterpret_cast<uint32_t*>(data);
+                    *stream << (unsigned int)data_ptr[i];
+                    break;
+                }
                 default: break;
             }
             if (w + ts->slice_range.ws < ts->slice_range.w1) {
