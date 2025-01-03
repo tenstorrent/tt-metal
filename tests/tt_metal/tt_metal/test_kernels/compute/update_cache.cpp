@@ -42,7 +42,7 @@ void MAIN {
             cb_pop_front(cache_cb, Wt);
             untilize_uninit(cache_cb);
 
-            tilize_init_short(untilized_cache2_cb, Wt);
+            tilize_init_short(untilized_cache2_cb, Wt, out_cb);
             cb_wait_front(untilized_cache2_cb, Wt);
             cb_reserve_back(out_cb, Wt);
             tilize_block(untilized_cache2_cb, Wt, out_cb);
@@ -51,7 +51,7 @@ void MAIN {
             // Compute pops both
             cb_pop_front(untilized_cache2_cb, Wt);
             cb_pop_front(untilized_cache_cb, Wt);
-            tilize_uninit(untilized_cache2_cb);
+            tilize_uninit(untilized_cache2_cb, out_cb);
         }
     }
 }

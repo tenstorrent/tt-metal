@@ -11,7 +11,7 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
-    untilize_init(tt::CBIndex::c_0);
+    untilize_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     // UNPACK(( DPRINT << "Block count=" << uint32_t(per_core_block_cnt) << " tile count=" << per_core_block_tile_cnt <<
     // ENDL() ));
