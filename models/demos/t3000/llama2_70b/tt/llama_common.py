@@ -6,7 +6,7 @@ import os
 import math
 from loguru import logger
 import re
-from typing import Tuple
+from typing import Tuple, List
 import numpy as np
 import torch
 import ttnn
