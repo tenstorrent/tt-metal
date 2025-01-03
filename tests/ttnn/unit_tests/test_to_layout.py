@@ -164,3 +164,28 @@ def test_to_layout_6D(shape, input_layout, output_layout, device):
     output_tensor = ttnn.to_layout(input_tensor, output_layout)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(input_a, output_tensor)
+
+
+@pytest.mark.skip("Skipping due to hang on to_layout to tile where input shape has 1 in it")
+@pytest.mark.parametrize(
+    "config",
+    [
+        [[3, 1370, 1, 1, 1280], ttnn.ROW_MAJOR_LAYOUT],  # hang
+        [[3, 50, 1, 1, 768], ttnn.ROW_MAJOR_LAYOUT],  # hang
+        [[3, 50, 1, 1, 1024], ttnn.ROW_MAJOR_LAYOUT],  # hang
+        [[3, 197, 1, 1, 768], ttnn.ROW_MAJOR_LAYOUT],  # hang
+        [[3, 197, 1, 1, 1024], ttnn.ROW_MAJOR_LAYOUT],  # hang
+    ],
+)
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+def test_to_layout_hangs(config, memory_config, device):
+    torch.manual_seed(2005)
+    torch_input = torch.randn(config[0], dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.DataType.BFLOAT16, layout=config[1], device=device, memory_config=memory_config
+    )
+    tt_output = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
+    tt_output = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_input, tt_output, 0.9999)
