@@ -10,7 +10,7 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import _gen_reshape_args_from_volume
 
 
-def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
+def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=32 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
     # device.compute_with_storage_grid_size()
     Y = 8
     X = 8
@@ -35,28 +35,25 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
             max_tensor_size = max_tensor_size_per_core * x * y
 
             if tensor_hw_as_shard_shape:
-                # Gets stuck:
-                # X 8 Y 8 input_shape [1, 17792, 8] DataType.BFLOAT8_B Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape True
-
                 if layout == "TILE_LAYOUT":
-                    # In shard mode ShardMode::PHYSICAL, physical shard shape {12, 13312} is not compatible with alignment Alignment([32, 32])!
-                    min_shard_size_x = 32
-                    min_shard_size_y = 32
-                else:  # if layout == "ROW_MAJOR_LAYOUT":
-                    # Shard Size must be multiple of input_tile_size (width * height is multiple of 1024)
-                    min_shard_size_x = random.choice([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024])
-                    min_shard_size_y = 1024 // min_shard_size_x
+                    min_tensor_height = 32
+                    min_tensor_width = 32
+                    max_tensor_height = int(math.sqrt(max_tensor_size_per_core))
+                    max_tensor_width = int(math.sqrt(max_tensor_size_per_core))
+                    tensor_height = random.randrange(min_tensor_height, max_tensor_height + 1, 32)
+                    tensor_width = random.randrange(min_tensor_width, max_tensor_width + 1, 32)
+                    input_shape = [tensor_height, tensor_width]
+                else:
+                    shard_size = random.randrange(1024, max_tensor_size_per_core + 1, 1024)
+                    tensor_width = random.randrange(16, shard_size // 2 + 1, 16)
+                    tensor_height = shard_size // tensor_width
+                    input_shape = [tensor_height, tensor_width]
 
-                rest_volume = random.randint(1, max_tensor_size // (min_shard_size_x * min_shard_size_y * x * y))
-                input_shape = random.choice(_gen_reshape_args_from_volume(rest_volume, step=1, out_dims=rank))
-                input_shape = list(input_shape["reshape_dims"])
-                input_shape[-2] = input_shape[-2] * min_shard_size_x
-                input_shape[-1] = input_shape[-1] * min_shard_size_y
-
-                # Shard width should be multiple of 16 to satisfy L1 alignment (width = multiple 8 for bfloat16)
-                while input_shape[-1] % 16 != 0:
-                    input_shape[-1] *= 2
-                    input_shape[-2] //= 2
+                if rank != 2:
+                    rest_volume = random.randint(1, max_tensor_size // math.prod(input_shape))
+                    rest_dims = random.choice(_gen_reshape_args_from_volume(rest_volume, step=1, out_dims=rank - 2))
+                    rest_dims = list(rest_dims["reshape_dims"])
+                    input_shape = rest_dims + input_shape
 
             elif sharding_strategy == "BLOCK":
                 min_shard_size_y = 32 * y
