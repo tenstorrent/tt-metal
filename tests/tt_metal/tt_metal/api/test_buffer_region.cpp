@@ -47,7 +47,7 @@ TEST_F(DeviceSingleCardBufferFixture, PartialBufferRegion) {
         .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> buffer = CreateBuffer(buffer_config);
 
-    const BufferRegion buffer_region1(512, 2048);
+    const BufferRegion buffer_region1(1024, 1024);
     EXPECT_TRUE(buffer.get()->is_partial_region(buffer_region1));
 
     const BufferRegion buffer_region2(0, 1024);
