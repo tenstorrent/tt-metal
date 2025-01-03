@@ -604,6 +604,7 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/experimental/reduction
     ttnn/operations/experimental/ssm
     ttnn/operations/experimental/transformer
+    ttnn/operations/experimental/dropout
     ttnn/operations/full_like
     ttnn/operations/full
     ttnn/operations/index_fill
