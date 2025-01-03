@@ -96,20 +96,30 @@ def validate_outputs(tt_outputs, ref_outputs, test_name):
     assert passing, f"{test_name} output does not meet PCC requirement {PCC_REQUIRED}"
 
 
-def to_tt_tensor(tensor, mesh_device, dtype=ttnn.bfloat16):
+def to_tt_tensor(tensor, mesh_device, dtype=ttnn.bfloat16, shard_dim=None):
     """Convert torch tensor to TT tensor."""
-    return ttnn.from_torch(
-        tensor,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    if shard_dim is None:
+        return ttnn.from_torch(
+            tensor,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        return ttnn.as_tensor(
+            tensor,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
 
 
-def to_torch_tensor(tensor, mesh_device, dtype=ttnn.bfloat16):
-    return ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1), dtype=dtype)
+def to_torch_tensor(tensor, mesh_device, dtype=ttnn.bfloat16, dim=-1):
+    return ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim), dtype=dtype)
 
 
 @torch.no_grad()
@@ -146,9 +156,9 @@ def test_tt_attn_qkv_y(mesh_device, seq_len, use_program_cache, reset_seeds, att
     tt_q, tt_k, tt_v = tt_model.run_qkv_y(tt_input)
 
     # Convert TT outputs to torch tensors
-    tt_q_torch = to_torch_tensor(tt_q, mesh_device)
-    tt_k_torch = to_torch_tensor(tt_k, mesh_device)
-    tt_v_torch = to_torch_tensor(tt_v, mesh_device)
+    tt_q_torch = to_torch_tensor(tt_q, mesh_device, dim=-3)
+    tt_k_torch = to_torch_tensor(tt_k, mesh_device, dim=-3)
+    tt_v_torch = to_torch_tensor(tt_v, mesh_device, dim=-3)
 
     # Get reference outputs
     with torch.no_grad():
@@ -231,9 +241,8 @@ def test_tt_attn_prepare_qkv(
     tt_y = to_tt_tensor(y_input_padded.view(1, batch_size, text_seq_len + y_padded_len, dim_y), mesh_device)
     tt_scale_x = to_tt_tensor(scale_x.view(batch_size, 1, 1, dim_x), mesh_device)
     tt_scale_y = to_tt_tensor(scale_y.view(batch_size, 1, 1, dim_y), mesh_device)
-    tt_rope_cos = to_tt_tensor(cos_padded, mesh_device)
-    tt_rope_sin = to_tt_tensor(sin_padded, mesh_device)
-    tt_valid_indices = to_tt_tensor(valid_token_indices, mesh_device)
+    tt_rope_cos = to_tt_tensor(cos_padded, mesh_device, shard_dim=-3)
+    tt_rope_sin = to_tt_tensor(sin_padded, mesh_device, shard_dim=-3)
 
     trans_mat = get_rot_transformation_mat(None)
     trans_mat_tt = to_tt_tensor(trans_mat, mesh_device)
@@ -251,9 +260,9 @@ def test_tt_attn_prepare_qkv(
     )
 
     # Convert TT outputs to torch tensors
-    tt_q_torch = to_torch_tensor(tt_q, mesh_device)
-    tt_k_torch = to_torch_tensor(tt_k, mesh_device)
-    tt_v_torch = to_torch_tensor(tt_v, mesh_device)
+    tt_q_torch = to_torch_tensor(tt_q, mesh_device, dim=-3)
+    tt_k_torch = to_torch_tensor(tt_k, mesh_device, dim=-3)
+    tt_v_torch = to_torch_tensor(tt_v, mesh_device, dim=-3)
 
     # unpad
     text_start = vision_seq_len + x_padded_len
@@ -346,15 +355,15 @@ def test_tt_attn_run_attention(
     torch_v_padded = torch.cat(
         [torch_v[:, :, :vision_seq_len, :], x_pad, torch_v[:, :, vision_seq_len:, :], y_pad, xy_pad], dim=2
     )
-    tt_q = to_tt_tensor(torch_q_padded, mesh_device)
-    tt_k = to_tt_tensor(torch_k_padded, mesh_device)
-    tt_v = to_tt_tensor(torch_v_padded, mesh_device)
+    tt_q = to_tt_tensor(torch_q_padded, mesh_device, shard_dim=-3)
+    tt_k = to_tt_tensor(torch_k_padded, mesh_device, shard_dim=-3)
+    tt_v = to_tt_tensor(torch_v_padded, mesh_device, shard_dim=-3)
 
     attn_mask = torch.zeros(batch_size, 1, attn_padded_len, attn_padded_len)
     attn_mask[:, :, :, vision_seq_len : vision_seq_len + x_padded_len] = -float("inf")
     text_end = vision_seq_len + x_padded_len + text_seq_len
     attn_mask[:, :, :, text_end:] = -float("inf")
-    tt_attn_mask = to_tt_tensor(attn_mask, mesh_device)
+    tt_attn_mask = to_tt_tensor(attn_mask, mesh_device, dtype=ttnn.bfloat4_b)
 
     logger.info("Run TtAsymmetricAttention run_attention")
     tt_out = tt_model.run_attention(
@@ -366,7 +375,7 @@ def test_tt_attn_run_attention(
     )
 
     # Convert TT output to torch tensor
-    tt_out_torch = to_torch_tensor(tt_out, mesh_device)
+    tt_out_torch = to_torch_tensor(tt_out, mesh_device, dim=-1)
 
     # unpad
     text_start = vision_seq_len + x_padded_len
@@ -459,7 +468,7 @@ def test_tt_attn_post_attention(
         [torch_out_padded[:, :, :vision_seq_len, :], x_pad, torch_out_padded[:, :, vision_seq_len:, :], y_pad, xy_pad],
         dim=2,
     )
-    tt_out = to_tt_tensor(torch_out_padded, mesh_device)
+    tt_out = to_tt_tensor(torch_out_padded, mesh_device, shard_dim=-1)
 
     logger.info("Run TtAsymmetricAttention post_attention")
     tt_x, tt_y = tt_model.post_attention(
@@ -471,8 +480,8 @@ def test_tt_attn_post_attention(
     )
 
     # Convert TT outputs to torch tensors
-    tt_x_torch = to_torch_tensor(tt_x, mesh_device)
-    tt_y_torch = to_torch_tensor(tt_y, mesh_device)
+    tt_x_torch = to_torch_tensor(tt_x, mesh_device, dim=-1)
+    tt_y_torch = to_torch_tensor(tt_y, mesh_device, dim=-1)
     # unpad
     tt_x_torch = tt_x_torch[:, :, :vision_seq_len, :]
     tt_y_torch = tt_y_torch[:, :, :text_seq_len, :]
