@@ -616,6 +616,7 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/kv_cache
     ttnn/operations/loss
     ttnn/operations/matmul
+    ttnn/operations/prefetcher
     ttnn/operations/moreh
     ttnn/operations/normalization
     ttnn/operations/pool

@@ -15,7 +15,7 @@ Tensor ExecuteDramPrefetcher::invoke(
     std::vector<ttnn::Tensor>& tensors,
     const Tensor& tensor_addrs,
     const uint32_t num_layers,
-    const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output(tensors))};
     operation::launch_op(
         [tensor_addrs, num_layers, global_cb](
