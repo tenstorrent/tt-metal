@@ -17,11 +17,15 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
+#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/command_interpreter_base.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/io_descriptors.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 #include <cstdint>
 #include <utility>
 
-using arg_idx_t = uint16_t;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -31,6 +35,7 @@ struct no_addrgen {};
 static constexpr size_t num_packet_headers_storable = 8;
 constexpr uint16_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
+
 #ifdef NO_TENSOR_MODE
 constexpr TensorMemoryLayout tensor0_layout = TensorMemoryLayout::INTERLEAVED;
 constexpr BufferType buffer0_type = BufferType::DRAM;
@@ -141,24 +146,6 @@ constexpr sharded_addrgen_fields in1_sharded_addrgen_fields = {0, 0, 0, 0, 0, 0,
 #endif
 
 
-// NOTE: This will eventually be updated with an official API
-static constexpr size_t VIRTUAL_COORDS_START_X = 16;
-static constexpr size_t VIRTUAL_COORDS_START_Y = 16;
-FORCE_INLINE bool is_using_noc_coords(uint16_t noc_x, uint16_t noc_y) {
-    return noc_x < VIRTUAL_COORDS_START_X && noc_y < VIRTUAL_COORDS_START_Y;
-}
-
-FORCE_INLINE uint64_t safe_get_noc_addr(uint8_t dest_noc_x, uint8_t dest_noc_y, uint32_t dest_bank_addr) {
-    bool using_noc_coords = is_using_noc_coords(dest_noc_x, dest_noc_y);
-    uint8_t noc_x = dest_noc_x;
-    uint8_t noc_y = dest_noc_y;
-    if (using_noc_coords) {
-        noc_x = NOC_X_PHYS_COORD(dest_noc_x);
-        noc_y = NOC_Y_PHYS_COORD(dest_noc_y);
-    }
-    return get_noc_addr(noc_x, noc_y, dest_bank_addr);
-}
-
 
 template <
     tt::tt_metal::TensorMemoryLayout tensor_layout,
@@ -242,78 +229,7 @@ union cmd_specific_context {
     cmd_specific_context() {}
 };
 
-class FabricConnectionManager final {
-public:
-    // return if there is/should be a connection - doesn't return whether or not the connection
-    // is actually live
-    bool is_logically_connected() const { return has_forward_connection() || has_backward_connection(); }
 
-    // make the connection live
-    void open() {
-        if (has_forward_connection()) {
-            forward_fabric_sender.open();
-        }
-        if (has_backward_connection()) {
-            backward_fabric_sender.open();
-        }
-    }
-    bool has_forward_connection() const { return connection_flags & FORWARD_CONNECTION_FLAG_MASK; }
-    bool has_backward_connection() const { return connection_flags & BACKWARD_CONNECTION_FLAG_MASK; }
-    void close() {
-        if (has_forward_connection()) {
-            forward_fabric_sender.close();
-        }
-        if (has_backward_connection()) {
-            backward_fabric_sender.close();
-        }
-    }
-
-    static FabricConnectionManager build_from_args(std::size_t& arg_idx) {
-        FabricConnectionManager connection_manager;
-        connection_manager.connection_flags = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0)
-                                              << FORWARD_CONNECTION_FLAG_OFFSET;
-        if (connection_manager.has_forward_connection()) {
-            connection_manager.forward_fabric_sender =
-                tt::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-        }
-        connection_manager.connection_flags |= static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0)
-                                               << BACKWARD_CONNECTION_FLAG_OFFSET;
-        if (connection_manager.has_backward_connection()) {
-            connection_manager.backward_fabric_sender =
-                tt::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-        }
-        return connection_manager;
-    }
-
-    tt::fabric::WorkerToFabricEdmSender& get_forward_connection() {
-        ASSERT(has_forward_connection());
-        return forward_fabric_sender;
-    }
-    tt::fabric::WorkerToFabricEdmSender& get_backward_connection() {
-        ASSERT(has_backward_connection());
-        return backward_fabric_sender;
-    }
-
-private:
-    static constexpr uint8_t FORWARD_CONNECTION_FLAG_MASK = 0x01;
-    static constexpr uint8_t BACKWARD_CONNECTION_FLAG_MASK = 0x02;
-    static constexpr uint8_t FORWARD_CONNECTION_FLAG_OFFSET = 0x0;
-    static constexpr uint8_t BACKWARD_CONNECTION_FLAG_OFFSET = 0x1;
-    tt::fabric::WorkerToFabricEdmSender forward_fabric_sender;
-    tt::fabric::WorkerToFabricEdmSender backward_fabric_sender;
-    uint8_t connection_flags;
-};
-
-struct address_info_t {
-    size_t address = 0;
-};
-
-struct core_descriptor_info_t {
-    union {
-        ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY noc_unicast;
-        ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast noc_multicast;
-    } core_desc_args;
-};
 template <typename Addrgen>
 struct command_context_t;
 
@@ -322,7 +238,7 @@ void update_ccl_command(
     arg_idx_t& arg_idx, command_context_t<Addrgen>& cmd_ctx, ttnn::ccl::cmd::CclCommandHeader const& cmd_header);
 
 template <typename Addrgen>
-struct command_context_t final {
+struct command_context_t final : public command_context_base_t<command_context_t<Addrgen>> {
     FORCE_INLINE command_context_t(
         FabricConnectionManager& fabric_connection,
         Addrgen& addrgen,
@@ -333,20 +249,22 @@ struct command_context_t final {
         uint8_t packet_size_in_pages,
         size_t packet_header_buffer_addr,
         uint8_t stream_id) :
-        fabric_connection(fabric_connection),
+        command_context_base_t<command_context_t<Addrgen>>(fabric_connection, num_commands, start_arg_idx, packet_header_buffer_addr, packet_size_in_pages, stream_id),
+        // fabric_connection(fabric_connection),
         tensor_addrgen(addrgen),
         cmd_specific_ctx(),
-        packet_header_buffer_addr(packet_header_buffer_addr),
-        num_commands(num_commands),
-        arg_idx(start_arg_idx),
-        command_idx(0),
+        // packet_header_buffer_addr(packet_header_buffer_addr),
+        // num_commands(num_commands),
+        // arg_idx(start_arg_idx),
+        // command_idx(0),
         page_size(page_size),
-        cb_id(cb_id),
-        packet_size_in_pages(packet_size_in_pages),
-        stream_id(stream_id) {
+        cb_id(cb_id)
+        // packet_size_in_pages(packet_size_in_pages),
+        // stream_id(stream_id)
+         {
         ASSERT(num_commands == 0 || arg_idx > 4);
     }
-    FabricConnectionManager& fabric_connection;
+    // FabricConnectionManager& fabric_connection;
     ttnn::ccl::cmd::CclCommandTensor command_tensor;
     ttnn::ccl::cmd::CclCommandHeader current_cmd_header;
     // TODO: optimize packing
@@ -355,44 +273,44 @@ struct command_context_t final {
     core_descriptor_info_t core_desc_info;
     Addrgen& tensor_addrgen;
     cmd_specific_context cmd_specific_ctx;
-    size_t packet_header_buffer_addr = 0;
+    // size_t packet_header_buffer_addr = 0;
 
-    uint16_t num_commands = 0;
-    arg_idx_t arg_idx = 0;
-    uint16_t command_idx = 0;
+    // uint16_t num_commands = 0;
+    // arg_idx_t arg_idx = 0;
+    // uint16_t command_idx = 0;
 
     uint16_t page_size = 0;
     ttnn::ccl::cmd::CclCommandAddrType src_addr_type = ttnn::ccl::cmd::CclCommandAddrType::NONE;
     ttnn::ccl::cmd::CclCommandAddrType dest_addr_type = ttnn::ccl::cmd::CclCommandAddrType::NONE;
     ttnn::ccl::cmd::CclCommandCoreDescriptorType core_desc_type = ttnn::ccl::cmd::CclCommandCoreDescriptorType::ADDRGEN;
     uint8_t cb_id = 0;
-    uint8_t packet_size_in_pages = 0;
-    uint8_t stream_id;
+    // uint8_t packet_size_in_pages = 0;
+    // uint8_t stream_id;
 
-    bool populated = false;
+    // bool populated = false;
 
-    bool command_requires_fabric() const {
-        return current_cmd_header.dest_type != ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY;
-    }
+    // bool command_requires_fabric() const {
+    //     return current_cmd_header.dest_type != ttnn::ccl::cmd::CclCommandDestType::CHIP_LOCAL_ONLY;
+    // }
 
-    FORCE_INLINE bool is_complete() const { return command_idx >= num_commands; }
+    // FORCE_INLINE bool is_complete() const { return command_idx >= num_commands; }
 
-    FORCE_INLINE void complete_current_command() {
-        command_idx++;
-        populated = false;
-    }
+    // FORCE_INLINE void complete_current_command() {
+    //     command_idx++;
+    //     populated = false;
+    // }
 
-    FORCE_INLINE bool current_command_active() const { return populated; }
+    // FORCE_INLINE bool current_command_active() const { return populated; }
 
-    FORCE_INLINE void fetch_next_command() {
-        populated = true;
+    FORCE_INLINE void fetch_next_command_impl() {
+//         this->populated = true;
 
-        this->current_cmd_header = ttnn::ccl::cmd::CclCommandHeader::from_uint32(get_arg_val<uint32_t>(arg_idx++));
-#ifdef DEBUG_PRINT_ENABLED
-        DPRINT << "CMD (code=" << (uint32_t)current_cmd_header.code
-               << ", args=" << (uint32_t)current_cmd_header.arg_count << ", idx=" << (uint32_t)(arg_idx - 1) << "\n";
-#endif
-        update_ccl_command(arg_idx, *this, current_cmd_header);
+//         this->current_cmd_header = ttnn::ccl::cmd::CclCommandHeader::from_uint32(get_arg_val<uint32_t>(this->arg_idx++));
+// #ifdef DEBUG_PRINT_ENABLED
+//         DPRINT << "CMD (code=" << (uint32_t)current_cmd_header.code
+//                << ", args=" << (uint32_t)current_cmd_header.arg_count << ", idx=" << (uint32_t)(arg_idx - 1) << "\n";
+// #endif
+        update_ccl_command(this->arg_idx, *this, current_cmd_header);
         switch (current_cmd_header.code) {
             case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
             case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_EDM: {
