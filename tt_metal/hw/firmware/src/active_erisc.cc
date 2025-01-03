@@ -17,7 +17,6 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dev_msgs.h"
 #include "risc_attribs.h"
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "dataflow_api.h"
 #include "ethernet/dataflow_api.h"
@@ -66,7 +65,7 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 #endif
 
 int main() {
-    conditionally_disable_l1_cache();
+    configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
     do_crt1((uint32_t*)eth_l1_mem::address_map::MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -74,23 +73,23 @@ int main() {
     // put this into scratch space similar to idle erisc
     noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 
-    volatile tt_l1_ptr uint32_t* debug_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
-    debug_addr_ptr[0] = 0xDEADDEAD;
+    // volatile tt_l1_ptr uint32_t* debug_addr_ptr =
+    //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+    // debug_addr_ptr[0] = 0xDEADDEAD;
 
-    debug_addr_ptr[0] = 0x12341234;
+    // debug_addr_ptr[0] = 0x12341234;
 
     risc_init();
 
-    debug_addr_ptr[0] = 0x56785678;
+    // debug_addr_ptr[0] = 0x56785678;
 
     mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
 
-    debug_addr_ptr[0] = 0xABCDABCD;
+    // debug_addr_ptr[0] = 0xABCDABCD;
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
-    debug_addr_ptr[0] = 0xFACEFACE;
+    // debug_addr_ptr[0] = 0xFACEFACE;
 
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -98,8 +97,8 @@ int main() {
     while (1) {
         // Wait...
         go_msg_t* go_msg_address = &(mailboxes->go_message);
-        DPRINT << "Waiting for go signal at " << (uint32_t)go_msg_address << ENDL();
-        debug_addr_ptr[0] = 0x1234ABCD;
+        // DPRINT << "Waiting for go signal at " << (uint32_t)go_msg_address << ENDL();
+        // debug_addr_ptr[0] = 0x1234ABCD;
         WAYPOINT("GW");
 
         uint8_t go_message_signal = RUN_MSG_DONE;
@@ -119,7 +118,7 @@ int main() {
                 internal_::notify_dispatch_core_done(dispatch_addr);
             }
         }
-        DPRINT << "Done waiting for go signal" << ENDL();
+        // DPRINT << "Done waiting for go signal" << ENDL();
         WAYPOINT("GD");
 
         {
@@ -130,7 +129,7 @@ int main() {
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
 
-            DPRINT << "launch msg address " << (uint32_t)launch_msg_address << ENDL();
+            // DPRINT << "launch msg rd ptr " << (uint32_t)launch_msg_rd_ptr << ENDL();
 
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
@@ -141,27 +140,35 @@ int main() {
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
-            DPRINT << "in aerisc enables is " << HEX() << uint32_t(enables) << DEC() << ENDL();
+            // DPRINT << "in aerisc enables is " << HEX() << uint32_t(enables) << DEC() << ENDL();
 
             // Run the ERISC kernel, no kernel config buffer on active eth
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
-                int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
-                DPRINT << "about to run the kernel " << kernel_config_base << ENDL();
+                int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
+                    mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
                 // void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
-                //     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                // void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(kernel_config_base);
-                // void(kernel_address)(uint32_t) = (void()(uint32_t))(0x3b30);
-                kernel_init((uint32_t)0x3b30);
+                //     (kernel_config_base +
+                //     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
+                DPRINT
+                    << "Kernel config base " << kernel_config_base << " index " << index << " offset "
+                    << (uint32_t)mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]
+                    << " kernel address " << (uint32_t)kernel_address << ENDL();
+                (*kernel_address)((uint32_t)kernel_address);
                 RECORD_STACK_USAGE();
                 WAYPOINT("D");
-            } else {
-                DPRINT << "not running the kernel" << ENDL();
             }
+            // else {
+            //     DPRINT << "not running the kernel" << ENDL();
+            // }
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
+
+            DPRINT << "kernel config mode " << HEX() << (uint32_t)launch_msg_address->kernel_config.mode << DEC()
+                   << ENDL();
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
@@ -173,8 +180,8 @@ int main() {
                 // dispatch addr 95056
                 // DPRINT << "dispatch core: " << (uint32_t)NOC_X(mailboxes->go_message.master_x) << " " <<
                 // (uint32_t)NOC_Y(mailboxes->go_message.master_y) << ENDL();
-                DPRINT << "dispatch addr " << DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset
-                       << ENDL();
+                // DPRINT << "dispatch addr " << DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset
+                //        << ENDL();
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
