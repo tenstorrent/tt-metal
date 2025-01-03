@@ -99,10 +99,15 @@ static Tensor reduce_impl(
                 }
                 bool transpose = i_dim < rank - 2;
                 int adjusted_dim = offset + i_dim;
+
+                auto pre_reduction_shape = output_tensor.get_shape();
+                if (!is_rank_le_4d) {
+                    output_tensor = reshape_nd_to_4d_for_reduction(output_tensor, transpose, adjusted_dim);
+                }
+
                 int reduce_dim = adjusted_dim;
+
                 if (transpose) {
-                    output_tensor =
-                        is_rank_le_4d ? output_tensor : reshape_nd_to_4d_for_transpose(output_tensor, adjusted_dim, -1);
                     output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -1, memory_config);
                     reduce_dim = output_tensor.get_shape().size() - 1;
                 }
@@ -127,9 +132,9 @@ static Tensor reduce_impl(
                 }
                 if (transpose) {
                     output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -1, memory_config);
-                    if (!is_rank_le_4d) {
-                        output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape{output_shape});
-                    }
+                }
+                if (!is_rank_le_4d) {
+                    output_tensor = reshape_4d_to_nd_after_reduction(output_tensor, pre_reduction_shape, i_dim);
                 }
             }
             return output_tensor;
