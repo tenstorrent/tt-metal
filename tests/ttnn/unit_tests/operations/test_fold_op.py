@@ -371,7 +371,6 @@ def test_fold(act_shape, stride_h, stride_w, device):
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_fold_sharded(device):
-    pytest.skip("Skippping fold sharded test to see more failures")
     torch.manual_seed(0)
 
     shape = (20, 230, 115, 8)
