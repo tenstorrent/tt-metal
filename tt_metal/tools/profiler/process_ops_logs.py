@@ -422,6 +422,7 @@ def get_device_data_generate_report(
                     if analysis == "device_fw_duration":
                         rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
                         rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
+                    if analysis == "device_kernel_duration":
                         if device in devicePreOpTime.keys():
                             rowDict["OP TO OP LATENCY [ns]"] = round(
                                 1000 * (analysisData[0]["start_cycle"] - devicePreOpTime[device]) / freq
@@ -632,6 +633,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                         if analysis == "device_fw_duration":
                             rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
                             rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
+                        if analysis == "device_kernel_duration":
                             freq = analysisData[0]["duration_cycles"] / analysisData[0]["duration_ns"]
                             if deviceID in devicePreOpTime.keys():
                                 rowDict["OP TO OP LATENCY [ns]"] = round(
