@@ -46,6 +46,8 @@ public:
     // Test/Debug
     uint32_t get_last_slot_addr(HalProgrammableCoreType programmable_core_type) const;
 
+    void PrintStatus();
+
 private:
     std::vector<uint32_t> base_addrs_;
     std::vector<uint32_t> end_addrs_;
