@@ -67,7 +67,6 @@ FORCE_INLINE void resize_remote_sender_cb_interface(uint32_t cb_id, uint32_t pag
     uint32_t fifo_wr_ptr = sender_cb_interface.fifo_wr_ptr;
     uint32_t cb_size_page_aligned = fifo_size - fifo_size % page_size;
     uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
-    uint32_t prev_fifo_limit_page_aligned = sender_cb_interface.fifo_limit_page_aligned;
 
     uint32_t next_fifo_wr_ptr = fifo_start_addr + align(fifo_wr_ptr - fifo_start_addr, page_size);
     if constexpr (update_remote_over_noc) {

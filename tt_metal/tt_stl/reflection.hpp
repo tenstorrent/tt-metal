@@ -1045,18 +1045,6 @@ struct fmt::formatter<std::unordered_map<K, V>> {
     }
 };
 
-template <typename K, typename V>
-struct fmt::formatter<std::vector<std::pair<K, V>>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::vector<std::pair<K, V>>& vec, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
-        std::stringstream ss;
-        ss << vec;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
 template <typename T>
     requires(
         tt::stl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value or
