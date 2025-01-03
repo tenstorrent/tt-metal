@@ -83,7 +83,7 @@ Cluster::Cluster() {
 
 void Cluster::detect_arch_and_target() {
 
-    this->target_type_ = (std::getenv("TT_METAL_SIMULATOR_EN")) ? TargetDevice::Simulator : TargetDevice::Silicon;
+    this->target_type_ = (std::getenv("TT_METAL_SIMULATOR")) ? TargetDevice::Simulator : TargetDevice::Silicon;
 
     this->arch_ = tt_metal::get_platform_architecture();
 
@@ -219,10 +219,9 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 }
 
 void Cluster::open_driver(const bool &skip_driver_allocs) {
-    const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
-
     std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
+        const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
         std::unordered_set<chip_id_t> all_chips = this->cluster_desc_->get_all_chips();
         std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
@@ -250,7 +249,8 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // that is later expected to be populated by unrelated APIs
         // TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1, "Only one target mmio device id allowed.");
     } else if (this->target_type_ == TargetDevice::Simulator) {
-        device_driver = std::make_unique<tt_SimulationDevice>(sdesc_path);
+        auto simulator_directory = std::getenv("TT_METAL_SIMULATOR");
+        device_driver = std::make_unique<tt_SimulationDevice>(simulator_directory);
     }
 
     barrier_address_params barrier_params;
