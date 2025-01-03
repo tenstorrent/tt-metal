@@ -79,7 +79,7 @@ static Tensor reduce_impl(
 
     Tensor output_tensor;
     bool single_reduce_op = (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
-                            (dim.size() == 2 && dim[0] == rank - 1 && dim[0] == rank - 2);
+                            (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
         auto reduce_4d_loop = [&](const bool use_reduce_type) -> Tensor {
             Tensor output_tensor = input_tensor;
