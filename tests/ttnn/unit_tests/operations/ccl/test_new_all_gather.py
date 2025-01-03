@@ -67,6 +67,7 @@ def run_with_trace(
     dim,
     num_links,
     output_mem_config,
+    multi_device_global_semaphore,
     num_iter=20,
     subdevice_id=None,
 ):
@@ -75,11 +76,11 @@ def run_with_trace(
     tt_out_tensor = ttnn.experimental.all_gather_async(
         input_tensor_mesh,
         dim,
+        multi_device_global_semaphore=multi_device_global_semaphore,
         num_links=num_links,
         memory_config=output_mem_config,
         topology=all_gather_topology,
         subdevice_id=subdevice_id,
-        create_semaphore_handles=True,
     )
     for d in mesh_device.get_devices():
         ttnn.synchronize_device(d)
@@ -91,11 +92,11 @@ def run_with_trace(
         tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
+            multi_device_global_semaphore=multi_device_global_semaphore,
             num_links=num_links,
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
-            create_semaphore_handles=False,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     for d in mesh_device.get_devices():
@@ -143,6 +144,30 @@ def run_all_gather_impl(
 
     if enable_async:
         logger.info(f"Using Async Mode for All Gather Op Dispatch")
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice(
+        [
+            ccl_sub_device_crs,
+        ]
+    )
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    if create_persistent_fabric:
+        mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+        )
+
+    # create global semaphore handles
+    ccl_semaphore_handles = ttnn.create_global_semaphore_with_same_address(
+        mesh_device, ccl_sub_device_crs, 0, sub_device_ids=[worker_sub_device_id]
+    )
+    addrs = ttnn.get_global_semaphore_address(ccl_semaphore_handles)
+    logger.info(f"semaphore handle addresses: {addrs}")
+    # assert all addresses are the same
+    assert len(set(addrs)) == 1
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
@@ -200,25 +225,13 @@ def run_all_gather_impl(
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
         tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
+            ttnn.Tensor(t, input_dtype)
+            .to(layout)
+            .to(mesh_device.get_devices()[i], input_mem_config, sub_device_ids=[worker_sub_device_id])
         )
         logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-            )
-        ]
-    )
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    if create_persistent_fabric:
-        mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
-        )
 
     if trace_mode:
         tt_out_tensor = run_with_trace(
@@ -228,6 +241,7 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
+            multi_device_global_semaphore=ccl_semaphore_handles,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
@@ -241,16 +255,17 @@ def run_all_gather_impl(
                     mesh_device=mesh_device,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
+                    multi_device_global_semaphore=ccl_semaphore_handles,
                     subdevice_id=worker_sub_device_id,
                     enable_persistent_fabric_mode=enable_persistent_fabric,
                     num_preferred_links=num_links,
-                    create_semaphore_handles=True,
                 )
 
             else:
                 tt_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh,
                     dim,
+                    multi_device_global_semaphore=ccl_semaphore_handles,
                     num_links=num_links,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
@@ -263,11 +278,8 @@ def run_all_gather_impl(
                 ttnn.synchronize_device(d, sub_device_ids=[worker_sub_device_id])
             logger.info(f"Done iteration {i}")
 
-    if enable_persistent_fabric and teardown_persistent_fabric:
-        teardown_fabric_interface(mesh_device)
-
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        tt_output_tensor = t.cpu(sub_device_ids=[worker_sub_device_id]).to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         logger.info(f"Checking for device {t.device().id()}")
 
         if input_dtype == ttnn.bfloat16:
@@ -277,6 +289,9 @@ def run_all_gather_impl(
         if not eq:
             logger.error(f"output mismatch for tensor {i}")
         assert eq, f"{i} FAILED: {output}"
+
+    if enable_persistent_fabric and teardown_persistent_fabric:
+        teardown_fabric_interface(mesh_device)
 
 
 # Enumerate the post-commit cases explicitly

@@ -193,15 +193,12 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 
     if use_all_gather_async:
         compute_grid_size = mesh_device.compute_with_storage_grid_size()
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+        )
         worker_sub_device = ttnn.SubDevice(
             [
-                ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
-                        )
-                    }
-                )
+                ccl_sub_device_crs,
             ]
         )
         worker_sub_device_id = ttnn.SubDeviceId(0)
@@ -211,6 +208,15 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                 mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
             )
             logger.info("Done Create persistent fabric interface")
+
+        # create global semaphore handles
+        ccl_semaphore_handles = ttnn.create_global_semaphore_with_same_address(
+            mesh_device, ccl_sub_device_crs, 0, sub_device_ids=[worker_sub_device_id]
+        )
+        addrs = ttnn.get_global_semaphore_address(ccl_semaphore_handles)
+        logger.info(f"semaphore handle addresses: {addrs}")
+        # assert all addresses are the same
+        assert len(set(addrs)) == 1
 
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
     if trace_mode:
@@ -234,11 +240,11 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
                     topology=ttnn.Topology.Linear,
+                    multi_device_global_semaphore=ccl_semaphore_handles,
                     num_links=num_links,
                     memory_config=output_mem_config,
                     subdevice_id=worker_sub_device_id,
                     enable_persistent_fabric_mode=enable_persistent_fabric,
-                    create_semaphore_handles=True,
                 )
             else:
                 ttnn_tensor_out = ttnn.all_gather(

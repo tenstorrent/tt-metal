@@ -130,14 +130,10 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::optional<std::shared_ptr<const GlobalSemaphore>>& semaphore_handle_opt,
+    const std::shared_ptr<const GlobalSemaphore>& semaphore_handle,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
-
-    TT_FATAL(semaphore_handle_opt.has_value(), "Semaphore handle is required for compile time");
-
-    auto semaphore_handle = semaphore_handle_opt.value();
 
     Device* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
