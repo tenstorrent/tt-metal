@@ -167,7 +167,7 @@ void mul_block_bcast_scalar_inplace() {
     constexpr uint32_t dst_tiles = MUL_BCAST_GRANULARITY;
     constexpr uint32_t granularity = num_tiles >> LOG2_MUL_BCAST_GRANULARITY;
     reconfig_data_format(in0_cb, in1_scalar_cb);
-    mul_tiles_bcast_scalar_init_short();
+    mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_scalar_cb, 1);
     for (uint32_t g = 0; g < granularity; ++g) {

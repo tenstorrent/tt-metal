@@ -194,7 +194,7 @@ void MAIN {
     }
     index_h_offset = 0;
     reconfig_data_format_srca(cb_ex_external, cb_in);
-    sub_bcast_cols_init_short();
+    sub_bcast_cols_init_short(cb_in, cb_ex_global);
     cb_reserve_back(cb_xmm, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -345,7 +345,7 @@ void MAIN {
         reconfig_data_format(cb_xmm, cb_ex_global);
     }
 #endif
-    mul_bcast_cols_init_short();
+    mul_bcast_cols_init_short(cb_xmm, cb_ex_global);
     index_h_offset = 0;
     cb_reserve_back(cb_im, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -380,7 +380,7 @@ void MAIN {
         if constexpr (do_beta == 0) {
             pack_reconfig_data_format(cb_out);
         }
-        mul_bcast_rows_init_short();
+        mul_bcast_rows_init_short(cb_im, cb_gamma);
         cb_wait_front(cb_gamma, block_w);
         index_h_offset = 0;
         cb_reserve_back(cb_outgamma, num_tiles_per_block);
@@ -410,7 +410,7 @@ void MAIN {
     if constexpr (do_beta) {
         reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
-        add_bcast_rows_init_short();
+        add_bcast_rows_init_short(cb_fusion, cb_beta);
         cb_wait_front(cb_beta, block_w);
         index_h_offset = 0;
         cb_reserve_back(cb_out, num_tiles_per_block);
