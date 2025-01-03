@@ -1130,68 +1130,67 @@ Tensor pad(
         });
     }
 
-    auto output_spec = TensorSpec(
-        output_padded_shape,
-        TensorLayout::fromPaddedShape(
-            tensor.get_dtype(),
-            tensor.get_tensor_spec().page_config(),
-            MemoryConfig{},
-            output_padded_shape,
-            output_padded_shape));
-
     auto pad_value_ = static_cast<T>(pad_value);
     const auto input_padded_shape = tensor.get_padded_shape();
     const auto input_strides = tensor.strides();
-    auto output_strides = output_spec.compute_strides();
-    auto tensor_padded_shape = tensor.padded_shape();
+    const auto input_data_type = tensor.get_dtype();
 
-    auto pad = [&](const auto& input_buffer) {
-        ttnn::SmallVector<std::array<uint32_t, 2>> pad_size{};
-        ttnn::SmallVector<uint32_t> input_indices(tensor.padded_shape().rank(), 0);
-
-        for (int index = 0; index < output_padded_shape.rank(); index++) {
-            uint32_t out_dim = output_padded_shape[index];
-
-            int tensor_idx =
-                index + static_cast<int>(tensor_padded_shape.size()) - static_cast<int>(output_padded_shape.size());
-            uint32_t tensor_dim = tensor_idx >= 0 ? tensor_padded_shape[tensor_idx] : 1;
-
-            int start_idx =
-                index + static_cast<int>(input_tensor_start.size()) - static_cast<int>(output_padded_shape.size());
-            uint32_t start = start_idx >= 0 ? input_tensor_start[start_idx] : 0;
-
-            // Check if input tensor fits in output tensor given the input tensor start indices
-            TT_ASSERT(tensor_dim + start <= out_dim, "Input tensor is out of bounds");
-
-            // Figure out pad size on each dim
-            pad_size.push_back({start, out_dim - tensor_dim - start});
-        }
-
-        auto flat_output_index = 0;
-        auto output_buffer = owned_buffer::create<T>(output_spec.padded_shape().volume());
-        std::function<void(std::size_t)> pad_to_tile = [&](std::size_t dim) -> void {
-            for (auto i = 0; i < pad_size[dim][0] * output_strides[dim]; i++) {
-                output_buffer[flat_output_index++] = pad_value_;
-            }
-
-            for (auto i = 0; i < input_padded_shape[dim]; i++) {
-                input_indices[dim] = i;
-                if (dim == input_padded_shape.rank() - 1) {
-                    auto flat_input_index = compute_flat_input_index(input_indices, input_strides);
-                    output_buffer[flat_output_index++] = input_buffer[flat_input_index];
-                } else {
-                    pad_to_tile(dim + 1);
+    auto pad =
+        [&input_padded_shape, &input_strides, &input_data_type, &output_padded_shape, &input_tensor_start, &pad_value_](
+            const auto& input_buffer) {
+            auto compute_stride = [](const ttnn::SimpleShape& padded_shape, uint32_t index) {
+                uint32_t stride = 1;
+                for (auto i = index + 1; i < padded_shape.rank(); i++) {
+                    stride *= padded_shape[i];
                 }
+                return stride;
+            };
+
+            ttnn::SmallVector<std::array<uint32_t, 2>> pad_size{};
+            ttnn::SmallVector<uint32_t> input_strides{};
+            ttnn::SmallVector<uint32_t> output_strides{};
+            ttnn::SmallVector<uint32_t> input_indices(input_padded_shape.rank(), 0);
+
+            for (auto index = 0; index < output_padded_shape.rank(); index++) {
+                // Check if input tensor fits in output tensor given the input tensor start indices
+                TT_ASSERT(
+                    input_padded_shape[index] + input_tensor_start[index] <= output_padded_shape[index],
+                    "Input tensor is out of bounds");
+
+                // Figure out pad size on each dim
+                pad_size.push_back(
+                    {input_tensor_start[index],
+                     output_padded_shape[index] - input_padded_shape[index] - input_tensor_start[index]});
+
+                input_strides.push_back(compute_stride(input_padded_shape, index));
+                output_strides.push_back(compute_stride(output_padded_shape, index));
             }
 
-            for (auto i = 0; i < pad_size[dim][1] * output_strides[dim]; i++) {
-                output_buffer[flat_output_index++] = pad_value_;
-            }
+            auto flat_output_index = 0;
+            auto output_buffer = owned_buffer::create<T>(output_padded_shape.volume());
+            std::function<void(std::size_t)> pad_to_tile = [&](std::size_t dim) -> void {
+                for (auto i = 0; i < pad_size[dim][0] * output_strides[dim]; i++) {
+                    output_buffer[flat_output_index++] = pad_value_;
+                }
+
+                for (auto i = 0; i < input_padded_shape[dim]; i++) {
+                    input_indices[dim] = i;
+                    if (dim == input_padded_shape.rank() - 1) {
+                        auto flat_input_index = compute_flat_input_index(input_indices, input_strides);
+                        output_buffer[flat_output_index++] = input_buffer[flat_input_index];
+                    } else {
+                        pad_to_tile(dim + 1);
+                    }
+                }
+
+                for (auto i = 0; i < pad_size[dim][1] * output_strides[dim]; i++) {
+                    output_buffer[flat_output_index++] = pad_value_;
+                }
+            };
+            pad_to_tile(0);
+
+            return output_buffer;
         };
-        pad_to_tile(0);
-
-        return output_buffer;
-    };
 
     auto output_buffer = std::visit(
         [&pad](auto&& storage) -> owned_buffer::Buffer<T> {
@@ -1213,7 +1212,12 @@ Tensor pad(
             }
         },
         tensor.get_storage());
-    return Tensor(OwnedStorage{output_buffer}, output_spec);
+    return Tensor(
+        OwnedStorage{output_buffer},
+        output_padded_shape,
+        tensor.get_dtype(),
+        tensor.get_layout(),
+        tensor.get_tensor_spec().tile());
 }
 
 template Tensor pad<bfloat16>(
