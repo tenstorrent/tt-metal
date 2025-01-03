@@ -16,7 +16,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-#include "circular_buffer_init.h"
+#include "remote_circular_buffer_api.h"
 #endif
 
 // Global vars
