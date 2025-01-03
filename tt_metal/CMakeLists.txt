@@ -6,6 +6,7 @@ target_sources(
     PRIVATE
         tt_metal.cpp
         graph/graph_tracking.cpp
+        experimental/hal.cpp
 )
 
 target_link_libraries(
