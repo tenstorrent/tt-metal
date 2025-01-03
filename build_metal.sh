@@ -31,6 +31,7 @@ show_help() {
     echo "  --disable-unity-builds           Disable Unity builds"
     echo "  --cxx-compiler-path              Set path to C++ compiler."
     echo "  --c-compiler-path                Set path to C++ compiler."
+    echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
 }
 
 clean() {
@@ -59,11 +60,12 @@ unity_builds="ON"
 build_all="OFF"
 cxx_compiler_path=""
 c_compiler_path=""
+ttnn_shared_sub_libs="OFF"
 
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,build-all,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,build-tt-train,build-static-libs,disable-unity-builds,release,development,debug,clean,cxx-compiler-path:,c-compiler-path:
+LONGOPTIONS=help,build-all,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,build-tt-train,build-static-libs,disable-unity-builds,release,development,debug,clean,cxx-compiler-path:,c-compiler-path:,ttnn-shared-sub-libs
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -115,6 +117,8 @@ while true; do
             build_static_libs="ON";;
         --build-all)
             build_all="ON";;
+        --ttnn-shared-sub-libs)
+            ttnn_shared_sub_libs="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --cxx-compiler-path)
@@ -177,6 +181,7 @@ echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
 echo "INFO: Enable Unity builds: $unity_builds"
+echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -226,6 +231,10 @@ if [ "$export_compile_commands" = "ON" ]; then
     cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
 else
     cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF")
+fi
+
+if [ "$ttnn_shared_sub_libs" = "ON" ]; then
+    cmake_args+=("-DENABLE_TTNN_SHARED_SUBLIBS=ON")
 fi
 
 if [ "$build_tests" = "ON" ]; then
