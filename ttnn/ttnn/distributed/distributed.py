@@ -253,7 +253,7 @@ class MeshToTensor:
     You can also "Bring your own MeshToTensor" based on your custom mapping.
     """
 
-    def compose(self, tensor: ttnn.Tensor):
+    def compose(self, tensor: ttnn.Tensor, sub_device_ids: List[ttnn.SubDeviceId] = []):
         raise NotImplementedError("Subclasses must implement this method")
 
 
