@@ -7,14 +7,13 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/experimental/hal.hpp"
 
 #include "transpose_program_factory.hpp"
 
-// FIXME: ARCH_NAME specific include
-#include "noc/noc_parameters.h"  // DRAM_ALIGNMENT
-
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
@@ -95,8 +94,9 @@ void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
     }
     if (this->dim == TransposeOpDim::HC) {
         if (row_major) {
-            auto BUFFER_ALIGNMENT =
-                input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+            auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                        ? hal::get_dram_alignment()
+                                        : hal::get_l1_alignment();
             TT_FATAL(
                 (W * input_tensor.element_size()) % BUFFER_ALIGNMENT == 0,
                 "Buffer is not aligned for this implementation row_size_bytes {} buffer_alignment {}",
