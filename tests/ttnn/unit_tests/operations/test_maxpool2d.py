@@ -52,6 +52,18 @@ def run_max_pool(
     cores_y = device.core_grid.y
     max_cores = cores_x * cores_y
 
+    # temporarily skip non-8 tile multiple wide reductions with large kernels
+    if kernel_h > 4:
+        if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
+            if in_c > 256 and in_c % 256 != 0:
+                pytest.skip("Wide reductions with large kernels requires input channels to be multiple of 8 tiles")
+        if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            if (in_c / max_cores) > 256 and (in_c / max_cores) % 256 != 0:
+                pytest.skip("Wide reductions with large kernels requires input channels to be multiple of 8 tiles")
+        if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+            if (in_c / cores_x) > 256 and (in_c / cores_x) % 256 != 0:
+                pytest.skip("Wide reductions with large kernels requires input channels to be multiple of 8 tiles")
+
     if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
         if in_c % 16 != 0:
             pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
@@ -275,6 +287,11 @@ def run_max_pool(
             [1, 512, 10, 10],
             [1, 96, 112, 112],
             [1, 192, 132, 20],
+            # wide non-8 multiple tests
+            [1, 384, 16, 16],
+            [1, 576, 16, 8],
+            [1, 800, 8, 8],
+            [1, 16, 10, 10],
         )
     ),
 )
@@ -350,6 +367,10 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
             # wide yolo kernel
             [1, 32768, 10, 10],
             [1, 6144, 6, 6],
+            # wide non-8 multiple tests
+            [1, 24576, 16, 16],
+            [1, 36864, 16, 8],
+            [1, 51200, 8, 8],
         )
     ),
 )
@@ -455,6 +476,10 @@ def test_run_max_pool_width_shard(
             [1, 4096, 10, 10],
             [1, 768, 56, 56],
             [1, 1280, 8, 6],
+            # wide non-8 multiple tests
+            [1, 3072, 16, 16],
+            [1, 4608, 16, 8],
+            [1, 6400, 8, 8],
         )
     ),
 )
