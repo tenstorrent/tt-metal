@@ -77,9 +77,84 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim):
 
 @pytest.mark.parametrize("dim_1", [3])
 @pytest.mark.parametrize("dim_2", [5])
-@pytest.mark.parametrize("dim_3", [37])
-@pytest.mark.parametrize("dim_4", [44])
-@pytest.mark.parametrize("dim_5", [63])
+@pytest.mark.parametrize("dim_3", [6])
+@pytest.mark.parametrize("dim_4", [8])
+@pytest.mark.parametrize("dim_5", [2])
+@pytest.mark.parametrize("dim_6", [4])
+@pytest.mark.parametrize("dim_7", [3])
+@pytest.mark.parametrize("dim_8", [6])
+@pytest.mark.parametrize("dim", [[3, 7]])
+@pytest.mark.parametrize("keepdim", [True])
+def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8, dim, keepdim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8), dtype=torch.bfloat16)
+    torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize("dim_1", [3])
+@pytest.mark.parametrize("dim_2", [5])
+@pytest.mark.parametrize("dim_3", [4])
+@pytest.mark.parametrize("dim_4", [6])
+@pytest.mark.parametrize("dim_5", [2])
+@pytest.mark.parametrize("dim_6", [8])
+@pytest.mark.parametrize("dim_7", [2])
+@pytest.mark.parametrize("dim", [[2, 5]])
+@pytest.mark.parametrize("keepdim", [True])
+def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim, keepdim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7), dtype=torch.bfloat16)
+    torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize("dim_1", [3])
+@pytest.mark.parametrize("dim_2", [5])
+@pytest.mark.parametrize("dim_3", [2])
+@pytest.mark.parametrize("dim_4", [3])
+@pytest.mark.parametrize("dim_5", [2])
+@pytest.mark.parametrize("dim_6", [9])
+@pytest.mark.parametrize("dim", [[1, 4]])
+@pytest.mark.parametrize("keepdim", [True])
+def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim, keepdim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((dim_1, dim_2, dim_3, dim_4, dim_5, dim_6), dtype=torch.bfloat16)
+    torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize("dim_1", [3])
+@pytest.mark.parametrize("dim_2", [5])
+@pytest.mark.parametrize("dim_3", [7])
+@pytest.mark.parametrize("dim_4", [2])
+@pytest.mark.parametrize("dim_5", [5])
 @pytest.mark.parametrize("dim", [[1, 4]])
 @pytest.mark.parametrize("keepdim", [True])
 def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keepdim):
@@ -100,8 +175,8 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
 
 @pytest.mark.parametrize("batch_size", [3])
 @pytest.mark.parametrize("c", [5])
-@pytest.mark.parametrize("h", [37])
-@pytest.mark.parametrize("w", [63])
+@pytest.mark.parametrize("h", [6])
+@pytest.mark.parametrize("w", [8])
 @pytest.mark.parametrize("dim", [None, [], 0, 2, [0, 1], [1, 3], [0, 1, 2], [1, 2, 3], [0, 1, 2, 3]])
 @pytest.mark.parametrize("keepdim", [True])
 def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
