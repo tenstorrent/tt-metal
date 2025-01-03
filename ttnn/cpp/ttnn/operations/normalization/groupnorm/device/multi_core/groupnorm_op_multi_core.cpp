@@ -320,7 +320,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
     uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
-    uint32_t in0_CB_size = in0_block_tiles * in_single_tile_size;
+    uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
+    uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
     // in2 - scaler
     uint32_t in2_CB_size = single_tile_size;
     // in3 - eps
@@ -338,7 +339,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
     // itermediate buffers
     uint32_t interm_block_tiles = block_ht * block_wt;
-    uint32_t in_CB_size = in0_CB_size;
     uint32_t im_out_CB_size = out_single_tile_size * interm_block_tiles;
     uint32_t x_CB_size = interm_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = interm_block_tiles * single_tile_size;
