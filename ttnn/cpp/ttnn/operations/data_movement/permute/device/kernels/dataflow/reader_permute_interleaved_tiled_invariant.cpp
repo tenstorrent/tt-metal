@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr bool src_is_dram = (bool)get_compile_time_arg_val(0);
+    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t N = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(3);
