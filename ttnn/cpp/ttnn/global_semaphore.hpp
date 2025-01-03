@@ -37,7 +37,14 @@ MultiDeviceGlobalSemaphore create_global_semaphore(
     uint32_t initial_value,
     BufferType buffer_type = BufferType::L1,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
+MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
+    MeshDevice* mesh_device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    uint32_t attempts,
+    bool search_max = false);
 std::vector<tt::tt_metal::DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSemaphore& global_semaphore);
 
 void reset_global_semaphore_value(
