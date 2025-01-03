@@ -273,8 +273,7 @@ Tensor tensor_pad(
         return input_tensor;
     }
 
-    auto output = tensor_impl::pad_wrapper(
-        input_tensor, input_tensor.get_padded_shape(), output_padded_shape, input_tensor_start, pad_value);
+    auto output = tensor_impl::pad_wrapper(input_tensor, output_padded_shape, input_tensor_start, pad_value);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

@@ -239,7 +239,6 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 template <typename T>
 Tensor pad(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_shape,
     const ttnn::SimpleShape& output_padded_shape,
     const ttnn::SimpleShape& input_tensor_start,
     float pad_value);
