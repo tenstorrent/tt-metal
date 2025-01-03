@@ -10,7 +10,7 @@ from pathlib import Path
 from loguru import logger
 import torch
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.llama3.tt.llama_common import (
+from models.demos.llama3_subdevices.tt.llama_common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
     num_to_core_range_set,

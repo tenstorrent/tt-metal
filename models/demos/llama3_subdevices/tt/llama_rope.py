@@ -6,7 +6,7 @@ import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
+from models.demos.llama3_subdevices.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
 from models.utility_functions import nearest_32
 from loguru import logger
 

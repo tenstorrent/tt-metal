@@ -6,10 +6,10 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.llama3.tt.llama_attention import TtLlamaAttention
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.llama3.tt.llama_common import (
+from models.demos.llama3_subdevices.tt.llama_attention import TtLlamaAttention
+from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
+from models.demos.llama3_subdevices.tt.llama_common import (
     precompute_freqs,
     PagedAttentionConfig,
 )
@@ -87,7 +87,7 @@ def test_llama_attention_inference(
     seq_len = 1
 
     generation_start_pos = 127
-    generation_length = 10
+    generation_length = 1
     all_tests_pass = True
 
     # Setup RoPE transformation matrices

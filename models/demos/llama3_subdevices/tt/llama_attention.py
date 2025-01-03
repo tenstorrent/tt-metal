@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3.tt.llama_ccl import tt_all_reduce, tt_all_gather
+from models.demos.llama3_subdevices.tt.llama_ccl import tt_all_reduce, tt_all_gather
 
 
 class TtLlamaAttention(LightweightModule):
