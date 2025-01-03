@@ -190,7 +190,7 @@ Tensor pad_bfloat8_b(
     auto float_tensor =
         Tensor(
             OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tile)
-            .pad(output_shape, output_padded_shape, input_tensor_start, pad_value);
+            .pad(output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT8_B
     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
@@ -253,7 +253,7 @@ Tensor pad_bfloat4_b(
     auto float_tensor =
         Tensor(
             OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tile)
-            .pad(output_shape, output_padded_shape, input_tensor_start, pad_value);
+            .pad(output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT4_B
     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();

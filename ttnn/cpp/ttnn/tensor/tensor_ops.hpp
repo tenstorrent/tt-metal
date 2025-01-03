@@ -45,7 +45,6 @@ void tensor_print(const Tensor& input_tensor);
 
 Tensor tensor_pad(
     const Tensor& input_tensor,
-    const ttnn::SimpleShape& output_shape,
     const ttnn::SimpleShape& output_padded_shape,
     const ttnn::SimpleShape& input_tensor_start,
     float pad_value);

@@ -116,12 +116,8 @@ Tensor convert_float_vector_to_tt_tensor(
         auto owned_buffer = create_owned_buffer_from_vector_of_floats(std::move(data), DataType::FLOAT32);
         auto float_tensor = Tensor(OwnedStorage{owned_buffer}, shape, DataType::FLOAT32, Layout::ROW_MAJOR, tile);
         if (result_cpu_spec.logical_shape() != result_cpu_spec.padded_shape()) {
-            float_tensor = tensor_ops::tensor_pad(
-                float_tensor,
-                result_cpu_spec.logical_shape(),
-                result_cpu_spec.padded_shape(),
-                ttnn::SimpleShape{0, 0, 0, 0},
-                0);
+            float_tensor =
+                tensor_ops::tensor_pad(float_tensor, result_cpu_spec.padded_shape(), ttnn::SimpleShape{0, 0, 0, 0}, 0);
         }
         auto output_float_data = owned_buffer::get_as<float>(float_tensor.to(Layout::TILE)).get();
         auto output_packed_data =
