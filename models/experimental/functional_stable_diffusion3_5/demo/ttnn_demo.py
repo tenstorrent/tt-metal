@@ -96,5 +96,7 @@ def test_demo(device):
             guidance_scale=4.5,
             parameters_transformer=parameters,
             device_ttnn=device,
+            width=512,
+            height=512,
         ).images[0]
         image.save("ttnn_capybara.png")

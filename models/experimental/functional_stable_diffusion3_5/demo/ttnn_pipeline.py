@@ -577,7 +577,7 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
         device_ttnn=None,
     ):
         disable_persistent_kernel_cache()
-        device_ttnn.enable_program_cache()
+        # device_ttnn.enable_program_cache()
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
 
@@ -757,7 +757,7 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
 
         numpy_array = latents.to(torch.float32).numpy()
         np.save(
-            "models/experimental/functional_stable_diffusion3_5/demo/latents_of_40_iter_capybara.npy",
+            "models/experimental/functional_stable_diffusion3_5/demo/demo_unoptimized_512x512.npy",
             numpy_array,
         )
         print("completed forloop")
