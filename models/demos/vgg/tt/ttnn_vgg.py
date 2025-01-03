@@ -64,16 +64,17 @@ def ttnn_vgg16(
     for itr, v in enumerate(cfgs["D"]):
         if v == "M":
             l = list(tt_x.shape)
-            in_n, in_c, in_h, in_w = list(tt_x.shape)
+            in_n, in_h, in_w, in_c = list(tt_x.shape)
+            tt_x = tt_x.reshape((1, 1, batch_size * in_h * in_w, in_c))
 
             tt_x = ttnn.to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT)
             ttact_d = ttnn.to_device(tt_x, device)
             tt_x = ttnn.max_pool2d(
                 input_tensor=ttact_d,
                 batch_size=batch_size,
-                input_h=int(math.sqrt(in_h / batch_size)),
-                input_w=int(math.sqrt(in_h / batch_size)),
-                channels=l[3],
+                input_h=in_h,
+                input_w=in_w,
+                channels=in_c,
                 kernel_size=[2, 2],
                 stride=[2, 2],
                 padding=[0, 0],
@@ -196,16 +197,16 @@ def ttnn_vgg11(
         if v == "M":
             l = list(tt_x.shape)
 
-            in_n, in_c, in_h, in_w = list(tt_x.shape)
-
+            in_n, in_h, in_w, in_c = list(tt_x.shape)
+            tt_x = ttnn.reshape(tt_x, (1, 1, batch_size * in_h * in_w, in_c))
             tt_x = ttnn.to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT)
             ttact_d = ttnn.to_device(tt_x, device)
             tt_x = ttnn.max_pool2d(
                 input_tensor=ttact_d,
                 batch_size=batch_size,
-                input_h=int(math.sqrt(in_h / batch_size)),
-                input_w=int(math.sqrt(in_h / batch_size)),
-                channels=l[3],
+                input_h=in_h,
+                input_w=in_w,
+                channels=in_c,
                 kernel_size=[2, 2],
                 stride=[2, 2],
                 padding=[0, 0],
