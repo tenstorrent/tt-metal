@@ -11,7 +11,7 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t NHtWt = get_compile_time_arg_val(0);
 #ifndef SHORT_INIT
-    transpose_wh_init(tt::CBIndex::c_0);
+    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #else
     unary_op_init_common(tt::CBIndex::c_0);
     transpose_wh_init_short(tt::CBIndex::c_0);
