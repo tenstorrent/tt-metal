@@ -18,7 +18,7 @@
 #include "c_tensix_core.h"
 #include "kernel_includes.hpp"
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-#include "circular_buffer_init.h"
+#include "remote_circular_buffer_api.h"
 #endif
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
