@@ -82,12 +82,9 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
         for idx in range(0, len(all_receiver_cores_list), 2)
     ]
 
-    mm_optimised_ring_cores = PREFETCHER_NOC1_GRID
-    hop_grid = [
-        (3, 6),
-    ]
-
     dram_cores = all_dram_cores[:num_reader_cores]
+    hop_grid = []
+    mm_optimised_ring_cores = []
     if not is_functional_test:
         sender_cores = all_sender_cores[:num_reader_cores]
         receiver_cores_list = all_receiver_cores_list[: num_reader_cores * num_global_cb_receivers]
@@ -99,6 +96,11 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
                 ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
             ]
         )
+
+        mm_optimised_ring_cores = PREFETCHER_NOC1_GRID
+        hop_grid = [
+            (3, 6),
+        ]
     else:
         sender_cores = [ttnn.CoreCoord(0, y) for y in range(num_reader_cores)]
 
@@ -527,7 +529,7 @@ def test_run_prefetcher(
     )
 
 
-@pytest.mark.skipif(is_grayskull() or is_wormhole_b0() or is_blackhole(), reason="GS not supported")
+@pytest.mark.skipif(is_grayskull(), reason="GS not supported")
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [
