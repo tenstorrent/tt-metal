@@ -12,6 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
+from models.utility_functions import is_grayskull
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     run_multi_core_matmul_1d,
@@ -460,6 +461,7 @@ def run_prefetcher_mm(
     assert all_passing
 
 
+@pytest.mark.skipif(is_grayskull(), reason="GS not supported")
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [
@@ -525,6 +527,7 @@ def test_run_prefetcher(
     )
 
 
+@pytest.mark.skipif(is_grayskull(), reason="GS not supported")
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [
