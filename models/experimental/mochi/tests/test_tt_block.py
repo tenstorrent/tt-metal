@@ -12,6 +12,7 @@ from models.experimental.mochi.tests.test_tt_attn import (
     load_model_weights,
     to_tt_tensor,
     to_torch_tensor,
+    replicate_attn_mask,
     stack_cos_sin,
     PCC_REQUIRED,
     NUM_HEADS,
@@ -51,7 +52,6 @@ def create_models(mesh_device, state_dict, partial_state_dict, block_path, dim_x
     )
     reference_model.load_state_dict(partial_state_dict)
 
-    weight_cache_path = get_cache_path(os.environ.get("FAKE_DEVICE"))
     tt_model = TtAsymmetricJointBlock(
         mesh_device=mesh_device,
         state_dict=state_dict,
@@ -76,7 +76,7 @@ def create_models(mesh_device, state_dict, partial_state_dict, block_path, dim_x
 @pytest.mark.parametrize(
     "vision_seq_len, text_seq_len",
     [
-        (44 * 1024, 256),
+        (43 * 1024, 256),
     ],
 )
 @pytest.mark.parametrize(
@@ -131,8 +131,8 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
     tt_x = to_tt_tensor(x_input.view(1, batch_size, vision_seq_len, dim_x), mesh_device)
     tt_y = to_tt_tensor(y_input.view(1, batch_size, text_seq_len, dim_y), mesh_device)
     tt_c = to_tt_tensor(c_input.view(batch_size, 1, 1, dim_x), mesh_device)
-    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device)
-    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device)
+    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-3)
+    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-3)
     tt_trans_mat = to_tt_tensor(trans_mat, mesh_device)
 
     # Create packed indices
@@ -154,8 +154,9 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
     )
 
     # Convert TT outputs to torch tensors
-    tt_x_torch = to_torch_tensor(tt_x_out, mesh_device)
-    tt_y_torch = to_torch_tensor(tt_y_out, mesh_device)
+    # extract from replicated tensors
+    tt_x_torch = to_torch_tensor(tt_x_out, mesh_device, dim=0)[0:1]
+    tt_y_torch = to_torch_tensor(tt_y_out, mesh_device, dim=0)[0:1]
 
     # Get reference outputs
     ref_x, ref_y = reference_model(
@@ -281,17 +282,16 @@ def test_tt_block_with_saved_tensors(mesh_device, use_program_cache, reset_seeds
     tt_x = to_tt_tensor(x_padded.view(1, x_shape[0], x_padded.shape[1], x_shape[2]), mesh_device)
     tt_y = to_tt_tensor(tensors["y_feat"].view(1, y_shape[0], y_shape[1], y_shape[2]), mesh_device)
     tt_c = to_tt_tensor(tensors["c"].view(x_shape[0], 1, 1, -1), mesh_device)
-    tt_attn_mask = to_tt_tensor(
-        attn_mask.view(1, 1, attn_padded_len, attn_padded_len), mesh_device, dtype=ttnn.bfloat4_b
-    )
+    attn_mask = attn_mask.view(1, 1, attn_padded_len, attn_padded_len)
+    tt_attn_mask = replicate_attn_mask(attn_mask, mesh_device, ttnn.bfloat4_b)
 
     # Stack and convert RoPE tensors
     # NOTE: do I need to pad rope_cos and rope_sin? I think this will break if padding is more than tile aligned!
     rope_cos_stack, rope_sin_stack = stack_cos_sin(
         tensors["rope_cos"].unsqueeze(0).permute(0, 2, 1, 3), tensors["rope_sin"].unsqueeze(0).permute(0, 2, 1, 3)
     )
-    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device)
-    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device)
+    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-3)
+    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-3)
 
     # Get transformation matrix
     trans_mat = get_rot_transformation_mat(None)
@@ -321,8 +321,8 @@ def test_tt_block_with_saved_tensors(mesh_device, use_program_cache, reset_seeds
     )
 
     # Convert TT outputs to torch tensors
-    tt_x_torch = to_torch_tensor(tt_x_out, mesh_device)
-    tt_y_torch = to_torch_tensor(tt_y_out, mesh_device)
+    tt_x_torch = to_torch_tensor(tt_x_out, mesh_device, dim=0)[0:1]
+    tt_y_torch = to_torch_tensor(tt_y_out, mesh_device, dim=0)[0:1]
 
     # unpad x
     tt_x_torch = tt_x_torch[:, :, : x_shape[1], :]

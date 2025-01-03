@@ -31,6 +31,7 @@ class TtAsymmetricJointBlock(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         self.state_dict = state_dict
         self.state_dict_prefix = state_dict_prefix
         self.weight_cache_path = weight_cache_path
@@ -146,7 +147,8 @@ class TtAsymmetricJointBlock(LightweightModule):
             weight,
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            # mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight"),
@@ -159,7 +161,8 @@ class TtAsymmetricJointBlock(LightweightModule):
                 bias_pt,
                 dtype=ttnn.bfloat16,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),  # Bias is 1D
+                # mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),
@@ -170,14 +173,24 @@ class TtAsymmetricJointBlock(LightweightModule):
     def ff_block_x(self, x: ttnn.Tensor, scale_x: ttnn.Tensor, gate_x: ttnn.Tensor) -> ttnn.Tensor:
         """Feed-forward block for visual features."""
         x_mod = modulated_rmsnorm(x, scale_x)
-        x_res = self.mlp_x(x_mod)
+        x_res_shard = self.mlp_x(x_mod)
+        if self.num_devices > 1:
+            # Collect hidden-dim-fractured MLP outputs
+            x_res = ttnn.all_gather(x_res_shard, dim=3)
+        else:
+            x_res = x_res_shard
         x = residual_tanh_gated_rmsnorm(x, x_res, gate_x)
         return x
 
     def ff_block_y(self, y: ttnn.Tensor, scale_y: ttnn.Tensor, gate_y: ttnn.Tensor) -> ttnn.Tensor:
         """Feed-forward block for text features."""
         y_mod = modulated_rmsnorm(y, scale_y)
-        y_res = self.mlp_y(y_mod)
+        y_res_shard = self.mlp_y(y_mod)
+        if self.num_devices > 1:
+            # Collect hidden-dim-fractured MLP outputs
+            y_res = ttnn.all_gather(y_res_shard, dim=3)
+        else:
+            y_res = y_res_shard
         y = residual_tanh_gated_rmsnorm(y, y_res, gate_y)
         return y
 
@@ -195,9 +208,9 @@ class TtAsymmetricJointBlock(LightweightModule):
         """Forward pass of a block.
 
         Args:
-            x: (B, N, dim) tensor of visual tokens
-            c: (B, dim) tensor of conditioned features
-            y: (B, L, dim) tensor of text tokens
+            x: (1, B, N, dim) tensor of visual tokens
+            c: (1, 1, B, dim) tensor of conditioned features
+            y: (1, B, L, dim) tensor of text tokens
             **attn_kwargs: Additional arguments passed to attention layer
 
         Returns:
@@ -257,7 +270,7 @@ class TtAsymmetricJointBlock(LightweightModule):
         print(f"y: {y.shape}")
 
         # Self-attention block
-        x_attn, y_attn = self.attn(
+        x_attn_shard, y_attn_shard = self.attn(
             x,
             y,
             scale_x=scale_msa_x,
@@ -268,6 +281,14 @@ class TtAsymmetricJointBlock(LightweightModule):
             packed_indices=packed_indices,
             attn_mask=attn_mask,
         )
+
+        if self.num_devices > 1:
+            # Collect hidden-dim-fractured attention outputs
+            x_attn = ttnn.all_gather(x_attn_shard, dim=3)
+            y_attn = ttnn.all_gather(y_attn_shard, dim=3)
+        else:
+            x_attn = x_attn_shard
+            y_attn = y_attn_shard
 
         assert x_attn.shape[2] == N
         x = residual_tanh_gated_rmsnorm(x, x_attn, gate_msa_x)
