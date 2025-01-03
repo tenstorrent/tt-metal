@@ -533,6 +533,7 @@ void DeviceProfiler::dumpJsonReport(
                                     tracy::TTDeviceEventPhase zone_phase = (packet_type == kernel_profiler::ZONE_END)
                                                                                ? tracy::TTDeviceEventPhase::end
                                                                                : tracy::TTDeviceEventPhase::begin;
+                                    std::string proc;
                                     std::string zone_name;
                                     std::string source_file;
                                     std::string source_line;
@@ -551,7 +552,12 @@ void DeviceProfiler::dumpJsonReport(
                                     } else if (
                                         zone_name.ends_with("-KERNEL") &&
                                         zone_phase == tracy::TTDeviceEventPhase::begin) {
+
                                         kernel_start_timestamp = timestamp;
+                                        // derive proc from zone_name
+                                        proc = zone_name;
+                                        const std::string erase_str = "-KERNEL";
+                                        proc.erase(proc.find(erase_str), erase_str.size());
                                     }
 
                                     std::string prefix(first_record ? " " : ",");
@@ -559,8 +565,9 @@ void DeviceProfiler::dumpJsonReport(
                                     json_rpt_os
                                         << std::endl
                                         << fmt::format(
-                                               R"({}{{ "zone":{:<14}, "zone_phase":{:<7}, "sx":{:<2}, "sy":{:<2}, "timestamp" : {} }})",
+                                               R"({}{{ "proc":{:<8s}, "zone":{:<14}, "zone_phase":{:<7}, "sx":{:<2}, "sy":{:<2}, "timestamp" : {} }})",
                                                prefix,
+                                               dquote(proc),
                                                dquote(zone_name),
                                                dquote(magic_enum::enum_name(zone_phase)),
                                                worker_core.x,
