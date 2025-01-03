@@ -124,8 +124,8 @@ on:
           - eltwise.unary.hardsigmoid.hardsigmoid_sharded
           - eltwise.unary.hardshrink.hardshrink
           - eltwise.unary.hardshrink.hardshrink_sharded
-          - eltwise.unary.softmax.softmax
-          - eltwise.unary.softmax.softmax_sharded
+          - normalization.softmax.softmax
+          - normalization.softmax.softmax_sharded
           - eltwise.unary.identity.identity
           - eltwise.unary.neg.neg
           - eltwise.unary.sinh.sinh
