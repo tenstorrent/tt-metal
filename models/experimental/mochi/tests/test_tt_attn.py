@@ -122,6 +122,22 @@ def to_torch_tensor(tensor, mesh_device, dtype=ttnn.bfloat16, dim=-1):
     return ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim), dtype=dtype)
 
 
+def replicate_attn_mask(mask, mesh_device, dtype):
+    if mesh_device.get_num_devices() > 1:
+        dist_mask = ttnn.as_tensor(
+            mask,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        rep_mask = ttnn.all_gather(dist_mask, dim=-1)
+    else:
+        rep_mask = to_tt_tensor(mask, mesh_device, dtype=dtype)
+    return rep_mask
+
+
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
@@ -363,7 +379,7 @@ def test_tt_attn_run_attention(
     attn_mask[:, :, :, vision_seq_len : vision_seq_len + x_padded_len] = -float("inf")
     text_end = vision_seq_len + x_padded_len + text_seq_len
     attn_mask[:, :, :, text_end:] = -float("inf")
-    tt_attn_mask = to_tt_tensor(attn_mask, mesh_device, dtype=ttnn.bfloat4_b)
+    tt_attn_mask = replicate_attn_mask(attn_mask, mesh_device, dtype=ttnn.bfloat4_b)
 
     logger.info("Run TtAsymmetricAttention run_attention")
     tt_out = tt_model.run_attention(
@@ -530,7 +546,7 @@ def test_tt_attn_post_attention(
 @pytest.mark.parametrize(
     "vision_seq_len, text_seq_len",
     [
-        (44 * 1024, 256),
+        (43 * 1024, 256),
     ],
 )
 @pytest.mark.parametrize(
@@ -580,12 +596,25 @@ def test_tt_attn_forward(
     max_seqlen_in_batch = total_seq_len
 
     # Convert inputs to TT tensors
-    tt_x = to_tt_tensor(x_input.view(1, batch_size, vision_seq_len, dim_x), mesh_device)
-    tt_y = to_tt_tensor(y_input.view(1, batch_size, text_seq_len, dim_y), mesh_device)
+    attn_padded_len = 44 * 1024  # TODO: GENERALIZE!
+    x_padded_len = nearest_32(vision_seq_len) - vision_seq_len
+    y_padding_len = 256 - text_seq_len
+    x_pad = torch.zeros(1, batch_size, x_padded_len, dim_x)
+    y_pad = torch.zeros(1, batch_size, y_padding_len, dim_y)
+    rope_pad = torch.zeros(batch_size, NUM_HEADS, x_padded_len, head_dim)
+
+    attn_mask = torch.zeros(batch_size, 1, attn_padded_len, attn_padded_len)
+    attn_mask[:, :, :, vision_seq_len : vision_seq_len + x_padded_len] = -float("inf")
+    text_end = vision_seq_len + x_padded_len + text_seq_len
+    attn_mask[:, :, :, text_end:] = -float("inf")
+
+    tt_x = to_tt_tensor(torch.cat([x_input.unsqueeze(0), x_pad], dim=2), mesh_device)
+    tt_y = to_tt_tensor(torch.cat([y_input.unsqueeze(0), y_pad], dim=2), mesh_device)
     tt_scale_x = to_tt_tensor(scale_x.view(batch_size, 1, 1, dim_x), mesh_device)
     tt_scale_y = to_tt_tensor(scale_y.view(batch_size, 1, 1, dim_y), mesh_device)
-    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device)
-    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device)
+    tt_rope_cos = to_tt_tensor(torch.cat([rope_cos_stack, rope_pad], dim=2), mesh_device, shard_dim=-3)
+    tt_rope_sin = to_tt_tensor(torch.cat([rope_sin_stack, rope_pad], dim=2), mesh_device, shard_dim=-3)
+    tt_attn_mask = replicate_attn_mask(attn_mask, mesh_device, dtype=ttnn.bfloat4_b)
 
     # Create transformation matrix for RoPE
     trans_mat = get_rot_transformation_mat(None)
@@ -604,11 +633,15 @@ def test_tt_attn_forward(
         rope_sin=tt_rope_sin,
         trans_mat=trans_mat_tt,
         packed_indices=packed_indices,
+        attn_mask=tt_attn_mask,
     )
 
     # Convert TT outputs to torch tensors
-    tt_x_torch = to_torch_tensor(tt_x_out, mesh_device)
-    tt_y_torch = to_torch_tensor(tt_y_out, mesh_device)
+    tt_x_torch = to_torch_tensor(tt_x_out, mesh_device, dim=-1)
+    tt_y_torch = to_torch_tensor(tt_y_out, mesh_device, dim=-1)
+    # unpad TT
+    tt_x_torch = tt_x_torch[:, :, :vision_seq_len, :]
+    tt_y_torch = tt_y_torch[:, :, :text_seq_len, :]
 
     # Create packed_indices for reference model
     packed_indices = {
@@ -630,6 +663,9 @@ def test_tt_attn_forward(
             packed_indices=packed_indices,
             **rope_rotation,
         )
+
+    # unpad ref_y
+    ref_y = ref_y[..., :text_seq_len, :]
 
     # Validate outputs
     metrics = []

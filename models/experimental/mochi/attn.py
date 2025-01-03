@@ -72,11 +72,11 @@ class TtAsymmetricAttention(LightweightModule):
             "qkv_y", self.qkv_bias, weight_cache_path, state_dict, state_dict_prefix
         )
 
-        self.proj_x, self.proj_x_bias = self._row_parallel_linear(
+        self.proj_x, self.proj_x_bias = self._col_parallel_linear(
             "proj_x", self.out_bias, weight_cache_path, state_dict, state_dict_prefix
         )
         if update_y:
-            self.proj_y, self.proj_y_bias = self._row_parallel_linear(
+            self.proj_y, self.proj_y_bias = self._col_parallel_linear(
                 "proj_y", self.out_bias, weight_cache_path, state_dict, state_dict_prefix
             )
 
@@ -172,14 +172,16 @@ class TtAsymmetricAttention(LightweightModule):
             )
         return w, b
 
-    def _row_parallel_linear(self, name, bias, weight_cache_path, state_dict, state_dict_prefix):
+    def _col_parallel_linear(self, name, bias, weight_cache_path, state_dict, state_dict_prefix):
         w = torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         b = state_dict[f"{state_dict_prefix}.{name}.bias"] if bias else None
         w = self._as_sharded_tensor(
-            w, dim=-2, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight")
+            w, dim=-1, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight")
         )
         if b is not None:
-            b = self._as_replicated_tensor(b, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"))
+            b = self._as_sharded_tensor(
+                b, dim=-1, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias")
+            )
         return w, b
 
     def run_qkv_y(self, y):
@@ -292,6 +294,7 @@ class TtAsymmetricAttention(LightweightModule):
 
         # Process text features if present
         if B == 1:
+            # TODO: This could be buggy since N is a padded length, which could be greater than max_seqlen_in_batch
             text_padded_seqlen = max_seqlen_in_batch - N
             if text_padded_seqlen > 0:
                 # Process text features
@@ -432,6 +435,11 @@ class TtAsymmetricAttention(LightweightModule):
         )
 
         x = ttnn.reshape(x, (1, x.shape[2] // self.X_MM_SEQ_LEN, self.X_MM_SEQ_LEN, x.shape[3]))
+        if self.num_devices > 1:
+            x = ttnn.all_gather(
+                x,
+                dim=-1,
+            )
         x = ttnn.linear(
             x,
             self.proj_x,
@@ -442,19 +450,13 @@ class TtAsymmetricAttention(LightweightModule):
             program_config=self.proj_x_config,
         )
         x = ttnn.reshape(x, (1, 1, x.shape[1] * x.shape[2], x.shape[3]))
-        if self.num_devices > 1:
-            x = ttnn.reduce_scatter(
-                x,
-                dim=-1,
-                math_op=ttnn.ReduceType.Sum,
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
 
         if self.update_y:
-            print(f"y: {y.shape}")
-            print(f"proj_y: {self.proj_y.shape}")
-            print(f"proj_y_bias: {self.proj_y_bias.shape}")
+            if self.num_devices > 1:
+                y = ttnn.all_gather(
+                    y,
+                    dim=-1,
+                )
             y = ttnn.linear(
                 y,
                 self.proj_y,
@@ -464,16 +466,6 @@ class TtAsymmetricAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            if self.num_devices > 1:
-                y = ttnn.reduce_scatter(
-                    y,
-                    dim=-1,
-                    math_op=ttnn.ReduceType.Sum,
-                    num_links=1,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
-                )
-            print(f"y: {y.shape}")
 
         return x, y
 
