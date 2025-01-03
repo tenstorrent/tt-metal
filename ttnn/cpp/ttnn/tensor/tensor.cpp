@@ -779,7 +779,15 @@ void Tensor::print() const { tensor_ops::tensor_print(*this); }
 
 Tensor Tensor::pad(
     const ttnn::SimpleShape& output_padded_shape, const ttnn::SimpleShape& input_tensor_start, float pad_value) const {
-    return tensor_ops::tensor_pad(*this, output_padded_shape, input_tensor_start, pad_value);
+    return tensor_ops::tensor_pad(*this, output_padded_shape, output_padded_shape, input_tensor_start, pad_value);
+}
+
+Tensor Tensor::pad(
+    const ttnn::SimpleShape& output_shape,
+    const ttnn::SimpleShape& output_padded_shape,
+    const ttnn::SimpleShape& input_tensor_start,
+    float pad_value) const {
+    return tensor_ops::tensor_pad(*this, output_shape, output_padded_shape, input_tensor_start, pad_value);
 }
 
 Tensor Tensor::unpad(const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) const {

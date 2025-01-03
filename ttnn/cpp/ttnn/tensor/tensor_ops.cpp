@@ -254,12 +254,13 @@ void tensor_print(const Tensor& input_tensor) {
 
 Tensor tensor_pad(
     const Tensor& input_tensor,
+    const ttnn::SimpleShape& output_shape,
     const ttnn::SimpleShape& output_padded_shape,
     const ttnn::SimpleShape& input_tensor_start,
     float pad_value) {
     ZoneScoped;
     GraphTracker::instance().track_function_start(
-        "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
+        "Tensor::pad", input_tensor, output_shape, output_padded_shape, input_tensor_start, pad_value);
     TT_ASSERT(
         input_tensor.storage_type() == StorageType::OWNED or
         input_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST or
@@ -273,7 +274,8 @@ Tensor tensor_pad(
         return input_tensor;
     }
 
-    auto output = tensor_impl::pad_wrapper(input_tensor, output_padded_shape, input_tensor_start, pad_value);
+    auto output =
+        tensor_impl::pad_wrapper(input_tensor, output_shape, output_padded_shape, input_tensor_start, pad_value);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -301,25 +303,28 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
     uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
-    // ttnn::SmallVector<uint32_t> shape;
+    ttnn::SmallVector<uint32_t> shape;
     ttnn::SmallVector<uint32_t> padded_shape;
     ttnn::SmallVector<uint32_t> input_tensor_start;
 
     for (auto index = 0; index < input_tensor.get_padded_shape().rank() - 2; index++) {
-        // shape.push_back(input_tensor.get_logical_shape()[index]);
+        shape.push_back(input_tensor.get_logical_shape()[index]);
         padded_shape.push_back(input_tensor.get_padded_shape()[index]);
         input_tensor_start.push_back(0);
     }
 
-    // shape.push_back(height);
-    // shape.push_back(width);
+    shape.push_back(height);
+    shape.push_back(width);
     padded_shape.push_back(padded_height);
     padded_shape.push_back(padded_width);
     input_tensor_start.push_back(0);
     input_tensor_start.push_back(0);
 
     auto output = input_tensor.pad(
-        ttnn::SimpleShape(std::move(padded_shape)), ttnn::SimpleShape{std::move(input_tensor_start)}, pad_value);
+        ttnn::SimpleShape(std::move(shape)),
+        ttnn::SimpleShape(std::move(padded_shape)),
+        ttnn::SimpleShape{std::move(input_tensor_start)},
+        pad_value);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

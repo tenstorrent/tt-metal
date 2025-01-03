@@ -200,6 +200,11 @@ struct Tensor {
         const ttnn::SimpleShape& output_padded_shape,
         const ttnn::SimpleShape& input_tensor_start,
         float pad_value) const;
+    Tensor pad(
+        const ttnn::SimpleShape& output_shape,
+        const ttnn::SimpleShape& output_padded_shape,
+        const ttnn::SimpleShape& input_tensor_start,
+        float pad_value) const;
 
     Tensor cpu(
         bool blocking = true,
