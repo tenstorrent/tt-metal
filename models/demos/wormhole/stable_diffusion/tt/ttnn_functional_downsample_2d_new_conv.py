@@ -146,6 +146,42 @@ class downsample_2d:
         if self.conv_config_override and "act_block_h" in self.conv_config_override:
             conv_config.act_block_h_override = self.conv_config_override["act_block_h"]
 
+        conv_kwargs = {
+            "in_channels": in_channels,
+            "out_channels": self.out_channels,
+            "batch_size": hidden_states.shape[0],
+            "input_height": hidden_states.shape[1],
+            "input_width": hidden_states.shape[2],
+            "kernel_size": (3, 3),
+            "stride": (self.stride, self.stride),
+            "padding": (1, 1),
+            "dilation": (1, 1),
+            "groups": 1,
+            "device": self.device,
+            "conv_config": conv_config,
+        }
+
+        if not ttnn.is_tensor_storage_on_device(self.conv_weights):
+            self.conv_weights = ttnn.prepare_conv_weights(
+                weight_tensor=self.conv_weights,
+                weights_format="OIHW",
+                input_memory_config=hidden_states.memory_config(),
+                input_layout=hidden_states.get_layout(),
+                **conv_kwargs,
+            )
+            self.conv_bias = (
+                ttnn.prepare_conv_bias(
+                    bias_tensor=self.conv_bias,
+                    input_memory_config=hidden_states.memory_config(),
+                    input_layout=hidden_states.get_layout(),
+                    **conv_kwargs,
+                )
+                if self.conv_bias is not None
+                else None
+            )
+            self.conv_weights = ttnn.to_device(self.conv_weights, self.device)
+            self.conv_bias = ttnn.to_device(self.conv_bias, self.device)
+
         [hidden_states, [self.conv_weights, self.conv_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             in_channels=self.in_channels,
