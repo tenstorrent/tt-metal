@@ -15,18 +15,20 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
+#include "tt_metal/distributed/mesh_shape.hpp"
 
 namespace tt::tt_metal::distributed {
+namespace {
 
 using LogicalCoordinate = Coordinate;
 using PhysicalCoordinate = eth_coord_t;
 
-static std::string get_config_path(const std::string& filename) {
+std::string get_config_path(const std::string& filename) {
     std::string root_path = getenv("TT_METAL_HOME") ? getenv("TT_METAL_HOME") : "./";
     return root_path + "/tt_metal/distributed/mesh_configurations/" + filename;
 }
 
-static std::unordered_map<LogicalCoordinate, PhysicalCoordinate> load_translation_map(
+std::unordered_map<LogicalCoordinate, PhysicalCoordinate> load_translation_map(
     const std::string& filename, const std::string& key) {
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -62,6 +64,13 @@ static std::unordered_map<LogicalCoordinate, PhysicalCoordinate> load_translatio
 
     return result;
 }
+
+MeshDeviceID generate_unique_mesh_id() {
+    static std::atomic<MeshDeviceID> next_id{0};
+    return next_id++;
+}
+
+}  // namespace
 
 class SystemMesh::Impl {
 private:
@@ -155,7 +164,7 @@ void SystemMesh::Impl::initialize() {
             physical_coordinate_to_device_id_.emplace(coord, chip_id);
         }
     } else {
-        for (const auto& [chip_id, physical_coordinate] : this->physical_device_id_to_coordinate_) {
+        for (const auto& [chip_id, physical_coordinate] : physical_device_id_to_coordinate_) {
             physical_coordinate_to_device_id_.emplace(physical_coordinate, chip_id);
         }
     }
@@ -170,7 +179,7 @@ void SystemMesh::Impl::initialize() {
 
 const MeshShape& SystemMesh::Impl::get_shape() const { return logical_mesh_shape_; }
 size_t SystemMesh::Impl::get_num_devices() const {
-    auto [num_rows, num_cols] = this->get_shape();
+    auto [num_rows, num_cols] = get_shape();
     return num_rows * num_cols;
 }
 
@@ -191,7 +200,7 @@ chip_id_t SystemMesh::Impl::get_physical_device_id(size_t logical_row_idx, size_
 
 std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const MeshDeviceConfig& config) const {
     std::vector<chip_id_t> physical_device_ids;
-    auto [system_mesh_rows, system_mesh_cols] = this->get_shape();
+    auto [system_mesh_rows, system_mesh_cols] = get_shape();
     auto [requested_num_rows, requested_num_cols] = config.mesh_shape;
     auto [row_offset, col_offset] = config.offset;
 
@@ -213,15 +222,11 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
             physical_device_ids.push_back(physical_device_id);
 
             log_debug(
-                LogMetal,
-                "Logical coordinate: {}, Physical device ID: {}",
-                logical_coordinate,
-                physical_device_id);
+                LogMetal, "Logical coordinate: {}, Physical device ID: {}", logical_coordinate, physical_device_id);
         }
         return physical_device_ids;
     }
     bool requires_rotation = requested_num_rows > system_mesh_rows || requested_num_cols > system_mesh_cols;
-
 
     if (requires_rotation) {
         bool can_rotate = requested_num_rows <= system_mesh_cols && requested_num_cols <= system_mesh_rows;
@@ -229,17 +234,22 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
             // Rotate requested shape; row_offset and col_offset refer to original orientation
             std::swap(requested_num_rows, requested_num_cols);
         } else {
-            TT_THROW("User has requested a submesh that is too big and is not rotatable: {}x{} and SystemMesh is {}x{}.",
-                     requested_num_rows, requested_num_cols,
-                     system_mesh_rows, system_mesh_cols);
+            TT_THROW(
+                "User has requested a submesh that is too big and is not rotatable: {}x{} and SystemMesh is {}x{}.",
+                requested_num_rows,
+                requested_num_cols,
+                system_mesh_rows,
+                system_mesh_cols);
         }
     } else {
         // If no rotation, check dimensions directly
         TT_FATAL(
             requested_num_rows <= system_mesh_rows && requested_num_cols <= system_mesh_cols,
             "Requested submesh is too big: {}x{} and SystemMesh is {}x{}",
-            requested_num_rows, requested_num_cols,
-            system_mesh_rows, system_mesh_cols);
+            requested_num_rows,
+            requested_num_cols,
+            system_mesh_rows,
+            system_mesh_cols);
     }
 
     size_t original_rows = system_mesh_rows;
@@ -249,11 +259,15 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
     TT_FATAL(
         row_offset + requested_num_rows <= original_rows,
         "Row offset + requested rows exceeds mesh size: {} + {} > {}",
-        row_offset, requested_num_rows, original_rows);
+        row_offset,
+        requested_num_rows,
+        original_rows);
     TT_FATAL(
         col_offset + requested_num_cols <= original_cols,
         "Column offset + requested columns exceeds mesh size: {} + {} > {}",
-        col_offset, requested_num_cols, original_cols);
+        col_offset,
+        requested_num_cols,
+        original_cols);
 
     // Map each submesh coordinate to the original logical coordinates
     for (size_t row = 0; row < requested_num_rows; row++) {
@@ -262,8 +276,8 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
             if (requires_rotation) {
                 // After swapping requested_num_rows and requested_num_cols,
                 // (row, col) now iterate over the rotated shape.
-                size_t old_row = row_offset + row;    // top row
-                size_t old_col = col_offset + col;    // increasing columns horizontally
+                size_t old_row = row_offset + row;  // top row
+                size_t old_col = col_offset + col;  // increasing columns horizontally
                 logical_coordinate = Coordinate{old_row, old_col};
             } else {
                 logical_coordinate = Coordinate{row + row_offset, col + col_offset};
@@ -284,10 +298,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
             physical_device_ids.push_back(physical_device_id);
 
             log_debug(
-                LogMetal,
-                "Logical coordinate: {}, Physical device ID: {}",
-                logical_coordinate,
-                physical_device_id);
+                LogMetal, "Logical coordinate: {}, Physical device ID: {}", logical_coordinate, physical_device_id);
         }
     }
     return physical_device_ids;
@@ -296,7 +307,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
 void SystemMesh::Impl::register_mesh_device(
     const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<Device*>& devices) {
     std::vector<chip_id_t> physical_device_ids;
-    for (auto device : devices) {
+    for (auto* device : devices) {
         physical_device_ids.push_back(device->id());
     }
     assigned_mesh_device_devices_.insert({mesh_device->get_mesh_id(), mesh_device});
@@ -316,7 +327,7 @@ std::vector<chip_id_t> SystemMesh::Impl::request_available_devices(const MeshDev
         row_offset,
         col_offset);
 
-    return config.physical_device_ids.empty() ? this->get_mapped_physical_device_ids(config)
+    return config.physical_device_ids.empty() ? get_mapped_physical_device_ids(config)
                                               : config.physical_device_ids;
 }
 
@@ -352,18 +363,13 @@ std::vector<chip_id_t> SystemMesh::get_mapped_physical_device_ids(const MeshDevi
     return pimpl_->get_mapped_physical_device_ids(config);
 }
 
-static MeshDeviceID generate_unique_mesh_id() {
-    static std::atomic<MeshDeviceID> next_id{0};
-    return next_id++;
-}
-
-Device* MeshDevice::reference_device() const { return this->devices.at(0); }
+Device* MeshDevice::reference_device() const { return devices_.at(0); }
 
 MeshDevice::MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh) :
-    mesh_device_shape(mesh_device_shape),
-    type(type),
-    mesh_id(generate_unique_mesh_id()),
-    parent_mesh(std::move(parent_mesh)) {}
+    mesh_device_shape_(mesh_device_shape),
+    type_(type),
+    mesh_id_(generate_unique_mesh_id()),
+    parent_mesh_(std::move(parent_mesh)) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -390,25 +396,25 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         TT_THROW("Invalid offset: ({}, {}). Offset must be non-negative.", offset.row, offset.col);
     }
 
-    if (offset.row + submesh_shape.num_rows > this->mesh_device_shape.num_rows ||
-        offset.col + submesh_shape.num_cols > this->mesh_device_shape.num_cols) {
+    if (offset.row + submesh_shape.num_rows > mesh_device_shape_.num_rows ||
+        offset.col + submesh_shape.num_cols > mesh_device_shape_.num_cols) {
         TT_THROW(
             "Submesh ({}x{}) with offset ({}, {}) does not fit within parent mesh ({}x{}).",
             submesh_shape.num_rows,
             submesh_shape.num_cols,
             offset.row,
             offset.col,
-            this->mesh_device_shape.num_rows,
-            this->mesh_device_shape.num_cols);
+            mesh_device_shape_.num_rows,
+            mesh_device_shape_.num_cols);
     }
 
     auto submesh = std::make_shared<MeshDevice>(submesh_shape, type, shared_from_this());
     auto start_coordinate = Coordinate{offset.row, offset.col};
     auto end_coordinate = Coordinate{offset.row + submesh_shape.num_rows - 1, offset.col + submesh_shape.num_cols - 1};
-    submesh->view = std::make_unique<MeshDeviceView>(*this, start_coordinate, end_coordinate);
-    submesh->devices = submesh->view->get_devices();
-    SystemMesh::instance().register_mesh_device(submesh, submesh->devices);
-    this->submeshes.push_back(submesh);
+    submesh->view_ = std::make_unique<MeshDeviceView>(*this, start_coordinate, end_coordinate);
+    submesh->devices_ = submesh->view_->get_devices();
+    SystemMesh::instance().register_mesh_device(submesh, submesh->devices_);
+    submeshes_.push_back(submesh);
     log_trace(
         LogMetal,
         "Instantiating submesh {}: {}x{} with offset: {} {}",
@@ -424,9 +430,9 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
 
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const MeshShape& submesh_shape, MeshType type) {
     std::vector<std::shared_ptr<MeshDevice>> submeshes;
-    for (int row = 0; row < this->num_rows(); row += submesh_shape.num_rows) {
-        for (int col = 0; col < this->num_cols(); col += submesh_shape.num_cols) {
-            auto submesh = this->create_submesh(submesh_shape, MeshOffset{row, col}, type);
+    for (int row = 0; row < num_rows(); row += submesh_shape.num_rows) {
+        for (int col = 0; col < num_cols(); col += submesh_shape.num_cols) {
+            auto submesh = create_submesh(submesh_shape, MeshOffset{row, col}, type);
             submeshes.push_back(submesh);
         }
     }
@@ -442,25 +448,25 @@ void MeshDevice::initialize(
     auto& system_mesh = SystemMesh::instance();
     auto physical_device_ids = system_mesh.request_available_devices(config);
 
-    this->opened_devices = tt::tt_metal::detail::CreateDevices(
+    opened_devices_ = tt::tt_metal::detail::CreateDevices(
         physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
 
     for (auto physical_device_id : physical_device_ids) {
-        this->devices.push_back(this->opened_devices.at(physical_device_id));
+        devices_.push_back(this->opened_devices_.at(physical_device_id));
     }
-    this->view = std::make_unique<MeshDeviceView>(*this);
-    system_mesh.register_mesh_device(shared_from_this(), this->devices);
+    view_ = std::make_unique<MeshDeviceView>(*this);
+    system_mesh.register_mesh_device(shared_from_this(), devices_);
 }
 
 MeshDevice::~MeshDevice() { close_devices(); }
 
 Device* MeshDevice::get_device_index(size_t logical_device_id) const {
     TT_FATAL(logical_device_id >= 0 and logical_device_id < num_devices(), "Invalid device index");
-    return this->devices.at(logical_device_id);
+    return devices_.at(logical_device_id);
 }
 
 Device* MeshDevice::get_device(chip_id_t physical_device_id) const {
-    for (auto device : this->devices) {
+    for (auto device : devices_) {
         if (device->id() == physical_device_id) {
             return device;
         }
@@ -469,56 +475,56 @@ Device* MeshDevice::get_device(chip_id_t physical_device_id) const {
 }
 
 std::vector<Device*> MeshDevice::get_devices(const std::optional<MeshType>& requested_type) const {
-    return this->view->get_devices(requested_type.value_or(this->type));
+    return view_->get_devices(requested_type.value_or(this->type_));
 }
 
 // TODO: Remove this function once we have a proper view interface
 Device* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
-    return this->get_device_index(row_idx * num_cols() + col_idx);
+    return get_device_index(row_idx * num_cols() + col_idx);
 }
 
 const DeviceIds MeshDevice::get_device_ids() const {
     DeviceIds device_ids;
-    for (auto device : this->get_devices()) {
+    for (auto device : get_devices()) {
         device_ids.push_back(device->id());
     }
     return device_ids;
 }
 
-size_t MeshDevice::num_devices() const { return this->devices.size(); }
+size_t MeshDevice::num_devices() const { return devices_.size(); }
 
 CoreCoord MeshDevice::compute_with_storage_grid_size() const {
-    return this->reference_device()->compute_with_storage_grid_size();
+    return reference_device()->compute_with_storage_grid_size();
 }
 
-CoreCoord MeshDevice::dram_grid_size() const { return this->reference_device()->dram_grid_size(); }
+CoreCoord MeshDevice::dram_grid_size() const { return reference_device()->dram_grid_size(); }
 
-tt::ARCH MeshDevice::arch() const { return this->reference_device()->arch(); }
+tt::ARCH MeshDevice::arch() const { return reference_device()->arch(); }
 
-size_t MeshDevice::num_rows() const { return this->mesh_device_shape.num_rows; }
+size_t MeshDevice::num_rows() const { return mesh_device_shape_.num_rows; }
 
-size_t MeshDevice::num_cols() const { return this->mesh_device_shape.num_cols; }
+size_t MeshDevice::num_cols() const { return mesh_device_shape_.num_cols; }
 
-MeshShape MeshDevice::shape() const { return this->mesh_device_shape; }
+MeshShape MeshDevice::shape() const { return mesh_device_shape_; }
 
 void MeshDevice::reshape(const MeshShape& new_shape) {
     TT_FATAL(
-        new_shape.num_rows * new_shape.num_cols == this->num_devices(),
+        new_shape.num_rows * new_shape.num_cols == num_devices(),
         "New shape must have the same number of devices as current shape");
 
     std::unordered_map<chip_id_t, size_t> physical_device_id_to_linearized_index;
-    for (size_t i = 0; i < this->num_devices(); i++) {
-        physical_device_id_to_linearized_index[this->devices[i]->id()] = i;
+    for (size_t i = 0; i < num_devices(); i++) {
+        physical_device_id_to_linearized_index[devices_[i]->id()] = i;
     }
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
     if (new_shape.num_rows != 1 and new_shape.num_cols != 1) {
-        auto new_physical_device_ids =
-            SystemMesh::instance().request_available_devices(MeshDeviceConfig{new_shape});
+        auto new_physical_device_ids = SystemMesh::instance().request_available_devices(MeshDeviceConfig{new_shape});
 
         for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
-            if (physical_device_id_to_linearized_index.find(new_physical_device_ids[i]) == physical_device_id_to_linearized_index.end()) {
+            if (physical_device_id_to_linearized_index.find(new_physical_device_ids[i]) ==
+                physical_device_id_to_linearized_index.end()) {
                 TT_THROW(
                     "User has requested a reshape of the MeshDevice to shape: {}x{}, but it is not possible to form a "
                     "physically connected mesh of {}x{} grid with the opened devices from the original shape: {}x{}.",
@@ -526,68 +532,68 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
                     new_shape.num_cols,
                     new_shape.num_rows,
                     new_shape.num_cols,
-                    this->num_rows(),
-                    this->num_cols());
+                    num_rows(),
+                    num_cols());
             }
         }
     }
 
-    this->mesh_device_shape = new_shape;
-    this->view = std::make_unique<MeshDeviceView>(*this);
+    mesh_device_shape_ = new_shape;
+    view_ = std::make_unique<MeshDeviceView>(*this);
 }
 
 void MeshDevice::close_devices() {
-    for (const auto& submesh : this->submeshes) {
+    for (const auto& submesh : submeshes_) {
         submesh->close_devices();
     }
-    if (!this->opened_devices.empty()) {
-        tt::tt_metal::detail::CloseDevices(this->opened_devices);
-        this->opened_devices.clear();
+    if (!opened_devices_.empty()) {
+        tt::tt_metal::detail::CloseDevices(opened_devices_);
+        opened_devices_.clear();
     }
-    this->submeshes.clear();
-    this->parent_mesh.reset();
-    this->devices.clear();
-    this->view.reset();
+    submeshes_.clear();
+    parent_mesh_.reset();
+    devices_.clear();
+    view_.reset();
 }
 
 std::string MeshDevice::to_string() const {
-    return fmt::format("MeshDevice({}x{} grid, {} devices)", this->num_rows(), this->num_cols(), this->num_devices());
+    return fmt::format("MeshDevice({}x{} grid, {} devices)", num_rows(), this->num_cols(), this->num_devices());
 }
 
 const MeshDeviceView& MeshDevice::get_view() const {
-    TT_FATAL(view, "MeshDeviceView is not initialized");
-    return *view;
+    TT_FATAL(view_, "MeshDeviceView is not initialized");
+    return *view_;
 }
 
-MeshDeviceID MeshDevice::get_mesh_id() const { return this->mesh_id; }
+MeshDeviceID MeshDevice::get_mesh_id() const { return mesh_id_; }
 
-bool MeshDevice::is_parent_mesh() const { return this->parent_mesh.expired(); }
+bool MeshDevice::is_parent_mesh() const { return parent_mesh_.expired(); }
 
-std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { return this->submeshes; }
+std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { return submeshes_; }
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 void MeshDevice::enable_async(bool enable) {
-    for (auto device : this->devices) {
+    for (auto device : devices_) {
         device->enable_async(enable);
     }
 }
 
 void MeshDevice::enable_program_cache() {
-    for (auto device : this->devices) {
+    for (auto device : devices_) {
         device->enable_program_cache();
     }
 }
 
 void MeshDevice::disable_and_clear_program_cache() {
-    for (auto device : this->devices) {
+    for (auto device : devices_) {
         device->disable_and_clear_program_cache();
     }
 }
 
 size_t MeshDevice::num_program_cache_entries() const {
     size_t total_entries = 0;
-    for (auto device : this->devices) {
+    for (auto device : devices_) {
         total_entries += device->num_program_cache_entries();
     }
     return total_entries;
@@ -596,52 +602,54 @@ size_t MeshDevice::num_program_cache_entries() const {
 MeshSubDeviceManagerId MeshDevice::create_sub_device_manager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     MeshSubDeviceManagerId mesh_sub_device_manager_id(*this);
-    for (uint32_t i = 0; i < this->num_devices(); i++) {
-        auto* device = this->devices[i];
+    for (uint32_t i = 0; i < num_devices(); i++) {
+        auto* device = devices_[i];
         auto& sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
         device->push_work([device, sub_devices, local_l1_size, &sub_device_manager_id]() {
             sub_device_manager_id = device->create_sub_device_manager(sub_devices, local_l1_size);
         });
     }
-    for (auto* device : this->devices) {
+    for (auto* device : devices_) {
         device->synchronize();
     }
     return mesh_sub_device_manager_id;
 }
 
-std::tuple<MeshSubDeviceManagerId, SubDeviceId> MeshDevice::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+std::tuple<MeshSubDeviceManagerId, SubDeviceId> MeshDevice::create_sub_device_manager_with_fabric(
+    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     MeshSubDeviceManagerId mesh_sub_device_manager_id(*this);
     SubDeviceId fabric_sub_device_id;
-    for (uint32_t i = 0; i < this->num_devices(); i++) {
-        auto* device = this->devices[i];
+    for (uint32_t i = 0; i < num_devices(); i++) {
+        auto* device = devices_[i];
         auto& sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
         // All fabric sub-device ids will be the same, since all managers are created with the same sub_devices input
         device->push_work([device, sub_devices, local_l1_size, &sub_device_manager_id, &fabric_sub_device_id]() {
-            std::tie(sub_device_manager_id, fabric_sub_device_id) = device->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
+            std::tie(sub_device_manager_id, fabric_sub_device_id) =
+                device->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
         });
     }
-    for (auto* device : this->devices) {
+    for (auto* device : devices_) {
         device->synchronize();
     }
     return {mesh_sub_device_manager_id, fabric_sub_device_id};
 }
 
 void MeshDevice::load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id) {
-    for (uint32_t i = 0; i < this->num_devices(); i++) {
-        auto* device = this->devices[i];
+    for (uint32_t i = 0; i < num_devices(); i++) {
+        auto* device = devices_[i];
         auto sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
         device->push_work(
             [device, sub_device_manager_id]() { device->load_sub_device_manager(sub_device_manager_id); });
     }
 }
 void MeshDevice::clear_loaded_sub_device_manager() {
-    for (auto* device : this->devices) {
+    for (auto* device : devices_) {
         device->push_work([device]() { device->clear_loaded_sub_device_manager(); });
     }
 }
 void MeshDevice::remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id) {
-    for (uint32_t i = 0; i < this->num_devices(); i++) {
-        auto* device = this->devices[i];
+    for (uint32_t i = 0; i < num_devices(); i++) {
+        auto* device = devices_[i];
         auto sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
         device->push_work(
             [device, sub_device_manager_id]() { device->remove_sub_device_manager(sub_device_manager_id); });
@@ -649,11 +657,11 @@ void MeshDevice::remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_devic
 }
 
 MeshSubDeviceManagerId::MeshSubDeviceManagerId(const MeshDevice& mesh_device) {
-    this->sub_device_manager_ids.resize(mesh_device.num_devices());
+    sub_device_manager_ids.resize(mesh_device.num_devices());
 }
 
 int MeshDevice::num_dram_channels() const {
-    return this->reference_device()->num_dram_channels() * this->num_devices();
+    return reference_device()->num_dram_channels() * this->num_devices();
 }
 
 allocator::Statistics MeshDevice::get_memory_allocation_statistics(
@@ -661,7 +669,7 @@ allocator::Statistics MeshDevice::get_memory_allocation_statistics(
     // With current implementation, we assume that all devices have the same memory allocation statistics.
     // This will be made more explicit in the future to have lock-step allocation across devices.
     // Right now, we just return the statistics of the first device.
-    return this->reference_device()->get_memory_allocation_statistics(buffer_type, sub_device_id);
+    return reference_device()->get_memory_allocation_statistics(buffer_type, sub_device_id);
 }
 
 }  // namespace tt::tt_metal::distributed

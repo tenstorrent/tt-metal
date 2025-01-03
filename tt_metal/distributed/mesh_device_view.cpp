@@ -2,31 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/mesh_device_view.hpp"
-
 #include <algorithm>
 #include <stdexcept>
 
+#include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
+#include "tt_metal/distributed/mesh_shape.hpp"
 
 namespace tt::tt_metal::distributed {
+namespace {
 
-static std::vector<MeshDeviceView::device_pointer> get_devices_from_coordinates(
+MeshDeviceView::DeviceView get_devices_from_coordinates(
     const MeshDeviceView& mesh, const std::vector<Coordinate>& coords) {
-    std::vector<MeshDeviceView::device_pointer> devices;
-    for (const auto& coord : coords) {
-        if (auto device = mesh.get_device(coord.row, coord.col)) {
+    MeshDeviceView::DeviceView devices;
+    for (const auto& [row, col] : coords) {
+        if (auto* device = mesh.get_device(row, col)) {
             devices.push_back(device);
         }
     }
     return devices;
 }
 
+}  // namespace
+
 MeshDeviceView::MeshDeviceView(const MeshDevice& mesh) :
     top_left_(0, 0), bottom_right_(mesh.num_rows() - 1, mesh.num_cols() - 1) {
     for (size_t row = 0; row < mesh.num_rows(); ++row) {
         for (size_t col = 0; col < mesh.num_cols(); ++col) {
-            if (auto device = mesh.get_device(row, col)) {
+            if (auto* device = mesh.get_device(row, col)) {
                 devices_.push_back(device);
                 device_coordinates_[(device)->id()] = {row, col};
             }
@@ -38,7 +41,7 @@ MeshDeviceView::MeshDeviceView(const MeshDevice& mesh, Coordinate top_left, Coor
     top_left_(0, 0), bottom_right_(Coordinate{bottom_right.row - top_left.row, bottom_right.col - top_left.col}) {
     for (size_t row = top_left.row; row <= bottom_right.row; ++row) {
         for (size_t col = top_left.col; col <= bottom_right.col; ++col) {
-            if (auto device = mesh.get_device(row, col)) {
+            if (auto* device = mesh.get_device(row, col)) {
                 devices_.push_back(device);
                 device_coordinates_[(device)->id()] = {row - top_left.row, col - top_left.col};
             }
@@ -47,12 +50,12 @@ MeshDeviceView::MeshDeviceView(const MeshDevice& mesh, Coordinate top_left, Coor
     validate_coordinates();
 }
 
-MeshDeviceView::MeshDeviceView(std::vector<device_pointer> devices, const CoordinateMapper& mapper) :
+MeshDeviceView::MeshDeviceView(std::vector<Device*> devices, const CoordinateMapper& mapper) :
     devices_(std::move(devices)) {
     initialize_from_devices(devices_, std::move(mapper));
 }
 
-MeshDeviceView::device_pointer MeshDeviceView::get_device(size_t row, size_t col) const {
+Device* MeshDeviceView::get_device(size_t row, size_t col) const {
     for (const auto& device : devices_) {
         auto it = device_coordinates_.find(device->id());
         if (it != device_coordinates_.end() && it->second.row == row && it->second.col == col) {
@@ -82,8 +85,8 @@ MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshShape& submesh_
     return get_devices({0, 0}, {submesh_shape.num_rows - 1, submesh_shape.num_cols - 1});
 }
 
-std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_devices_on_row(size_t row) const {
-    std::vector<device_pointer> row_devices;
+MeshDeviceView::DeviceView MeshDeviceView::get_devices_on_row(size_t row) const {
+    DeviceView row_devices;
     for (const auto& device : devices_) {
         auto it = device_coordinates_.find(device->id());
         if (it != device_coordinates_.end() && it->second.row == row) {
@@ -93,8 +96,8 @@ std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_devices_on_row(s
     return row_devices;
 }
 
-std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_devices_on_column(size_t col) const {
-    std::vector<device_pointer> col_devices;
+MeshDeviceView::DeviceView MeshDeviceView::get_devices_on_column(size_t col) const {
+    DeviceView col_devices;
     for (const auto& device : devices_) {
         auto it = device_coordinates_.find(device->id());
         if (it != device_coordinates_.end() && it->second.col == col) {
@@ -104,16 +107,16 @@ std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_devices_on_colum
     return col_devices;
 }
 
-std::vector<std::vector<MeshDeviceView::device_pointer>> MeshDeviceView::get_row_views() const {
-    std::vector<std::vector<device_pointer>> row_views;
+MeshDeviceView::DeviceViews MeshDeviceView::get_row_views() const {
+    MeshDeviceView::DeviceViews row_views;
     for (size_t row = top_left_.row; row <= bottom_right_.row; ++row) {
         row_views.push_back(get_devices_on_row(row));
     }
     return row_views;
 }
 
-std::vector<std::vector<MeshDeviceView::device_pointer>> MeshDeviceView::get_column_views() const {
-    std::vector<std::vector<device_pointer>> column_views;
+MeshDeviceView::DeviceViews MeshDeviceView::get_column_views() const {
+    MeshDeviceView::DeviceViews column_views;
     for (size_t col = top_left_.col; col <= bottom_right_.col; ++col) {
         column_views.push_back(get_devices_on_column(col));
     }
@@ -131,7 +134,7 @@ bool MeshDeviceView::contains(const Coordinate& coord) const noexcept {
            coord.col <= bottom_right_.col;
 }
 
-MeshDeviceView::const_device_pointer MeshDeviceView::at(const Coordinate& coord) const noexcept {
+const Device* MeshDeviceView::at(const Coordinate& coord) const noexcept {
     if (contains(coord)) {
         return get_device(coord.row, coord.col);
     }
@@ -164,8 +167,7 @@ chip_id_t MeshDeviceView::find_device_id(const Coordinate& coord) const {
     return this->devices_.at(coord.row * num_cols() + coord.col)->id();
 }
 
-void MeshDeviceView::initialize_from_devices(
-    const std::vector<device_pointer>& devices, const CoordinateMapper& mapper) {
+void MeshDeviceView::initialize_from_devices(const std::vector<Device*>& devices, const CoordinateMapper& mapper) {
     size_t min_row = std::numeric_limits<size_t>::max(), min_col = std::numeric_limits<size_t>::max();
     size_t max_row = std::numeric_limits<size_t>::min(), max_col = std::numeric_limits<size_t>::min();
 
@@ -254,13 +256,13 @@ void MeshDeviceView::validate_coordinates() const {
     }
 }
 
-std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_line_devices() const {
+MeshDeviceView::DeviceView MeshDeviceView::get_line_devices() const {
     auto boundary_coords =
         get_line_coordinates(this->num_rows() * this->num_cols(), this->top_left_, this->num_rows(), this->num_cols());
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 
-std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_ring_devices() const {
+MeshDeviceView::DeviceView MeshDeviceView::get_ring_devices() const {
     auto boundary_coords = get_ring_coordinates(shape(), this->top_left_, this->num_rows(), this->num_cols());
     return get_devices_from_coordinates(*this, boundary_coords);
 }
