@@ -142,6 +142,18 @@ Tensor reduce_scatter(
     std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt,  // TODO make reference
     bool create_semaphore_handles = true,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
+Tensor reduce_scatter(
+    const Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt,  // TODO make reference
+    bool create_semaphore_handles = true,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
 
 }  // namespace ccl
 }  // namespace experimental

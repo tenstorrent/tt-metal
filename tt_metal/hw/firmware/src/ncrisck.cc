@@ -17,7 +17,7 @@
 #include "tensix_functions.h"
 #include "c_tensix_core.h"
 #include "kernel_includes.hpp"
-#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS or defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
+#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "circular_buffer_init.h"
 #endif
 
@@ -47,8 +47,5 @@ void kernel_launch(uint32_t kernel_base_addr) {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     kernel_main();
-#ifdef UPDATE_REMOTE_CB_CONFIGS_IN_L1
-    UPDATE_REMOTE_CB_CONFIGS_IN_L1
-#endif
 #endif
 }

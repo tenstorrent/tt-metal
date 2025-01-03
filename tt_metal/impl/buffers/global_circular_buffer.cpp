@@ -28,8 +28,7 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    Private) :
+    tt::stl::Span<const SubDeviceId> sub_device_ids) :
     device_(device), sender_receiver_core_mapping_(sender_receiver_core_mapping), size_(size) {
     TT_FATAL(this->device_ != nullptr, "Device cannot be null");
     uint32_t num_sender_cores = sender_receiver_core_mapping.size();
@@ -146,16 +145,6 @@ void GlobalCircularBuffer::setup_cb_buffers(
                 device->command_queue(), cb_config_buffer, cb_config_host_buffer.data(), false, sub_device_ids);
         }
     });
-}
-
-std::shared_ptr<GlobalCircularBuffer> GlobalCircularBuffer::create(
-    Device* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return std::make_shared<GlobalCircularBuffer>(
-        device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids, Private());
 }
 
 const Buffer& GlobalCircularBuffer::cb_buffer() const { return *this->cb_buffer_; }

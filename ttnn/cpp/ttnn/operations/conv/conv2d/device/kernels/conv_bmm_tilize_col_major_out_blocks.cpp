@@ -18,7 +18,6 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #define DEBUG_PRINT 0
-
 // #include "debug_macros.h"
 
 // SliceRange srt = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
