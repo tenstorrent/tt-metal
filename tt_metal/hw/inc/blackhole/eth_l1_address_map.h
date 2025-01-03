@@ -76,9 +76,15 @@ struct address_map {
     static constexpr std::int32_t MEM_ERISC_STACK_BASE =
         RISC_LOCAL_MEM_BASE + MEM_ERISC_LOCAL_SIZE - MEM_ERISC_STACK_SIZE;
 
-    // This scratch address is same as ERISC_L1_UNRESERVED_BASE, as the scratch space is used to copy data during
-    // runtime build, and is unused once FW copies the data to local memory during FW initialization.
-    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH = ERISC_L1_UNRESERVED_BASE;
+    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = MEM_ERISC_MAP_END;
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH =
+        (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 63) & ~63;
+    // Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS +
+    // NUM_L1_BANKS)
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_XY_SIZE = 1024;
+    // Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS +
+    // NUM_L1_BANKS)
+    static constexpr std::int32_t ERISC_MEM_BANK_OFFSET_SIZE = 1024;
     static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SIZE = ERISC_MEM_BANK_TO_NOC_XY_SIZE + ERISC_MEM_BANK_OFFSET_SIZE;
 
     static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = 0;  // don't need this - just to get things to compile

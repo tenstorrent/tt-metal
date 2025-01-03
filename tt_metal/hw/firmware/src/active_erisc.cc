@@ -134,11 +134,15 @@ int main() {
 
                 RECORD_STACK_USAGE();
                 WAYPOINT("D");
-            } else {
-                DPRINT << "not running the kernel" << ENDL();
             }
+            // else {
+            //     DPRINT << "not running the kernel" << ENDL();
+            // }
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
+
+            DPRINT << "kernel config mode " << HEX() << (uint32_t)launch_msg_address->kernel_config.mode << DEC()
+                   << ENDL();
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {

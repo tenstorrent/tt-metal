@@ -98,6 +98,14 @@ bool reader_kernel_no_send(
 
     fixture->RunProgram(device, program);
 
+    uint32_t l1_unreserved_base_val;
+    tt::Cluster::instance().read_core(
+        &l1_unreserved_base_val,
+        sizeof(uint32_t),
+        tt_cxy_pair(device->id(), eth_noc_xy),
+        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+    std::cout << "L1 unreserved base " << std::hex << l1_unreserved_base_val << std::dec << std::endl;
+
     auto readback_vec = llrt::read_hex_vec_from_core(device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
     pass &= (readback_vec == inputs);
     if (not pass) {
@@ -163,6 +171,14 @@ bool writer_kernel_no_receive(
         });
 
     fixture->RunProgram(device, program);
+
+    uint32_t l1_unreserved_base_val;
+    tt::Cluster::instance().read_core(
+        &l1_unreserved_base_val,
+        sizeof(uint32_t),
+        tt_cxy_pair(device->id(), eth_noc_xy),
+        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+    std::cout << "L1 unreserved base " << std::hex << l1_unreserved_base_val << std::dec << std::endl;
 
     std::vector<uint32_t> readback_vec;
     fixture->ReadBuffer(device, output_dram_buffer, readback_vec);
@@ -284,16 +300,14 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
 
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
-            std::cout << "Eth core is " << eth_core.str() << std::endl;
+            std::cout << "Eth core is " << eth_core.str() << " device is " << device->id() << std::endl;
             ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
                 static_cast<DispatchFixture*>(this), device, WORD_SIZE, src_eth_l1_byte_address, eth_core));
-            break;
-            // ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            //     static_cast<DispatchFixture*>(this), device, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
-            // ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            //     static_cast<DispatchFixture*>(this), device, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+                static_cast<DispatchFixture*>(this), device, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+                static_cast<DispatchFixture*>(this), device, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
         }
-        break;
     }
 }
 
@@ -303,6 +317,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) 
 
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
+            std::cout << "Eth core is " << eth_core.str() << " device is " << device->id() << std::endl;
             ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
                 static_cast<DispatchFixture*>(this), device, WORD_SIZE, src_eth_l1_byte_address, eth_core));
             ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
