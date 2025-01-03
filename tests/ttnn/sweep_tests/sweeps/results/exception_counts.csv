@@ -1,0 +1,47 @@
+Issue,Count
+"Exception: TT_FATAL @ ../ttnn/cpp/ttnn/operations/transformer.hpp:107: input_shape_kv[1] == input_shape[1]
+info:
+KV tensor seq_len dim must be same as Q tensor seq_len!
+backtrace:
+ --- /home/tt-saad/workspace/tt-metal/ttnn/ttnn/_t",576
+"Exception: TT_FATAL @ ../ttnn/cpp/ttnn/operations/transformer.hpp:78: transpose_key == false
+info:
+Transpose = true and separate num_kv_heads is not supported
+backtrace:
+ --- /home/tt-saad/workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x",288
+"Exception: TT_FATAL @ ../tt_eager/tt_dnn/op_library/nlp_tms/nlp_tms.cpp:27: (input_shape == Shape({input_shape[0], 1, input_shape[2], 4672}))
+info:
+Unsupported input shape
+backtrace:
+ --- tt::tt_metal::NlpCreateHeadsFalcon7B::vali",144
+"Exception: TT_FATAL @ ../ttnn/cpp/ttnn/operations/transformer.hpp:84: head_size % TILE_SIZE == 0
+info:
+Head size 80 must be a multiple of tile size 32! Update the preceding matmul to have the padding in the weights!
+backtrace:
+ --",72
+"Exception: TT_FATAL @ ../ttnn/cpp/ttnn/operations/transformer.hpp:84: head_size % TILE_SIZE == 0
+info:
+Head size 48 must be a multiple of tile size 32! Update the preceding matmul to have the padding in the weights!
+backtrace:
+ --",72
+"Exception: TT_FATAL @ ../ttnn/cpp/ttnn/operations/transformer.hpp:123: not input_tensor_kv.has_value()
+info:
+KV tensor cannot be passed in when sharded
+backtrace:
+ --- /home/tt-saad/workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x6a7c95)",72
+"Exception: TT_ASSERT @ ../tt_eager/tensor/tensor_impl.cpp:130: num_shards_along_height <= shard_grid.y
+info:
+Number of shards along height 4 must match number of rows 2 for row major orientation!
+backtrace:
+ --- void tt::assert::t",72
+"Exception: TT_ASSERT @ ../tt_eager/tensor/tensor_impl.cpp:130: num_shards_along_height <= shard_grid.y
+info:
+Number of shards along height 4 must match number of rows 2 for row major orientation!
+backtrace:
+ --- void tt::assert::t",72
+"Exception: TT_ASSERT @ ../tt_eager/tensor/tensor_impl.cpp:130: num_shards_along_height <= shard_grid.y
+info:
+Number of shards along height 4 must match number of rows 2 for row major orientation!
+backtrace:
+ --- void tt::assert::t",72
+pcc failure,432
