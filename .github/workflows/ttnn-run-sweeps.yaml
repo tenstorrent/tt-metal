@@ -21,6 +21,8 @@ on:
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
+          - composite.binary.gcd.gcd
+          - composite.binary.lcm.lcm
           - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
           - eltwise.unary.relu.relu_pytorch2
