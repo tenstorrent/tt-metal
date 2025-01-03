@@ -86,7 +86,8 @@ Basic Examples
 
 .. code-block:: bash
 
-    # To print currently executing ttnn operations
+    # To print currently executing ttnn operations and synchronize/block after each call
+    # please set enable_fast_runtime_mode to false and enable_logging to true
     export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'
 
     # To print the currently executing ttnn and tt_lib operation and its input tensors to stdout
