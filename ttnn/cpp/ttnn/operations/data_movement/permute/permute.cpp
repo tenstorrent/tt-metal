@@ -35,19 +35,23 @@ ttnn::Tensor permute_impl(
     // Get the device
     Device* device = a.device();
     uint32_t rank = a.get_shape().rank();
+
+    auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
+        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt);
+    };
+
     if (rank > 4) {
         if (a.get_layout() == Layout::TILE && ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2)) ||
             (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
-            return ttnn::prim::permute(a, dims, output_mem_config, std::nullopt);
+            return prim_permute(a);
         }
-
         auto input = a.get_layout() == Layout::TILE
                          ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr)
                          : a;
         TT_FATAL(
             !(pad_value.has_value() && pad_value.value() != 0.0f),
             "Non-zero padding is not supported for permute on tensors with rank > 4.");
-        input = ttnn::prim::permute(input, dims, output_mem_config, std::nullopt);
+        input = prim_permute(input);
         return ttnn::to_layout(input, a.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
     }
 
@@ -92,7 +96,7 @@ ttnn::Tensor permute_impl(
     } else if (N == 1 && C == 0 && H == 2 && W == 3) {
         output = transpose_cn(formatted_input_tensor);
     } else if (N == 1 && C == 0 && H == 3 && W == 2) {
-        output = transpose_wh(transpose_cn(formatted_input_tensor));
+        output = prim_permute(formatted_input_tensor);
     } else if (N == 1 && C == 2 && H == 0 && W == 3) {
         output = transpose_hc(transpose_cn(formatted_input_tensor));
     } else if (N == 1 && C == 2 && H == 3 && W == 0) {
@@ -155,13 +159,46 @@ ttnn::Tensor permute_launch(
 }
 
 bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& dims) {
-    if (a.get_shape().rank() <= 1) {
+    // 1) Trivial early-out for rank <= 1
+    const auto rank = a.get_logical_shape().rank();
+    if (rank <= 1) {
         return true;
     }
-    auto normalized_dims = ttnn::SmallVector<uint32_t>(dims.begin(), dims.end());
-    ttnn::SmallVector<uint32_t> seq_dims(dims.size());
+
+    // 2) Check for identity permutation
+    ttnn::SmallVector<uint32_t> seq_dims(rank);
     std::iota(seq_dims.begin(), seq_dims.end(), 0);
-    return normalized_dims == seq_dims;
+    if (dims == seq_dims) {
+        return true;
+    }
+
+    // 3) Build permuted shape
+    const auto& shape = a.get_logical_shape();
+    ttnn::SmallVector<uint32_t> perm_shape(rank);
+    for (uint32_t i = 0; i < rank; ++i) {
+        perm_shape[i] = shape[dims[i]];
+    }
+
+    // 4) If the shape changed, definitely not a no-op
+    if (perm_shape != shape) {
+        return false;
+    }
+
+    // 5) If the shape stayed the same, ensure we didn't
+    //    relocate a dimension with size > 1
+    for (uint32_t i = 0; i < rank; ++i) {
+        const uint32_t j = dims[i];
+        if (i != j && shape[i] > 1) {
+            // Moved a dimension that has > 1 elements
+            // => layout changed => not a no-op.
+            return false;
+        }
+    }
+
+    // If we made it here, we either
+    //    - only moved dimensions of size 1, or
+    //    - didn't move anything at all
+    return true;
 }
 
 }  // namespace detail
