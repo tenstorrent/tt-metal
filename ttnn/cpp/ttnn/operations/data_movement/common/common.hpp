@@ -11,8 +11,8 @@
 namespace ttnn {
 namespace operations {
 namespace data_movement {
-ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor);
-ttnn::Shape squeeze_output_shape(ttnn::Shape output_shape);
+
+ttnn::Shape squeeze_shape_to_4D(ttnn::Shape output_shape);
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
 
 ttnn::Tensor pad_to_tile_vol(
@@ -150,7 +150,6 @@ private:
     OpType operation_;
 };
 
-ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor);
 ttnn::Tensor pad_to_tile_vol(
     uint8_t queue_id,
     const ttnn::Tensor& tensor,
