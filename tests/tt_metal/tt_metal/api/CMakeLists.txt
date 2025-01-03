@@ -16,6 +16,7 @@ set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_merge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_banked.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_bit_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_buffer_region.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_CommandQueue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_direct.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dram_to_l1_multicast.cpp

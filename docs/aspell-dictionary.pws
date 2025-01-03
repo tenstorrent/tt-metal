@@ -65,10 +65,12 @@ EltwiseUnary
 EndTraceCapture
 EnqueueProgram
 EnqueueReadBuffer
+EnqueueReadSubBuffer
 EnqueueRecordEvent
 EnqueueTrace
 EnqueueWaitForEvent
 EnqueueWriteBuffer
+EnqueueWriteSubBuffer
 Enum
 Enums
 EventSynchronize

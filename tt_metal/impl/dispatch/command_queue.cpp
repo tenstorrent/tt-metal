@@ -17,6 +17,8 @@
 #include <utility>
 #include <variant>
 
+#include "buffers/buffer.hpp"
+#include "common/math.hpp"
 #include "dev_msgs.h"
 #include "device/device_handle.hpp"
 #include "llrt/hal.hpp"
@@ -56,6 +58,29 @@ void SetLazyCommandQueueMode(bool lazy) {
     DispatchStateCheck(true);
     LAZY_COMMAND_QUEUE_MODE = lazy;
 }
+
+void ValidateBufferRegion(
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, const BufferRegion& region) {
+    auto& b = std::visit(
+        [&](auto&& b) -> Buffer& {
+            using type_buf = std::decay_t<decltype(b)>;
+            if constexpr (std::is_same_v<type_buf, std::shared_ptr<Buffer>>) {
+                return *b;
+            } else {
+                return b.get();
+            }
+        },
+        buffer);
+
+    TT_FATAL(
+        b.is_valid_region(region), "Buffer region with offset {} and size {} is invalid.", region.offset, region.size);
+
+    if (b.is_partial_region(region)) {
+        TT_FATAL(
+            !is_sharded(b.buffer_layout()),
+            "Reading from and writing to partial buffer regions is only supported for non-sharded buffers.");
+    }
+}
 }  // namespace detail
 
 enum DispatchWriteOffsets {
@@ -71,19 +96,19 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     Device* device,
     NOC noc_index,
     Buffer& buffer,
-    void* dst,
     SystemMemoryManager& manager,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
+    uint32_t bank_base_address,
     uint32_t src_page_index,
     std::optional<uint32_t> pages_to_read) :
     command_queue_id(command_queue_id),
     noc_index(noc_index),
-    dst(dst),
     manager(manager),
     buffer(buffer),
     expected_num_workers_completed(expected_num_workers_completed),
     sub_device_ids(sub_device_ids),
+    bank_base_address(bank_base_address),
     src_page_index(src_page_index),
     pages_to_read(pages_to_read.has_value() ? pages_to_read.value() : buffer.num_pages()) {
     TT_ASSERT(buffer.is_dram() or buffer.is_l1(), "Trying to read an invalid buffer");
@@ -95,7 +120,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
 void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = this->buffer.aligned_page_size();
     command.add_prefetch_relay_paged(
-        this->buffer.is_dram(), this->src_page_index, this->buffer.address(), padded_page_size, this->pages_to_read);
+        this->buffer.is_dram(), this->src_page_index, this->bank_base_address, padded_page_size, this->pages_to_read);
 }
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
@@ -200,18 +225,14 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
                                                                  // buffer page size > MAX_PREFETCH_CMD_SIZE
     bool write_partial_pages = this->padded_page_size < full_page_size;
 
-    uint32_t buffer_addr_offset = this->bank_base_address - this->buffer.address();
-    uint32_t num_banks = this->device->num_banks(this->buffer.buffer_type());
-
     // TODO: Consolidate
     if (write_partial_pages) {
         uint32_t padding = full_page_size - this->buffer.page_size();
-        uint32_t unpadded_src_offset = buffer_addr_offset;
-        uint32_t src_address_offset = unpadded_src_offset;
+        uint32_t src_address_offset = this->initial_src_addr_offset;
         for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
              sysmem_address_offset += this->padded_page_size) {
             uint32_t page_size_to_copy = this->padded_page_size;
-            if (src_address_offset + this->padded_page_size > buffer.page_size()) {
+            if (src_address_offset + this->padded_page_size > this->buffer.page_size()) {
                 // last partial page being copied from unpadded src buffer
                 page_size_to_copy -= padding;
             }
@@ -219,13 +240,10 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
             src_address_offset += page_size_to_copy;
         }
     } else {
-        uint32_t unpadded_src_offset =
-            (((buffer_addr_offset / this->padded_page_size) * num_banks) + this->dst_page_index) *
-            this->buffer.page_size();
         if (this->buffer.page_size() % this->buffer.alignment() != 0 and
             this->buffer.page_size() != this->buffer.size()) {
             // If page size is not aligned, we cannot do a contiguous write
-            uint32_t src_address_offset = unpadded_src_offset;
+            uint32_t src_address_offset = this->initial_src_addr_offset;
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
                  sysmem_address_offset += this->padded_page_size) {
                 command_sequence.add_data(
@@ -233,7 +251,8 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
                 src_address_offset += this->buffer.page_size();
             }
         } else {
-            command_sequence.add_data((char*)this->src + unpadded_src_offset, data_size_bytes, data_size_bytes);
+            command_sequence.add_data(
+                (char*)this->src + this->initial_src_addr_offset, data_size_bytes, data_size_bytes);
         }
     }
 }
@@ -1022,13 +1041,23 @@ void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<co
     }
 }
 
-void HWCommandQueue::enqueue_read_buffer(std::shared_ptr<Buffer>& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    this->enqueue_read_buffer(*buffer, dst, blocking, sub_device_ids);
+void HWCommandQueue::enqueue_read_buffer(
+    std::shared_ptr<Buffer>& buffer,
+    void* dst,
+    const BufferRegion region,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    this->enqueue_read_buffer(*buffer, dst, region, blocking, sub_device_ids);
 }
 
 // Read buffer command is enqueued in the issue region and device writes requested buffer data into the completion
 // region
-void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void HWCommandQueue::enqueue_read_buffer(
+    Buffer& buffer,
+    void* dst,
+    const BufferRegion region,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_read_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
 
@@ -1037,15 +1066,15 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
 
     uint32_t padded_page_size = buffer.aligned_page_size();
-    uint32_t pages_to_read = buffer.num_pages();
     uint32_t unpadded_dst_offset = 0;
-    uint32_t src_page_index = 0;
+    uint32_t src_page_index;
 
     if (sub_device_ids.empty()) {
         sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
     }
 
     if (is_sharded(buffer.buffer_layout())) {
+        src_page_index = 0;
         const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
         const auto& buffer_page_mapping = width_split ? buffer.get_buffer_page_mapping() : nullptr;
 
@@ -1086,7 +1115,6 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                     this->device,
                     this->noc_index,
                     buffer,
-                    dst,
                     this->manager,
                     this->expected_num_workers_completed,
                     sub_device_ids,
@@ -1115,17 +1143,47 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             this->finish(sub_device_ids);
         }
     } else {
+        if (buffer.is_partial_region(region)) {
+            TT_FATAL(
+                region.offset % buffer.page_size() == 0,
+                "Offset {} must be a multiple of the buffer page size {}.",
+                region.offset,
+                buffer.page_size());
+            TT_FATAL(
+                region.size % buffer.page_size() == 0,
+                "Size {} must be a multiple of the buffer page size {}.",
+                region.size,
+                buffer.page_size());
+            TT_FATAL(
+                (region.size + region.offset) <= buffer.size(),
+                "(Size + offset) {} must be <= the buffer size {}.",
+                region.size + region.offset,
+                buffer.size());
+        }
+
+        const uint32_t pages_to_read = region.size / buffer.page_size();
         if (pages_to_read > 0) {
+            uint32_t bank_base_address = buffer.address();
+            src_page_index = region.offset / buffer.page_size();
+            // Only 4 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
+            // To handle larger page offsets move bank base address up and update page offset to be relative to the new
+            // bank address
+            if (src_page_index > 15) {
+                const uint32_t num_banks = this->device->num_banks(buffer.buffer_type());
+                const uint32_t num_pages_per_bank = src_page_index / num_banks;
+                bank_base_address += num_pages_per_bank * buffer.aligned_page_size();
+                src_page_index = src_page_index % num_banks;
+            }
             // this is a streaming command so we don't need to break down to multiple
             auto command = EnqueueReadInterleavedBufferCommand(
                 this->id,
                 this->device,
                 this->noc_index,
                 buffer,
-                dst,
                 this->manager,
                 this->expected_num_workers_completed,
                 sub_device_ids,
+                bank_base_address,
                 src_page_index,
                 pages_to_read);
 
@@ -1149,7 +1207,11 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
 }
 
 void HWCommandQueue::enqueue_write_buffer(
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, HostDataType src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    HostDataType src,
+    const BufferRegion region,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     // Top level API to accept different variants for buffer and src
     // For shared pointer variants, object lifetime is guaranteed at least till the end of this function
     auto data = std::visit([&](auto&& data) -> const void* {
@@ -1168,14 +1230,19 @@ void HWCommandQueue::enqueue_write_buffer(
             return b.get();
         }
     }, buffer);
-    this->enqueue_write_buffer(b, data, blocking, sub_device_ids);
+    this->enqueue_write_buffer(b, data, region, blocking, sub_device_ids);
 }
 
 CoreType HWCommandQueue::get_dispatch_core_type() {
     return dispatch_core_manager::instance().get_dispatch_core_type(device->id());
 }
 
-void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void HWCommandQueue::enqueue_write_buffer(
+    Buffer& buffer,
+    const void* src,
+    const BufferRegion region,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_write_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
 
@@ -1187,13 +1254,14 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
     uint32_t max_data_sizeB =
         max_prefetch_command_size - (hal.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
 
-    uint32_t dst_page_index = 0;
+    uint32_t dst_page_index;
 
     if (sub_device_ids.empty()) {
         sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
     }
 
     if (is_sharded(buffer.buffer_layout())) {
+        dst_page_index = 0;
         const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
         const auto& buffer_page_mapping = width_split ? buffer.get_buffer_page_mapping() : nullptr;
 
@@ -1279,12 +1347,31 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
             }
         }
     } else {
-        uint32_t total_pages_to_write = buffer.num_pages();
+        if (buffer.is_partial_region(region)) {
+            TT_FATAL(
+                region.offset % buffer.page_size() == 0,
+                "Offset {} must be divisible by the buffer page size {}.",
+                region.offset,
+                buffer.page_size());
+            TT_FATAL(
+                region.size % buffer.page_size() == 0,
+                "Size {} must be divisible by the buffer page size {}.",
+                region.size,
+                buffer.page_size());
+            TT_FATAL(
+                (region.size + region.offset) <= buffer.size(),
+                "(Size + offset) {} must be <= the buffer size {}.",
+                region.size + region.offset,
+                buffer.size());
+        }
+        dst_page_index = region.offset / buffer.page_size();
+        uint32_t num_pages = region.size / buffer.page_size();
+        uint32_t total_pages_to_write = num_pages;
         bool write_partial_pages = padded_page_size > max_data_sizeB;
         uint32_t page_size_to_write = padded_page_size;
-        uint32_t padded_buffer_size = buffer.num_pages() * padded_page_size;
+        uint32_t padded_buffer_size = num_pages * padded_page_size;
         if (write_partial_pages) {
-            TT_FATAL(buffer.num_pages() == 1, "TODO: add support for multi-paged buffer with page size > 64KB");
+            TT_FATAL(num_pages == 1, "TODO: add support for multi-paged buffer with page size > 64KB");
             uint32_t partial_size = dispatch_constants::BASE_PARTIAL_PAGE_SIZE;
             uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
             while (padded_buffer_size % partial_size != 0) {
@@ -1295,8 +1382,8 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
         }
 
         const uint32_t num_banks = this->device->num_banks(buffer.buffer_type());
-        uint32_t num_pages_round_robined = buffer.num_pages() / num_banks;
-        uint32_t num_banks_with_residual_pages = buffer.num_pages() % num_banks;
+        uint32_t num_pages_round_robined = num_pages / num_banks;
+        uint32_t num_banks_with_residual_pages = num_pages % num_banks;
         uint32_t num_partial_pages_per_page = padded_page_size / page_size_to_write;
         uint32_t num_partials_round_robined = num_partial_pages_per_page * num_pages_round_robined;
 
@@ -1307,12 +1394,13 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
 
         uint32_t bank_base_address = buffer.address();
 
-        uint32_t num_full_pages_written = 0;
+        const uint32_t orig_dst_page_index = dst_page_index;
+        uint32_t total_num_pages_written = 0;
         while (total_pages_to_write > 0) {
             uint32_t data_offsetB = hal.get_alignment(HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
                                                                     // + CQ_DISPATCH_CMD_WRITE_PAGED
             bool issue_wait =
-                (dst_page_index == 0 and
+                (dst_page_index == orig_dst_page_index and
                  bank_base_address == buffer.address());  // only stall for the first write of the buffer
             if (issue_wait) {
                 data_offsetB *= 2;  // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
@@ -1329,17 +1417,23 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
             }
 
             uint32_t num_pages_to_write =
-                std::min(std::min((uint32_t)num_pages_available, max_num_pages_to_write), total_pages_to_write);
+                std::min({(uint32_t)num_pages_available, max_num_pages_to_write, total_pages_to_write});
 
             // Page offset in CQ_DISPATCH_CMD_WRITE_PAGED is uint16_t
             // To handle larger page offsets move bank base address up and update page offset to be relative to the new
             // bank address
             if (dst_page_index > 0xFFFF or (num_pages_to_write == max_num_pages_to_write and write_partial_pages)) {
-                uint32_t num_banks_to_use = write_partial_pages ? max_num_pages_to_write : num_banks;
-                uint32_t residual = dst_page_index % num_banks_to_use;
-                uint32_t num_pages_written_per_bank = dst_page_index / num_banks_to_use;
+                const uint32_t num_banks_to_use = write_partial_pages ? max_num_pages_to_write : num_banks;
+                const uint32_t num_pages_written_per_bank = dst_page_index / num_banks_to_use;
                 bank_base_address += num_pages_written_per_bank * page_size_to_write;
-                dst_page_index = residual;
+                dst_page_index = dst_page_index % num_banks_to_use;
+            }
+
+            uint32_t initial_src_addr_offset;
+            if (write_partial_pages) {
+                initial_src_addr_offset = bank_base_address - buffer.address();
+            } else {
+                initial_src_addr_offset = total_num_pages_written * buffer.page_size();
             }
 
             tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", this->id);
@@ -1350,6 +1444,7 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
                 this->noc_index,
                 buffer,
                 src,
+                initial_src_addr_offset,
                 this->manager,
                 issue_wait,
                 this->expected_num_workers_completed,
@@ -1361,6 +1456,7 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
             this->enqueue_command(
                 command, false, sub_device_ids);  // don't block until the entire src data is enqueued in the issue queue
 
+            total_num_pages_written += num_pages_to_write;
             total_pages_to_write -= num_pages_to_write;
             dst_page_index += num_pages_to_write;
         }
@@ -1383,8 +1479,13 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         // Write program binaries to device if it hasn't previously been cached
         program.allocate_kernel_bin_buf_on_device(device);
         if (program.get_program_transfer_info().binary_data.size()) {
+            const BufferRegion buffer_region(0, program.get_kernels_buffer(device)->size());
             this->enqueue_write_buffer(
-                *program.get_kernels_buffer(device), program.get_program_transfer_info().binary_data.data(), false, sub_device_ids);
+                *program.get_kernels_buffer(device),
+                program.get_program_transfer_info().binary_data.data(),
+                buffer_region,
+                false,
+                sub_device_ids);
         }
         program.set_program_binary_status(device->id(), ProgramBinaryStatus::InFlight);
     }
@@ -1399,7 +1500,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
         if (const auto buffer = program.get_kernels_buffer(device)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
-            this->enqueue_read_buffer(*buffer, read_data.data(), true, sub_device_ids);
+            const BufferRegion region(0, buffer->size());
+            this->enqueue_read_buffer(*buffer, read_data.data(), region, true, sub_device_ids);
             TT_FATAL(
                 program.get_program_transfer_info().binary_data == read_data,
                 "Binary for program to be executed is corrupted. Another program likely corrupted this binary");
@@ -1458,7 +1560,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
         if (const auto buffer = program.get_kernels_buffer(device)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
-            this->enqueue_read_buffer(*buffer, read_data.data(), true, sub_device_ids);
+            const BufferRegion region(0, buffer->size());
+            this->enqueue_read_buffer(*buffer, read_data.data(), region, true, sub_device_ids);
             TT_FATAL(
                 program.get_program_transfer_info().binary_data == read_data,
                 "Binary for program that executed is corrupted. This program likely corrupted its own binary.");
@@ -2040,9 +2143,38 @@ void EnqueueReadBuffer(
     void* dst,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    const DeviceAddr offset = 0;
+    const DeviceAddr size = std::visit(
+        [](auto&& buf) -> size_t {
+            using T = std::decay_t<decltype(buf)>;
+            if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
+                return buf.get().size();
+            } else if constexpr (std::is_same_v<T, std::shared_ptr<Buffer>>) {
+                return buf->size();
+            }
+        },
+        buffer);
+    BufferRegion region(offset, size);
+    EnqueueReadSubBuffer(cq, buffer, dst, region, blocking, sub_device_ids);
+}
+
+void EnqueueReadSubBuffer(
+    CommandQueue& cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    void* dst,
+    const BufferRegion region,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
+    detail::ValidateBufferRegion(buffer, region);
+
     cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_READ_BUFFER, .blocking = blocking, .buffer = buffer, .dst = dst, .sub_device_ids = sub_device_ids});
+        .type = EnqueueCommandType::ENQUEUE_READ_BUFFER,
+        .blocking = blocking,
+        .buffer = buffer,
+        .dst = dst,
+        .region = region,
+        .sub_device_ids = sub_device_ids});
 }
 
 void EnqueueWriteBuffer(
@@ -2051,9 +2183,38 @@ void EnqueueWriteBuffer(
     HostDataType src,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    const DeviceAddr offset = 0;
+    const DeviceAddr size = std::visit(
+        [](auto&& buf) -> size_t {
+            using T = std::decay_t<decltype(buf)>;
+            if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
+                return buf.get().size();
+            } else if constexpr (std::is_same_v<T, std::shared_ptr<Buffer>>) {
+                return buf->size();
+            }
+        },
+        buffer);
+    BufferRegion region(offset, size);
+    EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking, sub_device_ids);
+}
+
+void EnqueueWriteSubBuffer(
+    CommandQueue& cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    HostDataType src,
+    const BufferRegion region,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
+    detail::ValidateBufferRegion(buffer, region);
+
     cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER, .blocking = blocking, .buffer = buffer, .src = std::move(src), .sub_device_ids = sub_device_ids});
+        .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER,
+        .blocking = blocking,
+        .buffer = buffer,
+        .src = std::move(src),
+        .region = region,
+        .sub_device_ids = sub_device_ids});
 }
 
 void EnqueueProgram(
@@ -2143,6 +2304,7 @@ void EnqueueReadBufferImpl(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
+    const BufferRegion region,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     std::visit(
@@ -2150,7 +2312,7 @@ void EnqueueReadBufferImpl(
             using T = std::decay_t<decltype(b)>;
             if constexpr (
                 std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                cq.hw_command_queue().enqueue_read_buffer(b, dst, blocking, sub_device_ids);
+                cq.hw_command_queue().enqueue_read_buffer(b, dst, region, blocking, sub_device_ids);
             }
         },
         buffer);
@@ -2160,9 +2322,10 @@ void EnqueueWriteBufferImpl(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
+    const BufferRegion region,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    cq.hw_command_queue().enqueue_write_buffer(std::move(buffer), std::move(src), blocking, sub_device_ids);
+    cq.hw_command_queue().enqueue_write_buffer(std::move(buffer), std::move(src), region, blocking, sub_device_ids);
 }
 
 void EnqueueProgramImpl(
@@ -2361,13 +2524,27 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
             TT_ASSERT(command.dst.has_value(), "Must provide a dst!");
             TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
             TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
-            EnqueueReadBufferImpl(*this, command.buffer.value(), command.dst.value(), command.blocking.value(), command.sub_device_ids);
+            TT_ASSERT(command.region.has_value(), "Must specify region value!");
+            EnqueueReadBufferImpl(
+                *this,
+                command.buffer.value(),
+                command.dst.value(),
+                command.region.value(),
+                command.blocking.value(),
+                command.sub_device_ids);
             break;
         case EnqueueCommandType::ENQUEUE_WRITE_BUFFER:
             TT_ASSERT(command.src.has_value(), "Must provide a src!");
             TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
             TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
-            EnqueueWriteBufferImpl(*this, command.buffer.value(), command.src.value(), command.blocking.value(), command.sub_device_ids);
+            TT_ASSERT(command.region.has_value(), "Must specify region value!");
+            EnqueueWriteBufferImpl(
+                *this,
+                command.buffer.value(),
+                command.src.value(),
+                command.region.value(),
+                command.blocking.value(),
+                command.sub_device_ids);
             break;
         case EnqueueCommandType::GET_BUF_ADDR:
             TT_ASSERT(command.dst.has_value(), "Must provide a dst address!");
