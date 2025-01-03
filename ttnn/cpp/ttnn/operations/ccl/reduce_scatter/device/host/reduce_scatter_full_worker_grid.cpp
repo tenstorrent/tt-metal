@@ -327,7 +327,6 @@ static void set_reduce_scatter_worker_rt(
             edm_noc_coord = ttnn::ccl::WorkerXY(
                 device->ethernet_core_from_logical_core(sender_edm).x,
                 device->ethernet_core_from_logical_core(sender_edm).y);
-            TT_ASSERT(edm_noc_coord.y == 0 || edm_noc_coord.y == 6);
             edm_core_semaphore_address =
                 edm_interface_addresses.worker_sender_edm_semaphore_addresses.at(global_worker_index);
             edm_core_buffer_address =
