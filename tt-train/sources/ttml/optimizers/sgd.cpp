@@ -40,10 +40,6 @@ void SGD::step() {
         print_stats();
     }
 
-    auto* device = &autograd::ctx().get_device();
-    auto devices = device->get_devices().size();
-    fmt::println("devices: {}", devices);
-
     for (auto& [name, theta_ptr] : m_theta) {
         auto theta = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
         const auto& tensor_ptr = m_parameters.at(name);
@@ -52,26 +48,10 @@ void SGD::step() {
         }
 
         auto gradients = tensor_ptr->get_grad();
-        if (devices > 1U) {
-            // to_xtensor
-            auto mesh_shape = device->shape();
-            ttml::core::MeshToXTensorVariant<float> identity_composer =
-                ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-            auto xtensors_back = ttml::core::to_xtensor(gradients, identity_composer);
 
-            for (auto& xtensor : xtensors_back) {
-                fmt::print("xtensor: ");
-                for (auto& s : xtensor.shape()) {
-                    fmt::print("{} ", s);
-                }
-                fmt::print("\n");
-            }
+        // synchronize gradients for multi-device case, no-op if single device
+        gradients = synchronize_tensor(gradients);
 
-            // all_reduce Mean is not supported, use sum and divide by devices
-            gradients = ttnn::experimental::all_reduce(
-                gradients, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring);
-            gradients = ttnn::multiply(gradients, 1.0F / devices);
-        }
         if (m_config.weight_decay != 0.0F) {
             gradients = ttnn::add(
                 ttnn::multiply(tensor_ptr->get_value(autograd::PreferredPrecision::FULL), m_config.weight_decay),

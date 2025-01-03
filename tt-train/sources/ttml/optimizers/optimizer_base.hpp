@@ -8,6 +8,8 @@
 
 namespace ttml::optimizers {
 
+ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor);
+
 class OptimizerBase {
 public:
     explicit OptimizerBase(serialization::NamedParameters&& parameters);
