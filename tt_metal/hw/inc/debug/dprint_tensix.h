@@ -199,15 +199,21 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
     }
 
 // Print the content of the register field given the value in the register.
-#define DPRINT_TENSIX_CONFIG_FIELD(reg_val, reg_field_name, name)                           \
+#define DPRINT_TENSIX_CONFIG_FIELD(reg_val, reg_field_name, name, printDec)                     \
     {                                                                                           \
         uint32_t field_value = (reg_val & reg_field_name##_MASK) >> reg_field_name##_SHAMT;     \
-        DPRINT << name << " = " << HEX() << field_value << "; ";                                \
+        DPRINT << name << " = ";                                                                \
+        if (printDec) DPRINT << DEC();                                                          \
+        else DPRINT << HEX();                                                                   \
+        DPRINT << field_value << "; ";                                                          \
     }
 
-inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t shamt, const char* name)
+inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t shamt, const char* name, bool printDec = false)
 {
-    DPRINT << name << ": " << HEX() << ((word & mask) >> shamt) << "; ";
+    DPRINT << name << ": ";
+    if (printDec) DPRINT << DEC();
+    else DPRINT << HEX();
+    DPRINT << ((word & mask) >> shamt) << "; ";
 }
 
 // HARDWARE SPECIFIC FUNCTIONS
@@ -224,28 +230,28 @@ inline void dprint_tensix_unpack_tile_descriptor_grayskull() {
     dprint_tensix_struct_field(word, 0xf, 0, "in_data_format");
     dprint_tensix_struct_field(word, 0x10, 4, "uncompressed");
     dprint_tensix_struct_field(word, 0xe0, 5, "reserved_0");
-    dprint_tensix_struct_field(word, 0xf00, 8, "blobs_per_xy_plane");
+    dprint_tensix_struct_field(word, 0xf00, 8, "blobs_per_xy_plane", true);
     dprint_tensix_struct_field(word, 0xf000, 12, "reserved_1");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "x_dim");
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "x_dim", true);
 
     //word 1
     word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
-    dprint_tensix_struct_field(word, 0xffff, 0, "y_dim");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "z_dim");
+    dprint_tensix_struct_field(word, 0xffff, 0, "y_dim", true);
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "z_dim", true);
 
     //word 2
     word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32];
-    dprint_tensix_struct_field(word, 0xffff, 0, "w_dim");
+    dprint_tensix_struct_field(word, 0xffff, 0, "w_dim", true);
 
     // blobs_y_start is in 2 words (word2 and word3)
     uint32_t tmp_word = word;
 
     // word3
     word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1];
-    DPRINT << "blobs_y_start: " << HEX() << (((word & 0xffff) << 16) | ((tmp_word & 0xffff0000) >> 16)) << "; "; //blobs_y_start
+    DPRINT << "blobs_y_start: " << DEC() << (((word & 0xffff) << 16) | ((tmp_word & 0xffff0000) >> 16)) << "; "; //blobs_y_start
 
     dprint_tensix_struct_field(word, 0xff0000, 16, "digest_type");
-    dprint_tensix_struct_field(word, 0xff000000, 24, "digest_size");
+    dprint_tensix_struct_field(word, 0xff000000, 24, "digest_size", true);
 
     DPRINT << ENDL();
 }
@@ -263,9 +269,9 @@ inline void dprint_tensix_unpack_config_grayskull() {
     dprint_tensix_struct_field(word, 0x200, 9, "tile_mode");
     dprint_tensix_struct_field(word, 0x400, 10, "force_shrd_exp");
     dprint_tensix_struct_field(word, 0x800, 11, "res_0");
-    dprint_tensix_struct_field(word, 0x7000, 12, "upsmpl_rate");
+    dprint_tensix_struct_field(word, 0x7000, 12, "upsmpl_rate", true);
     dprint_tensix_struct_field(word, 0x8000, 15, "upsmpl_and_intrlv");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "shamt");
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "shamt", true);
 
     //word 2
     word = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 1];
@@ -277,7 +283,7 @@ inline void dprint_tensix_unpack_config_grayskull() {
     //word 2
     word = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32];
     dprint_tensix_struct_field(word, 0xffff, 0, "limit_addr");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "fifo_sz");
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "fifo_sz", true);
 
     DPRINT << ENDL();
 }
@@ -292,18 +298,18 @@ inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
     dprint_tensix_struct_field(word, 0xf, 0, "in_data_format");
     dprint_tensix_struct_field(word, 0x10, 4, "uncompressed");
     dprint_tensix_struct_field(word, 0xe0, 5, "reserved_0");
-    dprint_tensix_struct_field(word, 0xf00, 8, "blobs_per_xy_plane");
+    dprint_tensix_struct_field(word, 0xf00, 8, "blobs_per_xy_plane", true);
     dprint_tensix_struct_field(word, 0xf000, 12, "reserved_1");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "x_dim");
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "x_dim", true);
 
     //word 1
     word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
-    dprint_tensix_struct_field(word, 0xffff, 0, "y_dim");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "z_dim");
+    dprint_tensix_struct_field(word, 0xffff, 0, "y_dim", true);
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "z_dim", true);
 
     //word 2
     word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32];
-    dprint_tensix_struct_field(word, 0xffff, 0, "w_dim");
+    dprint_tensix_struct_field(word, 0xffff, 0, "w_dim", true);
 
     uint32_t prev_word = word;
 
@@ -311,7 +317,7 @@ inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
     word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1];
     DPRINT << "blobs_y_start: " << HEX() << (((word & 0xffff) << 16) | ((prev_word & 0xffff0000) >> 16)) << "; ";
     dprint_tensix_struct_field(word, 0xff0000, 16, "digest_type");
-    dprint_tensix_struct_field(word, 0xff000000, 24, "digest_size");
+    dprint_tensix_struct_field(word, 0xff000000, 24, "digest_size", true);
 
     DPRINT << ENDL();
 }
@@ -332,7 +338,7 @@ inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
     dprint_tensix_struct_field(word, 0x3000, 12, "ups_rate");
     dprint_tensix_struct_field(word, 0x4000, 14, "r1");
     dprint_tensix_struct_field(word, 0x8000, 15, "ups_and_int");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "shamt");
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "shamt", true);
 
     //word 2
     word = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 1];
@@ -351,7 +357,7 @@ inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
 
     //word 3
     word = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32];
-    dprint_tensix_struct_field(word, 0x1ffff, 0, "fifo_sz");
+    dprint_tensix_struct_field(word, 0x1ffff, 0, "fifo_sz", true);
     dprint_tensix_struct_field(word, 0xfffe0000, 17, "r5");
 
     DPRINT << ENDL();
@@ -362,8 +368,8 @@ inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
 inline void dprint_tensix_pack_config_grayskull(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg ) {
     // word 0
     uint32_t word = cfg[reg_addr];
-    dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "exp_sec_sz");
+    dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz", true);
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "exp_sec_sz", true);
 
     // word 1
     word = cfg[reg_addr + 1];
@@ -388,7 +394,7 @@ inline void dprint_tensix_pack_config_grayskull(uint32_t reg_addr, const volatil
     dprint_tensix_struct_field(word, 0x80000, 19, "r_md");
     dprint_tensix_struct_field(word, 0x100000, 20, "exp_th_en");
     dprint_tensix_struct_field(word, 0xe00000, 21, "r2");
-    dprint_tensix_struct_field(word, 0xff000000, 24, "exp_th");
+    dprint_tensix_struct_field(word, 0xff000000, 24, "exp_th", true);
 
     DPRINT << ENDL();
 }
@@ -396,8 +402,8 @@ inline void dprint_tensix_pack_config_grayskull(uint32_t reg_addr, const volatil
 inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg ){
     // word 0
     uint32_t word = cfg[reg_addr];
-    dprint_tensix_struct_field(word, 0xffff, 0, "r_p_s_sz");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "e_s_sz");
+    dprint_tensix_struct_field(word, 0xffff, 0, "r_p_s_sz", true);
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "e_s_sz", true);
 
     // word 1
     word = cfg[reg_addr + 1];
@@ -412,7 +418,7 @@ inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile
     dprint_tensix_struct_field(word, 0xf00, 8, "in_frmt");
     dprint_tensix_struct_field(word, 0xf000, 12, "r1");
     dprint_tensix_struct_field(word, 0x10000, 16, "src_if_sel");
-    dprint_tensix_struct_field(word, 0xfe0000, 17, "pck_per_xy_pl");
+    dprint_tensix_struct_field(word, 0xfe0000, 17, "pck_per_xy_pl", true);
     dprint_tensix_struct_field(word, 0xff000000, 24, "l1_src_adr");
 
     // word 3
@@ -423,7 +429,7 @@ inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile
     dprint_tensix_struct_field(word, 0x100000, 20, "exp_th_en");
     dprint_tensix_struct_field(word, 0x600000, 21, "pck_l1_ac_dis_pck_0_flg");
     dprint_tensix_struct_field(word, 0x800000, 23, "r2");
-    dprint_tensix_struct_field(word, 0xff000000, 24, "exp_th");
+    dprint_tensix_struct_field(word, 0xff000000, 24, "exp_th", true);
 
     DPRINT << ENDL();
 }
@@ -431,8 +437,8 @@ inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile
 inline void dprint_tensix_pack_config_blackhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
     // word 0
     uint32_t word = cfg[reg_addr];
-    dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "exp_sec_sz");
+    dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz", true);
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "exp_sec_sz", true);
 
     // word 1
     word = cfg[reg_addr + 1];
@@ -449,11 +455,11 @@ inline void dprint_tensix_pack_config_blackhole(uint32_t reg_addr, const volatil
     dprint_tensix_struct_field(word, 0x1000, 12, "dsea");
     dprint_tensix_struct_field(word, 0x2000, 13, "alpis");
     dprint_tensix_struct_field(word, 0x4000, 14, "en_out_fifo");
-    dprint_tensix_struct_field(word, 0x8000, 15, "sub_l1_til_h_sz");
+    dprint_tensix_struct_field(word, 0x8000, 15, "sub_l1_til_h_sz", true);
     dprint_tensix_struct_field(word, 0x10000, 16, "src_if_sel");
     dprint_tensix_struct_field(word, 0x1e0000, 17, "pck_st_intf_pos");
     dprint_tensix_struct_field(word, 0x200000, 21, "apd0co");
-    dprint_tensix_struct_field(word, 0x400000, 22, "add_til_h_sz");
+    dprint_tensix_struct_field(word, 0x400000, 22, "add_til_h_sz", true);
     dprint_tensix_struct_field(word, 0x800000, 23, "pdypso");
     dprint_tensix_struct_field(word, 0xff000000, 24, "l1_src_adr");
 
@@ -475,22 +481,22 @@ inline void dprint_tensix_alu_config() {
     uint32_t reg_val = cfg[ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32];
 
     DPRINT << "RND_MODE: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Fpu_srnd_en, "Fpu_srnd_en");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Gasket_srnd_en, "Gasket_srnd_en");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Packer_srnd_en, "Packer_srnd_en");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Padding, "Padding");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_GS_LF, "GS_LF");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Bfp8_HF, "Bfp8_HF");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Fpu_srnd_en, "Fpu_srnd_en", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Gasket_srnd_en, "Gasket_srnd_en", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Packer_srnd_en, "Packer_srnd_en", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Padding, "Padding", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_GS_LF, "GS_LF", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Bfp8_HF, "Bfp8_HF", false);
     DPRINT << "FORMAT: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcAUnsigned, "SrcAUnsigned");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcBUnsigned, "SrcBUnsigned");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcA, "SrcA");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG1_SrcB, "SrcB");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG2_Dstacc, "Dstacc");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcAUnsigned, "SrcAUnsigned", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcBUnsigned, "SrcBUnsigned", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcA, "SrcA", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG1_SrcB, "SrcB", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG2_Dstacc, "Dstacc", false);
     DPRINT << "ACC_CTRL: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Fp32_enabled, "Fp32_enabled");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_SFPU_Fp32_enabled, "SFPU_Fp32_enabled");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_INT8_math_enabled, "INT8_math_enabled");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Fp32_enabled, "Fp32_enabled", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_SFPU_Fp32_enabled, "SFPU_Fp32_enabled", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_INT8_math_enabled, "INT8_math_enabled", false);
     DPRINT << ENDL();
 }
 
@@ -560,18 +566,18 @@ inline void dprint_tensix_pack_relu_config() {
     uint32_t reg_val = cfg[ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32];
 
     DPRINT << "ALU_ACC_CTRL: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Zero_Flag_disabled_src, "zero_flag_disabled_src");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Zero_Flag_disabled_dst, "zero_flag_disabled_dst");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Zero_Flag_disabled_src, "zero_flag_disabled_src", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Zero_Flag_disabled_dst, "zero_flag_disabled_dst", false);
     DPRINT << "STACC_RELU: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, STACC_RELU_ApplyRelu, "apply_relu");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, STACC_RELU_ReluThreshold, "relu_threshold");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, STACC_RELU_ApplyRelu, "apply_relu", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, STACC_RELU_ReluThreshold, "relu_threshold", true);
     DPRINT << "DISABLE_RISC_BP_Disable: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_main, "main");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_trisc, "trisc");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_ncrisc, "ncrisc");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_main, "bmp_clear_main");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_trisc, "bmp_clear_trisc");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_ncrisc, "bmp_clear_ncrisc");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_main, "main", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_trisc, "trisc", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_ncrisc, "ncrisc", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_main, "bmp_clear_main", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_trisc, "bmp_clear_trisc", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_ncrisc, "bmp_clear_ncrisc", false);
     DPRINT << ENDL();
 }
 
@@ -587,10 +593,10 @@ inline void dprint_tensix_dest_rd_ctrl() {
     uint32_t reg_val = cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32];
 
     DPRINT << "PCK_DEST_RD_CTRL: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_32b_data, "read_32b_data");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_unsigned, "read_unsigned");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_int8, "read_int8");
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Round_10b_mant, "round_10b_mant");
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_32b_data, "read_32b_data", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_unsigned, "read_unsigned", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_int8, "read_int8", false);
+    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Round_10b_mant, "round_10b_mant", false);
 
     // Can't write to reserved? -> always prints 0
     // reg_val gets only last 4 bits
@@ -680,11 +686,11 @@ inline void dprint_tensix_pack_counters_helper(uint reg_id, const volatile uint 
     // Get pointer to registers for current state ID
     uint32_t reg_val = cfg[reg_addr];
 
-    dprint_tensix_struct_field(reg_val, 0xff, 0, "pack_per_xy_plane");
-    dprint_tensix_struct_field(reg_val, 0xff00, 8, "pack_reads_per_xy_plane");
-    dprint_tensix_struct_field(reg_val, 0x7f0000, 16, "pack_xys_per_til");
+    dprint_tensix_struct_field(reg_val, 0xff, 0, "pack_per_xy_plane", true);
+    dprint_tensix_struct_field(reg_val, 0xff00, 8, "pack_reads_per_xy_plane", true);
+    dprint_tensix_struct_field(reg_val, 0x7f0000, 16, "pack_xys_per_til", true);
     dprint_tensix_struct_field(reg_val, 0x800000, 23, "pack_yz_transposed");
-    dprint_tensix_struct_field(reg_val, 0xff000000, 24, "pack_per_xy_plane_offset");
+    dprint_tensix_struct_field(reg_val, 0xff000000, 24, "pack_per_xy_plane_offset", true);
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
@@ -729,13 +735,13 @@ inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint t
 
     // word 0 xy_stride
     uint32_t word = cfg[reg_addr];
-    dprint_tensix_struct_field(word, 0xfff, 0, "x_stride");
-    dprint_tensix_struct_field(word, 0xfff000, 12, "y_stride");
+    dprint_tensix_struct_field(word, 0xfff, 0, "x_stride", true);
+    dprint_tensix_struct_field(word, 0xfff000, 12, "y_stride", true);
     
     // word 1 zw_stride
     word = cfg[reg_addr + 1];
-    dprint_tensix_struct_field(word, 0xfff, 0, "z_stride");
-    dprint_tensix_struct_field(word, 0xffff000, 12, "w_stride");
+    dprint_tensix_struct_field(word, 0xfff, 0, "z_stride", true);
+    dprint_tensix_struct_field(word, 0xffff000, 12, "w_stride", true);
 }
 
 // Choose what register you want printed (1-2). 0 for all.
