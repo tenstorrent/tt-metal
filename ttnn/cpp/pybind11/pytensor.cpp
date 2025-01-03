@@ -110,17 +110,14 @@ Tensor convert_float_vector_to_tt_tensor(
     const std::optional<Tile>& tile) {
     if (data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Tile layout is required for BFLOAT8_B and BFLOAT4_B; got {}", layout);
+        auto result_cpu_spec = TensorSpec(
+            ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(Layout::TILE, tile), MemoryConfig{}));
 
         auto owned_buffer = create_owned_buffer_from_vector_of_floats(std::move(data), DataType::FLOAT32);
         auto float_tensor = Tensor(OwnedStorage{owned_buffer}, shape, DataType::FLOAT32, Layout::ROW_MAJOR, tile);
-        auto tile_val = tile.value_or(Tile());
-        if (shape[2] % tile_val.get_height() != 0 || shape[3] % tile_val.get_width() != 0) {
-            auto padded_shape = shape;
-            padded_shape[2] = tt::round_up(shape[2], tile_val.get_height());
-            padded_shape[3] = tt::round_up(shape[3], tile_val.get_width());
-
-            float_tensor = tensor_ops::tensor_pad(
-                float_tensor, LegacyShape(shape, padded_shape), ttnn::SimpleShape{0, 0, 0, 0}, 0);
+        if (result_cpu_spec.logical_shape() != result_cpu_spec.padded_shape()) {
+            float_tensor =
+                tensor_ops::tensor_pad(float_tensor, result_cpu_spec.padded_shape(), ttnn::SimpleShape{0, 0, 0, 0}, 0);
         }
         auto output_float_data = owned_buffer::get_as<float>(float_tensor.to(Layout::TILE)).get();
         auto output_packed_data =
@@ -128,14 +125,16 @@ Tensor convert_float_vector_to_tt_tensor(
                 ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
                 : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
         auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-        auto tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), shape, data_type, Layout::TILE, tile);
+        auto tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), result_cpu_spec);
         if (device) {
             return tensor.to(device, memory_config.value_or(MemoryConfig{}));
         }
         return tensor;
     }
+    auto result_cpu_spec = TensorSpec(
+        ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(Layout::ROW_MAJOR, tile), MemoryConfig{}));
     auto owned_buffer = create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-    auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR, tile).to(layout);
+    auto tensor = Tensor(OwnedStorage{owned_buffer}, result_cpu_spec).to(layout);
     if (device) {
         return tensor.to(device, memory_config.value_or(MemoryConfig{}));
     }
@@ -1247,7 +1246,8 @@ void pytensor_module(py::module& m_tensor) {
                const std::array<uint32_t, 4>& output_tensor_shape,
                const std::array<uint32_t, 4>& input_tensor_start,
                float pad_value) {
-                return self.pad(output_tensor_shape, ttnn::SimpleShape(input_tensor_start), pad_value);
+                return self.pad(
+                    ttnn::SimpleShape(output_tensor_shape), ttnn::SimpleShape(input_tensor_start), pad_value);
             },
             R"doc(
             Pad TT Tensor with given pad value ``arg2``.

@@ -254,12 +254,12 @@ void tensor_print(const Tensor& input_tensor) {
 
 Tensor tensor_pad(
     const Tensor& input_tensor,
-    const tt::tt_metal::LegacyShape& output_tensor_shape,
+    const ttnn::SimpleShape& output_padded_shape,
     const ttnn::SimpleShape& input_tensor_start,
     float pad_value) {
     ZoneScoped;
     GraphTracker::instance().track_function_start(
-        "Tensor::pad", input_tensor, output_tensor_shape, input_tensor_start, pad_value);
+        "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
     TT_ASSERT(
         input_tensor.storage_type() == StorageType::OWNED or
         input_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST or
@@ -273,17 +273,7 @@ Tensor tensor_pad(
         return input_tensor;
     }
 
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
-    for (auto index = 0; index < input_shape.rank(); index++) {
-        auto front = input_tensor_start[index];
-        auto back = output_tensor_shape[index] - (input_tensor_start[index] + input_shape[index]);
-        dimensions_pads.push_back(Padding::PadDimension{.front = front, .back = back});
-    }
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto output_shape_with_padding = tt::tt_metal::LegacyShape(output_tensor_shape, padding);
-
-    auto output = tensor_impl::pad_wrapper(input_tensor, output_shape_with_padding, input_tensor_start, pad_value);
+    auto output = tensor_impl::pad_wrapper(input_tensor, output_padded_shape, input_tensor_start, pad_value);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -306,30 +296,26 @@ Tensor tensor_unpad(
 Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
-    uint32_t height = input_tensor.get_legacy_shape()[-2];
-    uint32_t width = input_tensor.get_legacy_shape()[-1];
+    uint32_t height = input_tensor.get_padded_shape()[-2];
+    uint32_t width = input_tensor.get_padded_shape()[-1];
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
     uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
-    ttnn::SmallVector<uint32_t> shape;
     ttnn::SmallVector<uint32_t> padded_shape;
     ttnn::SmallVector<uint32_t> input_tensor_start;
 
-    for (auto index = 0; index < input_tensor.get_legacy_shape().rank() - 2; index++) {
-        shape.push_back(input_tensor.get_legacy_shape().without_padding()[index]);
-        padded_shape.push_back(input_tensor.get_legacy_shape()[index]);
+    for (auto index = 0; index < input_tensor.get_padded_shape().rank() - 2; index++) {
+        padded_shape.push_back(input_tensor.get_padded_shape()[index]);
         input_tensor_start.push_back(0);
     }
 
-    shape.push_back(height);
-    shape.push_back(width);
     padded_shape.push_back(padded_height);
     padded_shape.push_back(padded_width);
     input_tensor_start.push_back(0);
     input_tensor_start.push_back(0);
 
     auto output = input_tensor.pad(
-        tt::tt_metal::LegacyShape(shape, padded_shape), ttnn::SimpleShape{std::move(input_tensor_start)}, pad_value);
+        ttnn::SimpleShape(std::move(padded_shape)), ttnn::SimpleShape{std::move(input_tensor_start)}, pad_value);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
