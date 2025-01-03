@@ -20,11 +20,13 @@ namespace {
 
 using namespace ttnn::graph;
 
-std::unordered_map<std::string, long long> extract_peak_DRAM_memory_usage(const nlohmann::json& trace) {
+using DeviceMemoryMap = std::unordered_map<std::string, long long>;
+
+DeviceMemoryMap extract_peak_DRAM_memory_usage(const nlohmann::json& trace) {
     std::vector<std::string> current_op;
 
-    std::unordered_map<string, long long> current_buffer;
-    std::unordered_map<string, long long> peak_buffer;
+    DeviceMemoryMap current_buffer;
+    DeviceMemoryMap peak_buffer;
 
     for (size_t i = 0; i < trace.size(); ++i) {
         const auto& v = trace[i];
@@ -113,11 +115,10 @@ int main() {
     backward_trace_file << pretty_backward_trace;
     backward_trace_file.close();
 
-    auto print_dram_memory_usage = [](const std::string& prefix,
-                                      const std::unordered_map<std::string, long long>& memory_usage) {
+    auto print_dram_memory_usage = [](const std::string& prefix, const DeviceMemoryMap& memory_usage) {
         fmt::println("{}", prefix);
         for (const auto& [device_id, memory] : memory_usage) {
-            fmt::print("    Device id: {} Memory usage: {}", device_id, memory / 1024.0 / 1024.0);
+            fmt::println("    Device id: {} Memory usage: {}", device_id, memory / 1024.0 / 1024.0);
         }
     };
 
