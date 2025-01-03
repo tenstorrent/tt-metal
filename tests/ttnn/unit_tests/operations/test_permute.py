@@ -212,8 +212,6 @@ def test_permute_5d_width(shape, perm, memory_config, dtype, device):
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_5d_blocked(shape, perm, memory_config, dtype, device):
-    pytest.skip("Skipping this test to see more failures")
-
     torch.manual_seed(520)
     input_a = torch.randn(shape)
 
