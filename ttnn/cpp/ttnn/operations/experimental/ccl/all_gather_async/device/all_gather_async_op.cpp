@@ -258,9 +258,9 @@ Tensor all_gather_async(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    std::optional<std::vector<std::shared_ptr<const GlobalSemaphore>>> semaphore_handles_opt;
+    std::optional<std::vector<std::shared_ptr<const GlobalSemaphore>>> semaphores_opt;
     if (create_semaphore_handles) {
-        semaphore_handles_opt = ttnn::ccl::worker_detail::create_global_semaphores(devices, core_grid, subdevice_id);
+        semaphores_opt = ttnn::ccl::worker_detail::create_global_semaphores(devices, core_grid, subdevice_id);
     }
 
     operation::launch_op(
