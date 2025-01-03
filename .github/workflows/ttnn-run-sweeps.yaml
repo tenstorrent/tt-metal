@@ -29,6 +29,7 @@ on:
           - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu_pytorch2
           - eltwise.unary.abs.abs
+          - eltwise.unary.abs.abs_sharded
           - eltwise.unary.abs.abs_forge
           - eltwise.unary.cos.cos
           - eltwise.unary.cos.cos_pytorch2
@@ -126,7 +127,9 @@ on:
           - eltwise.unary.hardshrink.hardshrink_sharded
           - eltwise.unary.softmax.softmax
           - eltwise.unary.identity.identity
+          - eltwise.unary.identity.identity_sharded
           - eltwise.unary.neg.neg
+          - eltwise.unary.neg.neg_sharded
           - eltwise.unary.sinh.sinh
           - eltwise.unary.asinh.asinh
           - eltwise.unary.cosh.cosh
@@ -134,6 +137,7 @@ on:
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
           - eltwise.unary.selu.selu
+          - eltwise.unary.selu.selu_sharded
           - eltwise.unary.softshrink.softshrink_sharded
           - eltwise.unary_backward.fill_zero_bw
           - eltwise.unary_backward.log_sigmoid_bw
