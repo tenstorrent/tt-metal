@@ -160,8 +160,8 @@ public:
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
 
-    uint32_t get_allocator_alignment() const;
-    uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const;
+    uint32_t get_allocator_alignment(const BufferType &buffer_type) const;
+    uint32_t get_allocator_alignment(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
 
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const;
