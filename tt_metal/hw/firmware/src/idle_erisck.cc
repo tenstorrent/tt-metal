@@ -22,8 +22,6 @@
 #include <kernel_includes.hpp>
 
 void kernel_launch(uint32_t kernel_base_addr) {
-    DeviceZoneScopedMainChildN("ERISC-KERNEL");
-
     extern uint32_t __kernel_init_local_l1_base[];
     extern uint32_t __fw_export_end_text[];
     do_crt1((uint32_t tt_l1_ptr
@@ -31,5 +29,8 @@ void kernel_launch(uint32_t kernel_base_addr) {
 
     noc_local_state_init(NOC_INDEX);
 
-    kernel_main();
+    {
+        DeviceZoneScopedMainChildN("IDLE-ERISC-KERNEL");
+        kernel_main();
+    }
 }
