@@ -400,7 +400,7 @@ class ConcatMesh2dToTensor(MeshToTensor):
         if self.dims[0] == self.dims[1]:
             raise ValueError("Both dimensions in 'dims' must be different")
 
-    def compose(self, tensor: ttnn.Tensor) -> "torch.Tensor":
+    def compose(self, tensor: ttnn.Tensor, sub_device_ids: List[ttnn.SubDeviceId] = []) -> "torch.Tensor":
         """
         Compose the sharded tensors back into a single tensor.
 
@@ -416,7 +416,8 @@ class ConcatMesh2dToTensor(MeshToTensor):
         import torch
 
         device_shards = [
-            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None, sub_device_ids=sub_device_ids)
+            for tt_input_tensor in ttnn.get_device_tensors(tensor)
         ]
 
         rows, cols = self.mesh_shape
