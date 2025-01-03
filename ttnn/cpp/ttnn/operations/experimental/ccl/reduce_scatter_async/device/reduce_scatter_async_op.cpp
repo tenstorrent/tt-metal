@@ -342,9 +342,9 @@ Tensor reduce_scatter(
     std::optional<std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>>> to_remote_inputs_semaphores_opt;
     auto worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(6, 6)));
     if (create_semaphore_handles) {
-        from_remote_inputs_semaphores_opt = 
+        from_remote_inputs_semaphores_opt =
             ttnn::ccl::worker_detail::create_global_semaphores(devices, worker_cores, worker_subdevice_id_opt);
-        to_remote_inputs_semaphores_opt = 
+        to_remote_inputs_semaphores_opt =
             ttnn::ccl::worker_detail::create_global_semaphores(devices, worker_cores, worker_subdevice_id_opt);
     } else {
         from_remote_inputs_semaphores_opt = std::nullopt;
