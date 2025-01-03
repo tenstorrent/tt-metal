@@ -49,7 +49,7 @@ ttnn::SmallVector<int> generate_reduce_dim(
     return dim;
 }
 
-Tensor reshape_nd_to_4d_for_transpose(const Tensor& input_tensor_arg, int& dim1, int& dim2) {
+Tensor reshape_nd_to_4d_for_reduction(const Tensor& input_tensor_arg, const bool transpose, int& dim1, int dim2 = -1) {
     auto input_shape = input_tensor_arg.get_shape();
     auto rank = input_shape.size();
     auto input_tensor = input_tensor_arg;
@@ -59,8 +59,14 @@ Tensor reshape_nd_to_4d_for_transpose(const Tensor& input_tensor_arg, int& dim1,
     if (dim2 < 0) {
         dim2 += rank;
     }
-    if (rank > 4) {
-        auto new_shape = ttnn::SmallVector<uint32_t>(4, 1);
+    if (rank <= 4) {
+        return input_tensor;
+    }
+
+    auto new_shape = ttnn::SmallVector<uint32_t>(4, 1);
+
+    // if we need transpose, we need to reshape to 4D based on specific dim1 and dim2 values
+    if (transpose) {
         int insert_idx = 0;
         for (int i = 0; i < rank; i++) {
             if (i == dim1 || i == dim2) {
@@ -76,9 +82,37 @@ Tensor reshape_nd_to_4d_for_transpose(const Tensor& input_tensor_arg, int& dim1,
             }
             new_shape[insert_idx] *= input_shape[i];
         }
-        input_tensor = ttnn::reshape(input_tensor, ttnn::SimpleShape{new_shape});
+    } else {
+        // transpose is not needed but we still need to reshape to 4D for reduction operation
+        // So we squash all front dims into one dim until we reach 4-D shape
+        int insert_idx = 3;
+        for (int i = rank - 1; i >= 0; i--) {
+            if (insert_idx == 0) {
+                new_shape[insert_idx] *= input_shape[i];
+                continue;
+            }
+            new_shape[insert_idx] = input_shape[i];
+            insert_idx--;
+        }
+
+        int offset = rank - 4;
+        dim1 -= offset;
     }
-    return input_tensor;
+    return ttnn::reshape(input_tensor, ttnn::SimpleShape{new_shape});
+    ;
+}
+
+Tensor reshape_4d_to_nd_after_reduction(
+    const Tensor& input_tensor_arg, const ttnn::Shape& pre_reduction_shape, int dim) {
+    ttnn::SmallVector<uint32_t> post_reduction_shape(pre_reduction_shape.size());
+    for (int i = 0; i < pre_reduction_shape.size(); i++) {
+        if (i == dim) {
+            post_reduction_shape[dim] = 1;
+        } else {
+            post_reduction_shape[i] = pre_reduction_shape[i];
+        }
+    }
+    return ttnn::reshape(input_tensor_arg, ttnn::SimpleShape{post_reduction_shape});
 }
 
 template <ReduceType reduce_type>
@@ -123,10 +157,15 @@ static Tensor reduce_impl(
                 }
                 bool transpose = i_dim < rank - 2;
                 int adjusted_dim = offset + i_dim;
+
+                auto pre_reduction_shape = output_tensor.get_shape();
+                if (!is_rank_le_4d) {
+                    output_tensor = reshape_nd_to_4d_for_reduction(output_tensor, transpose, adjusted_dim);
+                }
+
                 int reduce_dim = adjusted_dim;
+
                 if (transpose) {
-                    output_tensor =
-                        is_rank_le_4d ? output_tensor : reshape_nd_to_4d_for_transpose(output_tensor, adjusted_dim, -1);
                     output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -1, memory_config);
                     reduce_dim = output_tensor.get_shape().size() - 1;
                 }
@@ -151,9 +190,9 @@ static Tensor reduce_impl(
                 }
                 if (transpose) {
                     output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -1, memory_config);
-                    if (!is_rank_le_4d) {
-                        output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape{output_shape});
-                    }
+                }
+                if (!is_rank_le_4d) {
+                    output_tensor = reshape_4d_to_nd_after_reduction(output_tensor, pre_reduction_shape, i_dim);
                 }
             }
             return output_tensor;
