@@ -34,7 +34,7 @@ static ttnn::Tensor pad_impl(
             return input_tensor;
         } else {
             return input_tensor.pad(
-                tt::tt_metal::LegacyShape(output_padded_shape), ttnn::SimpleShape{input_tensor_start}, value);
+                ttnn::SimpleShape(output_padded_shape), ttnn::SimpleShape{input_tensor_start}, value);
         }
     }
 
