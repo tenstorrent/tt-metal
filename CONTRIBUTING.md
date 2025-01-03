@@ -71,23 +71,6 @@ standards](#contribution-standards).
 
 ## Machine setup
 
-### Hugepages setup
-
-Hugepages is required to both run and develop on the Metalium project.
-
-If you ever need to re-enable Hugepages, you can try the script we homemade
-for this:
-
-```
-sudo python3 infra/machine_setup/scripts/setup_hugepages.py enable
-```
-
-Then to check if Hugepages is enabled:
-
-```
-python3 infra/machine_setup/scripts/setup_hugepages.py check
-```
-
 ## Developing tt-metal
 
 Currently, the most convenient way to develop is to do so on our cloud

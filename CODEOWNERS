@@ -23,7 +23,6 @@ MANIFEST.in @tenstorrent/metalium-developers-infra
 setup.py @tenstorrent/metalium-developers-infra
 pyproject.toml @tenstorrent/metalium-developers-infra
 requirements*.txt @tenstorrent/metalium-developers-infra
-setup_hugepages.py @tenstorrent/metalium-developers-infra
 
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra
 cmake/ @tenstorrent/metalium-developers-infra
