@@ -53,7 +53,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     bool gather_in0,
     const CoreRangeSet& hop_cores,
     bool untilize_out,
-    const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers);
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor& input_tensor_a,
@@ -179,7 +179,7 @@ struct Matmul {
     const bool transpose_a = false;
     const bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
-    const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -199,36 +199,6 @@ struct Matmul {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
-    static constexpr auto attribute_names = std::forward_as_tuple(
-        "program_config",
-        "bcast_batch",
-        "output_mem_config",
-        "output_dtype",
-        "compute_kernel_config",
-        "untilize_out",
-        "user_core_coord",
-        "user_fused_activation",
-        "user_run_batched",
-        "transpose_a",
-        "transpose_b",
-        "output_tile",
-        "global_cb");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->program_config,
-            this->bcast_batch,
-            this->output_mem_config,
-            this->output_dtype,
-            this->compute_kernel_config,
-            this->untilize_out,
-            this->user_core_coord,
-            this->user_fused_activation,
-            this->user_run_batched,
-            this->transpose_a,
-            this->transpose_b,
-            this->output_tile,
-            this->global_cb.get());
-    }
 };
 
 Matmul create_matmul_struct(
@@ -248,7 +218,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     const MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    const std::shared_ptr<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb);
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb);
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,

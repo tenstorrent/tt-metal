@@ -18,7 +18,7 @@ namespace ttnn::operations::dram_prefetcher {
 void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() > 0, "Must have at least one input tensor");
     TT_FATAL(this->num_layers > 0, "Prefetcher must run for at least 1 layer");
-    TT_FATAL(global_cb != nullptr, "Global circular buffer must be provided");
+    TT_FATAL(global_cb.has_value(), "Global circular buffer must be provided");
 
     uint32_t num_receiver_cores = global_cb->receiver_cores().num_cores();
     for (const auto& tensor : input_tensors) {

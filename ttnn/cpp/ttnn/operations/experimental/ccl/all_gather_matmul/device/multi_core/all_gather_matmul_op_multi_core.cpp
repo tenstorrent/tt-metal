@@ -276,7 +276,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
                     config,
                     untilize_out,
                     matmul_fused_op_signaler,
-                    nullptr);
+                    std::nullopt);
                 matmul_override_runtime_arguments_callback =
                     matmul_program_with_callbacks->override_runtime_arguments_callback;
             } else {

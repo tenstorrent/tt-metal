@@ -1492,7 +1492,7 @@ void Matmul::validate(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
                         "Input tensor B must be width sharded when using gather_in0.");
-                    if (this->global_cb == nullptr) {
+                    if (!this->global_cb.has_value()) {
                         TT_FATAL(
                             input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
                             "Input tensor A and B must be sharded on the same cores when using gather_in0.");

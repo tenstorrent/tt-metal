@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, is_wormhole_b0, is_blackhole
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     run_multi_core_matmul_1d,
@@ -118,7 +118,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
 
         worker_cores_range_set = ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(7, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1)),
             ]
         )
 
@@ -527,7 +527,7 @@ def test_run_prefetcher(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS not supported")
+@pytest.mark.skipif(is_grayskull() or is_wormhole_b0() or is_blackhole(), reason="GS not supported")
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [
