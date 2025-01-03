@@ -14,6 +14,7 @@
 #include "noc/noc_parameters.h"
 
 #include "tt_metal/llrt/hal.hpp"
+#include "tt_metal/llrt/llrt.hpp"
 
 extern bool debug_g;
 extern bool use_coherent_data_g;

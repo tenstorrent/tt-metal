@@ -12,6 +12,7 @@
 #include "host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/llrt/llrt.hpp"
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"

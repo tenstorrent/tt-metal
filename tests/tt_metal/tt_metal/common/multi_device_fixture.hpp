@@ -11,6 +11,7 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/llrt/llrt.hpp"
 
 class MultiDeviceFixture : public DispatchFixture {
 protected:
