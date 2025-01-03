@@ -268,9 +268,11 @@ on:
           - eltwise.binary.eq.eq_scalar_pytorch2
           - eltwise.binary.eq.eq_forge
           - eltwise.binary.ge.ge
+          - eltwise.binary.ge.ge_
           - eltwise.binary.ge.ge_forge
           - eltwise.binary.gt.gt_scalar_pytorch2
           - eltwise.binary.gt.gt
+          - eltwise.binary.gt.gt_
           - eltwise.binary.gt.gt_forge
           - eltwise.binary.le.le_tensor_pytorch2
           - eltwise.binary.fmod.fmod
@@ -311,6 +313,7 @@ on:
           - eltwise.composite.binary.pow.pow_pytorch2
           - eltwise.composite.binary.pow.pow_scalar_pytorch2
           - eltwise.composite.binary.pow.pow_tensor_pytorch2
+          - eltwise.composite.binary.pow.pow_tensor
           - eltwise.ternary.addcmul.addcmul
           - eltwise.ternary.addcdiv.addcdiv
           - eltwise.ternary.mac.mac
