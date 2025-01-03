@@ -53,6 +53,7 @@ def run_bert_question_and_answering_inference(
     mesh_device,
     use_program_cache,
     model_name,
+    batch_size,
     sequence_size,
     model_location_generator,
     input_path,
@@ -69,7 +70,7 @@ def run_bert_question_and_answering_inference(
 
     profiler.start(f"preprocessing_parameter")
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
-    batch_size = 16 if mesh_device_flag else 8
+    batch_size = 2 * batch_size if mesh_device_flag else batch_size
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
@@ -171,6 +172,7 @@ def run_bert_question_and_answering_inference_squad_v2(
     mesh_device,
     use_program_cache,
     model_name,
+    batch_size,
     sequence_size,
     model_location_generator,
     n_iterations,
@@ -187,7 +189,7 @@ def run_bert_question_and_answering_inference_squad_v2(
     config = hugging_face_reference_model.config
 
     mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
-    batch_size = 16 if mesh_device_flag else 8
+    batch_size = 2 * batch_size if mesh_device_flag else batch_size
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
@@ -265,10 +267,12 @@ def run_bert_question_and_answering_inference_squad_v2(
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("sequence_size", [128])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("model_name", ["mrm8488/bert-tiny-finetuned-squadv2"])
 @pytest.mark.parametrize("input_loc", ["models/demos/wormhole/bert_tiny/demo/input_data.json"])
 def test_demo(
     input_loc,
+    batch_size,
     sequence_size,
     model_name,
     model_location_generator,
@@ -283,6 +287,7 @@ def test_demo(
         use_program_cache=use_program_cache,
         model_name=model_name,
         sequence_size=sequence_size,
+        batch_size=batch_size,
         model_location_generator=model_location_generator,
         input_path=input_loc,
     )
@@ -290,6 +295,7 @@ def test_demo(
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("model_name", ["mrm8488/bert-tiny-finetuned-squadv2"])
 @pytest.mark.parametrize(
@@ -299,6 +305,7 @@ def test_demo(
 def test_demo_squadv2(
     model_name,
     sequence_size,
+    batch_size,
     n_iterations,
     model_location_generator,
     mesh_device,
@@ -311,6 +318,7 @@ def test_demo_squadv2(
         mesh_device=mesh_device,
         use_program_cache=use_program_cache,
         model_name=model_name,
+        batch_size=batch_size,
         sequence_size=sequence_size,
         model_location_generator=model_location_generator,
         n_iterations=n_iterations,
