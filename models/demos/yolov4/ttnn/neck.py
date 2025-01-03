@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from models.demos.yolov4.ttnn.common import Conv
+from models.demos.yolov4.ttnn.common import Conv, Upsample
 from tt_lib.fallback_ops import fallback_ops
 
 
@@ -67,6 +67,10 @@ class TtNeck:
             width_sharding=True,
             deallocate=False,
         )
+        self.upsample1 = Upsample(
+            [1, 10, 10, 256],
+            [2, 2],
+        )
         self.conv7_2 = Conv(
             torch_model,
             "neek.conv8",
@@ -125,6 +129,10 @@ class TtNeck:
             height_sharding=False,
             enable_split_reader=True,
             enable_act_double_buffer=True,
+        )
+        self.upsample2 = Upsample(
+            [1, 20, 20, 128],
+            [2, 2],
         )
         self.conv9_2 = Conv(
             torch_model,
@@ -244,25 +252,8 @@ class TtNeck:
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
         output_tensor = ttnn.reshape(output_tensor, (1, 10, 10, 256))
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 4),
-                ),
-            }
-        )
-        shard_spec = ttnn.ShardSpec(shard_grid, (20, 32), ttnn.ShardOrientation.ROW_MAJOR, False)
-        in_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
-        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
-        shard_spec = ttnn.ShardSpec(shard_grid, (80, 32), ttnn.ShardOrientation.ROW_MAJOR, False)
-        out_sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
-
-        output_tensor_upsample_1 = ttnn.upsample(output_tensor, (2, 2), memory_config=out_sharded_mem_config)
+        output_tensor_upsample_1 = self.upsample1(device, output_tensor)
         output_tensor_upsample_1 = ttnn.sharded_to_interleaved(output_tensor_upsample_1, ttnn.L1_MEMORY_CONFIG)
         output_tensor_upsample_1 = ttnn.reshape(output_tensor_upsample_1, (1, 1, 400, 256))
         output_tensor_upsample_1 = ttnn.to_layout(output_tensor_upsample_1, layout=ttnn.TILE_LAYOUT)
@@ -320,23 +311,7 @@ class TtNeck:
         )
 
         output_tensor = ttnn.reshape(output_tensor, (1, 20, 20, 128))
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 4),
-                ),
-            }
-        )
-        shard_spec = ttnn.ShardSpec(shard_grid, (80, 16), ttnn.ShardOrientation.ROW_MAJOR, False)
-        in_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
-        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
-        shard_spec = ttnn.ShardSpec(shard_grid, (80 * 4, 16), ttnn.ShardOrientation.ROW_MAJOR, False)
-        out_sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
-
-        output_tensor_upsample_2 = ttnn.upsample(output_tensor, (2, 2), memory_config=out_sharded_mem_config)
+        output_tensor_upsample_2 = self.upsample2(device, output_tensor)
         output_tensor_upsample_2 = ttnn.sharded_to_interleaved(output_tensor_upsample_2, ttnn.L1_MEMORY_CONFIG)
         output_tensor_upsample_2 = ttnn.reshape(output_tensor_upsample_2, (1, 1, 1600, 128))
         output_tensor_upsample_2 = ttnn.to_layout(output_tensor_upsample_2, ttnn.TILE_LAYOUT)

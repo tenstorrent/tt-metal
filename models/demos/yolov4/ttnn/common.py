@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import math
+from typing import Tuple
 import ttnn
 
 
@@ -121,3 +123,75 @@ class Conv:
             return_weights_and_bias=True,
         )
         return output_tensor
+
+
+class Upsample:
+    def __init__(self, input_params, scale_factor, mode="nearest") -> None:
+        self.batch_size = input_params[0]
+        self.input_height = input_params[1]
+        self.input_width = input_params[2]
+        self.input_channels = input_params[3]
+        self.scale_h = scale_factor[0]
+        self.scale_w = scale_factor[1]
+        self.mode = mode
+
+    # helper functions for upsample for block sharded inputs
+    def determine_num_cores_for_upsample(
+        self, batch_size: int, height: int, width: int, num_channels: int, max_grid_size: Tuple[int, int]
+    ) -> Tuple[int, int]:
+        max_nshards_h = min(
+            batch_size * height * width, max_grid_size[0]
+        )  ## height along NHW (N: batch size, H: height, W: width)
+        max_nshards_w = min(num_channels, max_grid_size[1])  ## width along C (number of channels)
+        ## find nshards_h along NHW
+        nshards_h = max_nshards_h
+        while nshards_h > 0:
+            if batch_size * height % nshards_h == 0:
+                break
+            nshards_h -= 1
+        ## find nshards_w along C
+        nshards_w = max_nshards_w
+        while nshards_w > 0:
+            ## make sure: 1. nshards_w divides num_channels, and 2. shard_shape[1] is aligned to 32B
+            if num_channels % nshards_w == 0 and math.ceil(num_channels * 2 / nshards_w) % 32 == 0:
+                break
+            nshards_w -= 1
+        if nshards_w == 0 or nshards_h == 0:
+            raise ValueError(f"nshards_h or nshards_w is 0: nshards_h={nshards_h}, nshards_w={nshards_w}")
+        return [nshards_h, nshards_w]
+
+    def get_core_grid_from_num_cores_for_upsample(self, num_cores: Tuple[int, int], max_grid_size: Tuple[int, int]) -> ttnn.CoreRangeSet:  # type: ignore
+        ncores_h, ncores_w = num_cores
+        assert ncores_h <= max_grid_size[0]
+        assert ncores_w <= max_grid_size[1]
+        return ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(ncores_w - 1, ncores_h - 1),
+                )
+            }
+        )
+
+    def __call__(self, device, input_tensor):
+        device_grid = device.compute_with_storage_grid_size()
+        max_grid_size = [device_grid.y, device_grid.x]
+        num_cores = self.determine_num_cores_for_upsample(
+            self.batch_size, self.input_height, self.input_width, self.input_channels, max_grid_size
+        )
+        shard_grid = self.get_core_grid_from_num_cores_for_upsample(num_cores, max_grid_size)
+        shard_height = math.ceil(self.input_height * self.input_width / num_cores[0])
+        shard_width = math.ceil(self.input_channels / num_cores[1])
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR, False)
+        in_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+        output_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
+        out_shard_spec = ttnn.ShardSpec(
+            shard_grid,
+            (shard_height * self.scale_h * self.scale_w, shard_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        out_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, out_shard_spec
+        )
+        return ttnn.upsample(output_tensor, (self.scale_h, self.scale_w), memory_config=out_sharded_mem_config)
