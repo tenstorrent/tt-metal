@@ -27,10 +27,6 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
             (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
             return MultiCoreTileInvariant{};
         }
-        // else if (operation_attributes.dims[rank - 1] == tensor_args.input_tensor.get_logical_shape().rank() - 1) {
-        //     return MultiCoreTiledRowInvariant{};
-        // }
-        // return MultiCoreTiledGeneric{};
     }
     return MultiCoreBlockedGeneric{};
 }
