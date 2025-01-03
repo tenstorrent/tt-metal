@@ -88,9 +88,6 @@ def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset
 
     # Compute metrics
     pcc, mse, mae = compute_metrics(reference_output, tt_output_torch)
-
-    logger.info(f"PCC: {pcc}, MSE: {mse}, MAE: {mae}")
-
     # Check if model meets requirements
     pcc_required = 0.99
     passing = pcc >= pcc_required
