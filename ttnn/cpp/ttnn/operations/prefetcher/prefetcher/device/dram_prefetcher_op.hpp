@@ -32,10 +32,8 @@ struct DramPrefetcher {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("tensor_addrs", "global_cb", "num_layers");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(this->tensor_addrs, this->global_cb.get(), this->num_layers);
-    }
+    static constexpr auto attribute_names = std::forward_as_tuple("tensor_addrs", "num_layers");
+    const auto attribute_values() const { return std::forward_as_tuple(this->tensor_addrs, this->num_layers); }
 };
 
 }  // namespace ttnn::operations::dram_prefetcher

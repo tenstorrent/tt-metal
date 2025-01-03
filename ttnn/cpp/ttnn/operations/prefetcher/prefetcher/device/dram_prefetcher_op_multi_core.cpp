@@ -27,7 +27,7 @@ void get_max_page_size_and_num_pages(
     uint32_t& num_pages) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * num_datums_per_tile;
 
-    page_size = (8192 / num_datums_per_tile) * num_datums_per_tile;
+    page_size = (max_page_size / num_datums_per_tile) * num_datums_per_tile;
     while (total_size % page_size != 0 && page_size >= num_datums_per_tile) {
         page_size -= num_datums_per_tile;
     }
