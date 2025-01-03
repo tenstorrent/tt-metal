@@ -118,7 +118,7 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
 
         worker_cores_range_set = ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(7, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(7, 4)),
             ]
         )
 
