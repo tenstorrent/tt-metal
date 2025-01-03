@@ -236,14 +236,10 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
                                                                  // buffer page size > MAX_PREFETCH_CMD_SIZE
     bool write_partial_pages = this->padded_page_size < full_page_size;
 
-    uint32_t buffer_addr_offset = this->bank_base_address - this->buffer.address();
-    uint32_t num_banks = this->device->num_banks(this->buffer.buffer_type());
-
     // TODO: Consolidate
     if (write_partial_pages) {
         uint32_t padding = full_page_size - this->buffer.page_size();
-        uint32_t unpadded_src_offset = buffer_addr_offset;
-        uint32_t src_address_offset = unpadded_src_offset;
+        uint32_t src_address_offset = this->initial_src_addr_offset;
         for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
              sysmem_address_offset += this->padded_page_size) {
             uint32_t page_size_to_copy = this->padded_page_size;
@@ -255,13 +251,10 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
             src_address_offset += page_size_to_copy;
         }
     } else {
-        uint32_t unpadded_src_offset = (((buffer_addr_offset / this->padded_page_size) * num_banks) +
-                                        (this->dst_page_index - this->orig_dst_page_index)) *
-                                       this->buffer.page_size();
         if (this->buffer.page_size() % this->buffer.alignment() != 0 and
             this->buffer.page_size() != this->buffer.size()) {
             // If page size is not aligned, we cannot do a contiguous write
-            uint32_t src_address_offset = unpadded_src_offset;
+            uint32_t src_address_offset = this->initial_src_addr_offset;
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
                  sysmem_address_offset += this->padded_page_size) {
                 command_sequence.add_data(
@@ -269,7 +262,8 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
                 src_address_offset += this->buffer.page_size();
             }
         } else {
-            command_sequence.add_data((char*)this->src + unpadded_src_offset, data_size_bytes, data_size_bytes);
+            command_sequence.add_data(
+                (char*)this->src + this->initial_src_addr_offset, data_size_bytes, data_size_bytes);
         }
     }
 }
@@ -1281,7 +1275,8 @@ void HWCommandQueue::enqueue_write_buffer(
 
         uint32_t bank_base_address = buffer.address();
 
-        uint32_t orig_dst_page_index = dst_page_index;
+        const uint32_t orig_dst_page_index = dst_page_index;
+        uint32_t total_num_pages_written = 0;
         while (total_pages_to_write > 0) {
             uint32_t data_offsetB = hal.get_alignment(HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
                                                                     // + CQ_DISPATCH_CMD_WRITE_PAGED
@@ -1303,17 +1298,23 @@ void HWCommandQueue::enqueue_write_buffer(
             }
 
             uint32_t num_pages_to_write =
-                std::min(std::min((uint32_t)num_pages_available, max_num_pages_to_write), total_pages_to_write);
+                std::min({(uint32_t)num_pages_available, max_num_pages_to_write, total_pages_to_write});
 
             // Page offset in CQ_DISPATCH_CMD_WRITE_PAGED is uint16_t
             // To handle larger page offsets move bank base address up and update page offset to be relative to the new
             // bank address
             if (dst_page_index > 0xFFFF or (num_pages_to_write == max_num_pages_to_write and write_partial_pages)) {
-                uint32_t num_banks_to_use = write_partial_pages ? max_num_pages_to_write : num_banks;
-                uint32_t residual = dst_page_index % num_banks_to_use;
-                uint32_t num_pages_written_per_bank = dst_page_index / num_banks_to_use;
+                const uint32_t num_banks_to_use = write_partial_pages ? max_num_pages_to_write : num_banks;
+                const uint32_t num_pages_written_per_bank = dst_page_index / num_banks_to_use;
                 bank_base_address += num_pages_written_per_bank * page_size_to_write;
-                dst_page_index = residual;
+                dst_page_index = dst_page_index % num_banks_to_use;
+            }
+
+            uint32_t initial_src_addr_offset;
+            if (write_partial_pages) {
+                initial_src_addr_offset = bank_base_address - buffer.address();
+            } else {
+                initial_src_addr_offset = total_num_pages_written * buffer.page_size();
             }
 
             tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", this->id);
@@ -1324,6 +1325,7 @@ void HWCommandQueue::enqueue_write_buffer(
                 this->noc_index,
                 buffer,
                 src,
+                initial_src_addr_offset,
                 this->manager,
                 issue_wait,
                 this->expected_num_workers_completed,
@@ -1331,11 +1333,11 @@ void HWCommandQueue::enqueue_write_buffer(
                 bank_base_address,
                 page_size_to_write,
                 dst_page_index,
-                orig_dst_page_index,
                 num_pages_to_write);
             this->enqueue_command(
                 command, false, sub_device_ids);  // don't block until the entire src data is enqueued in the issue queue
 
+            total_num_pages_written += num_pages_to_write;
             total_pages_to_write -= num_pages_to_write;
             dst_page_index += num_pages_to_write;
         }

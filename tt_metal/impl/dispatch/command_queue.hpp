@@ -220,7 +220,7 @@ private:
     void add_dispatch_write(HugepageDeviceCommand& command) override;
     void add_buffer_data(HugepageDeviceCommand& command) override;
 
-    uint32_t orig_dst_page_index;
+    uint32_t initial_src_addr_offset;
 
 public:
     EnqueueWriteInterleavedBufferCommand(
@@ -229,6 +229,7 @@ public:
         NOC noc_index,
         const Buffer& buffer,
         const void* src,
+        const uint32_t initial_src_addr_offset,
         SystemMemoryManager& manager,
         bool issue_wait,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
@@ -236,7 +237,6 @@ public:
         uint32_t bank_base_address,
         uint32_t padded_page_size,
         uint32_t dst_page_index = 0,
-        uint32_t orig_dst_page_index = 0,
         std::optional<uint32_t> pages_to_write = std::nullopt) :
         EnqueueWriteBufferCommand(
             command_queue_id,
@@ -252,19 +252,19 @@ public:
             padded_page_size,
             dst_page_index,
             pages_to_write) {
-        this->orig_dst_page_index = orig_dst_page_index;
+        this->initial_src_addr_offset = initial_src_addr_offset;
     }
 };
 
 class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
-   private:
+private:
     void add_dispatch_write(HugepageDeviceCommand& command) override;
     void add_buffer_data(HugepageDeviceCommand& command) override;
 
     const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping;
     const CoreCoord core;
 
-   public:
+public:
     EnqueueWriteShardedBufferCommand(
         uint32_t command_queue_id,
         IDevice* device,
@@ -296,9 +296,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
             dst_page_index,
             pages_to_write),
         buffer_page_mapping(buffer_page_mapping),
-        core(core) {
-        ;
-    }
+        core(core) {}
 };
 
 class EnqueueProgramCommand : public Command {
