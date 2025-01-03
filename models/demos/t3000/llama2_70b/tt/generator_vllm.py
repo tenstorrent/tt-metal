@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Union
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import torch
 
 from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 from models.demos.t3000.llama2_70b.tt.llama_common import (
@@ -41,6 +41,10 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
         model_config, ckpt_dir, _, cache_path = setup_llama_env(
             llama_version=llama_version,
         )
+
+        mesh_rows = t3k_mesh_device.shape.num_rows
+        mesh_cols = t3k_mesh_device.shape.num_cols
+        assert mesh_rows == 2 and mesh_cols == 4, f"Invalid mesh device shape: {mesh_rows}x{mesh_cols}"
         check_mesh_device(t3k_mesh_device, model_config)
 
         # initialize arg classes
@@ -67,3 +71,6 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
     @property
     def cache_path(self):
         return self.tt_model.cache_path
+
+    def prefill_forward(self, tokens: torch.Tensor, page_table, kv_cache, prompt_lens):
+        return super().prefill_forward(tokens, 0, page_table, kv_cache, prompt_lens)

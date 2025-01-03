@@ -22,7 +22,8 @@ using namespace tt::tt_metal;
 typedef enum sanitization_features {
     SanitizeAddress,
     SanitizeAlignmentL1Write,
-    SanitizeAlignmentL1Read
+    SanitizeAlignmentL1Read,
+    SanitizeZeroL1Write
 } watcher_features_t;
 
 void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature, bool use_ncrisc = false) {
@@ -95,8 +96,13 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
         case SanitizeAlignmentL1Write:
             output_l1_buffer_addr++;  // This is illegal because reading DRAM->L1 needs DRAM alignment
                                       // requirements (32 byte aligned).
+            l1_buffer_size--;
             break;
-        case SanitizeAlignmentL1Read: input_l1_buffer_addr++; break;
+        case SanitizeAlignmentL1Read:
+            input_l1_buffer_addr++;
+            l1_buffer_size--;
+            break;
+        case SanitizeZeroL1Write: output_l1_buffer_addr = 0; break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -154,7 +160,7 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             break;
         case SanitizeAlignmentL1Write: {
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write 102400 "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write 102399 "
                 "bytes from local L1[{:#08x}] to Tensix core w/ physical coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
@@ -172,7 +178,7 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
         }
         case SanitizeAlignmentL1Read: {
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read 102400 "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read 102399 "
                 "bytes to local L1[{:#08x}] from Tensix core w/ physical coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
@@ -187,6 +193,23 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
                 target_core,
                 input_l1_buffer_addr);
         } break;
+        case SanitizeZeroL1Write: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write 102400 "
+                "bytes from local L1[{:#08x}] to Tensix core w/ physical coords {} L1[addr=0x{:08x}] (NOC target "
+                "address underflow).",
+                device->id(),
+                (is_eth_core) ? "ethnet" : "worker",
+                core.x,
+                core.y,
+                phys_core.x,
+                phys_core.y,
+                risc_name,
+                noc,
+                l1_buffer_addr,
+                target_core,
+                output_l1_buffer_addr);
+        } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -199,7 +222,7 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
         exception = get_watcher_exception_message();
     } while (exception == "");
     log_info(LogTest, "Reported error: {}", exception);
-    EXPECT_TRUE(get_watcher_exception_message() == expected);
+    EXPECT_EQ(get_watcher_exception_message(), expected);
 }
 
 static void RunTestEth(WatcherFixture* fixture, Device* device) {
@@ -291,6 +314,18 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitizeAlignmentL1ReadNCrisc) {
         },
         this->devices_[0]
     );
+}
+
+TEST_F(WatcherFixture, TensixTestWatcherSanitizeZeroL1Write) {
+    if (this->slow_dispatch_) {
+        GTEST_SKIP();
+    }
+    this->RunTestOnDevice(
+        [](WatcherFixture* fixture, Device* device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, device, core, false, SanitizeZeroL1Write);
+        },
+        this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, ActiveEthTestWatcherSanitizeEth) {

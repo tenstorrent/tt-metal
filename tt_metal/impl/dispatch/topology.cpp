@@ -18,6 +18,8 @@
 #define DISPATCH_MAX_UPSTREAM 4
 #define DISPATCH_MAX_DOWNSTREAM 4
 
+using namespace tt::tt_metal;
+
 typedef struct {
     int id;
     chip_id_t device_id;                          // Device that this kernel is located on
@@ -77,15 +79,18 @@ static const std::vector<dispatch_kernel_node_t> two_chip_arch_1cq = {
 
     {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {5, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {4, 0, 1, 0, DISPATCH_H, {6, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+
     {5, 0, 1, 0, PACKET_ROUTER_MUX, {3, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {6, 0, 1, 0, DEMUX, {7, x, x, x}, {4, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {7, 0, 1, 0, US_TUNNELER_REMOTE, {8, 5, x, x}, {8, 6, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {8, 1, x, 0, US_TUNNELER_LOCAL, {7, 9, x, x}, {7, 10, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {9, 1, x, 0, MUX_D, {12, x, x, x}, {8, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {10, 1, x, 0, PACKET_ROUTER_DEMUX, {8, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {11, 1, x, 0, PREFETCH_D, {10, x, x, x}, {12, 13, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {12, 1, x, 0, DISPATCH_D, {11, x, x, x}, {13, 9, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {13, 1, x, 0, DISPATCH_S, {11, x, x, x}, {12, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {7, 0, 1, 0, US_TUNNELER_REMOTE, {11, 5, x, x}, {11, 6, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    {8, 1, x, 0, PREFETCH_D, {13, x, x, x}, {9, 10, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {9, 1, x, 0, DISPATCH_D, {8, x, x, x}, {10, 12, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {10, 1, x, 0, DISPATCH_S, {8, x, x, x}, {9, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+
+    {11, 1, x, 0, US_TUNNELER_LOCAL, {7, 12, x, x}, {7, 13, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {12, 1, x, 0, MUX_D, {9, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {13, 1, x, 0, PACKET_ROUTER_DEMUX, {11, x, x, x}, {8, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 };
 
 static const std::vector<dispatch_kernel_node_t> two_chip_arch_2cq = {
@@ -101,15 +106,17 @@ static const std::vector<dispatch_kernel_node_t> two_chip_arch_2cq = {
 
     {8, 0, 1, 0, PACKET_ROUTER_MUX, {4, 5, x, x}, {10, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {9, 0, 1, 0, DEMUX, {10, x, x, x}, {6, 7, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {10, 0, 1, 0, US_TUNNELER_REMOTE, {11, 8, x, x}, {11, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {11, 1, x, 0, US_TUNNELER_LOCAL, {10, 12, x, x}, {10, 13, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {12, 1, x, 0, MUX_D, {16, 17, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {13, 1, x, 0, PACKET_ROUTER_DEMUX, {11, x, x, x}, {14, 15, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {10, 0, 1, 0, US_TUNNELER_REMOTE, {15, 8, x, x}, {15, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
-    {14, 1, x, 0, PREFETCH_D, {13, x, x, x}, {16, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {15, 1, x, 1, PREFETCH_D, {13, x, x, x}, {17, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {16, 1, x, 0, DISPATCH_D, {14, x, x, x}, {12, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {17, 1, x, 1, DISPATCH_D, {15, x, x, x}, {12, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {11, 1, x, 0, PREFETCH_D, {17, x, x, x}, {13, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {12, 1, x, 1, PREFETCH_D, {17, x, x, x}, {14, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {13, 1, x, 0, DISPATCH_D, {11, x, x, x}, {16, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {14, 1, x, 1, DISPATCH_D, {12, x, x, x}, {16, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+
+    {15, 1, x, 0, US_TUNNELER_LOCAL, {10, 16, x, x}, {10, 17, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {16, 1, x, 0, MUX_D, {13, 14, x, x}, {15, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {17, 1, x, 0, PACKET_ROUTER_DEMUX, {15, x, x, x}, {11, 12, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
 };
 
 static const std::vector<dispatch_kernel_node_t> galaxy_nine_chip_arch_1cq = {

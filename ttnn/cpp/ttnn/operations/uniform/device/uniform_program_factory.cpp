@@ -86,7 +86,8 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
         });
 
     uint32_t tile_offset = 0;
-    for (const auto& core : cores) {
+    for (int i = 0; i < cores.size(); ++i) {
+        const auto& core = cores[i];
         uint32_t units_per_core;
         if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
@@ -103,8 +104,11 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
         } f2u_from, f2u_to;
         f2u_from.f = operation_attributes.from;
         f2u_to.f = operation_attributes.to - eps;  // -eps make sure that generated number is < operation_attributes.to
-        std::vector<uint32_t> compute_runtime_args = {
-            get_random_seed(), f2u_from.u, f2u_to.u, tile_offset, units_per_core};
+
+        // Each core has its own seed to increase the number of generated random numbers
+        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+
+        std::vector<uint32_t> compute_runtime_args = {seed, f2u_from.u, f2u_to.u, tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
         std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), tile_offset, units_per_core};
@@ -130,13 +134,13 @@ void UniformDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     const uint32_t output_addr = output.buffer()->address();
 
-    for (const auto& core : cores) {
+    for (int i = 0; i < cores.size(); ++i) {
         {
-            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
-            runtime_args[0] = get_random_seed();
+            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, cores[i]);
+            runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
         }
         {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
             runtime_args[0] = output_addr;
         }
     }

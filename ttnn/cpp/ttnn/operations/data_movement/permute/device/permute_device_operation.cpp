@@ -51,7 +51,12 @@ PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_out
     }
     auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
     const auto& input_tensor = tensor_args.input_tensor;
-    return create_device_tensor(output_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device());
+    return create_device_tensor(
+        output_shape,
+        input_tensor.dtype(),
+        input_tensor.layout(),
+        input_tensor.device(),
+        operation_attributes.output_mem_config);
 }
 
 std::tuple<PermuteDeviceOperation::operation_attributes_t, PermuteDeviceOperation::tensor_args_t>
