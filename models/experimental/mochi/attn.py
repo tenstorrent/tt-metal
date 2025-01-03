@@ -35,7 +35,6 @@ class TtAsymmetricAttention(LightweightModule):
         out_proj_lora_dropout: float = 0.0,
     ):
         super().__init__()
-        assert len(mesh_device.get_devices()) == 1, "Only single-device inference is supported for attention layers"
         # Assert that all LoRA ranks are 0 since we don't support LoRA in this implementation
         assert qkv_proj_lora_rank == 0, "LoRA not supported - qkv_proj_lora_rank must be 0"
         assert qkv_proj_lora_alpha == 0, "LoRA not supported - qkv_proj_lora_alpha must be 0"
@@ -45,15 +44,16 @@ class TtAsymmetricAttention(LightweightModule):
         assert out_proj_lora_dropout == 0.0, "LoRA not supported - out_proj_lora_dropout must be 0.0"
 
         self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         self.state_dict = state_dict
         self.state_dict_prefix = state_dict_prefix
         self.weight_cache_path = weight_cache_path
         self.layer_num = layer_num
         self.dtype = dtype
-
         self.dim_x = dim_x
         self.dim_y = dim_y
         self.num_heads = num_heads
+        self.n_local_heads = num_heads // self.num_devices
         self.head_dim = dim_x // num_heads
         self.update_y = update_y
         self.softmax_scale = softmax_scale
@@ -65,31 +65,20 @@ class TtAsymmetricAttention(LightweightModule):
         self.out_bias = out_bias
 
         # Define the qkv and output projections
-        self.qkv_x = self._create_linear_layer(
-            "qkv_x", dim_x, 3 * dim_x, weight_cache_path, state_dict, state_dict_prefix
+        self.qkv_x, self.qkv_x_bias = self._col_parallel_qkv(
+            "qkv_x", self.qkv_bias, weight_cache_path, state_dict, state_dict_prefix
         )
-        if self.qkv_bias:
-            self.qkv_bias_x = self._create_bias_layer("qkv_x", dim_x, weight_cache_path, state_dict, state_dict_prefix)
-        self.qkv_y = self._create_linear_layer(
-            "qkv_y", dim_y, 3 * dim_x, weight_cache_path, state_dict, state_dict_prefix
+        self.qkv_y, self.qkv_y_bias = self._col_parallel_qkv(
+            "qkv_y", self.qkv_bias, weight_cache_path, state_dict, state_dict_prefix
         )
-        if self.qkv_bias:
-            self.qkv_bias_y = self._create_bias_layer("qkv_y", dim_y, weight_cache_path, state_dict, state_dict_prefix)
-        self.proj_x = self._create_linear_layer(
-            "proj_x", dim_x, dim_x, weight_cache_path, state_dict, state_dict_prefix
+
+        self.proj_x, self.proj_x_bias = self._row_parallel_linear(
+            "proj_x", self.out_bias, weight_cache_path, state_dict, state_dict_prefix
         )
-        if self.out_bias:
-            self.proj_bias_x = self._create_bias_layer(
-                "proj_x", dim_x, weight_cache_path, state_dict, state_dict_prefix
-            )
         if update_y:
-            self.proj_y = self._create_linear_layer(
-                "proj_y", dim_x, dim_y, weight_cache_path, state_dict, state_dict_prefix
+            self.proj_y, self.proj_y_bias = self._row_parallel_linear(
+                "proj_y", self.out_bias, weight_cache_path, state_dict, state_dict_prefix
             )
-            if self.out_bias:
-                self.proj_bias_y = self._create_bias_layer(
-                    "proj_y", dim_y, weight_cache_path, state_dict, state_dict_prefix
-                )
 
         # Query and key normalization for stability.
         assert qk_norm
@@ -132,38 +121,68 @@ class TtAsymmetricAttention(LightweightModule):
 
         self.X_MM_SEQ_LEN = 512
 
-        self.qkv_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x, 3 * dim_x, (8, 8))
-        self.proj_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x, dim_x, (8, 8))
+        self.qkv_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x, 3 * self.n_local_heads * self.head_dim, (8, 8))
+        self.proj_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x // self.num_devices, dim_x, (8, 8))
 
-    def _create_linear_layer(self, name, in_features, out_features, weight_cache_path, state_dict, state_dict_prefix):
-        torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
-        cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}.weight")
-
+    def _as_sharded_tensor(self, tensor, dim, cache_file_name=None):
         return ttnn.as_tensor(
-            torch_weight(name),
+            tensor,
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=dim),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name),
+            cache_file_name=cache_file_name,
         )
 
-    def _create_bias_layer(self, name, dim, weight_cache_path, state_dict, state_dict_prefix):
-        torch_bias = lambda name: state_dict[f"{state_dict_prefix}.{name}.bias"]
-        cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}.bias")
+    def _as_replicated_tensor(self, tensor, cache_file_name=None):
         return ttnn.as_tensor(
-            torch_bias(name),
+            tensor,
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name),
+            cache_file_name=cache_file_name,
         )
+
+    def _col_parallel_qkv(self, name, bias, weight_cache_path, state_dict, state_dict_prefix):
+        """
+        Shuffle QKV weights to group heads such that they can be column parallel
+        """
+        torch_weight = lambda name, suffix: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.{suffix}"], -2, -1)
+        w = torch_weight(name, "weight")
+        b = torch_weight(name, "bias") if bias else None
+
+        def shuffle_heads(tensor):
+            # Given torch tensor with output features in the last dimension,
+            # shuffle heads to allow for column parallel computation
+            in_dim = tensor.shape[0]
+            tensor = tensor.reshape(in_dim, 3, self.num_devices, self.n_local_heads, -1)  # [ID, 3, ND, NLH, DH]
+            tensor = tensor.permute(0, 2, 1, 3, 4)  # [ID, ND, 3, NLH, DH]
+            tensor = tensor.reshape(in_dim, -1)  # [ID, ND*3*NLH*DH]
+            return tensor
+
+        w = self._as_sharded_tensor(
+            shuffle_heads(w), dim=-1, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight")
+        )
+        if b is not None:
+            b = self._as_sharded_tensor(
+                shuffle_heads(b), dim=-1, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias")
+            )
+        return w, b
+
+    def _row_parallel_linear(self, name, bias, weight_cache_path, state_dict, state_dict_prefix):
+        w = torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+        b = state_dict[f"{state_dict_prefix}.{name}.bias"] if bias else None
+        w = self._as_sharded_tensor(
+            w, dim=-2, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight")
+        )
+        if b is not None:
+            b = self._as_replicated_tensor(b, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"))
+        return w, b
 
     def run_qkv_y(self, y):
-        # TODO: Go head parallel
         # Set up compute kernel config for high-fidelity computations
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -176,26 +195,23 @@ class TtAsymmetricAttention(LightweightModule):
         qkv_y = ttnn.linear(
             y,
             self.qkv_y,
-            bias=self.qkv_bias_y if self.qkv_bias else None,
+            bias=self.qkv_y_bias,
             compute_kernel_config=compute_kernel_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
         # Use nlp_create_qkv_heads here as well because text will be concatenated on the sequence dimension
         q_y, k_y, v_y = ttnn.experimental.nlp_create_qkv_heads(
             qkv_y,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_heads,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_heads,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
         # Apply normalization
         q_y = self.q_norm_y(q_y, mode="prefill")
         k_y = self.k_norm_y(k_y, mode="prefill")
-
         return q_y, k_y, v_y
 
     def prepare_qkv(
@@ -233,9 +249,6 @@ class TtAsymmetricAttention(LightweightModule):
         assert (
             seq_x % self.X_MM_SEQ_LEN == 0
         ), f"Visual sequence length must be divisible by {self.X_MM_SEQ_LEN}, got {seq_x}"
-        # TODO: This assert doesn't do what I want it to do. Should check padded shapes
-        # assert seq_x % 1024 == 0, f"Visual sequence length must be divisible by 1024, got {seq_x}"
-        # assert seq_x + seq_y == max_seqlen_in_batch, f"Padded sequence lengths are not yet supported"
         # Set up compute kernel config for high-fidelity computations
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -251,7 +264,7 @@ class TtAsymmetricAttention(LightweightModule):
         qkv_x = ttnn.linear(
             x,
             self.qkv_x,
-            bias=self.qkv_bias_x if self.qkv_bias else None,
+            bias=self.qkv_x_bias,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -263,8 +276,8 @@ class TtAsymmetricAttention(LightweightModule):
         # Need to get these tensors to shape [B, H, L, D] for rotary embeddings
         q_x, k_x, v_x = ttnn.experimental.nlp_create_qkv_heads(
             qkv_x,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_heads,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_heads,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -275,8 +288,7 @@ class TtAsymmetricAttention(LightweightModule):
         k_x = self.k_norm_x(k_x, mode="prefill")
         k_x = ttnn.experimental.rotary_embedding_llama(k_x, rope_cos, rope_sin, trans_mat)
 
-        B, num_heads, N, head_dim = q_x.shape
-        D = num_heads * head_dim
+        B, _, N, _ = q_x.shape
 
         # Process text features if present
         if B == 1:
@@ -329,13 +341,8 @@ class TtAsymmetricAttention(LightweightModule):
             out: Attention output tensor (total, local_dim)
         """
         assert B == 1, "Only batch size 1 is supported"
-        total = q.shape[0]
-        local_dim = self.dim_x  # No head parallel support yet
-        assert q.shape == k.shape == v.shape, "q, k, v must have the same shape"
-        NH = q.shape[1]
-        S = q.shape[2]
-        DH = q.shape[3]
         assert q.shape[0] == B, "Batch size must be B"
+        assert q.shape == k.shape == v.shape, "q, k, v must have the same shape"
 
         # Set up compute kernel config for high-fidelity computations
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -428,24 +435,45 @@ class TtAsymmetricAttention(LightweightModule):
         x = ttnn.linear(
             x,
             self.proj_x,
-            bias=self.proj_bias_x if self.out_bias else None,
+            bias=self.proj_x_bias,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.proj_x_config,
         )
         x = ttnn.reshape(x, (1, 1, x.shape[1] * x.shape[2], x.shape[3]))
+        if self.num_devices > 1:
+            x = ttnn.reduce_scatter(
+                x,
+                dim=-1,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         if self.update_y:
+            print(f"y: {y.shape}")
+            print(f"proj_y: {self.proj_y.shape}")
+            print(f"proj_y_bias: {self.proj_y_bias.shape}")
             y = ttnn.linear(
                 y,
                 self.proj_y,
-                bias=self.proj_bias_y if self.out_bias else None,
+                bias=self.proj_y_bias,
                 compute_kernel_config=compute_kernel_config,
                 core_grid=ttnn.CoreGrid(y=8, x=8),
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if self.num_devices > 1:
+                y = ttnn.reduce_scatter(
+                    y,
+                    dim=-1,
+                    math_op=ttnn.ReduceType.Sum,
+                    num_links=1,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ttnn.Topology.Linear,
+                )
+            print(f"y: {y.shape}")
 
         return x, y
 
@@ -462,9 +490,11 @@ class TtAsymmetricAttention(LightweightModule):
         packed_indices,
         attn_mask,
     ) -> ttnn.Tensor:
+        # input is replicated
         B, L = y.shape[1], y.shape[2]
         M = x.shape[2]
 
+        # output is head-sharded q, k, v
         q, k, v = self.prepare_qkv(
             x=x,
             y=y,
@@ -476,7 +506,7 @@ class TtAsymmetricAttention(LightweightModule):
             trans_mat=trans_mat,
         )
 
-        # Self-attention is expensive, so don't checkpoint it.
+        # output is col-sharded
         out = self.run_attention(
             q,
             k,
@@ -485,6 +515,7 @@ class TtAsymmetricAttention(LightweightModule):
             attn_mask=attn_mask,
         )
 
+        # output is col-sharded x, y
         x, y = self.post_attention(
             out,
             B=B,
