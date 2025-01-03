@@ -161,7 +161,7 @@ matmul_configs = [
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 @pytest.mark.parametrize("dump_profiler_log", [False])
-@pytest.mark.parametrize("dump_profiler_log_iteration", [False])
+@pytest.mark.parametrize("dump_profiler_log_single_iteration", [False])
 def test_matmul_2d_host_perf(
     device,
     tile_h,
@@ -170,7 +170,7 @@ def test_matmul_2d_host_perf(
     num_measurement_iterations,
     use_program_cache,
     dump_profiler_log,
-    dump_profiler_log_iteration,
+    dump_profiler_log_single_iteration,
 ):
     ENVS = dict(os.environ)
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
@@ -223,7 +223,6 @@ def test_matmul_2d_host_perf(
                 matmul_shapes = matmul_shapes_bfloat4_b
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
                 profiler.clear()
-                rm(profiler_log_path)
 
                 if dump_profiler_log:
                     # Create directory for profiler dump
@@ -353,6 +352,10 @@ def test_matmul_2d_host_perf(
                         output_tile=output_tile,
                     )
 
+                # Clear profiler log from warmup data before measurement iterations starts
+                ttnn.DumpDeviceProfiler(device)
+                rm(profiler_log_path)
+
                 if use_trace:
                     tid = ttnn.begin_trace_capture(device, cq_id=0)
                     for iter in range(0, num_measurement_iterations):
@@ -383,12 +386,21 @@ def test_matmul_2d_host_perf(
                             compute_kernel_config=compute_kernel_config,
                             output_tile=output_tile,
                         )
+                        if dump_profiler_log == True and dump_profiler_log_single_iteration == True:
+                            # Save device profiler log after each test iteration
+                            ttnn.DumpDeviceProfiler(device)
+                            profiler_log_dump = profiler_dump_dir / f"iteration_{iter}.csv"
+                            shutil.copy(profiler_log_path, profiler_log_dump)
+                            # Skip deleting profiler log at last iteration since it will be used to read device freq
+                            if iter < (num_measurement_iterations - 1):
+                                rm(profiler_log_path)
                     ttnn.synchronize_device(device)
                     profiler.end(f"run")
 
                 ttnn.DumpDeviceProfiler(device)
 
-                if dump_profiler_log == True and dump_profiler_log_iteration == False:
+                if dump_profiler_log == True and dump_profiler_log_single_iteration == False:
+                    # Save device profiler log after all iterations are finished
                     profiler_log_dump = profiler_dump_dir / "all_iterations.csv"
                     shutil.copy(profiler_log_path, profiler_log_dump)
 
@@ -475,7 +487,7 @@ matmul_configs_oob = [
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 @pytest.mark.parametrize("dump_profiler_log", [False])
-@pytest.mark.parametrize("dump_profiler_log_iteration", [False])
+@pytest.mark.parametrize("dump_profiler_log_single_iteration", [False])
 def test_matmul_2d_host_perf_out_of_box(
     device,
     tile_h,
@@ -484,7 +496,7 @@ def test_matmul_2d_host_perf_out_of_box(
     num_measurement_iterations,
     use_program_cache,
     dump_profiler_log,
-    dump_profiler_log_iteration,
+    dump_profiler_log_single_iteration,
 ):
     ENVS = dict(os.environ)
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
@@ -536,7 +548,6 @@ def test_matmul_2d_host_perf_out_of_box(
                 math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:
                 profiler.clear()
-                rm(profiler_log_path)
 
                 if dump_profiler_log:
                     # Create directory for profiler dump
@@ -584,6 +595,10 @@ def test_matmul_2d_host_perf_out_of_box(
                 for iter in range(0, num_warmup_iterations):
                     output_t = in0_t @ in1_t
 
+                # Clear profiler log from warmup data before measurement iterations starts
+                ttnn.DumpDeviceProfiler(device)
+                rm(profiler_log_path)
+
                 if use_trace:
                     tid = ttnn.begin_trace_capture(device, cq_id=0)
                     for iter in range(0, num_measurement_iterations):
@@ -598,12 +613,21 @@ def test_matmul_2d_host_perf_out_of_box(
                     profiler.start(f"run")
                     for iter in range(0, num_measurement_iterations):
                         output_t = in0_t @ in1_t
+                        if dump_profiler_log == True and dump_profiler_log_single_iteration == True:
+                            # Save device profiler log after each test iteration
+                            ttnn.DumpDeviceProfiler(device)
+                            profiler_log_dump = profiler_dump_dir / f"iteration_{iter}.csv"
+                            shutil.copy(profiler_log_path, profiler_log_dump)
+                            # Skip deleting profiler log at last iteration since it will be used to read device freq
+                            if iter < (num_measurement_iterations - 1):
+                                rm(profiler_log_path)
                     ttnn.synchronize_device(device)
                     profiler.end(f"run")
 
                 ttnn.DumpDeviceProfiler(device)
 
-                if dump_profiler_log == True and dump_profiler_log_iteration == False:
+                if dump_profiler_log == True and dump_profiler_log_single_iteration == False:
+                    # Save device profiler log after all iterations are finished
                     profiler_log_dump = profiler_dump_dir / "all_iterations.csv"
                     shutil.copy(profiler_log_path, profiler_log_dump)
 
