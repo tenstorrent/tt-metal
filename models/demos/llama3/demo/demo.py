@@ -417,7 +417,7 @@ def run_llama3_demo(
                         dims=(3, 1) if model_args.is_galaxy else (1, -1),
                         mesh_shape=model_args.cluster_shape,
                     ),
-                )[0, 0, (decoding_pos[batch_id] - 1) % 32, :]
+                )[0, 0, (decoding_pos[batch_id] - 1) % 32, : model_args.vocab_size]
             )
             ttnn.deallocate(tt_out)
 
