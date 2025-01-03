@@ -330,8 +330,6 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     ],
 )
 def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
-    pytest.skip("https://github.com/tenstorrent/cloud/issues/3323: May kill WH cards (internal issue 14440)")
-
     if (is_ci_env and instruct_weights == False) or (is_ci_env and not (num_batches == 1 or num_batches == 3)):
         pytest.skip(
             "CI demo test only runs instruct weights (1 and 3 batches) to reduce CI pipeline load (both are supported)"
