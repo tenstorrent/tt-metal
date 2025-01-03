@@ -738,6 +738,7 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
         this->expected_num_workers_completed[i] = 0;
     }
     reset_config_buffer_mgr(dispatch_constants::DISPATCH_MESSAGE_ENTRIES);
+    this->buf_dispatch_constants = buffer_utils::generate_buffer_dispatch_constants(this->manager, core_type, this->id);
 }
 
 void HWCommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
@@ -1038,13 +1039,6 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
 
     uint32_t padded_page_size = buffer.aligned_page_size();
-
-    const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->id);
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
-    const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
-    uint32_t max_data_sizeB =
-        max_prefetch_command_size - (hal.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
-
     uint32_t dst_page_index = 0;
 
     if (sub_device_ids.empty()) {
@@ -1052,93 +1046,36 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
     }
 
     if (is_sharded(buffer.buffer_layout())) {
-        const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
-        const auto& buffer_page_mapping = width_split ? buffer.get_buffer_page_mapping() : nullptr;
-
-        const auto& cores = width_split ? buffer_page_mapping->all_cores_
-                                        : corerange_to_cores(
-                                              buffer.shard_spec().grid(),
-                                              buffer.num_cores(),
-                                              buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR);
         TT_FATAL(
-            max_data_sizeB >= padded_page_size,
+            buf_dispatch_constants.max_data_sizeB >= padded_page_size,
             "Writing padded page size > {} is currently unsupported for sharded tensors.",
-            max_data_sizeB);
-        uint32_t num_total_pages = buffer.num_pages();
-        uint32_t max_pages_per_shard = buffer.shard_spec().size();
+            buf_dispatch_constants.max_data_sizeB);
+
+        buffer_utils::ShardedBufferDispatchParams dispatch_params;
+        dispatch_params.width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
+        dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
+        dispatch_params.num_total_pages = buffer.num_pages();
+        dispatch_params.max_pages_per_shard = buffer.shard_spec().size();
+        dispatch_params.device = this->device;
+        dispatch_params.cq_id = this->id;
+        dispatch_params.expected_num_workers_completed = this->expected_num_workers_completed;
+        dispatch_params.dst_page_index = dst_page_index;
+        dispatch_params.padded_page_size = padded_page_size;
+
+        const auto& cores = dispatch_params.width_split ?
+                            dispatch_params.buffer_page_mapping->all_cores_
+                            : corerange_to_cores(
+                                buffer.shard_spec().grid(),
+                                buffer.num_cores(),
+                                buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR);
 
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
-            // Skip writing the padded pages along the bottom
-            // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
-            // Alternative write each page row into separate commands, or have a strided linear write
-            uint32_t num_pages;
-            if (width_split) {
-                num_pages =
-                    buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
-                if (num_pages == 0) {
-                    continue;
-                }
-                dst_page_index =
-                    buffer_page_mapping->host_page_to_dev_page_mapping_[buffer_page_mapping->core_host_page_indices_[core_id][0]];
-            } else {
-                num_pages = std::min(num_total_pages, max_pages_per_shard);
-                num_total_pages -= num_pages;
-            }
-            uint32_t curr_page_idx_in_shard = 0;
-            uint32_t bank_base_address = buffer.address();
-            if (buffer.is_dram()) {
-                bank_base_address += buffer.device()->bank_offset(
-                    BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
-            }
-            while (num_pages != 0) {
-                // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
-                uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
-                bool issue_wait = dst_page_index == 0;  // only stall for the first write of the buffer
-                if (issue_wait) {
-                    // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-                    data_offset_bytes *= 2;
-                }
-                uint32_t space_available_bytes = std::min(
-                    command_issue_limit - this->manager.get_issue_queue_write_ptr(this->id), max_prefetch_command_size);
-                int32_t num_pages_available =
-                    (int32_t(space_available_bytes) - int32_t(data_offset_bytes)) / int32_t(padded_page_size);
-
-                uint32_t pages_to_write = std::min(num_pages, (uint32_t)num_pages_available);
-                if (pages_to_write > 0) {
-                    uint32_t address = bank_base_address + curr_page_idx_in_shard * padded_page_size;
-
-                    tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for channel {}", this->id);
-
-                    auto command = EnqueueWriteShardedBufferCommand(
-                        this->id,
-                        this->device,
-                        this->noc_index,
-                        buffer,
-                        src,
-                        this->manager,
-                        issue_wait,
-                        this->expected_num_workers_completed,
-                        sub_device_ids,
-                        address,
-                        buffer_page_mapping,
-                        cores[core_id],
-                        padded_page_size,
-                        dst_page_index,
-                        pages_to_write);
-
-                    this->enqueue_command(command, false, sub_device_ids);
-                    curr_page_idx_in_shard += pages_to_write;
-                    num_pages -= pages_to_write;
-                    dst_page_index += pages_to_write;
-                } else {
-                    this->manager.wrap_issue_queue_wr_ptr(this->id);
-                }
-            }
+           buffer_utils::write_sharded_buffer_to_core(src, core_id, buffer, dispatch_params, buf_dispatch_constants, sub_device_ids, cores);
         }
     } else {
         uint32_t total_pages_to_write = buffer.num_pages();
-        bool write_partial_pages = padded_page_size > max_data_sizeB;
+        bool write_partial_pages = padded_page_size > buf_dispatch_constants.max_data_sizeB;
         uint32_t page_size_to_write = padded_page_size;
         uint32_t padded_buffer_size = buffer.num_pages() * padded_page_size;
         if (write_partial_pages) {
@@ -1177,7 +1114,7 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
             }
 
             uint32_t space_availableB = std::min(
-                command_issue_limit - this->manager.get_issue_queue_write_ptr(this->id), max_prefetch_command_size);
+                buf_dispatch_constants.issue_queue_cmd_limit - this->manager.get_issue_queue_write_ptr(this->id), buf_dispatch_constants.max_prefetch_cmd_size);
             int32_t num_pages_available =
                 (int32_t(space_availableB) - int32_t(data_offsetB)) / int32_t(page_size_to_write);
 

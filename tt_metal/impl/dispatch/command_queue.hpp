@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "common/env_lib.hpp"
+#include "tt_metal/impl/buffers/buffer_dispatch_utils.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/lock_free_queue.hpp"
@@ -35,6 +36,10 @@ using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
 namespace detail {
 class Program_;
+}
+
+namespace buffer_utils {
+    struct BufferDispatchConstants;
 }
 
 // Only contains the types of commands which are enqueued onto the device
@@ -516,6 +521,7 @@ class HWCommandQueue {
     void reset_worker_state(bool reset_launch_msg_state);
     uint32_t& expected_num_workers_completed_for_sub_device(uint32_t sub_device_index);
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);
+    buffer_utils::BufferDispatchConstants buf_dispatch_constants;
 
    private:
     uint32_t id;
