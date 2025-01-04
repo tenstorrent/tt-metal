@@ -181,7 +181,7 @@ def test_to_layout_nd_hangs(shape, input_layout, output_layout, device):
 @pytest.mark.parametrize("shape", [[1, 768], [3, 230], [32, 768], [32, 143]])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_to_layout_2D(shape, input_layout, output_layout, device):
+def test_to_layout_for_2D(shape, input_layout, output_layout, device):
     torch.manual_seed(2005)
     input_a = torch.randn(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)

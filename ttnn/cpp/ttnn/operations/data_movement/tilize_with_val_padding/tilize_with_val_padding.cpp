@@ -126,8 +126,8 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     using namespace tt::constants;
     auto shape = input_tensor.get_legacy_shape();
 
-    shape[2] = tt::round_up(shape[2], tt::constants::TILE_HEIGHT);
-    shape[3] = tt::round_up(shape[3], tt::constants::TILE_WIDTH);
+    shape[-2] = tt::round_up(shape[-2], tt::constants::TILE_HEIGHT);
+    shape[-1] = tt::round_up(shape[-1], tt::constants::TILE_WIDTH);
 
     PadValue pad_value;
     if (input_tensor.get_dtype() == DataType::BFLOAT16 or input_tensor.get_dtype() == DataType::FLOAT32) {
