@@ -1072,7 +1072,8 @@ Matmul create_matmul_struct(
         parameters.user_run_batched,
         parameters.transpose_a,
         parameters.transpose_b,
-        output_tile};
+        output_tile,
+        parameters.global_cb};
 }
 
 Tensor matmul(
@@ -1279,18 +1280,16 @@ void Matmul::validate(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
                         "Input tensor B must be width sharded when using gather_in0.");
-                    TT_FATAL(
-                        input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
-                        "Input tensor A and B must be sharded on the same cores when using gather_in0.");
-
+                    if (!this->global_cb.has_value()) {
+                        TT_FATAL(
+                            input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
+                            "Input tensor A and B must be sharded on the same cores when using gather_in0.");
+                    }
                     TT_FATAL(
                         this->output_mem_config.is_sharded(), "Output tensor must be sharded when using gather_in0.");
                     TT_FATAL(
                         this->output_mem_config.shard_spec.has_value(),
                         "Output shard spec must be provided when using gather_in0.");
-                    TT_FATAL(
-                        input_tensor_a.shard_spec().value().grid == this->output_mem_config.shard_spec.value().grid,
-                        "Output tensor must be sharded on the same cores as the input when using gather_in0.");
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
                 }
@@ -1892,7 +1891,10 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fused_activation,
                     program_config.mcast_in0,
                     program_config.gather_in0,
-                    this->untilize_out);
+                    program_config.hop_cores,
+                    this->untilize_out,
+                    this->global_cb,
+                    program_config.num_global_cb_receivers);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
