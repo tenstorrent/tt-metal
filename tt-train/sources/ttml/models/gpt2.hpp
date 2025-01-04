@@ -18,6 +18,11 @@ enum class PositionalEmbeddingType {
     Fixed,
 };
 
+enum class RunnerType {
+    MemoryEfficient,
+    Default,
+};
+
 struct TransformerConfig {
     uint32_t num_heads = 6;
     uint32_t embedding_dim = 384;
@@ -25,6 +30,7 @@ struct TransformerConfig {
     uint32_t num_blocks = 6;
     uint32_t vocab_size = 256;
     uint32_t max_sequence_length = 256;
+    RunnerType runner_type = RunnerType::Default;
     PositionalEmbeddingType positional_embedding_type = PositionalEmbeddingType::Trainable;
 
     struct Experimental {
@@ -35,6 +41,7 @@ struct TransformerConfig {
 
 class Transformer : public ttml::autograd::ModuleBase {
 private:
+    RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::modules::Embedding> tok_emb;
     std::shared_ptr<ttml::modules::PositionalEmbeddingBase> pos_emb;
     std::vector<std::shared_ptr<ttml::modules::GPTBlock>> blocks;
