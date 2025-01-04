@@ -1749,6 +1749,27 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
 }
 
 /**
+ * This blocking call waits for all the outstanding read, write, and atomic NOC
+ * transactions issued on the current Tensix core to complete. After returning
+ * from this call all transaction queues will be empty for the current Tensix
+ * core.
+ *
+ * Return value: None
+ */
+FORCE_INLINE
+void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
+    WAYPOINT("NFBW");
+    do {
+        invalidate_l1_cache();
+    } while (!ncrisc_noc_reads_flushed(noc_idx));
+    while (!ncrisc_noc_nonposted_writes_sent(noc_idx));
+    while (!ncrisc_noc_nonposted_writes_flushed(noc_idx));
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+    while (!ncrisc_noc_posted_writes_sent(noc_idx));
+    WAYPOINT("NFBD");
+}
+
+/**
  * A blocking call that waits until the value of a local L1 memory address on
  * the Tensix core executing this function becomes equal to a target value.
  * This L1 memory address is used as a semaphore of size 4 Bytes, as a
