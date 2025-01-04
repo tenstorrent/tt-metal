@@ -1051,24 +1051,8 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
             "Writing padded page size > {} is currently unsupported for sharded tensors.",
             buf_dispatch_constants.max_data_sizeB);
 
-        buffer_utils::ShardedBufferDispatchParams dispatch_params;
-        dispatch_params.width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
-        dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
-        dispatch_params.num_total_pages = buffer.num_pages();
-        dispatch_params.max_pages_per_shard = buffer.shard_spec().size();
-        dispatch_params.device = this->device;
-        dispatch_params.cq_id = this->id;
-        dispatch_params.expected_num_workers_completed = this->expected_num_workers_completed;
-        dispatch_params.dst_page_index = dst_page_index;
-        dispatch_params.padded_page_size = padded_page_size;
-
-        const auto& cores = dispatch_params.width_split ?
-                            dispatch_params.buffer_page_mapping->all_cores_
-                            : corerange_to_cores(
-                                buffer.shard_spec().grid(),
-                                buffer.num_cores(),
-                                buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR);
-
+        buffer_utils::ShardedBufferDispatchParams dispatch_params = buffer_utils::initialize_sharded_buf_dispatch_params(buffer, this->id, this->expected_num_workers_completed);
+        const auto cores = buffer_utils::get_cores_for_sharded_buffer(dispatch_params, buffer);
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
            buffer_utils::write_sharded_buffer_to_core(src, core_id, buffer, dispatch_params, buf_dispatch_constants, sub_device_ids, cores);
