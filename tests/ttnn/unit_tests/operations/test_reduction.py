@@ -77,7 +77,7 @@ def test_sum_4d_tensors(device, batch_size, c, h, w, dim, keepdim):
 @pytest.mark.parametrize("h", [67])
 @pytest.mark.parametrize("w", [77])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
-@pytest.mark.parametrize("keepdim", [True])
+@pytest.mark.parametrize("keepdim", [True, False])
 def test_prod(device, batch_size, c, h, w, dim, keepdim):
     torch.manual_seed(0)
 
@@ -88,7 +88,7 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim):
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    output_tensor = ttnn.prod(input_tensor, dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.prod(input_tensor, dim=dim, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
