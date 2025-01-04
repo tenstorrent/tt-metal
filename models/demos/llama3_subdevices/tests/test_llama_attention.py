@@ -23,6 +23,7 @@ from models.utility_functions import skip_for_grayskull
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [

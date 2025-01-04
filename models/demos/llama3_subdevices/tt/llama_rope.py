@@ -41,6 +41,13 @@ class TtLlamaRotarySetup(LightweightModule):
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
         num_cores = self.core_grid.x * self.core_grid.y
+        self.sub_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            ]
+        )
+        self.start_core = ttnn.CoreCoord(1, 0)
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         cos_matrix, sin_matrix = compute_gather_cos_sin(
@@ -67,7 +74,9 @@ class TtLlamaRotarySetup(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
-        batch_grid = ttnn.num_cores_to_corerangeset(self.batch_size_per_device_group, self.core_grid, row_wise=True)
+        self.core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            self.start_core, self.batch_size_per_device_group, self.sub_core_grids, row_wise=True
+        )
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
@@ -78,7 +87,7 @@ class TtLlamaRotarySetup(LightweightModule):
         )  # Repeat across all cores on device
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
-            core_grid=batch_grid,
+            core_grid=self.core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -163,10 +172,9 @@ class TtLlamaRotarySetup(LightweightModule):
         if rot_idxs.device != device:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        grid = ttnn.num_cores_to_corerangeset(self.batch_size_per_device_group, self.core_grid, row_wise=True)
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=grid,
+            core_grid=self.core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,

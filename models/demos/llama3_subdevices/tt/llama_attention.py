@@ -263,32 +263,28 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        xqkv_fused_sharded = ttnn.linear(
+        x_torch = ttnn.to_torch(
             x,
-            self.wqkv,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            program_config=self.model_config["XQKV_DECODE_PROGCFG"],
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat16,
-        )
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=(8, 4)),
+        )[0].unsqueeze(0)
         ttnn.deallocate(x)
-        xqkv_fused = tt_all_reduce(
-            xqkv_fused_sharded,
-            self.mesh_device,
-            cluster_axis=1,
-            num_reduce_scatter_links=self.num_reduce_scatter_links,
-            num_all_gather_links=self.num_all_gather_links,
-            memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
-            sharded=True,
-            dtype=ttnn.bfloat16,  # self.ccl_dtype,
+        wqkv_torch = ttnn.to_torch(
+            self.wqkv,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 2), mesh_shape=(8, 4)),
+        )
+        xqkv_torch = torch.matmul(x_torch.to(torch.float32), wqkv_torch.to(torch.float32))
+        xqkv_fused = ttnn.as_tensor(
+            xqkv_torch,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
+            ),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        if self.TG:
-            xqkv_fused = ttnn.to_memory_config(xqkv_fused, self.model_config["CREATE_HEAD_INPUT_MEMCFG"])
-        else:
-            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG)
-
-        ttnn.deallocate(xqkv_fused_sharded)
+        xqkv_fused = ttnn.to_memory_config(xqkv_fused, self.model_config["CREATE_HEAD_INPUT_MEMCFG"])
 
         ###
         # Reshape and rotary embeddings
@@ -308,7 +304,6 @@ class TtLlamaAttention(LightweightModule):
         )
 
         ttnn.deallocate(xqkv_fused)
-
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
@@ -368,17 +363,25 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(q_heads_1BQD)
 
-        attn_output_gathered = tt_all_gather(
+        attn_output_torch = ttnn.to_torch(
             attn_output_1G4D,
-            self.mesh_device,
-            dim=1,
-            cluster_axis=1,
-            num_links=2,
-            memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
-            sharded=True,
-            # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=(8, 4)),
         )
         ttnn.deallocate(attn_output_1G4D)
+
+        attn_output_gathered = ttnn.as_tensor(
+            attn_output_torch,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(2, None), mesh_shape=list(self.mesh_device.shape)
+            ),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn_output_gathered = ttnn.to_memory_config(
+            attn_output_gathered, self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1])
+        )
 
         attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_gathered,
@@ -386,67 +389,29 @@ class TtLlamaAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_gathered)
 
-        self.use_fused_all_gather_matmul = False
+        attn_output_cat_torch = ttnn.to_torch(
+            attn_output_cat,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=(8, 4)),
+        )[0].unsqueeze(0)
+        ttnn.deallocate(attn_output_cat)
 
-        if self.use_fused_all_gather_matmul:
-            attn_output_cat = ttnn.to_memory_config(
-                attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
-            )
-            _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
-                attn_output_cat,
-                self.wo,
-                dim=3,
-                all_gather_core_grid_offset=(0, 4),
-                num_links=1,
-                program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
-                compute_kernel_config=self.compute_kernel_config_hifi2,
-                memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-            )
-            ttnn.deallocate(attn_output_cat)
-            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
-            return dense_out_sharded
+        wo_torch = ttnn.to_torch(
+            self.wo,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 3), mesh_shape=(8, 4)),
+        )
+        dense_out_reduced = torch.matmul(attn_output_cat_torch.to(torch.float32), wo_torch.to(torch.float32))
+        dense_out_reduced = ttnn.as_tensor(
+            dense_out_reduced,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=list(self.mesh_device.shape)
+            ),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-        else:
-            # TODO: Fix this once self.TG supports dram-sharded matmuls
-            dense_out_sharded = ttnn.matmul(
-                attn_output_cat,
-                self.wo,
-                core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
-                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_cat.memory_config(),
-                dtype=ttnn.bfloat8_b if self.TG else None,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
-            )
-
-            ttnn.deallocate(attn_output_cat)
-
-            # All reduce
-            dense_out_reduced = tt_all_reduce(
-                dense_out_sharded,
-                self.mesh_device,
-                cluster_axis=0,
-                num_reduce_scatter_links=self.num_reduce_scatter_links,
-                num_all_gather_links=self.num_all_gather_links,
-                dim=0 if (self.TG and self.hidden_size < 8192) else 3,
-                memory_config=(
-                    self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
-                    if self.hidden_size == 8192
-                    else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
-                )
-                if self.TG
-                else self.model_config["DECODE_RESIDUAL_MEMCFG"],
-                sharded=True,
-                dtype=self.ccl_dtype,
-                use_composite=True if self.hidden_size == 8192 else False,
-            )
-
-            if not self.TG:
-                dense_out_reduced = ttnn.to_memory_config(
-                    dense_out_reduced, self.model_config["DECODE_RESIDUAL_MEMCFG"]
-                )
-
-            return dense_out_reduced
+        return dense_out_reduced
 
     def forward_prefill(
         self,

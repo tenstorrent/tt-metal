@@ -100,6 +100,14 @@ class TtModelArgs:
         self.is_70b = False
         self.max_prefill_chunk_size = max_seq_len
 
+        self.sub_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            ]
+        )
+        self.start_core = ttnn.CoreCoord(1, 0)
+
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("LLAMA_CACHE_PATH")]):
@@ -415,6 +423,9 @@ class TtModelArgs:
 
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
+                sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    self.start_core, 32, self.sub_core_grids, row_wise=True
+                ),
                 exp_approx_mode=False,
                 q_chunk_size=256,
                 k_chunk_size=256,
@@ -456,7 +467,9 @@ class TtModelArgs:
                 "SCORES_BATCHED_MM_OUTPUT_MEMCFG"
             ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
                 shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
-                core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
+                core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    self.start_core, batch_size_per_device_group, self.sub_core_grids, row_wise=True
+                ),
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -522,10 +535,13 @@ class TtModelArgs:
                 num_cores=mlp2_core_grid.num_cores,
             )
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
+            attn_input_sub_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, 32, self.sub_core_grids, row_wise=True
+            )
             self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = (
                 ttnn.create_sharded_memory_config(
                     shape=(32, nearest_32(self.dim // (8 * lm_head_num_rows) // 4)),
-                    core_grid=ttnn.CoreGrid(y=lm_head_num_rows, x=8),
+                    core_grid=attn_input_sub_core_grid,
                     strategy=ttnn.ShardStrategy.WIDTH,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
@@ -1381,7 +1397,16 @@ def num_to_coregrid(x):
 
 
 def set_tg_attention_config(model_config, dim):
-    shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(40)})
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
+    start_core = ttnn.CoreCoord(1, 0)
+    shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        start_core, 40, sub_core_grids, row_wise=True
+    )
 
     model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
         None
@@ -1420,7 +1445,7 @@ def set_tg_attention_config(model_config, dim):
     )
     model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
         shape=(32, 128),  # mesh_cols = 4
-        core_grid=num_to_coregrid(32),
+        core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, 32, sub_core_grids, row_wise=True),
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
