@@ -581,4 +581,6 @@ void kernel_main() {
 
     reader.close();
     WAYPOINT("DONE");
+
+    noc_async_full_barrier();
 }

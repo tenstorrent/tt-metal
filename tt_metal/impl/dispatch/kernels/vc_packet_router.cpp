@@ -303,4 +303,6 @@ void kernel_main() {
         write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
         write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
     }
+
+    noc_async_full_barrier();
 }

@@ -167,4 +167,6 @@ void kernel_main() {
             cb_push_back(cb_id_in0, in0_block_num_tiles);
         }
     }
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }

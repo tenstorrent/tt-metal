@@ -1252,5 +1252,7 @@ void kernel_main() {
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(upstream_total_acquired_page_count);
 
+    noc_async_full_barrier();
+
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": out" << ENDL();
 }
