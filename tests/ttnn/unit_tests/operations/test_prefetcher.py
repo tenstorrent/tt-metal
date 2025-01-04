@@ -505,7 +505,7 @@ def run_prefetcher_mm(
     indirect=True,
 )
 def test_run_prefetcher(
-    device,
+    mesh_device,
     num_tensors,
     input_shapes,
     num_layers,
@@ -514,6 +514,8 @@ def test_run_prefetcher(
     use_program_cache,
     function_level_defaults,
 ):
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
+
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
