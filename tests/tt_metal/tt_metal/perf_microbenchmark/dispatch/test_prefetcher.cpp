@@ -1816,35 +1816,6 @@ void configure_for_single_chip(
     TT_ASSERT(dispatch_h_core_sem_0_id == dispatch_relay_mux_core_sem_0_id);
     const uint32_t dispatch_h_cb_sem = dispatch_h_core_sem_0_id;
 
-    std::vector<uint32_t> prefetch_compile_args = {
-        dispatch_buffer_base,                               // overridden below for prefetch_h
-        dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,  // overridden below for prefetch_h
-        dispatch_buffer_pages,                              // overridden below for prefetch_h
-        prefetch_downstream_cb_sem,                         // overridden below for prefetch_d
-        dispatch_cb_sem,                                    // overridden below for prefetch_h
-        dev_hugepage_base_g,
-        hugepage_issue_buffer_size_g,
-        prefetch_q_base,
-        prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
-        prefetch_q_rd_ptr_addr,
-        prefetch_q_rd_ptr_addr + sizeof(uint32_t),
-        cmddat_q_base,    // overridden for split below
-        cmddat_q_size_g,  // overridden for split below
-        0,                // scratch_db_base filled in below if used
-        scratch_db_size_g,
-        prefetch_sync_sem,
-        prefetch_d_buffer_pages,     // prefetch_d only
-        prefetch_d_upstream_cb_sem,  // prefetch_d only
-        prefetch_downstream_cb_sem,  // prefetch_d only
-        dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-        dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,  // prefetch_d only
-        0,                                             // unused: for prefetch_hd <--> dispatch_hd
-        0,                                             // unused: for prefetch_hd <--> dispatch_hd
-        0,                                             // unused: for prefetch_hd <--> dispatch_hd
-        0,                                             // unused: for prefetch_hd <--> dispatch_hd
-        0,                                             // unused: for prefetch_hd <--> dispatch_hd
-    };
-
     if (split_prefetcher_g) {
         log_info(LogTest, "split prefetcher test, packetized_path_en={}", packetized_path_en_g);
 
@@ -1855,17 +1826,41 @@ void configure_for_single_chip(
                                     noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
 
-        prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
-        prefetch_compile_args[11] = prefetch_d_buffer_base;
-        prefetch_compile_args[12] =
-            prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-        prefetch_compile_args[13] = scratch_db_base;
+        std::vector<uint32_t> prefetch_d_compile_args = {
+            dispatch_buffer_base,
+            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
+            dispatch_buffer_pages,
+            prefetch_d_downstream_cb_sem,
+            dispatch_cb_sem,
+            dev_hugepage_base_g,
+            hugepage_issue_buffer_size_g,
+            prefetch_q_base,
+            prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
+            prefetch_q_rd_ptr_addr,
+            prefetch_q_rd_ptr_addr + sizeof(uint32_t),
+            prefetch_d_buffer_base,
+            prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE),
+            scratch_db_base,
+            scratch_db_size_g,
+            prefetch_sync_sem,
+            prefetch_d_buffer_pages,
+            prefetch_d_upstream_cb_sem,
+            prefetch_downstream_cb_sem,
+            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+            dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,
+            0,
+            0,
+            0,
+            0,
+            0,
+        };
+
         CoreCoord phys_prefetch_d_upstream_core =
             packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core_g;
         configure_kernel_variant<true, false>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            prefetch_compile_args,
+            prefetch_d_compile_args,
             prefetch_d_core,
             phys_prefetch_d_core,
             phys_prefetch_d_upstream_core,
@@ -1876,20 +1871,41 @@ void configure_for_single_chip(
             my_noc_index);
 
         // prefetch_h
-        prefetch_compile_args[0] = prefetch_d_buffer_base;
-        prefetch_compile_args[1] = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        prefetch_compile_args[2] = prefetch_d_buffer_pages;
-        prefetch_compile_args[3] = prefetch_downstream_cb_sem;
-        prefetch_compile_args[4] = prefetch_d_upstream_cb_sem;
-        prefetch_compile_args[11] = cmddat_q_base;
-        prefetch_compile_args[12] = cmddat_q_size_g;
-        prefetch_compile_args[13] = 0;
+        std::vector<uint32_t> prefetch_h_compile_args = {
+            prefetch_d_buffer_base,
+            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+            prefetch_d_buffer_pages,
+            prefetch_downstream_cb_sem,
+            prefetch_d_upstream_cb_sem,
+            dev_hugepage_base_g,
+            hugepage_issue_buffer_size_g,
+            prefetch_q_base,
+            prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
+            prefetch_q_rd_ptr_addr,
+            prefetch_q_rd_ptr_addr + sizeof(uint32_t),
+            cmddat_q_base,
+            cmddat_q_size_g,
+            0,
+            scratch_db_size_g,
+            prefetch_sync_sem,
+            prefetch_d_buffer_pages,
+            prefetch_d_upstream_cb_sem,
+            prefetch_downstream_cb_sem,
+            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+            dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,
+            0,
+            0,
+            0,
+            0,
+            0,
+        };
+
         CoreCoord phys_prefetch_h_downstream_core =
             packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
         configure_kernel_variant<false, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            prefetch_compile_args,
+            prefetch_h_compile_args,
             prefetch_core,
             phys_prefetch_core_g,
             {0xffffffff, 0xffffffff},  // upstream core unused
@@ -2066,8 +2082,34 @@ void configure_for_single_chip(
         uint32_t scratch_db_base =
             cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
-        prefetch_compile_args[13] = scratch_db_base;
-
+        std::vector<uint32_t> prefetch_compile_args = {
+            dispatch_buffer_base,
+            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
+            dispatch_buffer_pages,
+            prefetch_downstream_cb_sem,
+            dispatch_cb_sem,
+            dev_hugepage_base_g,
+            hugepage_issue_buffer_size_g,
+            prefetch_q_base,
+            prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
+            prefetch_q_rd_ptr_addr,
+            prefetch_q_rd_ptr_addr + sizeof(uint32_t),
+            cmddat_q_base,
+            cmddat_q_size_g,
+            scratch_db_base,
+            scratch_db_size_g,
+            prefetch_sync_sem,
+            prefetch_d_buffer_pages,
+            prefetch_d_upstream_cb_sem,
+            prefetch_downstream_cb_sem,
+            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+            dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,
+            0,
+            0,
+            0,
+            0,
+            0,
+        };
         configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
@@ -2091,56 +2133,50 @@ void configure_for_single_chip(
         dispatch_constants::get(CoreType::WORKER)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
-    std::vector<uint32_t> dispatch_compile_args = {
-        dispatch_buffer_base,
-        dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-        dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS *
-            dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
-        dispatch_cb_sem,  // overridden below for h
-        split_prefetcher_g ? prefetch_d_downstream_cb_sem
-                           : prefetch_downstream_cb_sem,  // overridden below for dispatch_h
-        dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
-        prefetch_sync_sem,
-        0,  // true base of hugepage
-        dev_hugepage_completion_buffer_base,
-        DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
-        dispatch_buffer_base,
-        (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
-        0,  // unused on hd, filled in below for h and d
-        0,  // unused on hd, filled in below for h and d
-        0,  // unused unless tunneler is between h and d
-        split_prefetcher_g,
-        NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
-        prefetch_downstream_cb_sem,
-        prefetch_downstream_buffer_pages,
-        num_compute_cores,  // max_write_packed_cores
-        0,
-        dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
-        dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
-        0,
-        0,
-        0,
-        host_completion_queue_wr_ptr,
-        dev_completion_queue_wr_ptr,
-        dev_completion_queue_rd_ptr};
-
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
     if (split_dispatcher_g) {
         log_info(LogTest, "split dispatcher test, packetized_path_en={}", packetized_path_en_g);
 
-        // dispatch_hd and dispatch_d
+        // dispatch_d
         uint32_t dispatch_d_preamble_size = packetized_path_en_g ? sizeof(dispatch_packet_header_t) : 0;
-        dispatch_compile_args[12] = dispatch_downstream_cb_sem;
-        dispatch_compile_args[13] = dispatch_h_cb_sem;
-        dispatch_compile_args[14] = dispatch_d_preamble_size;
-        dispatch_compile_args[21] = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
-        dispatch_compile_args[22] = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
+        std::vector<uint32_t> dispatch_d_compile_args = {
+            dispatch_buffer_base,
+            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
+            dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS *
+                dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
+            dispatch_cb_sem,
+            split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
+            dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
+            prefetch_sync_sem,
+            0,  // true base of hugepage
+            dev_hugepage_completion_buffer_base,
+            DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
+            dispatch_buffer_base,
+            (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
+            dispatch_downstream_cb_sem,
+            dispatch_h_cb_sem,
+            dispatch_d_preamble_size,
+            split_prefetcher_g,
+            NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
+            prefetch_downstream_cb_sem,
+            prefetch_downstream_buffer_pages,
+            num_compute_cores,
+            0,
+            dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
+            dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
+            0,
+            0,
+            0,
+            host_completion_queue_wr_ptr,
+            dev_completion_queue_wr_ptr,
+            dev_completion_queue_rd_ptr};
+
         CoreCoord phys_dispatch_d_downstream_core =
             packetized_path_en_g ? phys_dispatch_relay_mux_core : phys_dispatch_h_core;
         configure_kernel_variant<true, false>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-            dispatch_compile_args,
+            dispatch_d_compile_args,
             dispatch_core,
             phys_dispatch_core,
             phys_upstream_from_dispatch_core,
@@ -2151,21 +2187,44 @@ void configure_for_single_chip(
             my_noc_index);
 
         // dispatch_h
-        dispatch_compile_args[3] = dispatch_h_cb_sem;
-        dispatch_compile_args[4] = dispatch_downstream_cb_sem;
-        dispatch_compile_args[12] = dispatch_h_cb_sem;
-        dispatch_compile_args[13] = dispatch_downstream_cb_sem;
-        dispatch_compile_args[14] = 0;  // preamble size
-        dispatch_compile_args[21] =
-            1;  // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
-        dispatch_compile_args[22] =
-            1;  // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
+        std::vector<uint32_t> dispatch_h_compile_args = {
+            dispatch_buffer_base,
+            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
+            dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS *
+                dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
+            dispatch_h_cb_sem,
+            dispatch_downstream_cb_sem,
+            dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
+            prefetch_sync_sem,
+            0,  // true base of hugepage
+            dev_hugepage_completion_buffer_base,
+            DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
+            dispatch_buffer_base,
+            (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
+            dispatch_h_cb_sem,
+            dispatch_downstream_cb_sem,
+            0,
+            split_prefetcher_g,
+            NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
+            prefetch_downstream_cb_sem,
+            prefetch_downstream_buffer_pages,
+            num_compute_cores,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            host_completion_queue_wr_ptr,
+            dev_completion_queue_wr_ptr,
+            dev_completion_queue_rd_ptr};
+
         CoreCoord phys_dispatch_h_upstream_core =
             packetized_path_en_g ? phys_dispatch_relay_demux_core : phys_dispatch_core;
         configure_kernel_variant<false, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-            dispatch_compile_args,
+            dispatch_h_compile_args,
             dispatch_h_core,
             phys_dispatch_h_core,
             phys_dispatch_h_upstream_core,
@@ -2339,6 +2398,39 @@ void configure_for_single_chip(
         }
 
     } else {
+        std::vector<uint32_t> dispatch_compile_args = {
+            dispatch_buffer_base,
+            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
+            dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS *
+                dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
+            dispatch_cb_sem,
+            split_prefetcher_g ? prefetch_d_downstream_cb_sem
+                               : prefetch_downstream_cb_sem,  // overridden below for dispatch_h
+            dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
+            prefetch_sync_sem,
+            0,  // true base of hugepage
+            dev_hugepage_completion_buffer_base,
+            DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
+            dispatch_buffer_base,
+            (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
+            0,
+            0,
+            0,
+            split_prefetcher_g,
+            NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
+            prefetch_downstream_cb_sem,
+            prefetch_downstream_buffer_pages,
+            num_compute_cores,  // max_write_packed_cores
+            0,
+            dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
+            dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
+            0,
+            0,
+            0,
+            host_completion_queue_wr_ptr,
+            dev_completion_queue_wr_ptr,
+            dev_completion_queue_rd_ptr};
+
         configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
