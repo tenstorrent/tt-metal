@@ -12,40 +12,6 @@
 namespace tt {
 
 namespace tt_metal {
-// Converts convolution weights to tilized 2d matrix layout.
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to tilized 2d matrix layout for block sharded conv. Adds zero padding between weight
-// blocks based on output shard width padding. Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution bias to tilized layout for block sharded conv. Adds zero padding between bias blocks based on
-// output shard width padding. Returns a new tensor with layout=Tile
-Tensor convert_conv_bias_tensor_to_tiled_layout_block_sharded(
-    const Tensor& conv_bias_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to tilized 2d matrix layout with special block height padding
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(
-    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
-
-// Converts convolution weights to depthwise layout with broadcasted weights
-Tensor convert_conv_weight_tensor_to_depthwise_layout(
-    const Tensor& conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
-
 const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
 // TODO: Remove this once we switch to SimpleShape .volume()

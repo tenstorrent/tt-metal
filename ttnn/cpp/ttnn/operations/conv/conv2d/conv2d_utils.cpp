@@ -72,35 +72,6 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
     return divisor;
 }
 
-// Converts convolution weights to tilized 2d matrix layout.
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype) {
-    return tt::tt_metal::convert_conv_weight_tensor_to_tiled_layout(
-        std::move(conv_weight_tensor), in1_block_h, in1_block_w, output_dtype);
-}
-
-// Converts convolution weights to tilized 2d matrix layout with special block height padding
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype) {
-    return tt::tt_metal::convert_conv_weight_tensor_to_special_padding_tiled_layout(
-        std::move(conv_weight_tensor), in1_block_h, in1_block_w, output_dtype);
-}
-
-// Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(
-    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
-    return tt::tt_metal::convert_conv_weight_tensor_to_grouped_layout(
-        std::move(conv_weight_tensor), num_groups, output_dtype);
-}
-
 ParallelConfig determine_parallel_config_non_tile_mul_width(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,

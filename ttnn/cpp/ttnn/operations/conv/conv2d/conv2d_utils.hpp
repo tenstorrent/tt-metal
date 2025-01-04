@@ -171,26 +171,6 @@ shard_or_reshard_tensor_if_required(
     bool auto_shard,
     bool is_non_tile_mul_width = false);
 
-// Converts convolution weights to tilized 2d matrix layout.
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to tilized 2d matrix layout with special block height padding
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(
-    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
-
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 
 }  // namespace operations::conv
