@@ -70,8 +70,7 @@ namespace kernel_profiler {
 
 void set_deassert_addresses() {
 #ifdef ARCH_BLACKHOLE
-    // start_pc1 make this a const!
-    WRITE_REG(0xFFB14008, MEM_SLAVE_IERISC_FIRMWARE_BASE);
+    WRITE_REG(SLAVE_IERISC_RESET_PC, MEM_SLAVE_IERISC_FIRMWARE_BASE);
 #endif
 }
 
@@ -157,8 +156,8 @@ int main() {
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
-                    (kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
+                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
+                    kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 (*kernel_address)((uint32_t)kernel_address);
                 RECORD_STACK_USAGE();
                 WAYPOINT("D");
@@ -173,7 +172,7 @@ int main() {
                 launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr = NOC_XY_ADDR(
                     NOC_X(mailboxes->go_message.master_x),
-                    NOC_Y(mailboxes->go_message.master_x),
+                    NOC_Y(mailboxes->go_message.master_y),
                     DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();

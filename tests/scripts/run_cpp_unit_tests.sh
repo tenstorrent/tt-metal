@@ -12,7 +12,7 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     env python3 tests/scripts/run_tt_eager.py --dispatch-mode slow
 else
     # Enable this on BH after #14613
-    if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
+    if [[ "$ARCH_NAME" == "wormhole_b0" || "$ARCH_NAME" == "blackhole" ]]; then
         TT_METAL_GTEST_ETH_DISPATCH=1 ./build/test/tt_metal/unit_tests_dispatch
     fi
     env python3 tests/scripts/run_tt_eager.py --dispatch-mode fast
