@@ -103,6 +103,7 @@ Represents the allocation of a memory buffer. This node records details about th
 * `size`: The size of the buffer in bytes.
 * `type`: The type of memory (e.g., "DRAM", "L1").
 * `layout`: The memory layout (e.g., "INTERLEAVED", "SINGLE\_BANK").
+* `device_id`: Id of the device.
 
 #### Connections
 * Single element in the connection list specifies the associated Tensor ID
@@ -115,6 +116,7 @@ Denotes the allocation of a buffer in memory. This node captures the specifics o
 * `address`: The memory address of the buffer.
 * `type`: The type of memory (e.g., "DRAM", "L1").
 * `layout`: The memory layout.
+* `device_id`: Id of the device.
 
 #### Connections
 * Single element in the connections list specifies the allocated buffer ID
@@ -126,6 +128,7 @@ Represents the deallocation of a buffer from memory. This node records the detai
 * `size`: The size of the buffer in bytes.
 * `type`: The type of memory (e.g., "DRAM", "L1").
 * `layout`: The memory layout.
+* `device_id`: Id of the device.
 
 #### Connections
 * Single element in the connections list specifies the deallocated buffer ID
@@ -138,6 +141,7 @@ Represents the allocation of a circular buffer, typically used in handling strea
 * `address`: The memory address associated with the buffer.
 * `core_range_set`: The range of cores involved in the circular buffer.
 * `globally_allocated`: Does the circular buffer has global address set, i.e., does it share space with the corresponding operand.
+* `device_id`: Id of the device.
 
 #### Connections
 Usually empty

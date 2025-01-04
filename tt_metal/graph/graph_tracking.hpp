@@ -33,11 +33,15 @@ public:
     virtual void track_deallocate(tt::tt_metal::Buffer* buffer) {};
 
     virtual void track_allocate_cb(
-        const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated) {};
+        const CoreRangeSet& core_range_set,
+        uint64_t addr,
+        uint64_t size,
+        bool is_globally_allocated,
+        const Device* device) {};
 
-    virtual void track_deallocate_cb() {};
+    virtual void track_deallocate_cb(const Device* device) {};
 
-    virtual void track_program(tt::tt_metal::Program* program) {};
+    virtual void track_program(tt::tt_metal::Program* program, const Device* device) {};
 
     virtual void track_function_start(std::string_view function_name, std::span<std::any> input_parameters) {};
 
@@ -82,11 +86,15 @@ public:
     void track_deallocate(Buffer* buffer);
 
     void track_allocate_cb(
-        const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated);
+        const CoreRangeSet& core_range_set,
+        uint64_t addr,
+        uint64_t size,
+        bool is_globally_allocated,
+        const Device* device);
 
-    void track_deallocate_cb();
+    void track_deallocate_cb(const Device* device);
 
-    void track_program(Program* program);
+    void track_program(Program* program, const Device* device);
 
     template <class... Args>
     void track_function_start(std::string_view function_name, Args&&... args) {
