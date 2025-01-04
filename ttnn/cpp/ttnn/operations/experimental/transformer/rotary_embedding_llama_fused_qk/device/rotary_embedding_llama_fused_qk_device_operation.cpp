@@ -66,10 +66,8 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
     TT_FATAL(
         q_batch_size <= 32,
         "Q and K must have batch size less than or equal to 32, due to parallelization over core-grid of 64");
-    uint32_t q_num_cores = q_input_tensor.shard_spec()->grid.bounding_box().grid_size().x *
-                           q_input_tensor.shard_spec()->grid.bounding_box().grid_size().y;
-    uint32_t k_num_cores = k_input_tensor.shard_spec()->grid.bounding_box().grid_size().x *
-                           k_input_tensor.shard_spec()->grid.bounding_box().grid_size().y;
+    uint32_t q_num_cores = q_input_tensor.shard_spec()->grid.num_cores();
+    uint32_t k_num_cores = k_input_tensor.shard_spec()->grid.num_cores();
     TT_FATAL(q_num_cores + k_num_cores <= 64, "Q and K must not exceed max core grid size of 64");
 
     bool is_overlap = q_input_tensor.shard_spec()->grid.intersects(k_input_tensor.shard_spec()->grid);
@@ -84,8 +82,7 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
         "sizes");
 
     // Checks for transformation matrix
-    uint32_t trans_mat_num_cores = trans_mat.shard_spec()->grid.bounding_box().grid_size().x *
-                                   trans_mat.shard_spec()->grid.bounding_box().grid_size().y;
+    uint32_t trans_mat_num_cores = trans_mat.shard_spec()->grid.num_cores();
     TT_FATAL(
         trans_mat_num_cores >= (q_num_cores + k_num_cores),
         "Transformation matrix is repeated for Q and K must be sharded over core grid of Q and K");

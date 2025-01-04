@@ -55,15 +55,11 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    CoreRange q_cores = q_shard_spec->grid.bounding_box();
-    uint32_t q_num_cores_x = q_cores.grid_size().x;
-    uint32_t q_num_cores_y = q_cores.grid_size().y;
+    CoreRangeSet q_cores = q_shard_spec->grid;
 
-    CoreRange k_cores = k_shard_spec->grid.bounding_box();
-    uint32_t k_num_cores_x = k_cores.grid_size().x;
-    uint32_t k_num_cores_y = k_cores.grid_size().y;
+    CoreRangeSet k_cores = k_shard_spec->grid;
 
-    CoreRange all_cores = cos_sin_shard_spec->grid.bounding_box();
+    CoreRangeSet all_cores = cos_sin_shard_spec->grid;
 
     const uint32_t num_q_input_tiles = q_n_heads_t * head_dim_t;
     const uint32_t num_q_output_tiles = num_q_input_tiles;
