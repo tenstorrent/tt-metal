@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -37,8 +38,9 @@ bool test_tensor_copy_semantics(Device* device) {
     pass &= dev_a_data == dev_a_copy_data;
 
     // host tensor updated with host tensor copy assignment
-    Tensor host_c = ttnn::arange(/*start=*/0, /*stop=*/tt_metal::compute_volume(single_tile_shape), /*step=*/1)
-                        .reshape(single_tile_shape)
+    Tensor host_c = ttnn::experimental::view(
+                        ttnn::arange(/*start=*/0, /*stop=*/tt_metal::compute_volume(single_tile_shape), /*step=*/1),
+                        single_tile_shape)
                         .to(Layout::TILE);
     Tensor host_c_copy = ttnn::random::random(single_tile_shape).to(Layout::TILE);
     host_c_copy = host_c;

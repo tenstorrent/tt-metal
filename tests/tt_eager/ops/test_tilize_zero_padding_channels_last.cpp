@@ -14,6 +14,9 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "tt_metal/host_api.hpp"
 
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
+
 using namespace tt;
 using namespace tt_metal;
 using namespace constants;
@@ -37,8 +40,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         ttnn::SimpleShape shape{1, 32, 61, 32};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = ttnn::arange(/*start=*/0, /*stop=*/shape.volume(), /*step=*/1, DataType::BFLOAT16)
-                       .reshape(shape)
+        Tensor a = ttnn::experimental::view(
+                       ttnn::arange(/*start=*/0, /*stop=*/shape.volume(), /*step=*/1, DataType::BFLOAT16), shape)
                        .to(device);
         Tensor b = ttnn::tilize_with_zero_padding(a);
         Tensor c = b.cpu();

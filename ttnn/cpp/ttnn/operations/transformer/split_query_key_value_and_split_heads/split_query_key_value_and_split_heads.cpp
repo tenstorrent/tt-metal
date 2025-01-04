@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -104,11 +105,14 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             head_size,
             padded_head_size);
 
-        const auto input_4d = input_tensor.reshape(ttnn::SimpleShape{
-            input_shape.with_tile_padding()[0],
-            1,
-            input_shape.with_tile_padding()[1],
-            input_shape.with_tile_padding()[2]});
+        const auto input_4d = ttnn::experimental::view(
+            input_tensor,
+            ttnn::SimpleShape{
+                input_shape.with_tile_padding()[0],
+                1,
+                input_shape.with_tile_padding()[1],
+                input_shape.with_tile_padding()[2]});
+
         auto outputs = ttnn::experimental::nlp_create_qkv_heads_falcon7b(
             input_4d, memory_config.value_or(input_tensor.memory_config()));
         return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
@@ -168,11 +172,13 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             "Invalid operation: KV tensor should not be provided when the input tensor is sharded. Please ensure that "
             "the KV tensor is only used in non-sharded configurations.");
 
-        const auto input_tensor_4d = input_tensor.reshape(ttnn::SimpleShape{
-            input_shape.with_tile_padding()[0],
-            1,
-            input_shape.with_tile_padding()[1],
-            input_shape.with_tile_padding()[2]});
+        const auto input_tensor_4d = ttnn::experimental::view(
+            input_tensor,
+            ttnn::SimpleShape{
+                input_shape.with_tile_padding()[0],
+                1,
+                input_shape.with_tile_padding()[1],
+                input_shape.with_tile_padding()[2]});
         return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
             ttnn::experimental::create_qkv_heads(
                 input_tensor_4d,
@@ -184,15 +190,18 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             sequence_size_padded,
             transpose_key);
     } else {
-        const auto input_tensor_4d = input_tensor.reshape(ttnn::SimpleShape{
-            input_shape.with_tile_padding()[0],
-            1,
-            input_shape.with_tile_padding()[1],
-            input_shape.with_tile_padding()[2]});
+        const auto input_tensor_4d = ttnn::experimental::view(
+            input_tensor,
+            ttnn::SimpleShape{
+                input_shape.with_tile_padding()[0],
+                1,
+                input_shape.with_tile_padding()[1],
+                input_shape.with_tile_padding()[2]});
         std::optional<Tensor> input_tensor_kv_4d = std::nullopt;
         if (input_tensor_kv.has_value()) {
             auto padded_input_shape_kv = input_tensor_kv.value().get_shape().with_tile_padding();
-            input_tensor_kv_4d = input_tensor_kv.value().reshape(
+            input_tensor_kv_4d = ttnn::experimental::view(
+                input_tensor_kv.value(),
                 ttnn::SimpleShape{padded_input_shape_kv[0], 1, padded_input_shape_kv[1], padded_input_shape_kv[2]});
         }
         const auto outputs = ttnn::experimental::nlp_create_qkv_heads(

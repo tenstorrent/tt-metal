@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -40,7 +41,7 @@ Tensor global_avg_pool2d(
         input_padding.pad_value());
     auto output_shape =
         tt::tt_metal::LegacyShape({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]}, output_padding);
-    output = output.reshape(output_shape);
+    output = ttnn::experimental::view(output, output_shape);
 
     output = pool_2d<PoolType::AVG>(output, memory_config, output_dtype);
     return output;

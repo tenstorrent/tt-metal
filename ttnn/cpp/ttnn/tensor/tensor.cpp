@@ -798,12 +798,6 @@ const bool Tensor::is_sharded() const {
 
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->get_dtype()); }
 
-Tensor Tensor::reshape(const ttnn::SimpleShape& new_shape) const {
-    return tensor_ops::tensor_reshape(*this, new_shape);
-}
-
-Tensor Tensor::reshape(const ttnn::Shape& new_shape) const { return tensor_ops::tensor_reshape(*this, new_shape); }
-
 bool Tensor::is_allocated() const {
     ZoneScoped;
     auto output = std::visit([](auto&& storage) -> bool { return storage.is_allocated(); }, this->get_storage());

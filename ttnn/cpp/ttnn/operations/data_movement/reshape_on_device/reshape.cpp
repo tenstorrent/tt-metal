@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -57,7 +58,7 @@ ttnn::Tensor ReshapeOperation::invoke(
          padded_output_shape[3] == input_tensor.get_padded_shape()[3])) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
-        return input_tensor.reshape(output_shape);
+        return ttnn::experimental::view(input_tensor, output_shape);
     }
     if (input_tensor.get_padded_shape() == padded_output_shape) {
         return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(

@@ -102,7 +102,7 @@ def test_llama_attention_inference(batch, num_chunks, mesh_device, use_program_c
     tt_out = tt_model(attention_input, mask=tt_mask)
 
     # Doing contract in tt is correct!!
-    tt_out = tt_out.reshape(batch, num_chunks, ntok + npadtt, dim)
+    tt_out = ttnn.experimental.view(tt_out, batch, num_chunks, ntok + npadtt, dim)
     tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
