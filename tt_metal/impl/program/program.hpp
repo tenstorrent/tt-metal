@@ -46,7 +46,15 @@ CBHandle CreateCircularBuffer(
 namespace program_utils {
     void assemble_device_commands(
         ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id);
+    template<typename T>
+    void finalize(T& workload_type, Device* device);
+    template <typename WorkloadType, typename DeviceType>
+    uint32_t program_base_addr_on_core(WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
 } // namespace program_utils
+
+namespace distributed {
+    class MeshWorkload;
+} // namespace distributed
 
 class EnqueueProgramCommand;
 class HWCommandQueue;
@@ -165,12 +173,12 @@ class Program {
     void allocate_circular_buffers(const Device *device);
 
     bool is_finalized() const;
+    void set_finalized();
     bool is_cached() const;
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
     void set_cached();
     void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
     void allocate_kernel_bin_buf_on_device(Device* device);
-    void finalize(Device *device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
@@ -181,7 +189,7 @@ class Program {
     uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
     void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
-
+    HWCommandQueue* get_last_used_command_queue() const;
     const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
    private:
@@ -222,9 +230,12 @@ class Program {
     friend void detail::AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
     friend void program_utils::assemble_device_commands(
         ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id);
-
+    template<typename T> friend void program_utils::finalize(T&, Device*);
+    template <typename WorkloadType, typename DeviceType>
+    friend uint32_t program_utils::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
+    friend distributed::MeshWorkload;
     friend detail::Internal_;
 };
 

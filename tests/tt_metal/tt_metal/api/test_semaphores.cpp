@@ -69,8 +69,7 @@ void create_and_read_max_num_semaphores(
     }
 
     tt_metal::detail::CompileProgram(device, program);
-
-    program.finalize(device);
+    program_utils::finalize(program, device);
 
     ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
 

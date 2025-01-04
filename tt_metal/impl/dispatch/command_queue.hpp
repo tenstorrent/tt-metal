@@ -331,9 +331,6 @@ class EnqueueProgramCommand : public Command {
         uint32_t unicast_cores_launch_message_wptr,
         SubDeviceId sub_device_id);
 
-    void write_program_command_sequence(
-        const ProgramCommandSequence& program_command_sequence, bool stall_first, bool stall_before_program);
-
     void process();
 
     EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_PROGRAM; }
@@ -517,6 +514,9 @@ class HWCommandQueue {
     void set_num_worker_sems_on_dispatch(uint32_t num_worker_sems);
     void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
     void reset_worker_state(bool reset_launch_msg_state);
+    uint32_t& expected_num_workers_completed_for_sub_device(uint32_t sub_device_index);
+    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);
+
    private:
     uint32_t id;
     uint32_t size_B;
@@ -575,7 +575,6 @@ class HWCommandQueue {
     void increment_num_entries_in_completion_q();
     void set_exit_condition();
 
-    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);
     void reset_config_buffer_mgr(const uint32_t num_entries);
 
     friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
