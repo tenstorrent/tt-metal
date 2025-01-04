@@ -6,7 +6,7 @@ import os
 import math
 from loguru import logger
 import re
-from typing import Tuple
+from typing import Tuple, List
 import numpy as np
 import torch
 import ttnn
@@ -70,8 +70,11 @@ class ConcatMesh2DToTensor(MeshToTensor):
         self.cluster_shape = cluster_shape
         self.mesh_device = mesh_device
 
-    def compose(self, tensor: ttnn.Tensor) -> torch.Tensor:
-        tt_shards = [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
+    def compose(self, tensor: ttnn.Tensor, sub_device_ids: List[ttnn.SubDeviceId] = []) -> torch.Tensor:
+        tt_shards = [
+            ttnn.to_torch(tt_input_tensor, sub_device_ids=sub_device_ids)
+            for tt_input_tensor in ttnn.get_device_tensors(tensor)
+        ]
 
         row_concat = []
         for cluster_row in range(self.cluster_shape[1]):

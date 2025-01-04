@@ -7,6 +7,8 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/cpp/ttnn/global_semaphore.hpp"
 
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/common/ccl_global_semaphore_creation.hpp"
+
 #include <ranges>
 #include <algorithm>
 #include <cstdint>
@@ -220,62 +222,6 @@ ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> create_global_semaphores(
-    const std::vector<Device*>& devices, std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt) {
-    std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> semaphores;
-    auto worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(6, 6)));
-    for (Device* d : devices) {
-        CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-        auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-        auto worker_subdevice_id = worker_subdevice_id_opt.has_value()
-                                       ? std::vector<SubDeviceId>{worker_subdevice_id_opt.value()}
-                                       : std::vector<SubDeviceId>{};
-        // TODO: Remove shared_ptr
-        auto sem = std::make_shared<GlobalSemaphore>(
-            global_semaphore::create_global_semaphore(d, core_grid, 0, BufferType::L1, worker_subdevice_id));
-        semaphores.push_back(sem);
-    }
-
-    auto first_addr = semaphores.front()->address();
-    bool all_same = std::all_of(
-        semaphores.begin(), semaphores.end(), [first_addr](const auto& sem) { return sem->address() == first_addr; });
-
-    if (!all_same) {
-        DeviceAddr highest_addr = semaphores.front()->address();
-        for (auto i = 1; i < semaphores.size(); i++) {
-            if (semaphores[i]->address() > highest_addr) {
-                highest_addr = semaphores[i]->address();
-            }
-        };
-        for (auto i = 0; i < semaphores.size(); i++) {
-            size_t attempts = 1000;
-            size_t attempt = 0;
-            std::vector<std::shared_ptr<tt::tt_metal::GlobalSemaphore>> garbage;
-            CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-            auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-            while (semaphores[i]->address() != highest_addr) {
-                auto worker_subdevice_id = worker_subdevice_id_opt.has_value()
-                                               ? std::vector<SubDeviceId>{worker_subdevice_id_opt.value()}
-                                               : std::vector<SubDeviceId>{};
-                // TODO: Remove shared_ptr
-                auto sem = std::make_shared<GlobalSemaphore>(global_semaphore::create_global_semaphore(
-                    devices[i], core_grid, 0, BufferType::L1, worker_subdevice_id));
-                if (sem->address() == highest_addr) {
-                    semaphores[i] = sem;
-                } else {
-                    garbage.push_back(std::move(sem));
-                    attempt++;
-                }
-
-                if (attempt > attempts) {
-                    TT_THROW("Failed to create global semaphores with the same address");
-                }
-            }
-        }
-    }
-    return semaphores;
-}
-
 namespace operations {
 namespace experimental {
 namespace ccl {
@@ -313,9 +259,13 @@ Tensor reduce_scatter(
 
     std::optional<std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>>> from_remote_inputs_semaphores_opt;
     std::optional<std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>>> to_remote_inputs_semaphores_opt;
+    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
+    auto worker_cores = CoreRangeSet({CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1})});
     if (create_semaphore_handles) {
-        from_remote_inputs_semaphores_opt = create_global_semaphores(devices, worker_subdevice_id_opt);
-        to_remote_inputs_semaphores_opt = create_global_semaphores(devices, worker_subdevice_id_opt);
+        from_remote_inputs_semaphores_opt =
+            ttnn::ccl::worker_detail::create_global_semaphores(devices, worker_cores, worker_subdevice_id_opt);
+        to_remote_inputs_semaphores_opt =
+            ttnn::ccl::worker_detail::create_global_semaphores(devices, worker_cores, worker_subdevice_id_opt);
     } else {
         from_remote_inputs_semaphores_opt = std::nullopt;
         to_remote_inputs_semaphores_opt = std::nullopt;
@@ -390,9 +340,12 @@ Tensor reduce_scatter(
     auto devices = input_tensor.get_workers();
     std::optional<std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>>> from_remote_inputs_semaphores_opt;
     std::optional<std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>>> to_remote_inputs_semaphores_opt;
+    auto worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(6, 6)));
     if (create_semaphore_handles) {
-        from_remote_inputs_semaphores_opt = create_global_semaphores(devices, worker_subdevice_id_opt);
-        to_remote_inputs_semaphores_opt = create_global_semaphores(devices, worker_subdevice_id_opt);
+        from_remote_inputs_semaphores_opt =
+            ttnn::ccl::worker_detail::create_global_semaphores(devices, worker_cores, worker_subdevice_id_opt);
+        to_remote_inputs_semaphores_opt =
+            ttnn::ccl::worker_detail::create_global_semaphores(devices, worker_cores, worker_subdevice_id_opt);
     } else {
         from_remote_inputs_semaphores_opt = std::nullopt;
         to_remote_inputs_semaphores_opt = std::nullopt;

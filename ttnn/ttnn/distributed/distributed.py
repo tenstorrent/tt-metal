@@ -253,7 +253,7 @@ class MeshToTensor:
     You can also "Bring your own MeshToTensor" based on your custom mapping.
     """
 
-    def compose(self, tensor: ttnn.Tensor):
+    def compose(self, tensor: ttnn.Tensor, sub_device_ids: List[ttnn.SubDeviceId] = []):
         raise NotImplementedError("Subclasses must implement this method")
 
 
@@ -400,7 +400,7 @@ class ConcatMesh2dToTensor(MeshToTensor):
         if self.dims[0] == self.dims[1]:
             raise ValueError("Both dimensions in 'dims' must be different")
 
-    def compose(self, tensor: ttnn.Tensor) -> "torch.Tensor":
+    def compose(self, tensor: ttnn.Tensor, sub_device_ids: List[ttnn.SubDeviceId] = []) -> "torch.Tensor":
         """
         Compose the sharded tensors back into a single tensor.
 
@@ -416,7 +416,8 @@ class ConcatMesh2dToTensor(MeshToTensor):
         import torch
 
         device_shards = [
-            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None, sub_device_ids=sub_device_ids)
+            for tt_input_tensor in ttnn.get_device_tensors(tensor)
         ]
 
         rows, cols = self.mesh_shape
@@ -451,11 +452,12 @@ class ConcatMeshToTensor(MeshToTensor):
         self.concat_dim = dim
         self.mesh_device = mesh_device
 
-    def compose(self, tensor: ttnn.Tensor) -> "torch.Tensor":
+    def compose(self, tensor: ttnn.Tensor, sub_device_ids: List[ttnn.SubDeviceId] = []) -> "torch.Tensor":
         import torch
 
         device_shards_converted_to_torch = [
-            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None, sub_device_ids=sub_device_ids)
+            for tt_input_tensor in ttnn.get_device_tensors(tensor)
         ]
         return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
 
@@ -466,9 +468,10 @@ class ListMeshToTensor(MeshToTensor):
     def __init__(self, mesh_device: MeshDevice):
         self.mesh_device = mesh_device
 
-    def compose(self, tensor: ttnn.Tensor) -> List["torch.Tensor"]:
+    def compose(self, tensor: ttnn.Tensor, sub_device_ids: List[ttnn.SubDeviceId] = []) -> List["torch.Tensor"]:
         return [
-            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None, sub_device_ids=sub_device_ids)
+            for tt_input_tensor in ttnn.get_device_tensors(tensor)
         ]
 
 

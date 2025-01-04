@@ -302,7 +302,7 @@ def to_torch(
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
     if mesh_composer:
-        return mesh_composer.compose(tensor)
+        return mesh_composer.compose(tensor, sub_device_ids=sub_device_ids)
 
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id, sub_device_ids=sub_device_ids)

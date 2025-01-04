@@ -196,16 +196,6 @@ def run_all_gather_impl(
                         output_tensor[w, z, y : y + 32, x : x + 32] = tile_id
                         tile_id += 1
 
-    input_tensors = torch.chunk(output_tensor, num_devices, dim)
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
-        )
-        logger.info(f"using device {mesh_device.get_devices()[i].id()}")
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     worker_sub_device = ttnn.SubDevice(
         [
@@ -215,68 +205,91 @@ def run_all_gather_impl(
         ]
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
+    worker_subdevice_ids = [worker_sub_device_id]
+    fabric_torn_down = True
     if create_persistent_fabric:
         mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
             mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
         )
+        fabric_torn_down = False
 
-    if trace_mode:
-        tt_out_tensor = run_with_trace(
-            mesh_device,
-            all_gather_topology,
-            input_tensor_mesh,
-            dim,
-            num_links,
-            output_mem_config,
-            num_iter=num_iters,
-            subdevice_id=worker_sub_device_id,
-        )
-    else:
-        for i in range(num_iters):
-            if use_cluster_axis_api:
-                tt_out_tensor = ttnn.experimental.all_gather_async(
-                    input_tensor_mesh,
-                    dim,
-                    cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
-                    memory_config=output_mem_config,
-                    topology=all_gather_topology,
-                    subdevice_id=worker_sub_device_id,
-                    enable_persistent_fabric_mode=enable_persistent_fabric,
-                    num_preferred_links=num_links,
-                    create_semaphore_handles=True,
-                )
+    try:
+        input_tensors = torch.chunk(output_tensor, num_devices, dim)
+        tt_input_tensors = []
+        for i, t in enumerate(input_tensors):
+            tt_input_tensors.append(
+                ttnn.Tensor(t, input_dtype)
+                .to(layout)
+                .to(mesh_device.get_devices()[i], input_mem_config, sub_device_ids=worker_subdevice_ids)
+            )
+            logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
-            else:
-                tt_out_tensor = ttnn.experimental.all_gather_async(
-                    input_tensor_mesh,
-                    dim,
-                    num_links=num_links,
-                    memory_config=output_mem_config,
-                    topology=all_gather_topology,
-                    subdevice_id=worker_sub_device_id,
-                    enable_persistent_fabric_mode=enable_persistent_fabric,
-                )
+        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+
+        if trace_mode:
+            tt_out_tensor = run_with_trace(
+                mesh_device,
+                all_gather_topology,
+                input_tensor_mesh,
+                dim,
+                num_links,
+                output_mem_config,
+                num_iter=num_iters,
+                subdevice_id=worker_sub_device_id,
+            )
+        else:
+            for i in range(num_iters):
+                if use_cluster_axis_api:
+                    tt_out_tensor = ttnn.experimental.all_gather_async(
+                        input_tensor_mesh,
+                        dim,
+                        cluster_axis=cluster_axis,
+                        mesh_device=mesh_device,
+                        memory_config=output_mem_config,
+                        topology=all_gather_topology,
+                        subdevice_id=worker_sub_device_id,
+                        enable_persistent_fabric_mode=enable_persistent_fabric,
+                        num_preferred_links=num_links,
+                        create_semaphore_handles=True,
+                    )
+
+                else:
+                    tt_out_tensor = ttnn.experimental.all_gather_async(
+                        input_tensor_mesh,
+                        dim,
+                        num_links=num_links,
+                        memory_config=output_mem_config,
+                        topology=all_gather_topology,
+                        subdevice_id=worker_sub_device_id,
+                        enable_persistent_fabric_mode=enable_persistent_fabric,
+                    )
 
             logger.info(f"Waiting for op {i}")
             for d in mesh_device.get_devices():
                 ttnn.synchronize_device(d, sub_device_ids=[worker_sub_device_id])
             logger.info(f"Done iteration {i}")
 
-    if enable_persistent_fabric and teardown_persistent_fabric:
-        teardown_fabric_interface(mesh_device)
+        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+            tt_output_tensor = t.cpu(sub_device_ids=worker_subdevice_ids).to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+            logger.info(f"Checking for device {t.device().id()}")
 
-    for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-        logger.info(f"Checking for device {t.device().id()}")
+            if input_dtype == ttnn.bfloat16:
+                eq, output = comp_equal(tt_output_tensor, output_tensor)
+            else:
+                eq, output = comp_pcc(tt_output_tensor, output_tensor)
+            if not eq:
+                logger.error(f"output mismatch for tensor {i}")
+            assert eq, f"{i} FAILED: {output}"
 
-        if input_dtype == ttnn.bfloat16:
-            eq, output = comp_equal(tt_output_tensor, output_tensor)
-        else:
-            eq, output = comp_pcc(tt_output_tensor, output_tensor)
-        if not eq:
-            logger.error(f"output mismatch for tensor {i}")
-        assert eq, f"{i} FAILED: {output}"
+        if enable_persistent_fabric and teardown_persistent_fabric:
+            teardown_fabric_interface(mesh_device)
+            fabric_torn_down = True
+
+    except Exception as e:
+        if create_persistent_fabric and not fabric_torn_down:
+            logger.error(f"Tearing down persistent fabric after failure")
+            teardown_fabric_interface(mesh_device)
+        raise e
 
 
 # Enumerate the post-commit cases explicitly
@@ -301,8 +314,7 @@ def run_all_gather_impl(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
     ],
 )
-@pytest.mark.parametrize("num_iters", [8])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("enable_async, num_iters", [(True, 1), (False, 8)])
 def test_all_gather(
     t3k_mesh_device,
     # pcie_mesh_device,
@@ -395,8 +407,7 @@ def test_all_gather(
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.parametrize("num_iters", [8])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("enable_async, num_iters", [(True, 1), (False, 8)])
 def test_all_gather_sharded(
     t3k_mesh_device,
     # pcie_mesh_device,
@@ -499,9 +510,6 @@ def test_line_all_gather_async_on_T3K_cols_transient_fabric_post_commit(
     )
 
 
-@pytest.mark.skip(
-    "persistent fabric test with cluster-axis API and multiple concurrent all-gather instances not enabled yet"
-)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
@@ -636,9 +644,6 @@ def test_line_all_gather_async_on_T3K_rows_transient_fabric_post_commit(
 
 
 # Enumerate the post-commit cases explicitly
-@pytest.mark.skip(
-    "persistent fabric test with cluster-axis API and multiple concurrent all-gather instances not enabled yet"
-)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
@@ -706,9 +711,6 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     )
 
 
-@pytest.mark.skip(
-    "persistent fabric test with cluster-axis API and multiple concurrent all-gather instances not enabled yet"
-)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices1, num_links1, per_chip_output_shape1, dim1, layout1",
@@ -733,7 +735,7 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     ],
 )
 @pytest.mark.parametrize("replication_factor1", [4])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize(
     "num_devices2, num_links2, per_chip_output_shape2, dim2, layout2",
     [
