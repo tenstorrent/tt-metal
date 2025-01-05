@@ -96,7 +96,7 @@ def test_llama_block_inference(batch, num_chunks, mesh_device, gated, use_progra
     )
     tt_attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
     tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, npadtt, num_chunks)
-    attention_input = attention_input.reshape(1, batch, -1, dim)
+    attention_input = ttnn.experimental.view(attention_input, 1, batch, -1, dim)
 
     tt_mask = ttnn.from_torch(
         tt_attn_mask,
@@ -108,7 +108,7 @@ def test_llama_block_inference(batch, num_chunks, mesh_device, gated, use_progra
     )
 
     tt_out = tt_model(attention_input, mask=tt_mask)
-    tt_out = tt_out.reshape(batch, num_chunks, ntok + npadtt, dim)
+    tt_out = ttnn.experimental.view(tt_out, batch, num_chunks, ntok + npadtt, dim)
     tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
