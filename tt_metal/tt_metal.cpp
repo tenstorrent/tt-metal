@@ -34,6 +34,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <graph_tracking.hpp>
+#include "host_api_capture_helpers.hpp"
 
 namespace tt {
 
@@ -1356,13 +1357,49 @@ uint32_t BeginTraceCapture(IDevice* device, const uint8_t cq_id) {
     return tid;
 }
 
-void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid) { device->end_trace(cq_id, tid); }
+void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid) {
+    device->end_trace(cq_id, tid);
+    // When light metal tracing is enabled, TraceDescriptor will be serialized via end_trace() and this
+    // will serialize the LightMetalLoadTraceId call to be used during replay to load trace back to device.
+    TRACE_FUNCTION_CALL(CaptureLoadTrace, device, cq_id, tid);
+}
 
 void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const bool blocking) {
+    TRACE_FUNCTION_CALL(CaptureReplayTrace, device, cq_id, tid, blocking);
     device->replay_trace(cq_id, tid, blocking);
 }
 
 void ReleaseTrace(IDevice* device, const uint32_t tid) { device->release_trace(tid); }
+
+// This is nop if compile time define not set.
+void LightMetalBeginCapture(IDevice* device) {
+#if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
+    log_debug(tt::LogMetalTrace, "Begin LightMetalBinary Capture");
+    auto& lm_capture_ctx = LightMetalCaptureContext::Get();
+    lm_capture_ctx.Reset();           // Clear previous traces if any, ensure tracing disabled
+    lm_capture_ctx.SetTracing(true);  // Enable tracing
+#else
+    log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalBeginCapture()");
+#endif
+}
+
+// This is nop if compile time define not set, return empty vector.
+std::vector<uint8_t> LightMetalEndCapture(IDevice* device) {
+#if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
+    log_debug(tt::LogMetalTrace, "End LightMetalBinary Capture");
+    auto& lm_capture_ctx = LightMetalCaptureContext::Get();
+    TT_ASSERT(lm_capture_ctx.IsTracing(), "Light Metal Capture was not enabled.");
+    lm_capture_ctx.SetTracing(false);  // Disable tracing
+    return lm_capture_ctx.CreateLightMetalBinary();
+#else
+    log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalEndCapture()");
+    return {};
+#endif
+}
+
+void LoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t trace_id, detail::TraceDescriptor& trace_desc) {
+    device->load_trace(cq_id, trace_id, trace_desc);
+}
 
 void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {

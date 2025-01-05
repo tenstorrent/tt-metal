@@ -41,7 +41,21 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/event/event.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_replay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture.cpp
 )
+
+# Include helper functions and generate headers from flatbuffer schemas
+include(${PROJECT_SOURCE_DIR}/cmake/flatbuffers.cmake)
+
+set(FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/binary.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/tracehost/command.fbs
+)
+foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE})
+    list(APPEND IMPL_SRC ${FBS_GENERATED_HEADER})
+endforeach()
 
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
@@ -51,6 +65,7 @@ target_link_libraries(
     PUBLIC
         common
         Tracy::TracyClient
+        FlatBuffers::FlatBuffers
     PRIVATE
         Boost::smart_ptr
         range-v3::range-v3
@@ -66,6 +81,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal/include
+        ${CMAKE_CURRENT_BINARY_DIR} # For generated flatbuffer headers
 )
 
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)

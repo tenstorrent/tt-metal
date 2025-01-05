@@ -40,6 +40,7 @@
 #include "umd/device/tt_xy_pair.h"
 
 #include <hal.hpp>
+#include "host_api_capture_helpers.hpp"
 
 using namespace tt::tt_metal;
 
@@ -2137,6 +2138,7 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
 }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
+    TRACE_FUNCTION_CALL(CaptureEnqueueTrace, cq, trace_id, blocking);
     detail::DispatchStateCheck(true);
     TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
     cq.run_command(

@@ -482,6 +482,12 @@ void MeshDevice::set_trace_buffers_size(uint32_t size) {
     reference_device()->set_trace_buffers_size(size);
 }
 
+// Light Metal
+void MeshDevice::load_trace(const uint8_t cq_id, const uint32_t tid, detail::TraceDescriptor& trace_desc) {
+    TT_THROW("load_trace() is not supported on MeshDevice - use individual devices instead");
+    reference_device()->load_trace(cq_id, tid, trace_desc);
+}
+
 // Dispatch and initialization
 bool MeshDevice::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
     TT_THROW("initialize() is not supported on MeshDevice - use individual devices instead");

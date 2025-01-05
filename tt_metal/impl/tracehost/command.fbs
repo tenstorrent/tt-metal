@@ -1,0 +1,32 @@
+// Define schema for tracing host API calls, called Commands in this context.
+
+namespace tt.target;
+
+table ReplayTraceCommand {
+    // TODO (kmabee) - add device.
+    cq_id: int;
+    tid: int;
+    blocking: bool;
+}
+
+table EnqueueTraceCommand {
+    // TODO (kmabee) - add device.
+    cq_id: int;
+    tid: int;
+    blocking: bool;
+}
+
+table LoadTraceCommand {
+    tid: int; // Pointer to trace data.
+    cq_id: int;
+}
+
+union CommandType {
+    ReplayTraceCommand,
+    EnqueueTraceCommand,
+    LoadTraceCommand
+}
+
+table Command {
+    cmd: CommandType;
+}
