@@ -10,8 +10,6 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include "eth_l1_address_map.h"
-
 namespace ttnn {
 namespace ccl {
 namespace all_gather_detail {
