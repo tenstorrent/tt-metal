@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
-
+#include "lightmetal_capture.hpp"  // For LightMetalCaptureContext
 namespace tt::tt_metal {
 
 // Original types defined in buffer_constants.hpp
@@ -54,10 +54,8 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
     };
 
     // Optional shadow buffer for dynamically allocated CBs, get global_id or use 0 as none/nullptr.
-    // auto& ctx = LightMetalCaptureContext::Get();
-    // auto shadow_buf_global_id = config.shadow_global_buffer ? ctx.GetGlobalId(config.shadow_global_buffer) : 0;
-    // TODO (kmabee) - Uncomment above code once capture library is merged. Temp hack here for now.
-    uint32_t shadow_buf_global_id = 0;
+    auto& ctx = LightMetalCaptureContext::Get();
+    auto shadow_buf_global_id = config.shadow_global_buffer ? ctx.GetGlobalId(config.shadow_global_buffer) : 0;
 
     // Create the FlatBuffer object
     return flatbuffer::CreateCircularBufferConfig(
