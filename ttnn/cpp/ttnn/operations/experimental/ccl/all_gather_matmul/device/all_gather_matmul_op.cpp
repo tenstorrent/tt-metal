@@ -7,7 +7,6 @@
 #include "ttnn/operations/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "eth_l1_address_map.h"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 
 /* All Gather Matmul fusion includes */

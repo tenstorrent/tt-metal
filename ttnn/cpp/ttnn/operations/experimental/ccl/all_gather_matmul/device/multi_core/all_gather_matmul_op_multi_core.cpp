@@ -5,7 +5,6 @@
 #include <algorithm>
 
 #include "tt_metal/common/core_coord.hpp"
-#include "eth_l1_address_map.h"
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
