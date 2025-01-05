@@ -12,11 +12,13 @@
 #include <circular_buffer_constants.h>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "lightmetal/lightmetal_replay.hpp"
 #include "command_queue_fixture.hpp"
 #include <lightmetal_binary.hpp>
 
 class SingleDeviceLightMetalFixture : public CommandQueueFixture {
 protected:
+    bool replay_binary_;
     std::string trace_bin_path_;
     bool write_bin_to_disk_;
 
@@ -38,6 +40,7 @@ protected:
         }
 
         this->create_device(trace_region_size);
+        this->replay_binary_ = replay_binary && !tt::parse_env("LIGHTMETAL_DISABLE_RUN", false);
         // TODO (kmabee) - revisit placement. CreateDevice() path calls CreateKernel() on programs not
         // created with CreateProgram() traced API which leads to "program not in global_id map"
         LightMetalBeginCapture();
@@ -57,6 +60,22 @@ protected:
 
         if (!this->IsSlowDispatch()) {
             tt::tt_metal::CloseDevice(this->device_);
+        }
+
+        // We could gaurd this to not attempt to replay empty binary, and still allow test to pass
+        // but, would rather catch the case if the feature gets disabled at compile time.
+        if (replay_binary_) {
+            RunLightMetalBinary(std::move(binary));
+        }
+    }
+
+    // Mimic the light-metal standalone run replay tool by executing the binary.
+    void RunLightMetalBinary(LightMetalBinary&& binary) {
+        tt::tt_metal::LightMetalReplay lm_replay(std::move(binary));
+        if (!lm_replay.execute_binary()) {
+            FAIL() << "Light Metal Binary failed to execute or encountered errors.";
+        } else {
+            log_info(tt::LogMetalTrace, "Light Metal Binary executed successfully!");
         }
     }
 };
