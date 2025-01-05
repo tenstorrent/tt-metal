@@ -88,7 +88,7 @@ def test_llama_attention_inference(batch, num_chunks, mesh_device, use_program_c
     # Striped mask doesn't affect PCC on first layer but is necessary for later layers
     tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, npadtt, num_chunks)
 
-    attention_input = attention_input.reshape(1, batch, -1, dim)
+    attention_input = ttnn.experimental.view(attention_input, 1, batch, -1, dim)
 
     tt_mask = ttnn.from_torch(
         tt_attn_mask,
