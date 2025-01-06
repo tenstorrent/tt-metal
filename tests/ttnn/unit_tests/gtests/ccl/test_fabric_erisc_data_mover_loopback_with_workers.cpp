@@ -3010,9 +3010,20 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
         num_links);
     log_info(tt::LogTest, "Lauching op");
 
+    ttnn::global_semaphore::MultiDeviceGlobalSemaphore multi_device_global_semaphore =
+        ttnn::global_semaphore::create_global_semaphore_with_same_address(
+            test_fixture.mesh_device_.get(),
+            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+            0,                             // initial value
+            tt::tt_metal::BufferType::L1,  // buffer type
+            {SubDeviceId(0)},              // sub_device_ids
+            10                             // attempts
+        );
+
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
         dim,
+        multi_device_global_semaphore,
         num_links,
         operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology::Linear,
