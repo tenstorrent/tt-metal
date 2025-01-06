@@ -1660,7 +1660,7 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "reshape",
             [](Tensor& self, int N, int C, int H, int W) {
-                ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
+                return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
             },
             R"doc(
                 Reshapes TT tensor
