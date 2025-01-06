@@ -14,6 +14,7 @@ set(TT_METAL_TESTS_SRCS
     # test_eltwise_unary.cpp        <- not tested in run_tt_metal.py
     test_matmul_single_tile_bfp8b.cpp
     test_matmul_single_tile_output_in_l1.cpp
+    test_stress_noc_mcast.cpp
     test_dram_loopback_single_core.cpp
     test_datacopy_bfp8b.cpp
     test_datacopy.cpp
