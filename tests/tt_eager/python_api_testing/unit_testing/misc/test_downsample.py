@@ -90,9 +90,7 @@ def test_run_downsample(
     #        logger.info(f"A_pyt_nhwc_2d[{i}][{j}]={A_pyt_nhwc[0][0][i][j]}")
     # logger.info("A_pyt_nhwc_2d[32][0]=", A_pyt_nhwc[0][0][32][0])
     a_activation_shape_nhwc = [batch_size, input_height, input_width, input_channels]
-    A_cl_host = ttnn.experimental.view(
-        ttnn.Tensor(A_pyt_nhwc, dtype), 1, 1, batch_size * input_height * input_width, input_channels
-    )
+    A_cl_host = ttnn.Tensor(A_pyt_nhwc, dtype).reshape(1, 1, batch_size * input_height * input_width, input_channels)
     num_cores_height_slices = num_cores if height_sharded else grid_size[0]
     input_shape = [1, 1, _nearest_y(batch_size * input_height * input_width, 32), input_channels]
     A_cl_host = A_cl_host.pad(input_shape, (0, 0, 0, 0), 0.0)
@@ -190,7 +188,7 @@ def test_run_downsample(
                 #     assert False
     logger.debug(f"Num errors: {num_errors}")
 
-    out = ttnn.experimental.view(out, batch_size, output_height, output_width, input_channels)
+    out = out.reshape(batch_size, output_height, output_width, input_channels)
     assert out.get_layout() == ttnn.ROW_MAJOR_LAYOUT
 
     # Copy output to host and convert tt tensor to pytorch tensor
