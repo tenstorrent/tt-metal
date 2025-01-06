@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async.hpp"
+#include <utility>
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/cpp/ttnn/global_semaphore.hpp"
@@ -12,7 +13,7 @@ namespace ttnn::operations::experimental::ccl {
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
-    global_semaphore::MultiDeviceGlobalSemaphore multi_device_global_semaphore,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -21,7 +22,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
         dim,
-        multi_device_global_semaphore,
+        std::move(multi_device_global_semaphore),
         num_links,
         memory_config,
         topology,
@@ -35,7 +36,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    global_semaphore::MultiDeviceGlobalSemaphore multi_device_global_semaphore,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<SubDeviceId> subdevice_id,
@@ -46,7 +47,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         cluster_axis,
         mesh_device,
         topology,
-        multi_device_global_semaphore,
+        std::move(multi_device_global_semaphore),
         memory_config,
         num_preferred_links,
         subdevice_id,
