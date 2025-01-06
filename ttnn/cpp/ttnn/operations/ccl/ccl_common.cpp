@@ -99,7 +99,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
     ends[3] = unpad_elements_w;
 
     for (int i = 0; i < num_devices; ++i) {
-        begins[dim] = i * 32;
+        begins[dim] = i * output_tensor.at(0).get_logical_shape()[dim] / num_devices;
         if (dim == 2) {
             ends[dim] = begins[dim] + unpad_elements_h;
         } else if (dim == 3) {

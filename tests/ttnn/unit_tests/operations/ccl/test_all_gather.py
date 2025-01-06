@@ -323,6 +323,8 @@ def run_all_gather_on_t3000_impl_tight_loop(
         (8, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
         (8, 1, [1, 1, 8, 1], 2, ttnn.TILE_LAYOUT),
         (8, 1, [1, 1, 2, 8], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 2, 33 * 8], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 67 * 8, 35], 2, ttnn.TILE_LAYOUT),
         # (4, 2, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),      # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 2, [4, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
