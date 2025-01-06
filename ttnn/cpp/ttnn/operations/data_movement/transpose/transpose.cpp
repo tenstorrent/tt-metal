@@ -7,6 +7,7 @@
 #include "ttnn/decorators.hpp"
 #include "device/transpose_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/cpp/ttnn/operations/copy.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
@@ -18,36 +19,6 @@
 namespace ttnn::operations::data_movement {
 
 namespace detail {
-
-inline uint32_t get_estimated_size_of_cbs(const Tensor& input_tensor_a) {
-    // Circular Buffer sizes:
-    uint32_t element_size = input_tensor_a.element_size();
-    uint32_t Wt = input_tensor_a.get_padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t Ht = input_tensor_a.get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t HtWt = Ht * Wt;
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
-    uint32_t tile_size = tt::tt_metal::detail::TileSize(data_format);
-
-    uint32_t cb_src0_size = 2 * Wt * tile_size;
-    uint32_t cb_output_size = 2 * Ht * tile_size;
-    uint32_t cb_im_size = Ht * Wt * tile_size;
-    uint32_t cb_im2_size = Ht * tile_size;
-    return cb_src0_size + cb_output_size + cb_im_size + cb_im2_size;
-}
-
-inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    auto device = input_tensor_a.device();
-    auto lowest_address = device->lowest_occupied_compute_l1_address();
-    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - device->get_base_allocator_addr(HalMemType::L1);
-    return max_l1_space;
-}
-
-inline bool rm_enough_available_space(const Tensor& input_tensor_a) {
-    uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
-    uint32_t estimated_size_of_cbs = get_estimated_size_of_cbs(input_tensor_a);
-    return max_l1_space > estimated_size_of_cbs;
-}
 
 inline Tensor transpose_(
     const Tensor& a,
@@ -83,17 +54,10 @@ inline Tensor transpose_(
         case TransposeOpDim::CN:
             tiled_only = true;  // CN only has a tiled implementation at the moment
             break;
-        case TransposeOpDim::WH:  // THIS NEEDS TO BE FIXED
-            if (((W * a.element_size()) % FACE_WIDTH != 0) || ((H * a.element_size()) % FACE_WIDTH != 0)) {
-                tiled_only = true;
-            } else if (a.device()->arch() == tt::ARCH::GRAYSKULL) {
-                tiled_only = a.shape()[-2] > 256;  // hangs right now past this dimension, #13660 will turn it from a
-                                                   // hang into a PCC issue for GS and improve perf for WH
-            } else if (
-                !a.is_sharded() && a.layout() == Layout::ROW_MAJOR &&
-                !rm_enough_available_space(
-                    a)) {  // rm is L1 intensive, if it overflows we can do tiled which allocates much smaller CBs
-                tiled_only = true;
+        case TransposeOpDim::WH:
+            if (!a.is_sharded() && a.layout() == Layout::ROW_MAJOR) {
+                return ttnn::prim::permute(
+                    a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}), output_mem_config, std::nullopt);
             }
             break;
         default: break;
@@ -122,7 +86,7 @@ ttnn::Tensor transpose_nd(
     const uint32_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
-    std::vector<int64_t> permutation;
+    ttnn::SmallVector<int64_t> permutation;
     permutation.reserve(input_tensor.get_shape().rank());
     for (uint32_t i = 0; i < input_tensor.get_shape().rank(); ++i) {
         permutation.push_back(i);
