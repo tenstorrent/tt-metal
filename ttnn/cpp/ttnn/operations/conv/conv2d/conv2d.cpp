@@ -54,13 +54,13 @@ Result conv2d(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
+    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
     const uint32_t output_height =
         ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     const uint32_t output_width =
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
 
-    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     bool auto_shard = false;
@@ -158,6 +158,7 @@ Result conv2d(
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
             parallel_config,
+            output_parallel_config,
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
@@ -194,6 +195,9 @@ Result conv2d(
 
         if (bypass_halo) {
             if (input_tensor_post_tm.layout() == Layout::TILE) {
+                // Reshape is used as a workaround to an issue in to_layout mentioned here :
+                // https://github.com/tenstorrent/tt-metal/issues/16330
+                input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.get_padded_shape());
                 input_tensor_post_tm =
                     ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
             }

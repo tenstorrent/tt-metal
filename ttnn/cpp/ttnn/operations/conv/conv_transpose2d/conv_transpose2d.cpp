@@ -168,7 +168,12 @@ Result conv_transpose2d(
     log_debug(LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
 
     const bool mm_conv = use_matmul_for_1x1_conv(
-        kernel_size, {1, 1}, {input_pad_top + input_pad_bottom, input_pad_left + input_pad_right}, dilation, groups);
+        kernel_size,
+        {1, 1},
+        {input_pad_top + input_pad_bottom, input_pad_left + input_pad_right},
+        dilation,
+        groups,
+        conv_config);
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
@@ -268,7 +273,6 @@ Result conv_transpose2d(
         get_fp32_dest_acc_en(compute_config),
         conv_config.enable_split_reader);
 
-    // TODO: Flip the Weights
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
@@ -282,6 +286,7 @@ Result conv_transpose2d(
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
             parallel_config,
+            output_parallel_config,
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
