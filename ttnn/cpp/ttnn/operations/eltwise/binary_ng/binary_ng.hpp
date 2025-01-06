@@ -177,4 +177,12 @@ constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::add_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::ADD>>();
 
+constexpr auto sub_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::sub_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::SUB>>();
+
+constexpr auto mul_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::mul_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::MUL>>();
+
 }  // namespace ttnn::experimental

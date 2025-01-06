@@ -165,5 +165,7 @@ void py_module(py::module& module) {
     detail::bind_binary_ng_operation(module, ttnn::experimental::logaddexp, "Binary Logaddexp Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::logaddexp2, "Binary Logaddexp2 Operation");
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::add_, "Binary Add In-place Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::sub_, "Binary Subtract In-place Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::mul_, "Binary Multiply In-place Operation");
 }
 }  // namespace ttnn::operations::binary_ng

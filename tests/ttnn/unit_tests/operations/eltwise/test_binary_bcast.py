@@ -32,6 +32,9 @@ binary_fns = {
     "mul",
     "div",
     "bias_gelu",
+    "add_",
+    "sub_",
+    "mul_",
 }
 activation_fns = {
     "EXP": torch.exp,
@@ -137,6 +140,7 @@ def rand_bf16_gen(shape, device, *, min=0, max=1):
         parameters({"squared_difference"}, {erfinv_post, i0_post}),
         parameters({"add"}, {tan_post, tanh_post}),
         {("mul", log_lhs_sqrt_abs_post)},
+        {("mul_", log_lhs_sqrt_abs_post)},
     ),
 )
 def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
@@ -251,6 +255,5 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config):
     ttnn_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     ttnn_c = ttnn.experimental.add(ttnn_a, ttnn_b)
     c = ttnn.to_torch(ttnn_c).reshape((-1))
-
 
     assert c.tolist() == c_golden

@@ -199,5 +199,7 @@ template struct BinaryNg<BinaryOpType::LDEXP>;
 template struct BinaryNg<BinaryOpType::LOGADDEXP>;
 template struct BinaryNg<BinaryOpType::LOGADDEXP2>;
 template struct InplaceBinaryNg<BinaryOpType::ADD>;
+template struct InplaceBinaryNg<BinaryOpType::SUB>;
+template struct InplaceBinaryNg<BinaryOpType::MUL>;
 
 }  // namespace ttnn::operations::binary_ng
