@@ -920,6 +920,21 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCom
 
 namespace l1_tests {
 
+TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBufferForL1) {
+    const uint32_t page_size = 256;
+    const uint32_t buffer_size = 128 * page_size;
+    const BufferRegion region(64 * page_size, 2048);
+    for (Device* device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::L1);
+        auto src = local_test_functions::generate_arange_vector(region.size);
+        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
+        vector<uint32_t> result;
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
+        EXPECT_EQ(src, result);
+    }
+}
+
 TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToL1Bank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
     for (IDevice* device : devices_) {
