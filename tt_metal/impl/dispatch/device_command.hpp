@@ -172,6 +172,7 @@ public:
         uint16_t length_adjust = 0) {
         uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_relay_paged_cmd = [&](CQPrefetchCmd* relay_paged_cmd) {
+            TT_ASSERT((length_adjust & CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK) == length_adjust);
             relay_paged_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
             relay_paged_cmd->relay_paged.start_page = start_page;
             relay_paged_cmd->relay_paged.is_dram_and_length_adjust =
