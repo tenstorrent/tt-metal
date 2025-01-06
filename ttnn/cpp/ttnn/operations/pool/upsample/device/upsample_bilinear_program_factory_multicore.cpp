@@ -152,24 +152,39 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // intermediate tensor CB
-    uint32_t in1_cb_id = CBIndex::c_1;
+    uint32_t in_cb_id1 = CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
         CircularBufferConfig(
             4 * in_cb_pagesize,  // since 4 pixels per page are needed for intermediate tensor.
-            {{in1_cb_id, input_cb_data_format}})
-            .set_page_size(in1_cb_id, in_cb_pagesize);
+            {{in_cb_id1, input_cb_data_format}})
+            .set_page_size(in_cb_id1, in_cb_pagesize);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
+    // intermediate tensor CB
+    uint32_t in_cb_id2 = CBIndex::c_2;
+    CircularBufferConfig cb_src2_config =
+        CircularBufferConfig(
+            4 * in_cb_pagesize,  // since 4 pixels per page are needed for intermediate tensor.
+            {{in_cb_id2, input_cb_data_format}})
+            .set_page_size(in_cb_id2, in_cb_pagesize);
+    auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+
     // scaler CB
-    uint32_t in_scalar_cb_id = CBIndex::c_4;
+    uint32_t in_scalar_cb_id1 = CBIndex::c_4;
     uint32_t in_scalar_cb_pagesize = tile_size(input_cb_data_format);
     uint32_t in_scalar_cb_npages = 1;
     CircularBufferConfig in_scalar_cb_config =
-        CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id, input_cb_data_format}})
-            .set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
+        CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id1, input_cb_data_format}})
+            .set_page_size(in_scalar_cb_id1, in_scalar_cb_pagesize);
 
     auto in_scalar_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
 
+    uint32_t in_scalar_cb_id2 = CBIndex::c_5;
+    CircularBufferConfig in_scalar_cb_config2 =
+        CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id2, input_cb_data_format}})
+            .set_page_size(in_scalar_cb_id2, in_scalar_cb_pagesize);
+
+    auto in_scalar_cb2 = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config2);
     // output sharded CB with upsampled data
     uint32_t out_cb_id = CBIndex::c_16;
     uint32_t aligned_output_stick_nbytes = round_up_to_mul32(output_stick_nbytes);
@@ -205,36 +220,52 @@ operation::ProgramWithCallbacks bilinear_multi_core(
 
     std::vector<uint32_t> reader_compile_time_args = {
         in_cb_id,
-        out_cb_id,
-        false,
+        in_cb_id1,
+        in_scalar_cb_id1,
         scale_h_inv_u32,
         scale_w_inv_u32,
         y_index_u32,
         x_index_compute_u32,
+        1,
+    };
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        in_cb_id,
+        in_cb_id2,
+        in_scalar_cb_id2,
+        scale_h_inv_u32,
+        scale_w_inv_u32,
+        y_index_u32,
+        x_index_compute_u32,
+        0,
     };
 
     string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
 
     reader_kernel_fname = std::string(
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp");
+    writer_kernel_fname = std::string(
+        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp");
     compute_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp");
 
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / constants::TILE_WIDTH);
     std::vector<uint32_t> compute_compile_time_args = {
-        1,
+        in_cb_id1,
+        in_cb_id2,
+        in_scalar_cb_id1,
+        in_scalar_cb_id2,
+        out_cb_id,
         in_ntiles_c,
         1 * in_ntiles_c,
-        4,
-        output_shape[1],
-        output_shape[2],
-        (uint32_t)std::ceil((float)output_shape[2] / constants::TILE_HEIGHT),
+        scale_factor_h * scale_factor_w,
         (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH),
         output_nsticks_per_core,  // loop count with blocks
-        input_shape[3],
     };
 
     auto reader_kernel =
         CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
+    auto writer_kernel =
+        CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
     TT_FATAL(fp32_dest_acc_en == false, "fp32_dest_acc_en as true not supported. #12787 issue raised");
     auto reduce_op = ReduceOpMath::SUM;
     auto reduce_dim = ReduceOpDim::H;
@@ -267,13 +298,14 @@ operation::ProgramWithCallbacks bilinear_multi_core(
             reader_rt_args[8] = (core == 0) ? 1 : 0;
             reader_rt_args[9] = (core == ncores_nhw - 1) ? 1 : 0;
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
+            SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
             start_input_stick_id += input_nsticks_per_core;
         }
     } else {
         TT_FATAL(false, "Unsupported memory layout");
     }
 
-    auto override_runtime_args_callback = [reader_kernel, cb_src0, out_cb](
+    auto override_runtime_args_callback = [reader_kernel, writer_kernel, cb_src0, out_cb](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,

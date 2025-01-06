@@ -32,19 +32,21 @@ void kernel_main() {
     uint32_t src1_addr = get_arg_val<uint32_t>(6);
     uint32_t read_offset = get_arg_val<uint32_t>(8);
     uint32_t is_last_row = get_arg_val<uint32_t>(9);
-    uint32_t in_h = 1;
     constexpr bool src1_is_dram = false;
-
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_1;
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(2);
     // constexpr uint32_t is_reader = get_compile_time_arg_val(2);
     constexpr uint32_t scale_h_inv_comp = get_compile_time_arg_val(3);
     constexpr uint32_t scale_w_inv_comp = get_compile_time_arg_val(4);
     constexpr uint32_t y_index_comp = get_compile_time_arg_val(5);
     constexpr uint32_t x_index_compute_comp = get_compile_time_arg_val(6);
+    constexpr uint32_t is_reader = get_compile_time_arg_val(7);
 
     uint32_t l1_read_addr = get_read_ptr(in_cb_id);
-    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
+    // Calculate the number of sticks to process per core by dividing the total number of sticks (in width direction)
+    // by 2.
+    uint32_t nsticks_to_process = (in_w * scale_w) / 2;
 
     // assuming shard begins with a new row. TODO: generalize?
     float scale_h_inv = uint32_to_float(scale_h_inv_comp);
@@ -52,9 +54,16 @@ void kernel_main() {
     float x, y, x_index, y_index, dx, dy;
     y_index = uint32_to_float(y_index_comp);
     float x_index_compute = uint32_to_float(x_index_compute_comp);
+
+    // If the current core is a writer core, adjust the x_index_compute to start from the correct position.
+    if (!is_reader) {
+        x_index_compute += scale_w_inv;
+        // If the total number of sticks is odd, process one less stick.
+        nsticks_to_process = ((in_w * scale_w) % 2) ? nsticks_to_process - 1 : nsticks_to_process;
+    }
     for (uint32_t image_row = 0; image_row < in_image_rows_per_core * scale_h; ++image_row) {
         x_index = x_index_compute;
-        for (uint32_t j = 0; j < in_w * scale_w; j++) {
+        for (uint32_t j = 0; j < nsticks_to_process; j++) {
             cb_reserve_back(out_cb_id, 4);
             cb_reserve_back(in_scalar_cb_id, 1);
 
@@ -107,7 +116,7 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(out_cb_id, 4);
             cb_push_back(in_scalar_cb_id, 1);
-            x_index += scale_w_inv;
+            x_index += scale_w_inv * 2;
         }
         y_index += scale_h_inv;
     }
