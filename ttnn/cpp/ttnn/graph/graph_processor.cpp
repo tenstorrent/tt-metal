@@ -278,14 +278,13 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 
 int GraphProcessor::add_tensor(const Tensor& t) {
     auto& storage = t.get_storage();
-    auto buffer = std::visit(
-        [&t](auto&& storage) -> tt::tt_metal::Buffer* {
+    std::vector<tt::tt_metal::Buffer*> buffers = std::visit(
+        [&t](auto&& storage) -> std::vector<tt::tt_metal::Buffer*> {
             using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return t.buffer();
-            } else {
-                return nullptr;
+            if constexpr (std::is_same_v<T, DeviceStorage> || std::is_same_v<T, MultiDeviceStorage>) {
+                return t.buffers();
             }
+            return {};
         },
         storage);
     std::int64_t tensor_id;
@@ -297,9 +296,22 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     }
     auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.get_shape();
+
+    auto extract_device_ids = [](const std::vector<tt::tt_metal::Buffer*>& buffers) {
+        std::string device_ids;
+        for (size_t idx = 0; idx < buffers.size(); ++idx) {
+            if (idx > 0) {
+                device_ids += ", ";
+            }
+            device_ids += std::to_string(buffers[idx]->device()->id());
+        }
+        return device_ids;
+    };
+
     std::unordered_map<std::string, std::string> params = {
         {kShape, fmt::format("{}", shape)},
         {kTensorId, fmt::format("{}", tensor_id)},
+        {kDeviceId, extract_device_ids(buffers)},
     };
 
     if (tensor_id_to_counter.count(tensor_id) == 0) {
@@ -307,12 +319,15 @@ int GraphProcessor::add_tensor(const Tensor& t) {
         tensor_id_to_counter[tensor_id] = tensor_counter;
     }
 
-    if (buffer) {
-        auto buffer_id = add_buffer(buffer);
-        graph[buffer_id].connections.push_back(tensor_counter);
-    } else {
+    if (buffers.empty()) {
         tt::log_info("Tensor doesn't have buffer, but storage is {}", demangle(get_type_in_var(t.get_storage()).name()));
     }
+
+    for (auto& buffer : buffers) {
+        auto buffer_id = add_buffer(buffer);
+        graph[buffer_id].connections.push_back(tensor_counter);
+    }
+
     return tensor_counter;
 }
 
