@@ -15,6 +15,7 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
+#include "tt_metal/llrt/llrt.hpp"
 
 class CommandQueueFixture : public DispatchFixture {
 protected:
