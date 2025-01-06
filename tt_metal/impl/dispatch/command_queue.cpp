@@ -53,26 +53,24 @@ bool DispatchStateCheck(bool isFastDispatch) {
     return fd;
 }
 
-void SetLazyCommandQueueMode(bool lazy) {
-    DispatchStateCheck(true);
-    LAZY_COMMAND_QUEUE_MODE = lazy;
-}
-
 // Selects all sub-devices in the sub device stall group if none are specified
-tt::stl::Span<const SubDeviceId> select_sub_device_ids(IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+tt::stl::Span<const SubDeviceId> select_sub_device_ids(
+    IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (sub_device_ids.empty()) {
         return device->get_sub_device_stall_group();
     } else {
         for (const auto& sub_device_id : sub_device_ids) {
-            TT_FATAL(sub_device_id.to_index() < device->num_sub_devices(), "Invalid sub-device id specified {}", sub_device_id.to_index());
+            TT_FATAL(
+                sub_device_id.to_index() < device->num_sub_devices(),
+                "Invalid sub-device id specified {}",
+                sub_device_id.to_index());
         }
         return sub_device_ids;
     }
 }
 
-void ValidateBufferRegion(
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, const BufferRegion& region) {
-    auto& b = std::visit(
+Buffer& GetBufferObject(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer) {
+    return std::visit(
         [&](auto&& b) -> Buffer& {
             using type_buf = std::decay_t<decltype(b)>;
             if constexpr (std::is_same_v<type_buf, std::shared_ptr<Buffer>>) {
@@ -82,13 +80,26 @@ void ValidateBufferRegion(
             }
         },
         buffer);
+}
+
+void SetLazyCommandQueueMode(bool lazy) {
+    DispatchStateCheck(true);
+    LAZY_COMMAND_QUEUE_MODE = lazy;
+}
+
+void ValidateBufferRegion(
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, const BufferRegion& region) {
+    Buffer& buffer_obj = GetBufferObject(buffer);
 
     TT_FATAL(
-        b.is_valid_region(region), "Buffer region with offset {} and size {} is invalid.", region.offset, region.size);
+        buffer_obj.is_valid_region(region),
+        "Buffer region with offset {} and size {} is invalid.",
+        region.offset,
+        region.size);
 
-    if (b.is_partial_region(region)) {
+    if (buffer_obj.is_partial_region(region)) {
         TT_FATAL(
-            !is_sharded(b.buffer_layout()),
+            !is_sharded(buffer_obj.buffer_layout()),
             "Reading from and writing to partial buffer regions is only supported for non-sharded buffers.");
     }
 }
@@ -1097,23 +1108,18 @@ void HWCommandQueue::enqueue_write_buffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     // Top level API to accept different variants for buffer and src
     // For shared pointer variants, object lifetime is guaranteed at least till the end of this function
-    auto data = std::visit([&](auto&& data) -> const void* {
-        using T = std::decay_t<decltype(data)>;
-        if constexpr (std::is_same_v<T, const void*>) {
-            return data;
-        } else {
-            return data->data();
-        }
-    }, src);
-    auto& b = std::visit([&](auto&& b) -> Buffer& {
-        using type_buf = std::decay_t<decltype(b)>;
-        if constexpr (std::is_same_v<type_buf, std::shared_ptr<Buffer>>) {
-            return *b;
-        } else {
-            return b.get();
-        }
-    }, buffer);
-    this->enqueue_write_buffer(b, data, region, blocking, sub_device_ids);
+    auto data = std::visit(
+        [&](auto&& data) -> const void* {
+            using T = std::decay_t<decltype(data)>;
+            if constexpr (std::is_same_v<T, const void*>) {
+                return data;
+            } else {
+                return data->data();
+            }
+        },
+        src);
+    Buffer& buffer_obj = detail::GetBufferObject(buffer);
+    this->enqueue_write_buffer(buffer_obj, data, region, blocking, sub_device_ids);
 }
 
 CoreType HWCommandQueue::get_dispatch_core_type() {
@@ -2010,16 +2016,10 @@ void EnqueueReadBuffer(
     void* dst,
     bool blocking) {
     const DeviceAddr offset = 0;
-    const DeviceAddr size = std::visit(
-        [](auto&& buf) -> size_t {
-            using T = std::decay_t<decltype(buf)>;
-            if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
-                return buf.get().size();
-            } else if constexpr (std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                return buf->size();
-            }
-        },
-        buffer);
+
+    Buffer& buffer_obj = detail::GetBufferObject(buffer);
+    const DeviceAddr size = buffer_obj.size();
+
     BufferRegion region(offset, size);
     EnqueueReadSubBuffer(cq, buffer, dst, region, blocking);
 }
@@ -2049,16 +2049,10 @@ void EnqueueWriteBuffer(
     HostDataType src,
     bool blocking) {
     const DeviceAddr offset = 0;
-    const DeviceAddr size = std::visit(
-        [](auto&& buf) -> size_t {
-            using T = std::decay_t<decltype(buf)>;
-            if constexpr (std::is_same_v<T, std::reference_wrapper<Buffer>>) {
-                return buf.get().size();
-            } else if constexpr (std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                return buf->size();
-            }
-        },
-        buffer);
+
+    Buffer& buffer_obj = detail::GetBufferObject(buffer);
+    const DeviceAddr size = buffer_obj.size();
+
     BufferRegion region(offset, size);
     EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
 }
