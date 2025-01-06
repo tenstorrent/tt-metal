@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -56,7 +57,10 @@ void generate_ccl_cb_to_tensor_slice_sequence_commands(
     ttnn::ccl::cmd::CclCommandDestArgs const& dest_args);
 void generate_ccl_command_stream_to_kernel_args(
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream,
-    std::vector<uint32_t>& args_out);
+    std::optional<size_t> tensor_index,
+    std::optional<std::vector<size_t>> const& tensor_indices,
+    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider_out,
+    std::vector<uint32_t>& rt_args_out);
 
 // TODO: eventually take a fabric handle
 void generate_multi_input_command_stream_kernel_rt_args(
@@ -71,7 +75,9 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::optional<std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>> const& ccl_command_stream1,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<std::unordered_map<const Tensor*, Device*>> const& tensor_device_override = std::nullopt);
+    std::optional<std::unordered_map<const Tensor*, Device*>> const& tensor_device_override = std::nullopt,
+    std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
+    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);
 // Helper functions for building command processing datamovement kernels
 // TODO: Bundle into command bundle per command stream to cut down
 //       on args and improve usability
