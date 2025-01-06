@@ -174,7 +174,6 @@ static ttnn::Tensor pad_impl(
     TT_FATAL(padding.size() == original_rank, "ttnn.pad: padding must be the same length as the input tensor rank");
 
     // Unsqueeze Tensor to 4D if it is not already
-    // ttnn::Tensor input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     ttnn::Tensor input_tensor_4D;
     if (input_tensor.get_shape().rank() < 4) {
         input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
