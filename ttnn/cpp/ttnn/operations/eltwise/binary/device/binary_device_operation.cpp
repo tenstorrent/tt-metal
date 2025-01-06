@@ -11,6 +11,8 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::binary {
 
 namespace utils {
@@ -83,10 +85,10 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         }
         if (height_b == 1) {
             if (tensor_args.input_tensor_a.is_sharded()) {
-                if (tensor_args.input_tensor_a.get_padded_shape()[0] ==
-                        tensor_args.input_tensor_b->get_padded_shape()[0] ||
-                    tensor_args.input_tensor_a.get_padded_shape()[0] > 1 and
-                        tensor_args.input_tensor_b->get_padded_shape()[0] == 1) {
+                if (tensor_args.input_tensor_a.padded_shape()[0] ==
+                        tensor_args.input_tensor_b->padded_shape()[0] ||
+                    tensor_args.input_tensor_a.padded_shape()[0] > 1 and
+                        tensor_args.input_tensor_b->padded_shape()[0] == 1) {
                     return BroadcastHeightMultiCoreShardedOptimized{};
                 }
                 return BroadcastHeightMultiCoreSharded{};
