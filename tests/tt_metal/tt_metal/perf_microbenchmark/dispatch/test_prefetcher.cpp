@@ -1699,14 +1699,13 @@ void configure_for_single_chip(
     Program& program,
     void* host_hugepage_base,
     uint32_t prefetch_q_base,
-    uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_relay_mux_core,
     CoreCoord phys_prefetch_relay_demux_core,
     CoreCoord phys_dispatch_relay_mux_core,
     CoreCoord phys_dispatch_relay_demux_core,
     uint32_t packetized_path_test_results_addr,
     uint32_t packetized_path_test_results_size,
-    uint32_t dev_hugepage_base_g) {
+    uint32_t dev_hugepage_base) {
     constexpr CoreType dispatch_core_type = CoreType::WORKER;
     constexpr NOC my_noc_index = NOC::NOC_0;
     constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
@@ -1720,6 +1719,12 @@ void configure_for_single_chip(
     CoreCoord phys_prefetch_d_core = device->worker_core_from_logical_core(prefetch_d_core);
     CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
     CoreCoord phys_dispatch_h_core = device->worker_core_from_logical_core(dispatch_h_core);
+
+    const auto prefetch_q_rd_ptr_addr = dispatch_constants::get(CoreType::WORKER)
+                                            .get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+    const auto prefetch_q_rd_pcie_ptr_addr =
+        dispatch_constants::get(CoreType::WORKER)
+            .get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
 
     uint32_t dispatch_buffer_base = l1_buf_base_g;
     uint32_t prefetch_d_buffer_base = l1_buf_base_g;
@@ -1742,7 +1747,7 @@ void configure_for_single_chip(
 
     // NOTE: this test hijacks hugepage
     host_hugepage_completion_buffer_base_g = (void*)((uint8_t*)host_hugepage_base + hugepage_issue_buffer_size_g);
-    uint32_t dev_hugepage_completion_buffer_base = dev_hugepage_base_g + hugepage_issue_buffer_size_g;
+    uint32_t dev_hugepage_completion_buffer_base = dev_hugepage_base + hugepage_issue_buffer_size_g;
     uint32_t* host_hugepage_completion_buffer = (uint32_t*)host_hugepage_completion_buffer_base_g;
     vector<uint32_t> tmp = {dev_hugepage_completion_buffer_base >> 4};
     CoreCoord phys_dispatch_host_core = split_dispatcher_g ? phys_dispatch_h_core : phys_dispatch_core;
@@ -1754,66 +1759,59 @@ void configure_for_single_chip(
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_rd_ptr);
     dirty_host_completion_buffer(host_hugepage_completion_buffer);
 
-    const uint32_t prefetch_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
-    const uint32_t prefetch_d_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
-    TT_ASSERT(prefetch_core_sem_0_id == prefetch_d_core_sem_0_id);
-    if (packetized_path_en_g) {
-        const uint32_t prefetch_relay_mux_core_sem_0_id =
-            tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);  // unused
-        const uint32_t prefetch_relay_demux_core_sem_0_id =
-            tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);  // unused
-        TT_ASSERT(prefetch_relay_mux_core_sem_0_id == prefetch_relay_demux_core_sem_0_id);
-        TT_ASSERT(prefetch_relay_mux_core_sem_0_id == prefetch_core_sem_0_id);
-    }
-    const uint32_t prefetch_sync_sem = prefetch_core_sem_0_id;
-
+    // Prefetch semaphores
     const uint32_t prefetch_downstream_buffer_pages =
         split_prefetcher_g ? prefetch_d_buffer_pages : dispatch_buffer_pages;
+    const uint32_t prefetch_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
     const uint32_t prefetch_core_sem_1_id =
         tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_downstream_buffer_pages);
-    if (packetized_path_en_g) {
-        // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
-        // value only to update the rptr:
-        const uint32_t prefetch_relay_demux_core_sem_1_id =
-            tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);
-        TT_ASSERT(prefetch_core_sem_1_id == prefetch_relay_demux_core_sem_1_id);
-    }
-    const uint32_t prefetch_downstream_cb_sem = prefetch_core_sem_1_id;
 
+    const uint32_t prefetch_d_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
     const uint32_t prefetch_d_core_sem_1_id = tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
     const uint32_t prefetch_d_core_sem_2_id =
         tt_metal::CreateSemaphore(program, {prefetch_d_core}, dispatch_buffer_pages);
-    if (packetized_path_en_g) {
-        const uint32_t prefetch_relay_mux_core_sem_1_id =
-            tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
-        TT_ASSERT(prefetch_d_core_sem_1_id == prefetch_relay_mux_core_sem_1_id);
-    }
-    const uint32_t prefetch_d_upstream_cb_sem = prefetch_d_core_sem_1_id;
-    const uint32_t prefetch_d_downstream_cb_sem = prefetch_d_core_sem_2_id;
 
+    const uint32_t prefetch_relay_mux_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
+    const uint32_t prefetch_relay_mux_core_sem_1_id = tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
+    const uint32_t prefetch_relay_demux_core_sem_0_id =
+        tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);
+    const uint32_t prefetch_relay_demux_core_sem_1_id =
+        tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);
+
+    // Dispatch semaphores
     const uint32_t dispatch_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
-    const uint32_t dispatch_relay_demux_core_sem_0_id =
-        tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);  // unused
-    TT_ASSERT(dispatch_core_sem_0_id == dispatch_relay_demux_core_sem_0_id);
-    const uint32_t dispatch_sync_sem = dispatch_core_sem_0_id;
-
-    const uint32_t dispatch_core_sem_1_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0);  // 1
-    const uint32_t dispatch_relay_demux_core_sem_1_id =
-        tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);  // unused
-    TT_ASSERT(dispatch_core_sem_1_id == dispatch_relay_demux_core_sem_1_id);
-    const uint32_t dispatch_cb_sem = dispatch_core_sem_1_id;
-
+    const uint32_t dispatch_core_sem_1_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
     const uint32_t dispatch_core_sem_2_id = tt_metal::CreateSemaphore(program, {dispatch_core}, dispatch_buffer_pages);
-    // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
-    // value only to update the rptr:
+    const uint32_t dispatch_h_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0);
+
+    const uint32_t dispatch_relay_demux_core_sem_0_id =
+        tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
+    const uint32_t dispatch_relay_demux_core_sem_1_id =
+        tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
     const uint32_t dispatch_relay_demux_core_sem_2_id =
         tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
-    TT_ASSERT(dispatch_core_sem_2_id == dispatch_relay_demux_core_sem_2_id);
-    const uint32_t dispatch_downstream_cb_sem = dispatch_core_sem_2_id;
-
-    const uint32_t dispatch_h_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0);
     const uint32_t dispatch_relay_mux_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_relay_mux_core}, 0);
+
+    // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
+    // value only to update the rptr:
+    TT_ASSERT(prefetch_core_sem_0_id == prefetch_d_core_sem_0_id);
+    TT_ASSERT(prefetch_relay_demux_core_sem_0_id == prefetch_relay_mux_core_sem_0_id);
+    TT_ASSERT(prefetch_core_sem_0_id == prefetch_relay_mux_core_sem_0_id);
+    TT_ASSERT(prefetch_core_sem_1_id == prefetch_relay_demux_core_sem_1_id);
+    TT_ASSERT(prefetch_d_core_sem_1_id == prefetch_relay_mux_core_sem_1_id);
+
+    TT_ASSERT(dispatch_core_sem_0_id == dispatch_relay_demux_core_sem_0_id);
+    TT_ASSERT(dispatch_core_sem_1_id == dispatch_relay_demux_core_sem_1_id);
+    TT_ASSERT(dispatch_core_sem_2_id == dispatch_relay_demux_core_sem_2_id);
     TT_ASSERT(dispatch_h_core_sem_0_id == dispatch_relay_mux_core_sem_0_id);
+
+    const uint32_t prefetch_sync_sem = prefetch_core_sem_0_id;
+    const uint32_t prefetch_downstream_cb_sem = prefetch_core_sem_1_id;
+    const uint32_t prefetch_d_upstream_cb_sem = prefetch_d_core_sem_1_id;
+    const uint32_t prefetch_d_downstream_cb_sem = prefetch_d_core_sem_2_id;
+    const uint32_t dispatch_sync_sem = dispatch_core_sem_0_id;
+    const uint32_t dispatch_cb_sem = dispatch_core_sem_1_id;
+    const uint32_t dispatch_downstream_cb_sem = dispatch_core_sem_2_id;
     const uint32_t dispatch_h_cb_sem = dispatch_h_core_sem_0_id;
 
     if (split_prefetcher_g) {
@@ -1826,26 +1824,29 @@ void configure_for_single_chip(
                                     noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
 
+        // In the case of packetized_enable_g, the prefetch_h downstream is
+        // mux and the prefetch_d upstream is the demux
+        // set the semaphores accordingly
         std::vector<uint32_t> prefetch_d_compile_args = {
             dispatch_buffer_base,
             dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
             dispatch_buffer_pages,
-            prefetch_d_downstream_cb_sem,
-            dispatch_cb_sem,
-            dev_hugepage_base_g,
+            prefetch_d_downstream_cb_sem,  // my_downstream_cb_sem_id
+            dispatch_cb_sem,               // downstream_cb_sem_id
+            dev_hugepage_base,
             hugepage_issue_buffer_size_g,
             prefetch_q_base,
             prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
             prefetch_q_rd_ptr_addr,
-            prefetch_q_rd_ptr_addr + sizeof(uint32_t),
+            prefetch_q_rd_pcie_ptr_addr,
             prefetch_d_buffer_base,
             prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE),
             scratch_db_base,
             scratch_db_size_g,
-            prefetch_sync_sem,
+            prefetch_sync_sem,  // my_downstream_sync_sem_id
             prefetch_d_buffer_pages,
-            prefetch_d_upstream_cb_sem,
-            prefetch_downstream_cb_sem,
+            prefetch_d_upstream_cb_sem,  // my_upstream_cb_sem_id
+            prefetch_downstream_cb_sem,  // upstream_cb_sem_id
             dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
             dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,
             0,
@@ -1877,12 +1878,12 @@ void configure_for_single_chip(
             prefetch_d_buffer_pages,
             prefetch_downstream_cb_sem,
             prefetch_d_upstream_cb_sem,
-            dev_hugepage_base_g,
+            dev_hugepage_base,
             hugepage_issue_buffer_size_g,
             prefetch_q_base,
             prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
             prefetch_q_rd_ptr_addr,
-            prefetch_q_rd_ptr_addr + sizeof(uint32_t),
+            prefetch_q_rd_pcie_ptr_addr,
             cmddat_q_base,
             cmddat_q_size_g,
             0,
@@ -2083,27 +2084,27 @@ void configure_for_single_chip(
             cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
         std::vector<uint32_t> prefetch_compile_args = {
-            dispatch_buffer_base,
-            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-            dispatch_buffer_pages,
-            prefetch_downstream_cb_sem,
-            dispatch_cb_sem,
-            dev_hugepage_base_g,
-            hugepage_issue_buffer_size_g,
-            prefetch_q_base,
-            prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
-            prefetch_q_rd_ptr_addr,
-            prefetch_q_rd_ptr_addr + sizeof(uint32_t),
-            cmddat_q_base,
-            cmddat_q_size_g,
-            scratch_db_base,
-            scratch_db_size_g,
-            prefetch_sync_sem,
-            prefetch_d_buffer_pages,
-            prefetch_d_upstream_cb_sem,
-            prefetch_downstream_cb_sem,
-            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-            dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,
+            dispatch_buffer_base,                               // downstream_cb_base
+            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,  // downstream_cb_log_page_size
+            dispatch_buffer_pages,                              // downstream_cb_pages
+            prefetch_downstream_cb_sem,                         // my_downstream_cb_sem_id
+            dispatch_cb_sem,                                    // downstream_cb_sem_id
+            dev_hugepage_base,                                  // pcie_base
+            hugepage_issue_buffer_size_g,                       // pcie_size
+            prefetch_q_base,                                    // prefetch_q_base
+            prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),  // prefetch_q_size
+            prefetch_q_rd_ptr_addr,                               // prefetch_q_rd_ptr_addr
+            prefetch_q_rd_pcie_ptr_addr,                          // prefetch_q_pcie_rd_ptr_addr
+            cmddat_q_base,                                        // cmddat_q_base
+            cmddat_q_size_g,                                      // cmddat_q_size
+            scratch_db_base,                                      // scratch_db_base
+            scratch_db_size_g,                                    // scratch_db_size
+            prefetch_sync_sem,                                    // my_downstream_sync_sem_id
+            prefetch_d_buffer_pages,                              // cmddat_q_pages
+            prefetch_d_upstream_cb_sem,                           // my_upstream_cb_sem_id
+            prefetch_downstream_cb_sem,                           // upstream_cb_sem_id
+            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,  // cmddat_q_log_page_size
+            dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,         // cmddat_q_blocks
             0,
             0,
             0,
@@ -2527,12 +2528,12 @@ int main(int argc, char** argv) {
 
         uint32_t cq_start =
             dispatch_constants::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t dev_hugepage_base_g = 2 * (cq_start * sizeof(uint32_t));  // HOST_CQ uses some at the start address
+        uint32_t dev_hugepage_base = 2 * (cq_start * sizeof(uint32_t));  // HOST_CQ uses some at the start address
 
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
         auto host_hugepage_base = (void*)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
-        host_hugepage_base = (void*)((uint8_t*)host_hugepage_base + dev_hugepage_base_g);
+        host_hugepage_base = (void*)((uint8_t*)host_hugepage_base + dev_hugepage_base);
 
         if (test_device_id_g == 0) {
             configure_for_single_chip(
@@ -2540,14 +2541,13 @@ int main(int argc, char** argv) {
                 program,
                 host_hugepage_base,
                 prefetch_q_base,
-                prefetch_q_rd_ptr_addr,
                 phys_prefetch_relay_mux_core,
                 phys_prefetch_relay_demux_core,
                 phys_dispatch_relay_mux_core,
                 phys_dispatch_relay_demux_core,
                 packetized_path_test_results_addr,
                 packetized_path_test_results_size,
-                dev_hugepage_base_g);
+                dev_hugepage_base);
         } else {
             TT_THROW("Multi chip test is not implemented");
         }
@@ -2624,7 +2624,7 @@ int main(int argc, char** argv) {
                 cmds,
                 terminate_cmds,
                 host_hugepage_base,
-                dev_hugepage_base_g,
+                dev_hugepage_base,
                 prefetch_q_base,
                 prefetch_q_rd_ptr_addr,
                 phys_prefetch_core_g,
@@ -2656,7 +2656,7 @@ int main(int argc, char** argv) {
                     cmds,
                     terminate_cmds,
                     host_hugepage_base,
-                    dev_hugepage_base_g,
+                    dev_hugepage_base,
                     prefetch_q_base,
                     prefetch_q_rd_ptr_addr,
                     phys_prefetch_core_g,
@@ -2678,7 +2678,7 @@ int main(int argc, char** argv) {
                 cmds,
                 terminate_cmds,
                 host_hugepage_base,
-                dev_hugepage_base_g,
+                dev_hugepage_base,
                 prefetch_q_base,
                 prefetch_q_rd_ptr_addr,
                 phys_prefetch_core_g,
