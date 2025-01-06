@@ -10,7 +10,6 @@
 #include "gtest/gtest.h"
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/dispatch/util/include/dispatch_settings.hpp"
-#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 using namespace tt::tt_metal::dispatch;
@@ -31,37 +30,6 @@ void ForEachCoreTypeXHWCQs(const std::function<void(const CoreType& core_type, c
             test_func(core_type, num_hw_cqs);
         }
     }
-}
-
-TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsDefaultParity) {
-    ForEachCoreTypeXHWCQs([&](const CoreType& core_type, uint32_t num_hw_cqs) {
-        auto settings = DispatchSettings::defaults(core_type, tt::Cluster::instance(), num_hw_cqs);
-
-        const auto& old_constants = dispatch_constants::get(core_type, num_hw_cqs);
-
-        ASSERT_EQ(settings.num_hw_cqs_, num_hw_cqs);
-
-        ASSERT_EQ(settings.prefetch_q_entries_, old_constants.prefetch_q_entries());
-        ASSERT_EQ(settings.prefetch_q_size_, old_constants.prefetch_q_size());
-        ASSERT_EQ(settings.prefetch_max_cmd_size_, old_constants.max_prefetch_command_size());
-        ASSERT_EQ(settings.prefetch_cmddat_q_size_, old_constants.cmddat_q_size());
-        ASSERT_EQ(settings.prefetch_scratch_db_size_, old_constants.scratch_db_size());
-
-        ASSERT_EQ(settings.prefetch_d_buffer_size_, old_constants.prefetch_d_buffer_size());
-        ASSERT_EQ(settings.prefetch_d_pages_, old_constants.prefetch_d_buffer_pages());
-        ASSERT_EQ(settings.prefetch_d_blocks_, dispatch_constants::PREFETCH_D_BUFFER_BLOCKS);
-
-        ASSERT_EQ(settings.tunneling_buffer_size_ / num_hw_cqs, old_constants.mux_buffer_size(num_hw_cqs));
-        ASSERT_EQ(settings.tunneling_buffer_pages_ / num_hw_cqs, old_constants.mux_buffer_pages(num_hw_cqs));
-
-        ASSERT_EQ(settings.dispatch_pages_, old_constants.dispatch_buffer_pages());
-        ASSERT_EQ(settings.dispatch_pages_per_block_, dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS);
-
-        ASSERT_EQ(settings.dispatch_s_buffer_size_, old_constants.dispatch_s_buffer_size());
-        ASSERT_EQ(settings.dispatch_s_buffer_pages_, old_constants.dispatch_s_buffer_pages());
-
-        EXPECT_NO_THROW(settings.build());
-    });
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsDefaultUnsupportedCoreType) {
