@@ -246,6 +246,27 @@ void py_module(py::module& module) {
 
                 Args:
                     mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to remove.
+            )doc")
+        .def(
+            "set_sub_device_stall_group",
+            [](MeshDevice& self, const std::vector<SubDeviceId>& sub_device_ids) {
+                self.set_sub_device_stall_group(sub_device_ids);
+            },
+            py::arg("sub_device_ids"),
+            R"doc(
+                Set the SubDevice IDs that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing.
+                Stalling here refers to the Fast Dispatch cores waiting for programs to complete execution on the specified SubDevices before proceeding with the specified instruction.
+                The default SubDevice IDs to stall on are set to all SubDevice IDs, and whenever a new SubDevice Manager is loaded.
+
+                Args:
+                    sub_device_ids (List[SubDeviceId]): The IDs of the SubDevices to stall on.
+            )doc")
+        .def(
+            "reset_sub_device_stall_group",
+            &MeshDevice::reset_sub_device_stall_group,
+            R"doc(
+                Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
+                back to all SubDevice IDs.
             )doc");
 
     module.def(

@@ -102,27 +102,29 @@ When enqueuing a program on a specific sub-device, the dispatch infrastructure w
 
 ### 1.4 Synchronization
 
-In the default setup without sub-devices, all apis for reads/writes/running programs will stall until all previous programs have finished, before executing the target instructions. With sub-devices, this behaviour remains the same in that calls to reads/writes will stall on all programs to finish across all sub-devices. To only stall on specific sub-devices, a new sub_device_ids parameter is added to the enqueue read/write apis, as well as the higher level ttnn functions such as `tensor.to`, `tensor.cpu`, `ttnn.from_torch`, `ttnn.to_torch`, which takes in a list of sub-device ids to stall on. This allows the user to specify for example a read to host instruction to wait for only the producer sub-devices to finish.
+In the default setup without sub-devices, all apis for reads/writes/running programs will stall until all previous programs have finished before executing the target instructions. With sub-devices, this behaviour remains the same in that calls to reads/writes will stall on all programs to finish across all sub-devices. To only stall on specific sub-devices, a user can manually set what the stall group should be using `set_sub_device_stall_group`. This is useful for example if we have a persistent program running on one sub-device, so when running programs on a different sub-device or issuing reads/writes while that persistent program is active, we remove it from the stall list since we aren't depending on that program to finish. This allows the user to specify for example a read to host instruction to wait for only the producer sub-devices to finish, and not other unrelated sub-devices.
 
-The synchronize apis such as `Synchronize`, `EnqueueRecordEvent`, and the ttnn level functions `ttnn.synchronize_device`, `ttnn.record_event`, which are used for host level and device level synchronizations, also now take in a `sub_device_ids` parameter so that either the host or the device stalls until programs on the specified sub-devices complete before continuing.
+The synchronize apis such as `Synchronize`, `EnqueueRecordEvent`, and the ttnn level functions `ttnn.synchronize_device`, `ttnn.record_event`, which are used for host level and device level synchronizations, also take in a `sub_device_ids` parameter to override the default list so that either the host or the device stalls until programs on the specified sub-devices complete before continuing.
 
 The following are some examples of the different python level APIs that take in sub-devices for synchronizing.
 
-* `ttnn.from_torch(..., sub_device_ids=[sub_device_id_0, sub_device_id_1])`
+* `ttnn.set_sub_device_stall_group(sub_device_ids=[sub_device_id_0, sub_device_id_1])`
 
-  This will convert a tensor from torch to ttnn, and if written to device, will stall waiting for completion of the specified sub-device's programs before writing the tensor to device. Not specifying any sub-device ids means we will stall waiting for all sub-devices to complete.
+  Set the SubDevice IDs that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing.
+  Stalling here refers to the Fast Dispatch cores waiting for programs to complete execution on the specified SubDevices before proceeding with the specified instruction.
+  The default SubDevice IDs to stall on are set to all SubDevice IDs, and whenever a new SubDevice Manager is loaded.
 
-* `ttnn.to_torch(..., sub_device_ids=[sub_device_id_0, sub_device_id_1])`
+* `ttnn.reset_sub_device_stall_group()`
 
-  This will convert a tensor from ttnn to torch, and will stall waiting for completion of the specified sub-device's programs before reading the tensor to host. Not specifying any sub-device ids means we will stall waiting for all sub-devices to complete.
+  Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing back to all SubDevice IDs.
 
 * `ttnn.synchronize_devices(..., sub_device_ids=[sub_device_id_0, sub_device_id_1])`
 
-  This will stall the host waiting for completion of the specified sub-device's programs. Not specifying any sub-device ids means we will stall waiting for all sub-devices to complete.
+  This will stall the host waiting for completion of the specified sub-device's programs. Not specifying any sub-device ids means we will stall waiting for all sub-devices set by `set_sub_device_stall_group` to complete.
 
 * `ttnn.record_event(..., sub_device_ids=[sub_device_id_0, sub_device_id_1])`
 
-  This will stall the device waiting for completion of the specified sub-device's programs before recording that the event has occurred. Not specifying any sub-device ids means we will stall waiting for all sub-devices to complete.
+  This will stall the device waiting for completion of the specified sub-device's programs before recording that the event has occurred. Not specifying any sub-device ids means we will stall waiting for all sub-devices set by `set_sub_device_stall_group` to complete.
 
 ## 2. Global Semaphores
 
