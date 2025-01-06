@@ -1190,6 +1190,20 @@ std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chi
     return inactive_ethernet_cores;
 }
 
+bool Cluster::is_ethernet_link_up(chip_id_t chip_id, const CoreCoord &logical_core) const {
+    const auto &soc_desc = get_soc_desc(chip_id);
+    ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(logical_core);
+    if (arch_ == ARCH::BLACKHOLE) {
+        const auto &local_eth_channels_connectivity = this->chip_to_eth_connected_chips[chip_id];
+        auto local_eth_channel = soc_desc.logical_eth_core_to_chan_map.at(logical_core);
+        auto connected_chip_and_eth_channel = local_eth_channels_connectivity[local_eth_channel];
+        return connected_chip_and_eth_channel.has_value();
+    } else if (this->cluster_desc_->ethernet_core_has_active_ethernet_link(chip_id, eth_chan)) {
+        return true;
+    }
+    return false;
+}
+
 std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const {
     const auto &soc_desc = get_soc_desc(std::get<0>(eth_core));
     ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
