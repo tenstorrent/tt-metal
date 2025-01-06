@@ -150,6 +150,11 @@ class TtLlamaAttention(LightweightModule):
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
+        # Ring stuff
+        # 9216, 12288
+        qkv_cat = torch.nn.functional.pad(qkv_cat, (0, (12288 - 10240), 0, (9216 - 8192)), "constant", 0)
+
+        # [1, 1, 8192, 10240] -> [2304, 1536]
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.dtype,
@@ -263,18 +268,45 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        x_torch = ttnn.to_torch(
+        # x_torch = ttnn.to_torch(
+        #     x,
+        #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=(8, 4)),
+        # )[0].unsqueeze(0)
+        # ttnn.deallocate(x)
+        # wqkv_torch = ttnn.to_torch(
+        #     self.wqkv,
+        #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 2), mesh_shape=(8, 4)),
+        # )
+        # xqkv_torch = torch.matmul(x_torch.to(torch.float32), wqkv_torch.to(torch.float32))
+        # xqkv_fused = ttnn.as_tensor(
+        #     xqkv_torch,
+        #     dtype=ttnn.bfloat16,
+        #     device=self.mesh_device,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(
+        #         mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
+        #     ),
+        #     layout=ttnn.TILE_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
+
+        xqkv_fused_sharded = ttnn.matmul(
             x,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=(8, 4)),
-        )[0].unsqueeze(0)
-        ttnn.deallocate(x)
-        wqkv_torch = ttnn.to_torch(
             self.wqkv,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 2), mesh_shape=(8, 4)),
+            program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
+            memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
-        xqkv_torch = torch.matmul(x_torch.to(torch.float32), wqkv_torch.to(torch.float32))
+        # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
+
+        x_torch = ttnn.to_torch(
+            xqkv_fused_sharded,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=(8, 4)),
+        )  # [4, 1, 32, 12288]
+        x_torch_reduced = torch.sum(x_torch, dim=1, keep_dim=True)  # [1, 1, 32, 12288]
+        x_torch_reduced = x_torch_reduced[..., : 1280 * 8]  # Unpad, TODO: ttnn.slice?
+        # inner -> replicate, outer -> fractured
         xqkv_fused = ttnn.as_tensor(
-            xqkv_torch,
+            x_torch_reduced,
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(

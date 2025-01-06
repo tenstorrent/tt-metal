@@ -23,6 +23,12 @@ from pathlib import Path
 from tqdm import tqdm
 from dataclasses import dataclass
 
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
+    PREFETCHER_GRID,
+    num_cores_to_rectangle_grid,
+    get_physical_to_logical_core_mapping,
+)
+
 
 @dataclass
 class LlamaOptimizations:
@@ -246,6 +252,7 @@ class TtModelArgs:
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
+                dst_full_sync_en=True,
             )
             self.compute_kernel_config_hifi2_fp16 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -534,6 +541,67 @@ class TtModelArgs:
                 n=self.dim,
                 num_cores=mlp2_core_grid.num_cores,
             )
+
+            RING_SIZE = 24
+            mapping = get_physical_to_logical_core_mapping(mesh_device)
+            CORE_RANGE = [mapping[physical_coord] for physical_coord in PREFETCHER_GRID]
+
+            ring_core_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in CORE_RANGE
+                ]
+            )
+
+            self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"] = (
+                ttnn.create_sharded_memory_config(
+                    shape=(32, 2304 // RING_SIZE),
+                    core_grid=ring_core_range_set,
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                if self.is_galaxy
+                else ttnn.create_sharded_memory_config(
+                    (
+                        self.tile_padded_batch_rows,
+                        self.dim // attn_input_grid.num_cores,
+                    ),  # Shard shape: [32, 128] -> 1 shard per core
+                    attn_input_grid,
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+            )
+            qkv_shard_shape_ring = (9216 // 4, 12288 // 8 // RING_SIZE)
+            self.model_config["SHARDED_QKV_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=qkv_shard_shape_ring,
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            qkv_out_shard_shape_ring = (32, 12288 // 8 // RING_SIZE)
+            self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=qkv_shard_shape_ring,
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["XQKV_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                9216 // 4,
+                12288 // 8,
+                RING_SIZE,
+            )
+
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             attn_input_sub_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.start_core, 32, self.sub_core_grids, row_wise=True
@@ -1198,6 +1266,55 @@ class TtModelArgs:
             per_core_N=math.ceil(n / (self.tile_size * num_cores)),
             fused_activation=None,
         )
+
+    def matmul_1d_ring_config(
+        self,
+        B,
+        M,
+        K,
+        N,
+        num_cores,
+    ):
+        in0_shape = [1, B, M, K]
+        in1_shape = [1, 1, K, N]
+
+        storage_grid = num_cores_to_rectangle_grid(num_cores, device)
+        if storage_grid is None:
+            assert False, f"Could not find a rectangle grid for num_cores: {num_cores}"
+
+        M *= B  # Fuse batch always enabled
+
+        in0_block_h = M // ttnn.TILE_SIZE
+        in0_block_w = K // num_cores // ttnn.TILE_SIZE
+        out_block_h = M // ttnn.TILE_SIZE
+        out_block_w = N // num_cores // ttnn.TILE_SIZE
+
+        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
+        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
+        num_blocks_total = num_blocks_y * num_blocks_x
+
+        if num_blocks_total != num_cores:
+            assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
+
+        out_subblock_h = 1
+        out_subblock_w = 8
+        while out_block_w % out_subblock_w != 0:
+            out_subblock_w -= 1
+
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=storage_grid,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=out_block_h,
+            per_core_N=out_block_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+        )
+
+        return program_config
 
     def matmul_1d_config(
         self,

@@ -167,13 +167,13 @@ def test_llama_attention_inference(
 
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
-        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim) * 0.05
+        pt_attention_input = torch.randn(batch_size, seq_len, 9216) * 0.05
 
         tt_attention_input = pt_attention_input.clone()
 
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
-            model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+            model_args.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
             force_replicated=False if model_args.is_galaxy else True,
         )
 
