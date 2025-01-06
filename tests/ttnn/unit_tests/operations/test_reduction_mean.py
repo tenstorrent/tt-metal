@@ -42,9 +42,6 @@ def test_mean_without_dim(device, batch_size, h, w):
 
     output_tensor = ttnn.mean(input_tensor, keepdim=True)
     output_tensor = ttnn.to_torch(output_tensor)
-    import pdb
-
-    pdb.set_trace()
     # PCC does not work for a single value. Assert on allclose.
     # visit issue: https://github.com/tenstorrent/tt-metal/issues/16454 for why tolerance values are changed
     close_passed, close_message = comp_allclose(torch_output_tensor, output_tensor, rtol=0.001, atol=0.00139)
