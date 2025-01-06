@@ -543,17 +543,20 @@ class TtModelArgs:
             )
 
             RING_SIZE = 24
-            mapping = get_physical_to_logical_core_mapping(mesh_device)
-            CORE_RANGE = [mapping[physical_coord] for physical_coord in PREFETCHER_GRID]
+            # mapping = get_physical_to_logical_core_mapping(mesh_device)
+            # CORE_RANGE = [mapping[physical_coord] for physical_coord in PREFETCHER_GRID]
 
-            ring_core_range_set = ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(x, y),
-                        ttnn.CoreCoord(x, y),
-                    )
-                    for x, y in CORE_RANGE
-                ]
+            # ring_core_range_set = ttnn.CoreRangeSet(
+            #     [
+            #         ttnn.CoreRange(
+            #             ttnn.CoreCoord(x, y),
+            #             ttnn.CoreCoord(x, y),
+            #         )
+            #         for x, y in CORE_RANGE
+            #     ]
+            # )
+            ring_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, RING_SIZE, self.sub_core_grids, row_wise=True
             )
 
             self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"] = (
@@ -587,18 +590,51 @@ class TtModelArgs:
 
             qkv_out_shard_shape_ring = (32, 12288 // 8 // RING_SIZE)
             self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=qkv_shard_shape_ring,
+                shape=qkv_out_shard_shape_ring,
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.model_config["XQKV_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                9216 // 4,
+                12288 // 8,
+                RING_SIZE,
+            )
+
+            self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 12288 // 8 // RING_SIZE),
                 core_grid=ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
 
-            self.model_config["XQKV_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
+            wo_shard_shape_ring = (12288 // 8, 9216 // 4 // RING_SIZE)
+            self.model_config["SHARDED_WO_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=wo_shard_shape_ring,
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            wo_out_shard_shape_ring = (32, 9216 // 4 // RING_SIZE)
+            self.model_config["SHARDED_WO_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=wo_out_shard_shape_ring,
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["WO_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                9216 // 4,
                 12288 // 8,
+                9216 // 4,
                 RING_SIZE,
             )
 
@@ -945,7 +981,7 @@ class TtModelArgs:
         if len(x.shape) == 3:
             batch = x.shape[0]
             seq_len = x.shape[1]
-            assert x.shape[2] == self.dim
+            # assert x.shape[2] == self.dim #TODO : pad self.dim at model level
         elif len(x.shape) == 4:
             seq_len = x.shape[0]
             assert x.shape[1] == 1
@@ -1275,13 +1311,6 @@ class TtModelArgs:
         N,
         num_cores,
     ):
-        in0_shape = [1, B, M, K]
-        in1_shape = [1, 1, K, N]
-
-        storage_grid = num_cores_to_rectangle_grid(num_cores, device)
-        if storage_grid is None:
-            assert False, f"Could not find a rectangle grid for num_cores: {num_cores}"
-
         M *= B  # Fuse batch always enabled
 
         in0_block_h = M // ttnn.TILE_SIZE
@@ -1302,7 +1331,7 @@ class TtModelArgs:
             out_subblock_w -= 1
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=storage_grid,
+            compute_with_storage_grid_size=(8, 3),  # hard coded for ring
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,

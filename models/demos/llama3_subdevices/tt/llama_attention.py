@@ -164,12 +164,13 @@ class TtLlamaAttention(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
-            cache_file_name=cache_name("wqkv_sharded_2d"),
+            cache_file_name=cache_name("wqkv_sharded_2d_padded"),  ## TODO: Fix caching
         )
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
         pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        pt_wo = torch.nn.functional.pad(pt_wo, (0, 9216 - 8192, 0, 12288 - 8192), "constant", 0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             configuration.dim // configuration.num_devices, configuration.dim
@@ -186,7 +187,7 @@ class TtLlamaAttention(LightweightModule):
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
-            cache_file_name=cache_name("wo_width_sharded_2d")
+            cache_file_name=cache_name("wo_width_sharded_2d_padded")
             if (self.use_fused_all_gather_matmul or self.TG)
             else cache_name("wo"),
         )
@@ -268,41 +269,23 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        # x_torch = ttnn.to_torch(
-        #     x,
-        #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=(8, 4)),
-        # )[0].unsqueeze(0)
-        # ttnn.deallocate(x)
-        # wqkv_torch = ttnn.to_torch(
-        #     self.wqkv,
-        #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 2), mesh_shape=(8, 4)),
-        # )
-        # xqkv_torch = torch.matmul(x_torch.to(torch.float32), wqkv_torch.to(torch.float32))
-        # xqkv_fused = ttnn.as_tensor(
-        #     xqkv_torch,
-        #     dtype=ttnn.bfloat16,
-        #     device=self.mesh_device,
-        #     mesh_mapper=ttnn.ShardTensor2dMesh(
-        #         mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
-        #     ),
-        #     layout=ttnn.TILE_LAYOUT,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
-
+        wqkv_l1 = ttnn.to_memory_config(self.wqkv, self.model_config["SHARDED_QKV_RING_MEMCFG"])
         xqkv_fused_sharded = ttnn.matmul(
             x,
-            self.wqkv,
+            wqkv_l1,
             program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
+        ttnn.deallocate(x)
+        ttnn.deallocate(wqkv_l1)
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
         x_torch = ttnn.to_torch(
             xqkv_fused_sharded,
             mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=(8, 4)),
         )  # [4, 1, 32, 12288]
-        x_torch_reduced = torch.sum(x_torch, dim=1, keep_dim=True)  # [1, 1, 32, 12288]
+        x_torch_reduced = torch.sum(x_torch, dim=0, keepdim=True)  # [1, 1, 32, 12288]
         x_torch_reduced = x_torch_reduced[..., : 1280 * 8]  # Unpad, TODO: ttnn.slice?
         # inner -> replicate, outer -> fractured
         xqkv_fused = ttnn.as_tensor(
@@ -420,20 +403,55 @@ class TtLlamaAttention(LightweightModule):
             num_heads=self.n_local_heads,
         )
         ttnn.deallocate(attn_output_gathered)
+        # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
+        # Padded matmul on each device [1, 1, 32, 1536] @ [1, 1, 1536, 2304]
 
+        # [1, 1, 32, 8192]
         attn_output_cat_torch = ttnn.to_torch(
             attn_output_cat,
             mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=(8, 4)),
         )[0].unsqueeze(0)
+
+        # [1, 1, 32, 12288]
+        attn_output_cat_torch = torch.nn.functional.pad(attn_output_cat_torch, (0, 12288 - 8192), "constant", 0)
+
         ttnn.deallocate(attn_output_cat)
 
-        wo_torch = ttnn.to_torch(
-            self.wo,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 3), mesh_shape=(8, 4)),
+        # [1, 1, 32, 1536]
+        attn_output_cat_ttnn = ttnn.as_tensor(
+            attn_output_cat_torch,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
+            ),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
         )
-        dense_out_reduced = torch.matmul(attn_output_cat_torch.to(torch.float32), wo_torch.to(torch.float32))
+        wo_l1 = ttnn.to_memory_config(self.wo, self.model_config["SHARDED_WO_RING_MEMCFG"])
+
+        # [1, 1, 32, 1536] @ [1, 1, 1536, 2304]
+        dense_out_ttnn = ttnn.matmul(
+            attn_output_cat_ttnn,
+            wo_l1,
+            program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
+            memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+        )
+        # [1, 1, 32, 2304]
+        ttnn.deallocate(attn_output_cat_ttnn)
+        ttnn.deallocate(wo_l1)
+
+        dense_out_torch = ttnn.to_torch(
+            dense_out_ttnn,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=(8, 4)),
+        )  # [4, 1, 32, 12288]
+        ttnn.deallocate(dense_out_ttnn)
+        dense_out_torch = torch.sum(dense_out_torch, dim=0, keepdim=True)  # [1, 1, 32, 2304*4]
+        dense_out_torch = dense_out_torch[..., : 2048 * 4]  # Unpad, TODO: ttnn.slice?
+
         dense_out_reduced = ttnn.as_tensor(
-            dense_out_reduced,
+            dense_out_torch,
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
