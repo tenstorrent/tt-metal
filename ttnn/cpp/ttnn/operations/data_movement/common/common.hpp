@@ -11,6 +11,7 @@
 namespace ttnn {
 namespace operations {
 namespace data_movement {
+
 ttnn::Shape squeeze_shape_to_4D(ttnn::Shape output_shape);
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
 
