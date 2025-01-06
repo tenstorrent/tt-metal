@@ -22,7 +22,6 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Must have between 2 input tensors");
     auto &a = input_tensors.at(0);
     const auto &weights = input_tensors.at(1);
-    // TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Error");
     TT_FATAL(weights.get_layout() == Layout::ROW_MAJOR, "Error");
     TT_FATAL(a.get_dtype() == DataType::UINT32 or a.get_dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
     TT_FATAL(weights.get_dtype() == DataType::BFLOAT16, "Weights tensor must have BFLOAT16 dtype");

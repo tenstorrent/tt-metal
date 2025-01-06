@@ -13,6 +13,52 @@
 
 using namespace tt;
 
+std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores_aligned(
+    const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment) {
+    ZoneScoped;
+
+    uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
+    uint32_t total_cores = num_cores_x * num_cores_y;
+
+    // Initialize units_per_core and required_cores
+    uint32_t units_per_core = alignment;
+    uint32_t required_cores = (units_to_divide + units_per_core - 1) / units_per_core;
+
+    // Double units_per_core until it fits within total_cores
+    while (required_cores > total_cores) {
+        units_per_core += alignment;
+        required_cores = (units_to_divide + units_per_core - 1) / units_per_core;
+    }
+
+    // Core set for all active cores
+    CoreRangeSet all_cores = num_cores_to_corerangeset(required_cores, grid_size, false);
+
+    // Calculate remaining units for the last core
+    uint32_t evenly_distributed_units = (required_cores - 1) * units_per_core;
+    uint32_t remaining_units = units_to_divide - evenly_distributed_units;
+
+    // Create core groups
+    CoreRangeSet core_group_1 = all_cores;
+    CoreRangeSet core_group_2;
+
+    // Handle the last core if remaining units are less than units_per_core
+    if (remaining_units > 0 && remaining_units < units_per_core) {
+        uint32_t last_core_x = (required_cores - 1) % num_cores_x;
+        uint32_t last_core_y = (required_cores - 1) / num_cores_x;
+
+        core_group_2 =
+            CoreRangeSet(CoreRange(CoreCoord(last_core_x, last_core_y), CoreCoord(last_core_x, last_core_y)));
+        core_group_1 = num_cores_to_corerangeset(required_cores - 1, grid_size, false);
+    }
+
+    // Adjust the units per core for each group
+    uint32_t units_per_core_group_1 = units_per_core;
+    uint32_t units_per_core_group_2 = remaining_units < units_per_core ? remaining_units : 0;
+
+    return std::make_tuple(
+        required_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2);
+}
+
 namespace ttnn::operations::embedding::detail {
 
 operation::ProgramWithCallbacks embeddings_fused(
@@ -580,10 +626,6 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t batch_size = a.get_logical_shape()[0];  // num rows
     uint32_t num_cols = a.get_logical_shape()[-1];
     uint32_t volume = num_cols * batch_size;
-    constexpr uint32_t alignment = 32;
-    constexpr uint32_t tile_size = 32;
-    constexpr uint32_t face_size = 16;
-    constexpr uint32_t face_volume = face_size * face_size;
 
     auto num_embedding_dims = weights.get_legacy_shape()[-1];
 
@@ -598,7 +640,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores_aligned(compute_with_storage_grid_size, problem_size, face_size);
+        split_work_to_cores_aligned(compute_with_storage_grid_size, problem_size, FACE_HEIGHT);
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
 
@@ -618,8 +660,8 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t src1_cb_index = 1;
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
     tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(face_size * index_page_size, {{src1_cb_index, input_cb_data_format}})
-            .set_page_size(src1_cb_index, face_size * index_page_size);
+        tt_metal::CircularBufferConfig(FACE_HEIGHT * index_page_size, {{src1_cb_index, input_cb_data_format}})
+            .set_page_size(src1_cb_index, FACE_HEIGHT * index_page_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     if (embeddings_type == EmbeddingsType::PADDED) {
@@ -658,7 +700,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)weight_page_size,
         (std::uint32_t)weight_log2_stick_size,
         (std::uint32_t)a.get_logical_shape()[-1],  // width/length of a row
-        (std::uint32_t)face_size};
+        (std::uint32_t)FACE_HEIGHT};
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.get_dtype() == DataType::BFLOAT16) {
@@ -713,7 +755,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
 
     uint32_t row = 0;
-    uint32_t tiles_per_tile_row = (num_cols + tile_size - 1) / tile_size;
+    uint32_t tiles_per_tile_row = (num_cols + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -721,20 +763,19 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         row = weight_offset / num_cols;
 
         uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
-        uint32_t r_f_offset = ((row % tile_size) / face_size) * 2 * face_volume + (row % face_size) * face_size;
+        uint32_t r_f_offset = ((row % TILE_HEIGHT) / FACE_HEIGHT) * 2 * FACE_HW + (row % FACE_HEIGHT) * FACE_HEIGHT;
         // Offset by one face size if we are in the right half of the tile + where we are in the row
-        uint32_t c_f_offset = ((col_offset % tile_size) / face_size) * face_volume;
+        uint32_t c_f_offset = ((col_offset % TILE_HEIGHT) / FACE_HEIGHT) * FACE_HW;
         uint32_t face_offset = r_f_offset + c_f_offset;
-        uint32_t curr_tile = (row / tile_size) * tiles_per_tile_row + (col_offset / tile_size);
+        uint32_t curr_tile = (row / TILE_HEIGHT) * tiles_per_tile_row + (col_offset / TILE_HEIGHT);
 
         // Reader
         {
             reader_runtime_args[2] = curr_tile;
-            // reader_runtime_args[3] = round_down(col_offset % num_cols, tile_size) * input_element_size_bytes;
             reader_runtime_args[3] = face_offset;
             reader_runtime_args[4] = local_num_blocks;
             reader_runtime_args[5] = col_offset;
-            reader_runtime_args[6] = (col_offset % face_size);  // starting col in the face row
+            reader_runtime_args[6] = (col_offset % FACE_HEIGHT);  // starting col in the face row
             tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         }
 
@@ -748,29 +789,35 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         weight_offset += local_num_blocks;
     }
 
-    auto override_runtime_args_callback = [num_cores_x, num_cores_y, reader_kernel_id, writer_kernel_id, cores, device](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto output_dram_buffer = output_buffers.at(0);
-        auto input_dram_buffer = input_buffers.at(0);
-        auto weights_dram_buffer = input_buffers.at(1);
+    auto override_runtime_arguments_callback =
+        [reader_kernel_id, writer_kernel_id, cores](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto output_buffer_address = output_tensors.at(0).buffer()->address();
+            auto input_buffer_address = input_tensors.at(0).buffer()->address();
+            auto weights_buffer_address = input_tensors.at(1).buffer()->address();
 
-        for (const auto& core : cores) {
-            {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = input_dram_buffer->address();
-                runtime_args[1] = weights_dram_buffer->address();
+            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
+            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
+
+            for (const auto& core : cores) {
+                {
+                    auto& runtime_args = reader_runtime_args[core.x][core.y];
+                    runtime_args[0] = input_buffer_address;
+                    runtime_args[1] = weights_buffer_address;
+                }
+
+                {
+                    auto& runtime_args = writer_runtime_args[core.x][core.y];
+                    runtime_args[0] = output_buffer_address;
+                }
             }
+        };
 
-            {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = output_dram_buffer->address();
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 operation::ProgramWithCallbacks embeddings_(
