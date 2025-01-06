@@ -267,7 +267,6 @@ Result conv_transpose2d(
         get_fp32_dest_acc_en(compute_config),
         conv_config.enable_split_reader);
 
-    // TODO: Flip the Weights
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
@@ -281,6 +280,7 @@ Result conv_transpose2d(
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
             parallel_config,
+            output_parallel_config,
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,

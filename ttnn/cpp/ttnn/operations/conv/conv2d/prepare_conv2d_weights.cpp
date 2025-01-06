@@ -735,10 +735,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     // for conv op, pad the weights to block shape
     if (input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-        weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_special_padding_tiled_layout(
+        weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
             weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
     } else if(input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
-        weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_tiled_layout_block_sharded(
+        weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
             weight_tensor_, input_num_cores_channels, weights_bias_dtype);
     } else {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
