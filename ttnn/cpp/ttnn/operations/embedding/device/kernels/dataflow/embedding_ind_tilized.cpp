@@ -91,7 +91,6 @@ void kernel_main() {
 #else
     volatile tt_l1_ptr uint32_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
 #endif
-    // bool printed = false;
     auto read_block = [&](const uint32_t& token_idx, const uint32_t& width_size, const uint32_t& offset = 0) {
         cb_reserve_back(cb_id_in0, 1);
         uint32_t weight_l1_addr = get_write_ptr(cb_id_in0);
@@ -99,37 +98,6 @@ void kernel_main() {
         uint64_t src_noc_addr;
         uint32_t token = input_l1_ptr[token_idx + offset];
 
-        // I would like to keep this for future debugging purposes
-        // This prints which token is being read, as well as one full tile per core
-        // DPRINT << "Token: " << token << ENDL();
-
-        // if (!printed) {
-        //     for (uint32_t r_f = 0; r_f < 2; r_f++) {
-        //         for (uint32_t i = 0; i < 105; i++) {
-        //             DPRINT << "_";
-        //         }
-        //         DPRINT << ENDL();
-        //         uint32_t r_f_offset = r_f * 2 * face_size * face_size;
-        //         for (uint32_t r = 0; r < face_size; r++) {
-        //             uint32_t r_offset = r * face_size;
-        //             DPRINT << "[";
-        //             for (uint32_t i = 0; i < face_size; i++) {
-        //                 DPRINT << input_l1_ptr[i + r_f_offset + r_offset] << ", ";
-        //             }
-        //             DPRINT << "] | ";
-        //             DPRINT << "[";
-        //             for (uint32_t i = 0; i < face_size; i++) {
-        //                 DPRINT << input_l1_ptr[i + r_f_offset + r_offset + (face_size * face_size)] << ", ";
-        //             }
-        //             DPRINT << "]" << ENDL();
-        //         }
-        //         for (uint32_t i = 0; i < 105; i++) {
-        //             DPRINT << "_";
-        //         }
-        //         DPRINT << ENDL();
-        //     }
-        //     printed = true;
-        // }
 #if defined PADDED
         if (token == pad_token) {
             src_noc_addr = pad_noc_addr;
@@ -157,12 +125,6 @@ void kernel_main() {
 #endif
         noc_async_read(src_noc_addr, weight_l1_addr, width_size);
         noc_async_read_barrier();
-        // This prints the weight stick we are reading to the write location
-        // DPRINT << "Weight: [" << ENDL();
-        // for (uint32_t i = 0; i < weight_stick_size / 2; i++) {
-        //     DPRINT << BF16(weight_l1_ptr[i]) << ", ";
-        // }
-        // DPRINT << "]" << ENDL();
         cb_push_back(cb_id_in0, 1);
     };
 
@@ -178,11 +140,9 @@ void kernel_main() {
         .data_format = data_format,
     };
 
-    // DPRINT << "Starting tile: " << curr_tile << " offset: " << offset << ENDL();
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
             uint64_t noc_input_src_addr = get_noc_addr(curr_tile, input) + (offset * sizeof(uint32_t));
-            // noc_async_read(noc_input_src_addr, input_l1_addr, 32*32*4);
             noc_async_read_tile(curr_tile, s, input_l1_addr);
             noc_async_read_barrier();
             read_indices = false;
@@ -191,7 +151,6 @@ void kernel_main() {
         index++;
         col_offset++;
         if (index == face_size || col_offset == row_length) {
-            // DPRINT << "Read 16, offset: " << offset << ENDL();
             index = 0;
             uint32_t face = offset / (face_size * face_size);
             if (col_offset == row_length) {
