@@ -169,6 +169,10 @@ class Cluster {
     // Returns set of logical inactive ethernet coordinates on chip
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
 
+    // Returns whether link is up for a given ethernet core
+    // On Blackhole some active ethernets may be PORT_DOWN ... this is an interim thing
+    bool is_ethernet_link_up(chip_id_t chip_id, const CoreCoord &logical_core) const;
+
     // Returns connected ethernet core on the other chip
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
 
