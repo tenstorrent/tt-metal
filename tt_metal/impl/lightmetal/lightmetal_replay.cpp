@@ -245,7 +245,7 @@ void LightMetalReplay::RemoveCBHandleFromMap(uint32_t global_id) { cb_handle_map
 // TODO (kmabee) - Hardcode for now, eventually capture/replay "systemdesc" from binary.
 void LightMetalReplay::SetupDevices() {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(SetupDevices) - Using single chip WH device as temp hack.");
-    const size_t trace_region_size = 2048;  // Default is 0
+    const size_t trace_region_size = 4096;  // Default is 0
     const int device_id = 0;
     const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
     const chip_id_t mmio_device_id = 0;
