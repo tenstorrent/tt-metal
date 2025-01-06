@@ -67,7 +67,7 @@ cd ..
 
 ---
 
-#### Install TT-Flash
+#### Update Device TT-Firmware with TT-Flash
 - Install Cargo (Rust package manager):
   | OS | Command |
   |---|---|
@@ -80,11 +80,10 @@ cd ..
 pip install git+https://github.com/tenstorrent/tt-flash.git
 ```
 
-- For more information visit Tenstorrent's [TT-Flash repository](https://github.com/tenstorrent/tt-flash).
-
----
-
-#### Update Device TT-Firmware with TT-Flash
+- Reboot to load changes:
+```
+sudo reboot
+```
 
 - Check if TT-Flash is installed:
 ```
@@ -179,6 +178,14 @@ git submodule foreach 'git lfs fetch --all && git lfs pull'
 ./create_venv.sh
 source python_env/bin/activate
 ```
+
+- (optional) Software dependencies for profiling use:
+  - Install dependencies:
+  ```sh
+  sudo apt install pandoc libtbb-dev libcapstone-dev pkg-config
+  ```
+
+  - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
 
 - Continue to [You Are All Set!](#you-are-all-set)
 
