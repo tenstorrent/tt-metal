@@ -126,5 +126,5 @@ void run_routing() {
     // router_init();
     // TODO: maybe split into two FWs? or this may be better to sometimes allow each eth core to do both send and
     // receive of fd packets
-    internal_::risc_context_switch();
+    // internal_::risc_context_switch();
 }
