@@ -30,6 +30,7 @@ from models.demos.llama3.tt.llama_common import (
     get_rot_transformation_mat,
     get_single_rot_mat,
     copy_host_to_device,
+    get_padded_prefill_len,
 )
 from models.utility_functions import (
     nearest_32,
@@ -295,7 +296,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         S = tokens.shape[1]
         position_ids = torch.arange(S, dtype=torch.long)
         h = self.prepare_inputs_common(position_ids, tokens)
-        padded_seq_len = _get_padded_prefill_seqlen(S)
+        padded_seq_len = get_padded_prefill_len(S)
 
         xattn_mask = cross_attention_masks[:, :, position_ids]
         xattn_mask = torch.nn.functional.pad(
@@ -817,16 +818,3 @@ def _pad_masks(
                 out_masks[idx, mask_elem[0] : mask_elem[1], mask_idx, :mask_num_chunks].fill_(0.0)
 
     return out_masks
-
-
-def _get_padded_prefill_seqlen(seq_len):
-    """
-    If seq_len is less than 128, pad to 128
-    If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 2048 (text model requires mult of 2048, while vision allows mult of 1024)
-    """
-    if seq_len < 128:
-        return 128
-    else:
-        mult_2k = 2048 * math.ceil(seq_len / 2048)
-        pow_2 = 2 ** math.ceil(math.log2(seq_len))
-        return min(mult_2k, pow_2)
