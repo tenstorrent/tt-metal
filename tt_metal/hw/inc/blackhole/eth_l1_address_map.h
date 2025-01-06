@@ -16,7 +16,6 @@ struct address_map {
     // SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE)
     static constexpr std::int32_t SYSENG_RESERVED_SIZE = 64 * 1024;
     static constexpr std::int32_t ERISC_BARRIER_SIZE = 64;
-    static constexpr std::int32_t MAX_NUM_CONCURRENT_TRANSACTIONS = 8;
     static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = 48;
     static constexpr std::int32_t MAX_NUM_CONCURRENT_TRANSACTIONS = 8;
     static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 160 + 16 * MAX_NUM_CONCURRENT_TRANSACTIONS;
@@ -33,13 +32,12 @@ struct address_map {
     static constexpr std::uint32_t ERISC_BARRIER_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
 
     static constexpr std::int32_t MAX_SIZE =
-        512 * 1024 - SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE - ERISC_APP_SYNC_INFO_SIZE;
+        512 * 1024 - SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE - ERISC_APP_ROUTING_INFO_SIZE - ERISC_APP_SYNC_INFO_SIZE;
     static constexpr std::int32_t MAX_L1_LOADING_SIZE = MAX_SIZE;
 
-    static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = MAX_SIZE;
-    static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
-
-    static constexpr std::uint32_t ERISC_BARRIER_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
+    static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = MAX_SIZE;
+    static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
+    static constexpr std::uint32_t ERISC_BARRIER_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
 
     // Kernel config buffer is WIP
     // Size is presently based on the old sizes of the RTAs + CB config + Sems
