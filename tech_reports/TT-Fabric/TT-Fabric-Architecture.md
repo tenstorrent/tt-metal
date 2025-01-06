@@ -1139,7 +1139,7 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
       connected to N150 gateway cards. The Galaxy boards are connected <br>
       via long edge with external ethernet cables. There are only 2 <br>
       links per chip-to-chip connection, which is not uniform with the <br>
-      chip-to-chip within the Galaxy board. 
+      chip-to-chip within the Galaxy board.
       <br>
     </th>
     <td>
@@ -1255,7 +1255,7 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
       Mesh<br>
       Notes: For a Quanta Galaxy box, Galaxy to Galaxy connections <br>
       also have four edges, so we can represent two Galaxys as a 2x1 Mesh. <br>
-      We will also have one CPU host per Galaxy box. 
+      We will also have one CPU host per Galaxy box.
       <br>
     </th>
     <td>
