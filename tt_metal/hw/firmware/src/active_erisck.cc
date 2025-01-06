@@ -2,25 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unistd.h>
-#include <cstdint>
-
-#include "risc_common.h"
-#include "tensix.h"
-#include "tensix_types.h"
+#include "eth_l1_address_map.h"
+#include "noc_parameters.h"
+#include "ethernet/dataflow_api.h"
 #include "noc.h"
 #include "noc_overlay_parameters.h"
-#include "ckernel_structs.h"
-#include "stream_io_map.h"
+#include "risc_attribs.h"
+#include "tensix.h"
+#include "tensix_types.h"
+#include "tt_eth_api.h"
 #include "c_tensix_core.h"
-#include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "firmware_common.h"
-#include "tools/profiler/kernel_profiler.hpp"
-#include "dataflow_api.h"
+#include "stream_io_map.h"
+#include "tdma_xmov.h"
 #include "debug/dprint.h"
-
+#include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
+#include <stdint.h>
 
 extern uint32_t __kernel_init_local_l1_base[];
 extern uint32_t __fw_export_end_text[];
