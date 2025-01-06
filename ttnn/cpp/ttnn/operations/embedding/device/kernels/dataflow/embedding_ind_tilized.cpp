@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_common.hpp"
 #include "debug/dprint.h"
 
 void kernel_main() {
-    const std::uint32_t input_dram_buffer_src_addr = get_arg_val<uint32_t>(0);
-    const std::uint32_t weights_dram_buffer_src_addr = get_arg_val<uint32_t>(1);
+    const std::uint32_t input_buffer_src_addr = get_arg_val<uint32_t>(0);
+    const std::uint32_t weight_buffer_src_addr = get_arg_val<uint32_t>(1);
     const std::uint32_t tile_offset = get_arg_val<uint32_t>(2);
     const std::uint32_t face_offset = get_arg_val<uint32_t>(3);
     const std::uint32_t num_rows = get_arg_val<uint32_t>(4);
@@ -15,82 +16,32 @@ void kernel_main() {
     const std::uint32_t curr_col = get_arg_val<uint32_t>(5);
     const std::uint32_t starting_index = get_arg_val<uint32_t>(6);
 
-#define in_is_dram get_compile_time_arg_val(0) == 1
-#define in_stick_size_is_power_of_two get_compile_time_arg_val(1) == 1
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(2);
-#if (in_stick_size_is_power_of_two)
-    constexpr uint32_t log_base_2_of_input_page_size = get_compile_time_arg_val(3);
-    const InterleavedPow2AddrGen<in_is_dram> input = {
-        .bank_base_address = input_dram_buffer_src_addr,
-        .log_base_2_of_page_size = log_base_2_of_input_page_size  // TODO(AP): refactor
-    };
-#else
-    const InterleavedAddrGen<in_is_dram> input = {
-        .bank_base_address = input_dram_buffer_src_addr, .page_size = input_page_size};
-#endif
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
 
-#define weights_is_dram get_compile_time_arg_val(4) == 1
-#define weight_stick_size_is_power_of_two get_compile_time_arg_val(5) == 1
+    constexpr bool input_in_dram = get_compile_time_arg_val(3) == 1;
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(4);
+    const auto input = get_interleaved_addr_gen<input_in_dram, input_page_size>(input_buffer_src_addr);
+
+    constexpr bool weight_in_dram = get_compile_time_arg_val(5) == 1;
     constexpr uint32_t weight_stick_size = get_compile_time_arg_val(6);
-#if (weight_stick_size_is_power_of_two)
-    constexpr uint32_t log_base_2_of_weights_page_size = get_compile_time_arg_val(7);
-    const InterleavedPow2AddrGen<weights_is_dram> weights = {
-        .bank_base_address = weights_dram_buffer_src_addr,
-        .log_base_2_of_page_size = log_base_2_of_weights_page_size  // TODO(AP): refactor
-    };
-#else
-    const InterleavedAddrGen<weights_is_dram> weights = {
-        .bank_base_address = weights_dram_buffer_src_addr, .page_size = weight_stick_size};
-#endif
+    const auto weights = get_interleaved_addr_gen<weight_in_dram, weight_stick_size>(weight_buffer_src_addr);
 
-    constexpr uint32_t row_length = get_compile_time_arg_val(8);
-    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(9);
-
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t cb_id_in2 = 2;
+    constexpr uint32_t row_length = get_compile_time_arg_val(7);
+    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(8);
 
     constexpr uint32_t face_size = 16;
     constexpr uint32_t tile_height = 32;
 
-#if defined PADDED
-    const std::uint32_t pad_token = get_arg_val<uint32_t>(6);
-    uint64_t pad_noc_addr;
-    {
-        cb_reserve_back(cb_id_in2, 1);
-        uint32_t local_pad_addr = get_write_ptr(cb_id_in2);
-        uint64_t src_noc_addr = get_noc_addr(pad_token, weights);
-        noc_async_read(src_noc_addr, local_pad_addr, weight_stick_size);
-        noc_async_read_barrier();
-        pad_noc_addr = get_noc_addr(local_pad_addr);
-    }
-#elif defined BINARY
-    uint64_t zero_noc_addr, one_noc_addr;
-    {
-        cb_reserve_back(cb_id_in2, 2);
-        uint32_t local_write_addr = get_write_ptr(cb_id_in2);
-        uint64_t src_noc_addr = get_noc_addr(0, weights);
-        noc_async_read(src_noc_addr, local_write_addr, weight_stick_size);
-        zero_noc_addr = get_noc_addr(local_write_addr);
-
-        local_write_addr += weight_stick_size;
-        src_noc_addr = get_noc_addr(1, weights);
-        noc_async_read(src_noc_addr, local_write_addr, weight_stick_size);
-        one_noc_addr = get_noc_addr(local_write_addr);
-
-        noc_async_read_barrier();
-    }
-#endif
+    prepare_local_cache(cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
 
     cb_reserve_back(cb_id_in1, 1);
     uint32_t input_l1_addr = get_write_ptr(cb_id_in1);
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in1);
     const DataFormat data_format = get_dataformat(cb_id_in1);
-#if defined BFP16
-    volatile tt_l1_ptr uint16_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_addr);
-#else
-    volatile tt_l1_ptr uint32_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
-#endif
+    volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
+
     auto read_block = [&](const uint32_t& token_idx, const uint32_t& width_size, const uint32_t& offset = 0) {
         cb_reserve_back(cb_id_in0, 1);
         uint32_t weight_l1_addr = get_write_ptr(cb_id_in0);
@@ -135,7 +86,7 @@ void kernel_main() {
     uint32_t col_offset = curr_col;
     uint32_t tiles_per_row = (row_length + tile_height - 1) / tile_height;
     const InterleavedAddrGenFast<true> s = {
-        .bank_base_address = input_dram_buffer_src_addr,
+        .bank_base_address = input_buffer_src_addr,
         .page_size = tile_size_bytes,
         .data_format = data_format,
     };

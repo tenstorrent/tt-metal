@@ -650,29 +650,28 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.get_dtype());
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
-    uint32_t src0_cb_index = 0;
+    constexpr uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * rounded_weight_page_size, {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, rounded_weight_page_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t src1_cb_index = 1;
+    constexpr uint32_t src1_cb_index = CBIndex::c_1;
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(FACE_HEIGHT * index_page_size, {{src1_cb_index, input_cb_data_format}})
             .set_page_size(src1_cb_index, FACE_HEIGHT * index_page_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
+    constexpr uint32_t src2_cb_index = CBIndex::c_2;
     if (embeddings_type == EmbeddingsType::PADDED) {
-        uint32_t src2_cb_index = 2;
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
         auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     } else if (embeddings_type == EmbeddingsType::BINARY) {
-        uint32_t src2_cb_index = 2;
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
@@ -691,16 +690,28 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     // Create Kernels
     // reader
     std::vector<uint32_t> embedding_compile_time_args = {
+        (std::uint32_t)src0_cb_index,
+        (std::uint32_t)src1_cb_index,
+        (std::uint32_t)src2_cb_index,
         (std::uint32_t)in0_is_dram,
-        (std::uint32_t)input_stick_size_is_power_of_two,
         (std::uint32_t)input_page_size,
-        (std::uint32_t)input_log2_stick_size,
         (std::uint32_t)weights_is_dram,
-        (std::uint32_t)weight_stick_size_is_power_of_two,
         (std::uint32_t)weight_page_size,
-        (std::uint32_t)weight_log2_stick_size,
         (std::uint32_t)a.get_logical_shape()[-1],  // width/length of a row
         (std::uint32_t)FACE_HEIGHT};
+
+    /*
+    std::vector<uint32_t> embedding_compile_time_args = {
+        (std::uint32_t)src0_cb_index,
+        (std::uint32_t)src1_cb_index,
+        (std::uint32_t)src2_cb_index,
+        (std::uint32_t)in0_is_dram,
+        (std::uint32_t)input_page_size,
+        (std::uint32_t)weights_is_dram,
+        (std::uint32_t)weight_page_size,
+        (std::uint32_t)block_height,
+        (std::uint32_t)block_height * input_element_size_bytes};
+    */
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.get_dtype() == DataType::BFLOAT16) {
