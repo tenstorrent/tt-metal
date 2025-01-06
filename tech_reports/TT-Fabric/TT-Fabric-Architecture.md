@@ -715,6 +715,7 @@ fabric_async_write(
   dst_addr, // destination write address
   size, // number of bytes to write to remote destination
   fvc, // fabric virtual channel. Set to –1 for automatic selection
+  transaction_id, // transaction id used to track commpletion
   return_status_addr // TT-Fabric returns api call status at this address
 )
 ```
@@ -725,13 +726,11 @@ Asynchronous write is used to write data to a remote receiver. Sender does not n
 struct tt_fabric_status {
   status, // success and error codes
   fvc, // tt-fabric assigned automatic fvc
-  req_count, // requests sent counter
-  ack_count, // acknowledgements received counter
 }
 ```
-req\_count and ack\_count are counters to keep track of requests sent over fabric and acknowledgements received from remote receiver. These fields are useful to implement asynchronous barriers in TT-Fabric. Whenever req\_count and ack\_count are not equal, there are inflight transactions in TT-Fabric. To impose a barrier, the sender must wait until these two fields become equal.
+transaction\_id to keeps track of requests sent over fabric and acknowledgements received from remote receiver. TT-Fabric maintains upto 16 unique transaction counters which are indexed using transaction\_id values of 0 - 15. For every outgoing request, the specified transaction\_id counter is incremented by 1. For every acknowledgement received, transaction\_id counter is decremented by 1. Whenever transaction\_id counter is non-zero, there are inflight transactions in TT-Fabric. To impose a barrier, the sender must wait until transaction\_id counter becomes 0.
 
-fabric\_async\_write calls to different remote devices can be made with unique return\_status\_addr fields if the sender needs selective write barriers for devices.
+fabric\_async\_write calls to different remote devices can be made with unique transaction\_id fields if the sender needs selective write barriers for devices.
 
 ## 3.2 Asynchronous Multicast Write <a id="async_mcast_wr"></a>
 ```
@@ -742,6 +741,8 @@ fabric_async_write_multicast(
   src_addr,
   dst_addr,
   size,
+  fvc,
+  transaction_id
   mcast_flags,
   return_status_addr
 )
@@ -763,9 +764,9 @@ The following table summarizes asynchronous multicast write modes.
 
 ## 3.3 Asynchronous Write Barrier <a id="async_wr_barrier"></a>
 ```
-fabric_async_write_barrier(return_status_addr)
+fabric_async_write_barrier(transaction_id)
 ```
-Asynchronous write barrier guarantees that all prior writes issued by a sender have been committed to all the receivers.
+Asynchronous write barrier guarantees that all prior writes issued by a sender with the specified transaction\_id have been committed to all the receivers.
 
 ## 3.4 Asynchronous Read <a id="async_rd"></a>
 ```
@@ -774,6 +775,8 @@ fabric_async_read(
   src_addr, // read address in remote device
   return_addr, // address in local memory where read data is copied
   size, // number of bytes to read from remote deivce (src\_addr)
+  fvc,
+  transaction_id
   return_status_addr // status of async read
 )
 ```
@@ -781,11 +784,11 @@ Asynchronous read is used to read data from a remote receiver. Asynchronous read
 
 ## 3.5 Asynchronous Read Barrier <a id="async_rd_barrier"></a>
 ```
-fabric_async_read_barrier(return_status_addr)
+fabric_async_read_barrier(transaction_id)
 ```
-Asynchronous read barrier guarantees that all prior reads issued by a reader have been completed. return\_status\_addr points to data structure that holds status of pending transactions. All transactions are complete when req\_count is equal to ack\_count.
+Asynchronous read barrier guarantees that all prior reads issued by a reader have been completed.
 
-When reading from multiple remote devices, or multiple non contiguous address from a single remote device, a reader can implement selective barriers by issuing fabric\_async\_read with unique return\_status\_addr parameter.
+When reading from multiple remote devices, or multiple non contiguous address from a single remote device, a reader can implement selective barriers by issuing fabric\_async\_read with unique transaction\_id parameter.
 
 ## 3.6 Asynchronous Atomic Increment <a id="async_atomic_inc"></a>
 ```
@@ -794,12 +797,14 @@ fabric_async_atomic_inc(
   dst_addr, // address to increment in remote device
   inc_value, // amount to increment
   wrap_boundary, // value at which the remote counter wraps to 0
+  fvc,
+  transaction_id,
   return_status_addr // status of async atomic increment
 )
 ```
 Asynchronous atomic increment is used to atomically increment an address in a remote device. return\_status\_addr is used to track status of asynchronous command.
 
-wrap\_boundary is used to specify the maximum value of remote counter after which it will wrap to 0. The maximum value is always a power of 2. To atomically count from 0 – 31, wrap\_boundary is set to 5.
+wrap\_boundary is used to specify the maximum value of remote counter after which it will wrap to 0. The maximum value is 2 ^ (wrap_boundary + 1) - 1. To atomically count from 0 – 31, wrap\_boundary is set to 4.
 
 ## 3.7 Asynchronous Atomic Read and Increment <a id="async_atomic_rd_inc"></a>
 ```
@@ -809,6 +814,8 @@ fabric_async_atomic_read_inc(
   dst_addr, // 32-bit address to increment in remote device
   inc_value, // amount to increment
   wrap_boundary, // value at which the remote counter wraps to 0
+  fvc,
+  transaction_id,
   return_status_addr // status of async atomic read increment
 )
 ```
@@ -831,6 +838,7 @@ socket_handle fabric_socket_open(
   socket_type, // Unicast, Multicast, SSocket, DSocket
   direction, // Send or Receive
   remote_addr, // Remote device that is the socket data sender/receiver.
+  fvc, // fabric virtual channel.
 )
 ```
 Socket Open is used to open a socket for sending data to a specific receiver on a remote device.
@@ -838,6 +846,8 @@ Socket Open is used to open a socket for sending data to a specific receiver on 
 Both sender and receiver need to make a fabric\_socket\_open call with the matching parameters. Before sending data, socket owners must check the status of socket connection by calling fabric\_socket\_connect.
 
 socket\_handle returned by the open call holds socket specific parameters and is used in subsequent calls when sending or receiving data from socket.
+
+For datagram sockets, data is sent over the fabric virtual channel specified by fvc.
 
 ## 4.2 Socket Close <a id="socket_close"></a>
 ```
