@@ -9,6 +9,8 @@
 
 #include "ccl_host_datastructures.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -79,6 +81,39 @@ std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_dev
     }
 
     return {device_index, std::nullopt, std::nullopt};  // Return null if the device is not found
+}
+
+std::vector<ttnn::Tensor> unpad_output_tensor(
+    const std::vector<ttnn::Tensor>& output_tensor,
+    uint32_t num_devices,
+    uint32_t unpad_elements_h,
+    uint32_t unpad_elements_w,
+    int dim){
+    std::vector<ttnn::Tensor> combined_tensors;
+
+    ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
+    ttnn::SmallVector<uint32_t> ends = {1, 1, 1, 1};
+    ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+
+    ends[2] = unpad_elements_h;
+    ends[3] = unpad_elements_w;
+
+    for (int i = 0; i < num_devices; ++i) {
+        begins[dim] = i * 32;
+        if (dim == 2) {
+            ends[dim] = begins[dim] + unpad_elements_h;
+        } else if (dim == 3) {
+            ends[dim] = begins[dim] + unpad_elements_w;
+        } else {
+            TT_FATAL(false, "Unsupported dimension {} for slicing", dim);
+        }
+
+        ttnn::Tensor sliced_tensor = ttnn::slice(output_tensor.at(0), begins, ends, step);
+
+        combined_tensors.push_back(sliced_tensor);
+    }
+    ttnn::Tensor concat_tensor = ttnn::concat(combined_tensors, dim);
+    return {concat_tensor};
 }
 
 RingTopology::RingTopology(

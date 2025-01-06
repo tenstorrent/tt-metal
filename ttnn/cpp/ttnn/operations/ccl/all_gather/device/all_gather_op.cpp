@@ -10,8 +10,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "eth_l1_address_map.h"
 
 namespace ttnn {
@@ -274,12 +272,11 @@ Tensor all_gather(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto input_tensor = input_tensors.at(0);
 
-            bool needs_padding = false;
-            uint32_t total_elements = input_tensor.get_logical_shape()[dim];
-            if (input_tensor.get_logical_shape()[-2] < tt::constants::TILE_HEIGHT ||
-                input_tensor.get_logical_shape()[-1] < tt::constants::TILE_WIDTH) {
-                needs_padding = true;
-            }
+            uint32_t unpad_elements_h = input_tensor.get_logical_shape()[-2];
+            uint32_t unpad_elements_w = input_tensor.get_logical_shape()[-1];
+            bool needs_padding = input_tensor.get_layout() == Layout::TILE &&
+                                 (input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+                                  input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
             if (needs_padding) {
                 ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
                 input_tensor = ttnn::pad(0, input_tensor, padding, 0, false, std::nullopt);
@@ -298,28 +295,8 @@ Tensor all_gather(
                 {input_tensor});
 
             if (needs_padding) {
-                std::vector<Tensor> combined_tensors;
-
-                ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
-                ttnn::SmallVector<uint32_t> ends = {1, 1, 1, 1};
-                ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-
-                if (dim == 2) {
-                    ends[2] = total_elements;
-                } else if (dim == 3) {
-                    ends[3] = total_elements;
-                } else {
-                    TT_FATAL(false, "Unsupported dimension {} for slicing", dim);
-                }
-
-                for (int i = 0; i < num_devices; ++i) {
-                    begins[dim] = i * 32;
-                    ends[dim] = begins[dim] + total_elements;
-                    ttnn::Tensor sliced_tensor = ttnn::slice(output_tensor.at(0), begins, ends, step);
-                    combined_tensors.push_back(sliced_tensor);
-                }
-                ttnn::Tensor concat_tensor = ttnn::concat(combined_tensors, dim);
-                return {concat_tensor};
+                return ttnn::ccl::unpad_output_tensor(
+                    output_tensor, num_devices, unpad_elements_h, unpad_elements_w, dim);
             } else {
                 return output_tensor;
             }

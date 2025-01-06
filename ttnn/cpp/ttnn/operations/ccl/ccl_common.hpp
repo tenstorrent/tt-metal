@@ -37,6 +37,12 @@ std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_dev
     const std::vector<Device*>& devices,
     const ttnn::ccl::Topology& topology);
 
+std::vector<ttnn::Tensor> unpad_output_tensor(
+    const std::vector<ttnn::Tensor>& output_tensor,
+    uint32_t num_devices,
+    uint32_t unpad_elements_h,
+    uint32_t unpad_elements_w,
+    int dim);
 
 class LineTopology {
    public:
