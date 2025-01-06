@@ -160,7 +160,7 @@ ParallelConfig determine_parallel_config(
     return pconfig;
 }
 
-static ParallelConfig determine_output_parallel_config(
+ParallelConfig determine_output_parallel_config(
     const ParallelConfig& input_parallel_config,
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
@@ -371,9 +371,12 @@ bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 2>& padding,
     const std::array<uint32_t, 2>& dilation,
-    uint32_t groups) {
+    uint32_t groups,
+    const Conv2dConfig& conv_config) {
+    bool is_width_sharded =
+        (conv_config.shard_layout.has_value() && conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED);
     return kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == stride[1] && stride[0] == 1 && padding[0] == 0 &&
-           padding[1] == 0 && dilation[0] == 1 && dilation[1] == 1 && groups == 1;
+           padding[1] == 0 && dilation[0] == 1 && dilation[1] == 1 && groups == 1 && (not is_width_sharded);
 }
 
 // Implements a heuristic for selecting shard layout based on how many tenix cores are available
