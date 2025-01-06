@@ -42,23 +42,23 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb->cb_buffer();
     Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
-    std::vector<Buffer*> tensor_buffers;
-    for (const auto& tensor : tensors) {
-        tensor_buffers.push_back(tensor.buffer());
+    std::vector<Buffer*> tensor_buffers(tensors.size());
+    for (size_t t = 0; t < tensors.size(); ++t) {
+        tensor_buffers[t] = tensors[t].buffer();
     }
 
     /* Tiles */
     tt::tt_metal::Tile tensor_addrs_tile = tensor_addrs.get_tensor_spec().tile();
-    std::vector<tt::tt_metal::Tile> tensor_tiles;
-    for (const auto& tensor : tensors) {
-        tensor_tiles.push_back(tensor.get_tensor_spec().tile());
+    std::vector<tt::tt_metal::Tile> tensor_tiles(tensors.size());
+    for (size_t t = 0; t < tensors.size(); ++t) {
+        tensor_tiles[t] = tensors[t].get_tensor_spec().tile();
     }
 
-    /* Dataforamts */
+    /* Dataformats */
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.get_dtype());
-    std::vector<tt::DataFormat> tensor_data_formats;
-    for (const auto& tensor : tensors) {
-        tensor_data_formats.push_back(tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype()));
+    std::vector<tt::DataFormat> tensor_data_formats(tensors.size());
+    for (size_t t = 0; t < tensors.size(); ++t) {
+        tensor_data_formats[t] = tt::tt_metal::datatype_to_dataformat_converter(tensors[t].get_dtype());
     }
 
     Program program{};
@@ -69,16 +69,17 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t num_receivers_per_reader = global_cb->receiver_cores().num_cores() / global_cb->sender_cores().num_cores();
 
     uint32_t num_blocks = global_cb->receiver_cores().num_cores();
-    std::vector<uint32_t> tensor_block_num_tiles;
-    std::vector<std::vector<uint32_t>> tensor_shapes;
-    std::vector<uint32_t> tensor_tile_sizes;
+    std::vector<uint32_t> tensor_block_num_tiles(num_tensors);
+    std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
+    std::vector<uint32_t> tensor_tile_sizes(num_tensors);
     for (uint32_t t = 0; t < num_tensors; t++) {
         uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
         uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
 
-        tensor_shapes.push_back({height_in_tiles, width_in_tiles});
-        tensor_block_num_tiles.push_back(height_in_tiles * width_in_tiles / num_blocks);
-        tensor_tile_sizes.push_back(tensor_tiles[t].get_tile_size(tensor_data_formats[t]));
+        tensor_shapes[t][0] = height_in_tiles;
+        tensor_shapes[t][1] = width_in_tiles;
+        tensor_block_num_tiles[t] = height_in_tiles * width_in_tiles / num_blocks;
+        tensor_tile_sizes[t] = tensor_tiles[t].get_tile_size(tensor_data_formats[t]);
     }
     uint32_t max_block_tiles = *std::max_element(tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
     auto max_tile_size_iterator = std::max_element(tensor_tile_sizes.begin(), tensor_tile_sizes.end());
