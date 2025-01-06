@@ -255,6 +255,9 @@ public:
     virtual LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) = 0;
     virtual CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const = 0;
     virtual const std::vector<SubDeviceId> &get_sub_device_ids() const = 0;
+    virtual const std::vector<SubDeviceId> &get_sub_device_stall_group() const = 0;
+    virtual void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
+    virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
 
     // TODO #15944: Temporary api until migration to actual fabric is complete

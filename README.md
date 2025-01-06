@@ -121,7 +121,7 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 - [Ethernet and Multichip Basics](./tech_reports/EthernetMultichip/BasicEthernetGuide.md) (Updated Sept 20th, 2024)
 - [Collective Communication Library (CCL)](./tech_reports/EthernetMultichip/CclDeveloperGuide.md) (Updated Sept 20th, 2024)
 - [Blackhole Bring-Up Programming Guide](./tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) (Updated Dec 18th, 2024)
-- [Sub-Devices](./tech_reports/SubDevices/SubDevices.md) (Updated Jan 2nd, 2025)
+- [Sub-Devices](./tech_reports/SubDevices/SubDevices.md) (Updated Jan 7th, 2025)
 
 ## TT-Metalium Programming Examples
 
