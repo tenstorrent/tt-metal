@@ -1059,10 +1059,10 @@ void HWCommandQueue::enqueue_read_buffer(
         if (pages_to_read > 0) {
             uint32_t bank_base_address = buffer.address();
             src_page_index = region.offset / buffer.page_size();
-            // Only 4 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
+            // Only 8 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
             // To handle larger page offsets move bank base address up and update page offset to be relative to the new
             // bank address
-            if (src_page_index > 15) {
+            if (src_page_index > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
                 const uint32_t num_banks = this->device->num_banks(buffer.buffer_type());
                 const uint32_t num_pages_per_bank = src_page_index / num_banks;
                 bank_base_address += num_pages_per_bank * buffer.aligned_page_size();
