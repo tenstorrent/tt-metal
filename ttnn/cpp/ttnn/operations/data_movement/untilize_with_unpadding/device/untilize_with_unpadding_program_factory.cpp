@@ -304,8 +304,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     Padding padding(
         {{0, input_w - output_w}, {0, input_z - output_z}, {0, input_y - output_y}, {0, input_x - output_x}},
         Padding::PadValue::Any);
-    auto core_assignments =
-        ttnn::distribute_work(output_shape, padding, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff);
+    uint32_t tile_height = output.get_tensor_spec().tile().get_height();
+    auto core_assignments = ttnn::distribute_work(
+        output_shape, padding, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff, tile_height);
 
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;

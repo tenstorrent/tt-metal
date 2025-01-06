@@ -15,6 +15,7 @@
 #include "common/bfloat8.hpp"
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "ttnn/any_device.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -98,6 +99,13 @@ struct Tensor {
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
+    Tensor(
+        Storage storage,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape,
+        DataType dtype,
+        Layout layout,
+        const std::optional<Tile>& tile = std::nullopt);
     Tensor(Storage storage, TensorSpec tensor_spec);
 
     // Constructors to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
@@ -139,39 +147,30 @@ struct Tensor {
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
-    // elements have to match `spec`.
+    // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // The data in the buffer is copied into a tensor with an owned storage.
     //
-    // IMPORTANT: this function supports a limited subset of types (float32, bfloat16, uint32_t, int32_t),
-    // and only row-major layout.
-    //
-    // TODO:
-    //   1. add support for returning a tensor with a borrowed storage based off the buffer.
-    //   2. add support for sharding.
-    //   3. add support for block float formats.
-    //   4. add support for tilized layouts.
-    //   5. add support for on-device tensor creation.
+    // TODO: add support for returning a tensor with borrowed storage based off the buffer.
+    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
-    static Tensor from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec);
+    static Tensor from_span(
+        tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
 
     // Same as `from_span`, but takes a vector instead.
     template <typename T>
-    static Tensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec) {
-        return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), spec);
+    static Tensor from_vector(
+        const std::vector<T>& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
+        return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), spec, device);
     }
 
     // Converts a `Tensor` to a `std::vector<T>`.
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
-    // the `Tensor`.
+    // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // If the tensor resides on a device, it will be brough back to host.
     //
-    // IMPORTANT: this function supports a limited subset of types (float32, bfloat16, uint32_t, int32_t).
-    //
-    // TODO:
-    //   1. add support for sharding.
-    //   2. add support for block float formats.
+    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     std::vector<T> to_vector() const;
 
@@ -198,7 +197,7 @@ struct Tensor {
     Tensor to(Layout target_layout, distributed::MeshDevice* mesh_device) const;
 
     Tensor pad(
-        const tt::tt_metal::LegacyShape& output_tensor_shape,
+        const ttnn::SimpleShape& output_padded_shape,
         const ttnn::SimpleShape& input_tensor_start,
         float pad_value) const;
 

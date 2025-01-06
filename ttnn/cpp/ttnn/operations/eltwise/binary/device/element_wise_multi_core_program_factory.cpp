@@ -238,5 +238,4 @@ void BinaryDeviceOperation::ElementWiseMultiCore::override_runtime_arguments(
         shared_variables.src1_single_tile_size,
         shared_variables.dst_single_tile_size);
 }
-
 }  // namespace ttnn::operations::binary
