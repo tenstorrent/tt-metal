@@ -57,6 +57,43 @@ struct BinaryNg {
         tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 };
 
+template <BinaryOpType binary_op_type>
+struct InplaceBinaryNg {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const float scalar,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const float scalar,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+};
+
 }  // namespace ttnn::operations::binary_ng
 
 inline Tensor typecast_to(DataType dtype, const Tensor& input) {
@@ -135,5 +172,9 @@ constexpr auto logaddexp = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logaddexp2 = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::logaddexp2",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP2>>();
+
+constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::add_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::ADD>>();
 
 }  // namespace ttnn::experimental
