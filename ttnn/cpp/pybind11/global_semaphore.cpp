@@ -31,7 +31,7 @@ void py_module(py::module& module) {
         py::arg("cores"),
         py::arg("initial_value"),
         py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Create a GlobalSemaphore Object on a single device.
 
@@ -64,7 +64,7 @@ void py_module(py::module& module) {
         },
         py::arg("global_semaphore"),
         py::arg("reset_value"),
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Reset the value of the global semaphore.
 
@@ -90,7 +90,7 @@ void py_module(py::module& module) {
         py::arg("cores"),
         py::arg("initial_value"),
         py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Create a GlobalSemaphore Object on a single device.
 
@@ -158,7 +158,7 @@ void py_module(py::module& module) {
         },
         py::arg("global_semaphore"),
         py::arg("reset_value"),
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Reset the value of the global semaphore.
 

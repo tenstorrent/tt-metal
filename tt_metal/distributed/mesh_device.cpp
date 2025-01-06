@@ -656,6 +656,18 @@ void MeshDevice::remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_devic
     }
 }
 
+void MeshDevice::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    for (auto* device : this->devices) {
+        device->push_work([device, sub_device_ids=std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end())]() { device->set_sub_device_stall_group(sub_device_ids); });
+    }
+}
+
+void MeshDevice::reset_sub_device_stall_group() {
+    for (auto* device : this->devices) {
+        device->push_work([device]() { device->reset_sub_device_stall_group(); });
+    }
+}
+
 MeshSubDeviceManagerId::MeshSubDeviceManagerId(const MeshDevice& mesh_device) {
     this->sub_device_manager_ids.resize(mesh_device.num_devices());
 }

@@ -165,12 +165,16 @@ public:
 
     MeshSubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
-    // TODO #15944: Temporary api until migration to actual fabric is complete
+    // TODO #16526: Temporary api until migration to actual fabric is complete
     std::tuple<MeshSubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
     void load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
     void clear_loaded_sub_device_manager();
     void remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
+    // TODO #16492: Add get_sub_device_stall_group once MeshDevice is no longer just a collection of single Devices
+    // and the MeshDevice has a single SubDeviceManager responsible for all Devices.
+    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void reset_sub_device_stall_group();
 
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,

@@ -1055,7 +1055,7 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
             py::arg("cq_id") = ttnn::DefaultQueueId,
-            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
             py::keep_alive<0, 2>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
@@ -1097,7 +1097,7 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("mesh_device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
             py::arg("cq_id") = ttnn::DefaultQueueId,
-            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
             py::keep_alive<0, 2>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
@@ -1180,7 +1180,7 @@ void pytensor_module(py::module& m_tensor) {
             },
             py::arg("blocking") = true,
             py::arg("cq_id") = ttnn::DefaultQueueId,
-            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
 

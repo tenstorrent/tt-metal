@@ -1299,6 +1299,8 @@ void Device::reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceMana
     }
     // Reset the launch_message ring buffer state seen on host
     sub_device_manager->reset_worker_launch_message_buffer_state();
+
+    sub_device_manager->reset_sub_device_stall_group();
 }
 
 uint32_t Device::num_sub_devices() const {
@@ -1831,6 +1833,18 @@ void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id)
 
 const std::vector<SubDeviceId> &Device::get_sub_device_ids() const {
     return this->active_sub_device_manager_->get_sub_device_ids();
+}
+
+const std::vector<SubDeviceId> &Device::get_sub_device_stall_group() const {
+    return this->active_sub_device_manager_->get_sub_device_stall_group();
+}
+
+void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    this->active_sub_device_manager_->set_sub_device_stall_group(sub_device_ids);
+}
+
+void Device::reset_sub_device_stall_group() {
+    this->active_sub_device_manager_->reset_sub_device_stall_group();
 }
 
 DeviceAddr Device::get_base_allocator_addr(const HalMemType &mem_type) const {

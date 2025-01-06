@@ -75,7 +75,7 @@ void py_module(py::module& module) {
         py::arg("device"),
         py::arg("memory_config") = std::nullopt,
         py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>());  // TODO #16492: Remove argument
 
     module.def(
         "to_device",
@@ -89,7 +89,7 @@ void py_module(py::module& module) {
         py::arg("device"),
         py::arg("memory_config") = std::nullopt,
         py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Copy tensor from host to device.
 
@@ -118,7 +118,7 @@ void py_module(py::module& module) {
         py::arg("blocking") = true,
         py::kw_only(),
         py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Copy tensor from device to host.
 
@@ -262,7 +262,7 @@ void py_module(py::module& module) {
         py::arg("host_tensor"),
         py::arg("device_tensor"),
         py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>());  // TODO #16492: Remove argument
 
     module.def(
         "begin_trace_capture",
