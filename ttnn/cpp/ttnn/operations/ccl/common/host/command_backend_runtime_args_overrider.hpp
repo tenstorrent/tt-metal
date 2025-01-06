@@ -10,6 +10,7 @@ struct RuntimeArgsData;
 
 #include <vector>
 #include <cstdint>
+#include <cstddef>
 
 namespace ttnn::ccl {
 /*
