@@ -113,7 +113,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t weight_block_w_ntiles,
     const sliding_window::ParallelConfig& input_parallel_config,
     const sliding_window::ParallelConfig& output_parallel_config,
-    T * device,
+    T* device,
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
