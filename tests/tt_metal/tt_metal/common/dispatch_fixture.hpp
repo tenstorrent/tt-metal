@@ -12,7 +12,6 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/llrt/llrt.hpp"
 
 // A dispatch-agnostic test fixture
 class DispatchFixture : public ::testing::Test {

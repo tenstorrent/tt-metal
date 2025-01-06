@@ -10,7 +10,6 @@
 #include "tt_metal/common/test_tiles.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/llrt/llrt.hpp"
 
 using namespace tt;
 
