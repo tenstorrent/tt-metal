@@ -55,7 +55,7 @@ bool vecadd_multi_core(DispatchFixture* fixture, Device* device, uint32_t n_tile
 
     bool pass = true;
 
-    int seed = std::random_device{}();
+    int seed = 0x1234567;
     Program program = CreateProgram();
 
     // designate 4 cores for utilization - cores (0,0), (0,1), (0,2), (0,3)
@@ -123,7 +123,7 @@ bool vecadd_multi_core(DispatchFixture* fixture, Device* device, uint32_t n_tile
     size_t data_per_core = tile_size * tiles_per_core;
 
     for (int core = 0; core < num_core; ++core) {
-        const auto core_offset = core * tile_size + tiles_per_core;
+        const auto core_offset = core * (tile_size + tiles_per_core);
         for (int index = 0; index < data_per_core; index++) {
             const auto i = core_offset + index;
             float golden = a_data[i].to_float() + b_data[i].to_float();

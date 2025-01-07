@@ -89,7 +89,7 @@ void help(std::string_view program_name) {
 }
 
 int main(int argc, char** argv) {
-    int seed = std::random_device{}();
+    int seed = 0x1234567;
     int device_id = 0;
 
     // Quick and dirty argument parsing.
@@ -195,10 +195,12 @@ int main(int argc, char** argv) {
     // some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going "
                  "to be less accurate)\n";
-    size_t n = std::min((size_t)10, (size_t)tile_size * tiles_per_core);
+    size_t data_per_core = std::min((size_t)10, (size_t)tile_size * tiles_per_core);
 
-    for (int j = 0; j < num_core; ++j) {
-        for (int i = j * tile_size * tiles_per_core; i < j * tile_size * tiles_per_core + n; i++) {
+    for (int core = 0; core < num_core; ++core) {
+        const auto core_offset = core * (tile_size + tiles_per_core);
+        for (int index = 0; index < data_per_core; index++) {
+            const auto i = core_offset + index;
             std::cout << "  " << a_data[i].to_float() << " + " << b_data[i].to_float() << " = " << c_data[i].to_float()
                       << "\n";
         }
