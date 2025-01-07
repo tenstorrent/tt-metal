@@ -110,9 +110,9 @@ namespace shard_addr_gen_utils {
 template <uint32_t start_x, uint32_t start_y, uint32_t width, uint32_t height>
 struct shard_grid_info {
     constexpr static uint32_t x = start_x;
-    constexpr static uint32_t y = start_x;
-    constexpr static uint32_t w = start_x;
-    constexpr static uint32_t h = start_x;
+    constexpr static uint32_t y = start_y;
+    constexpr static uint32_t w = width;
+    constexpr static uint32_t h = height;
     constexpr static uint32_t volume = width * height;
 };
 
