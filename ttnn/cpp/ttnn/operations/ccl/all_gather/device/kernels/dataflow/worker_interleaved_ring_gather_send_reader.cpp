@@ -101,7 +101,7 @@ void kernel_main() {
             input_tensor_shard_grid_start_y_logical,
             input_tensor_shard_grid_start_x_logical,
             input_tensor_shard_grid_transposed),
-        output_page_size,
+        page_size,
         src_addr);
     auto d = tt::tt_metal::address_generators::build_sharded_addr_gen<output_tensor_memory_layout>(
         tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(

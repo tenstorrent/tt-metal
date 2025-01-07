@@ -170,6 +170,75 @@ FORCE_INLINE void write_chunk(
         contig_pages = 1;
 #ifdef ROW_MAJOR_LAYOUT
     #ifdef INTERLEAVED_MEM_LAYOUT
+        std::pair<uint64_t, uint32_t> dst_noc_addr_retval = get_contiguous_noc_addr(output_page_idx, d);
+        uint64_t dst_noc_addr = dst_noc_addr_retval.first;
+        contig_pages = dst_noc_addr_retval.second;
+        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
+    #elif defined SHARDED_MEM_LAYOUT
+        ASSERT(false);  // untested && unimplemented
+    #endif
+        output_page_idx++;
+        row_idx++;
+        if (row_idx == num_rows) {
+            row_idx = 0;
+            output_page_idx += row_offset;
+        }
+#elif defined TILED_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
+        noc_async_write_tile(output_page_idx, d, l1_read_addr);
+    #elif defined SHARDED_MEM_LAYOUT
+        std::pair<uint64_t, uint32_t> dst_noc_addr_retval = get_contiguous_noc_addr(output_page_idx, d);
+        uint64_t dst_noc_addr = dst_noc_addr_retval.first;
+        contig_pages = std::min<int32_t>(pages_remaining, std::min<int32_t>(dst_noc_addr_retval.second, num_cols - col_idx));
+        /*
+        auto [noc_yx, page_offset, contig_pages_] = d.get_page_location_with_contiguous_pages_in_row_in_bank(output_page_idx);
+        contig_pages = std::min<int32_t>(pages_remaining, std::min<int32_t>(contig_pages_, num_cols - col_idx));
+        uint32_t local_address = d.bank_base_address + (page_offset * d.page_size) + 0;
+        uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), static_cast<uint32_t>(noc_yx.noc_y), local_address);
+        */
+        ASSERT(((dst_noc_addr >> 32) & 0xF) == 0);
+
+        noc_async_write(l1_read_addr, dst_noc_addr, page_size * contig_pages);
+    #endif
+        output_page_idx += contig_pages;
+        col_idx += contig_pages;
+        if (col_idx == num_cols) {
+            output_page_idx += col_offset;
+            col_idx = 0;
+            row_idx++;
+            if (row_idx == num_rows) {
+                row_idx = 0;
+                output_page_idx += row_offset;
+            }
+        }
+#endif
+        l1_read_addr += page_size * contig_pages;
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_id, num_pages);
+}
+
+template <typename AddrGen>
+FORCE_INLINE void write_chunk_legacy(
+    uint32_t& output_page_idx,
+    uint32_t& col_idx,
+    uint32_t& row_idx,
+    const uint32_t& cb_id,
+    const AddrGen& d,
+    const uint32_t& num_cols,
+    const uint32_t& num_rows,
+    const uint32_t& col_offset,
+    const uint32_t& row_offset,
+    const uint32_t& num_pages,
+    const uint32_t& page_size) {
+    cb_wait_front(cb_id, num_pages);
+    uint32_t l1_read_addr = get_read_ptr(cb_id);
+    int32_t contig_pages = 1;
+
+    for (int32_t pages_remaining = num_pages; pages_remaining != 0; pages_remaining -= contig_pages) {
+        contig_pages = 1;
+#ifdef ROW_MAJOR_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t dst_noc_addr = get_noc_addr(output_page_idx, d);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
     #elif defined SHARDED_MEM_LAYOUT

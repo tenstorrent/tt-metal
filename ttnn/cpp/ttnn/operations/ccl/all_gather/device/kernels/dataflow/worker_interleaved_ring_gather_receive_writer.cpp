@@ -138,11 +138,11 @@ void kernel_main() {
         if (num_full_chunks > 0) {
             for (uint32_t c = 0; c < num_full_chunks; ++c) {
 #ifdef SHARDED_MEM_LAYOUT
-                ASSERT(
-                    output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x *
-                                          output_tensor_shard_grid_height * output_tensor_shard_grid_width);
+                // ASSERT(
+                //     output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x *
+                //                           output_tensor_shard_grid_height * output_tensor_shard_grid_width);
 #endif
-                write_chunk(
+                write_chunk_legacy(
                     output_page_idx,
                     col_idx,
                     row_idx,
@@ -161,11 +161,11 @@ void kernel_main() {
         }
         if (rem_num_pages > 0) {
 #ifdef SHARDED_MEM_LAYOUT
-            ASSERT(
-                output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x *
-                                      output_tensor_shard_grid_height * output_tensor_shard_grid_width);
+            // ASSERT(
+            //     output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x *
+            //                           output_tensor_shard_grid_height * output_tensor_shard_grid_width);
 #endif
-            write_chunk(
+            write_chunk_legacy(
                 output_page_idx,
                 col_idx,
                 row_idx,

@@ -73,3 +73,7 @@ extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 extern uint32_t tt_l1_ptr* rta_l1_base;
 extern uint32_t tt_l1_ptr* crta_l1_base;
 extern uint32_t tt_l1_ptr* sem_l1_base[];
+
+template <typename T>
+FORCE_INLINE T get_arg_val(int arg_idx);
+static FORCE_INLINE uint32_t get_arg_addr(int arg_idx);
