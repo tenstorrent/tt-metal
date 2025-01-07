@@ -217,7 +217,7 @@ class Buffer final {
     bool is_trace() const;
 
     bool is_valid_region(const BufferRegion& region) const;
-    bool is_partial_region(const BufferRegion& region) const;
+    bool is_valid_partial_region(const BufferRegion& region) const;
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 

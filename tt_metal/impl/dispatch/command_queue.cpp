@@ -97,7 +97,7 @@ void ValidateBufferRegion(
         region.offset,
         region.size);
 
-    if (buffer_obj.is_partial_region(region)) {
+    if (buffer_obj.is_valid_partial_region(region)) {
         TT_FATAL(
             !is_sharded(buffer_obj.buffer_layout()),
             "Reading from and writing to partial buffer regions is only supported for non-sharded buffers.");
@@ -940,7 +940,7 @@ void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<co
 void HWCommandQueue::enqueue_read_buffer(
     std::shared_ptr<Buffer>& buffer,
     void* dst,
-    const BufferRegion region,
+    const BufferRegion& region,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     this->enqueue_read_buffer(*buffer, dst, region, blocking, sub_device_ids);
@@ -951,7 +951,7 @@ void HWCommandQueue::enqueue_read_buffer(
 void HWCommandQueue::enqueue_read_buffer(
     Buffer& buffer,
     void* dst,
-    const BufferRegion region,
+    const BufferRegion& region,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_read_buffer");
@@ -1037,7 +1037,7 @@ void HWCommandQueue::enqueue_read_buffer(
             this->finish(sub_device_ids);
         }
     } else {
-        if (buffer.is_partial_region(region)) {
+        if (buffer.is_valid_partial_region(region)) {
             TT_FATAL(
                 region.offset % buffer.page_size() == 0,
                 "Offset {} must be a multiple of the buffer page size {}.",
@@ -1103,7 +1103,7 @@ void HWCommandQueue::enqueue_read_buffer(
 void HWCommandQueue::enqueue_write_buffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
-    const BufferRegion region,
+    const BufferRegion& region,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     // Top level API to accept different variants for buffer and src
@@ -1129,7 +1129,7 @@ CoreType HWCommandQueue::get_dispatch_core_type() {
 void HWCommandQueue::enqueue_write_buffer(
     Buffer& buffer,
     const void* src,
-    const BufferRegion region,
+    const BufferRegion& region,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_write_buffer");
@@ -1234,7 +1234,7 @@ void HWCommandQueue::enqueue_write_buffer(
             }
         }
     } else {
-        if (buffer.is_partial_region(region)) {
+        if (buffer.is_valid_partial_region(region)) {
             TT_FATAL(
                 region.offset % buffer.page_size() == 0,
                 "Offset {} must be divisible by the buffer page size {}.",
@@ -2028,7 +2028,7 @@ void EnqueueReadSubBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
-    const BufferRegion region,
+    const BufferRegion& region,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
@@ -2061,7 +2061,7 @@ void EnqueueWriteSubBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
-    const BufferRegion region,
+    const BufferRegion& region,
     bool blocking) {
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
@@ -2161,7 +2161,7 @@ void EnqueueReadBufferImpl(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
-    const BufferRegion region,
+    const BufferRegion& region,
     bool blocking) {
     std::visit(
         [&](auto&& b) {
@@ -2178,8 +2178,9 @@ void EnqueueWriteBufferImpl(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
-    const BufferRegion region,
-    bool blocking) {
+    const BufferRegion& region,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     cq.hw_command_queue().enqueue_write_buffer(std::move(buffer), std::move(src), region, blocking);
 }
 

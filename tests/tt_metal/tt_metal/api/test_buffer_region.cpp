@@ -9,7 +9,7 @@
 
 #include "device_fixture.hpp"
 
-TEST_F(DeviceSingleCardBufferFixture, InvalidBufferRegion) {
+TEST_F(DeviceSingleCardBufferFixture, TestInvalidBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
         .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> buffer = CreateBuffer(buffer_config);
@@ -24,7 +24,7 @@ TEST_F(DeviceSingleCardBufferFixture, InvalidBufferRegion) {
     EXPECT_FALSE(buffer.get()->is_valid_region(buffer_region3));
 }
 
-TEST_F(DeviceSingleCardBufferFixture, ValidBufferRegion) {
+TEST_F(DeviceSingleCardBufferFixture, TestValidBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
         .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> buffer = CreateBuffer(buffer_config);
@@ -42,26 +42,26 @@ TEST_F(DeviceSingleCardBufferFixture, ValidBufferRegion) {
     EXPECT_TRUE(buffer.get()->is_valid_region(buffer_region4));
 }
 
-TEST_F(DeviceSingleCardBufferFixture, PartialBufferRegion) {
+TEST_F(DeviceSingleCardBufferFixture, TestPartialBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
         .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> buffer = CreateBuffer(buffer_config);
 
     const BufferRegion buffer_region1(1024, 1024);
-    EXPECT_TRUE(buffer.get()->is_partial_region(buffer_region1));
+    EXPECT_TRUE(buffer.get()->is_valid_partial_region(buffer_region1));
 
     const BufferRegion buffer_region2(0, 1024);
-    EXPECT_TRUE(buffer.get()->is_partial_region(buffer_region2));
+    EXPECT_TRUE(buffer.get()->is_valid_partial_region(buffer_region2));
 
     const BufferRegion buffer_region3(512, 1024);
-    EXPECT_TRUE(buffer.get()->is_partial_region(buffer_region3));
+    EXPECT_TRUE(buffer.get()->is_valid_partial_region(buffer_region3));
 }
 
-TEST_F(DeviceSingleCardBufferFixture, FullBufferRegion) {
+TEST_F(DeviceSingleCardBufferFixture, TestFullBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
         .device = this->device_, .size = 2048, .page_size = 32, .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> buffer = CreateBuffer(buffer_config);
 
     const BufferRegion buffer_region(0, 2048);
-    EXPECT_FALSE(buffer.get()->is_partial_region(buffer_region));
+    EXPECT_FALSE(buffer.get()->is_valid_partial_region(buffer_region));
 }

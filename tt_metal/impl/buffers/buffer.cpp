@@ -417,13 +417,8 @@ bool Buffer::is_trace() const {
 
 bool Buffer::is_valid_region(const BufferRegion& region) const { return region.offset + region.size <= this->size(); }
 
-bool Buffer::is_partial_region(const BufferRegion& region) const {
-    TT_FATAL(
-        this->is_valid_region(region),
-        "Buffer region with offset {} and size {} is invalid!",
-        region.offset,
-        region.size);
-    return region.offset > 0 || region.size != this->size();
+bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
+    return this->is_valid_region(region) && (region.offset > 0 || region.size != this->size());
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
