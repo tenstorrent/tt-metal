@@ -4,7 +4,7 @@
 
 #include "debug/assert.h"
 
-const uint64_t global_const_eight_byte_val = 0xABCD0123ABCD0123;
+volatile uint64_t global_eight_byte_val = 0xABCD0123ABCD0123;
 
 volatile uint32_t nonzero[4] = {
     0xAABB0000,
@@ -44,7 +44,7 @@ void MAIN {
     zero[2] = 0xdeadbeef;
     zero[3] = 0xdeadbeef;
 
-    if (global_const_eight_byte_val != 0xABCD0123ABCD0123) {
+    if (global_eight_byte_val != 0xABCD0123ABCD0123) {
         ASSERT(0);
         while (1);
     }
