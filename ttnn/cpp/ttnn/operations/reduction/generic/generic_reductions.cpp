@@ -9,6 +9,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn {
 namespace operations::reduction {
@@ -88,7 +89,7 @@ static Tensor reduce_impl(
     Tensor output_tensor;
     float pad_value = get_pad_value(reduce_type);
     bool single_reduce_op = (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
-                            (dim.size() == 2 && dim[0] == rank - 1 && dim[0] == rank - 2);
+                            (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
         auto reduce_4d_loop = [&](const bool use_reduce_type) -> Tensor {
             Tensor output_tensor = input_tensor;
@@ -99,12 +100,6 @@ static Tensor reduce_impl(
                 }
                 bool transpose = i_dim < rank - 2;
                 int adjusted_dim = offset + i_dim;
-
-                auto pre_reduction_shape = output_tensor.get_shape();
-                if (!is_rank_le_4d) {
-                    output_tensor = reshape_nd_to_4d_for_reduction(output_tensor, transpose, adjusted_dim);
-                }
-
                 int reduce_dim = adjusted_dim;
 
                 if (transpose) {
@@ -132,9 +127,6 @@ static Tensor reduce_impl(
                 }
                 if (transpose) {
                     output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -1, memory_config);
-                }
-                if (!is_rank_le_4d) {
-                    output_tensor = reshape_4d_to_nd_after_reduction(output_tensor, pre_reduction_shape, i_dim);
                 }
             }
             return output_tensor;
@@ -165,6 +157,10 @@ static Tensor reduce_impl(
         int reduced_volume = 1;
         for (int axis : dim) {
             reduced_volume *= input_shape[axis];
+        }
+
+        if (!is_rank_le_4d) {
+            input_tensor = data_movement::squeeze_from_ND_to_4D(input_tensor);
         }
 
         if constexpr (reduce_type == ReduceType::Sum) {
@@ -205,6 +201,10 @@ static Tensor reduce_impl(
                 compute_kernel_config);
         } else {
             TT_THROW("Unsupported reduction operation");
+        }
+
+        if (!is_rank_le_4d) {
+            output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape{output_shape});
         }
     }
 
