@@ -11,7 +11,7 @@
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/tt_fabric_traffic_gen_test.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
-#include "tt_metal/hw/inc/wormhole/eth_l1_address_map.h"
+#include "eth_l1_address_map.h"
 #include "tt_fabric/hw/inc/tt_fabric_interface.h"
 
 using std::vector;
@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
-            std::filesystem::path(tt::llrt::OptionsG.get_root_dir()) /
+            std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
             "tt_fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
 
@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Invalid Device Id.");
         }
 
-        std::map<chip_id_t, tt_metal::Device*> device_map;
+        std::map<chip_id_t, IDevice*> device_map;
 
         std::vector<chip_id_t> chip_ids;
         for (unsigned int id = 4; id < 36; id++) {
@@ -290,7 +290,7 @@ int main(int argc, char** argv) {
         CoreCoord router_logical_core;
         CoreCoord router_phys_core;
         for (auto device : device_map) {
-            auto neighbors = device.second->get_ethernet_connected_device_ids();
+            auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(device.second->id());
             std::vector<CoreCoord> device_router_cores;
             std::vector<CoreCoord> device_router_phys_cores;
             uint32_t router_mask = 0;
@@ -553,7 +553,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");
