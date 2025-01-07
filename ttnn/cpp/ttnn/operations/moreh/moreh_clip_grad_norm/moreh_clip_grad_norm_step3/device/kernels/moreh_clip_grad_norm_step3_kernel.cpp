@@ -19,7 +19,7 @@ void MAIN {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    binary_op_init_common(cb_x, cb_clip_coef_clamped);
+    binary_op_init_common(cb_x, cb_clip_coef_clamped, cb_y);
 
     cb_wait_front(cb_clip_coef_clamped, onetile);  // comes from the reader
 
