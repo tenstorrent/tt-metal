@@ -1824,6 +1824,51 @@ void configure_for_single_chip(
                                     noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
 
+        // prefetch_h
+        std::vector<uint32_t> prefetch_h_compile_args = {
+            prefetch_d_buffer_base,
+            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+            prefetch_d_buffer_pages,
+            prefetch_downstream_cb_sem,  // my_downstream_cb_sem_id
+            prefetch_d_upstream_cb_sem,  // downstream_cb_sem_id
+            dev_hugepage_base,
+            hugepage_issue_buffer_size_g,
+            prefetch_q_base,
+            prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
+            prefetch_q_rd_ptr_addr,
+            prefetch_q_rd_pcie_ptr_addr,
+            cmddat_q_base,
+            cmddat_q_size_g,
+            0,  // unused
+            0,  // unused
+            0,  // unused
+            0,  // unused
+            0,  // unused
+            0,  // unused
+            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
+            dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,
+            0,  // unused
+            0,  // unused
+            0,  // unused
+            0,  // unused
+            0,  // unused
+        };
+
+        CoreCoord phys_prefetch_h_downstream_core =
+            packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
+        configure_kernel_variant<false, true>(
+            program,
+            "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+            prefetch_h_compile_args,
+            prefetch_core,
+            phys_prefetch_core_g,
+            {0xffffffff, 0xffffffff},  // upstream core unused
+            phys_prefetch_h_downstream_core,
+            device,
+            my_noc_index,
+            my_noc_index,
+            my_noc_index);
+
         // In the case of packetized_enable_g, the prefetch_h downstream is
         // mux and the prefetch_d upstream is the demux
         // set the semaphores accordingly
@@ -1833,8 +1878,8 @@ void configure_for_single_chip(
             dispatch_buffer_pages,
             prefetch_d_downstream_cb_sem,  // my_downstream_cb_sem_id
             dispatch_cb_sem,               // downstream_cb_sem_id
-            dev_hugepage_base,
-            hugepage_issue_buffer_size_g,
+            0,
+            0,
             prefetch_q_base,
             prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
             prefetch_q_rd_ptr_addr,
@@ -1866,51 +1911,6 @@ void configure_for_single_chip(
             phys_prefetch_d_core,
             phys_prefetch_d_upstream_core,
             phys_dispatch_core,
-            device,
-            my_noc_index,
-            my_noc_index,
-            my_noc_index);
-
-        // prefetch_h
-        std::vector<uint32_t> prefetch_h_compile_args = {
-            prefetch_d_buffer_base,
-            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-            prefetch_d_buffer_pages,
-            prefetch_downstream_cb_sem,
-            prefetch_d_upstream_cb_sem,
-            dev_hugepage_base,
-            hugepage_issue_buffer_size_g,
-            prefetch_q_base,
-            prefetch_q_entries_g * (uint32_t)sizeof(dispatch_constants::prefetch_q_entry_type),
-            prefetch_q_rd_ptr_addr,
-            prefetch_q_rd_pcie_ptr_addr,
-            cmddat_q_base,
-            cmddat_q_size_g,
-            0,
-            scratch_db_size_g,
-            prefetch_sync_sem,
-            prefetch_d_buffer_pages,
-            prefetch_d_upstream_cb_sem,
-            prefetch_downstream_cb_sem,
-            dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-            dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,
-            0,
-            0,
-            0,
-            0,
-            0,
-        };
-
-        CoreCoord phys_prefetch_h_downstream_core =
-            packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
-        configure_kernel_variant<false, true>(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            prefetch_h_compile_args,
-            prefetch_core,
-            phys_prefetch_core_g,
-            {0xffffffff, 0xffffffff},  // upstream core unused
-            phys_prefetch_h_downstream_core,
             device,
             my_noc_index,
             my_noc_index,
@@ -2101,8 +2101,8 @@ void configure_for_single_chip(
             scratch_db_size_g,                                    // scratch_db_size
             prefetch_sync_sem,                                    // my_downstream_sync_sem_id
             prefetch_d_buffer_pages,                              // cmddat_q_pages
-            prefetch_d_upstream_cb_sem,                           // my_upstream_cb_sem_id
-            prefetch_downstream_cb_sem,                           // upstream_cb_sem_id
+            0,                                                    // my_upstream_cb_sem_id
+            0,                                                    // upstream_cb_sem_id
             dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,  // cmddat_q_log_page_size
             dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,         // cmddat_q_blocks
             0,
@@ -2150,8 +2150,8 @@ void configure_for_single_chip(
             dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
             prefetch_sync_sem,
             0,  // true base of hugepage
-            dev_hugepage_completion_buffer_base,
-            DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
+            0,
+            0,
             dispatch_buffer_base,
             (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
             dispatch_downstream_cb_sem,
@@ -2202,7 +2202,7 @@ void configure_for_single_chip(
             DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
             dispatch_buffer_base,
             (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
-            dispatch_h_cb_sem,
+            0,
             dispatch_downstream_cb_sem,
             0,
             split_prefetcher_g,
