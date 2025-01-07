@@ -177,7 +177,6 @@ jobs:
             CHANGELOG.txt
             README.md
             INSTALLING.md
-            infra/machine_setup/scripts/setup_hugepages.py
             ttnn-*+*.whl
           fail_on_unmatched_files: true
   create-docker-release-image:

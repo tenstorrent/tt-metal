@@ -26,23 +26,19 @@ namespace v1 {
 namespace experimental {
 
 class GlobalCircularBuffer {
-    struct Private {
-        explicit Private() = default;
-    };
-
 public:
-    static std::shared_ptr<GlobalCircularBuffer> create(
+    GlobalCircularBuffer(
         Device* device,
         const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type = BufferType::L1,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-    GlobalCircularBuffer(const GlobalCircularBuffer&) = delete;
-    GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = delete;
+    GlobalCircularBuffer(const GlobalCircularBuffer&) = default;
+    GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = default;
 
-    GlobalCircularBuffer(GlobalCircularBuffer&&) noexcept = delete;
-    GlobalCircularBuffer& operator=(GlobalCircularBuffer&&) noexcept = delete;
+    GlobalCircularBuffer(GlobalCircularBuffer&&) noexcept = default;
+    GlobalCircularBuffer& operator=(GlobalCircularBuffer&&) noexcept = default;
 
     const Buffer& cb_buffer() const;
 
@@ -55,16 +51,6 @@ public:
 
     static constexpr auto attribute_names = std::forward_as_tuple("sender_receiver_core_mapping", "size");
     const auto attribute_values() const { return std::make_tuple(this->sender_receiver_core_mapping_, this->size_); }
-
-    // "Private" constructor to prevent direct instantiation
-    // Use GlobalCircularBuffer::create instead
-    GlobalCircularBuffer(
-        Device* device,
-        const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
-        uint32_t size,
-        BufferType buffer_type,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        Private);
 
 private:
     void setup_cb_buffers(

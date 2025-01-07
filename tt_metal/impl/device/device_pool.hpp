@@ -57,6 +57,7 @@ private:
     size_t l1_small_size;
     size_t trace_region_size;
     std::vector<uint32_t> l1_bank_remap;
+    bool using_fast_dispatch;
     std::mutex lock;
     // TODO replace std::vector<std::unique_ptr<Device>> with stl::SlotMap<v1::DeviceKey, Device> when removing v0
     std::vector<std::unique_ptr<Device>> devices;

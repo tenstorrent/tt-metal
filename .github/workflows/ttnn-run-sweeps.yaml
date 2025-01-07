@@ -138,7 +138,8 @@ on:
           - eltwise.unary_backward.fill_zero_bw
           - eltwise.unary_backward.log_sigmoid_bw
           - eltwise.unary_backward.logit_bw
-          - eltwise.unary_backward.neg_bw
+          - eltwise.unary_backward.neg_bw.neg_bw
+          - eltwise.unary_backward.neg_bw.neg_bw_sharded
           - eltwise.unary_backward.hardshrink_bw
           - eltwise.unary_backward.softshrink_bw
           - eltwise.unary_backward.acos_bw.acos_bw
@@ -149,7 +150,9 @@ on:
           - eltwise.unary_backward.i0_bw.i0_bw
           - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
           - eltwise.unary_backward.relu_bw.relu_bw
+          - eltwise.unary_backward.relu_bw.relu_bw_sharded
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
+          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
           - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
           - eltwise.unary_backward.tan_bw.tan_bw
           - eltwise.unary_backward.trunc_bw.trunc_bw
@@ -160,7 +163,9 @@ on:
           - eltwise.unary_backward.threshold_bw.threshold_bw
           - eltwise.unary_backward.div_bw.div_bw
           - eltwise.unary_backward.log_bw.log_bw
+          - eltwise.unary_backward.log_bw.log_bw_sharded
           - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary_backward.relu6_bw.relu6_bw_sharded
           - eltwise.unary_backward.log10_bw.log10_bw
           - eltwise.unary_backward.abs_bw.abs_bw
           - eltwise.unary_backward.sinh_bw.sinh_bw
@@ -179,6 +184,7 @@ on:
           - eltwise.unary_backward.lgamma_bw.lgamma_bw
           - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
           - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
+          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw_sharded
           - eltwise.unary_backward.elu_bw.elu_bw
           - eltwise.unary_backward.celu_bw.celu_bw
           - eltwise.unary_backward.selu_bw.selu_bw
