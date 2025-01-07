@@ -227,6 +227,7 @@ class LegacyShape {
     const LegacyShape without_padding() const;
 
     ttnn::SimpleShape logical_shape() const;
+    ttnn::SimpleShape padded_shape() const;
 
     const uint32_t get_normalized_index(std::int64_t index) const;
 
