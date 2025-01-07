@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import List, Union
 import torch
 import PIL
@@ -54,6 +55,16 @@ def input_processor_for_mllama(ctx: InputContext, inputs: Union[DecoderOnlyInput
     inputs["encoder_prompt"] = MLLAMA_IMAGE_TOKEN * num_vision_tokens
     inputs["encoder_prompt_token_ids"] = [MLLAMA_IMAGE_TOKEN_ID] * num_vision_tokens
 
+    return inputs
+
+
+def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
+    if "3.1-8B" in ctx.model_config.hf_config._name_or_path and os.environ.get("MESH_DEVICE") == "N150":
+        prompt_len = len(inputs.get("prompt_token_ids"))
+        if prompt_len > 65536:
+            raise ValueError(
+                f"TT-LLama8B does not support prompts longer than 65536 tokens on N150 (received prompt with {prompt_len} tokens)"
+            )
     return inputs
 
 
@@ -112,6 +123,7 @@ class TtMllamaForConditionalGeneration(LlamaGenerator, SupportsMultiModal):
         )
 
 
+@INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
 class TtLlamaForCausalLM(LlamaGenerator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -131,6 +143,9 @@ class TtLlamaForCausalLM(LlamaGenerator):
             optimizations=optimizations,
             max_seq_len=max_seq_len,
         )
+        assert (
+            model_args.model_name in hf_config._name_or_path
+        ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model weights ({model_args.DEFAULT_CKPT_DIR})."
         if n_layers is not None:
             model_args.n_layers = n_layers
         state_dict = model_args.load_state_dict()
