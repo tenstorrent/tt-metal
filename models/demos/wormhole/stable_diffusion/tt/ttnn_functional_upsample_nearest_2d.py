@@ -20,10 +20,8 @@ class upsample_nearest2d:
 
         ## calculate ncores, corresponding grid_size and in_shard_shape based on the input_shape
         ncores = None
-        grid_sizes = {1024: (8, 5), 256: (8, 8), 64: (4, 8)}
-        max_grid_size = grid_sizes[input_height * input_width]
-
-        max_nshards_h = min(batch_size * input_height, max_grid_size[0])  ## height along NHW
+        max_grid_size = (8, 8)
+        max_nshards_h = min(batch_size * input_height * input_width, max_grid_size[0])  ## height along NHW
         max_nshards_w = min(in_channels, max_grid_size[1])  ## width along C
         ## find nshards_h along NHW
         nshards_h = max_nshards_h
