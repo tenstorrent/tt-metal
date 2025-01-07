@@ -58,7 +58,12 @@ std::vector<TensorSpec> ArgMax::compute_output_specs(
     ttnn::SimpleShape output_shape({1, 1, 1, 1});
     if (this->dim.has_value()) {
         auto input_shape = input_tensors[0].get_logical_shape();
-        output_shape = ttnn::SimpleShape{input_shape[0], input_shape[1], 1, input_shape[2]};
+        auto dim_val = this->dim.value();
+        if (dim_val < 0) {
+            dim_val += input_shape.size();
+        }
+        output_shape = ttnn::SimpleShape{input_shape[0], input_shape[1], input_shape[2], input_shape[3]};
+        output_shape[dim_val] = 1;
     }
     return {
         TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(input_tensor.get_layout()), output_mem_config))};
