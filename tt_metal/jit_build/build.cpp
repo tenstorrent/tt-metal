@@ -50,12 +50,12 @@ void check_built_dir(const std::filesystem::path& dir_path, const std::filesyste
 }
 
 std::string get_default_root_path() {
-    std::string emptyString("");
-    std::string user_name = parse_env<std::string>("USER", emptyString);
-    if (user_name == emptyString) {
-        return "/tmp/tt-metal-cache/";
+    const std::string emptyString("");
+    const std::string home_path = parse_env<std::string>("HOME", emptyString);
+    if (!home_path.empty() && std::filesystem::exists(home_path)) {
+        return home_path + "/.cache/tenstorrent/metal-cache/";
     } else {
-        return "/tmp/" + user_name + "-metal-cache/";
+        return "/tmp/tenstorrent/metal-cache/";
     }
 }
 
