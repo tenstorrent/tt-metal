@@ -2917,15 +2917,36 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         enable_persistent_fabric,
         num_links);
 
+    ttnn::global_semaphore::MultiDeviceGlobalSemaphore from_remote_multi_device_global_semaphore =
+        ttnn::global_semaphore::create_global_semaphore_with_same_address(
+            test_fixture.mesh_device_.get(),
+            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+            0,                             // initial value
+            tt::tt_metal::BufferType::L1,  // buffer type
+            {SubDeviceId(0)},              // sub_device_ids
+            10                             // attempts
+        );
+
+    ttnn::global_semaphore::MultiDeviceGlobalSemaphore to_remote_multi_device_global_semaphore =
+        ttnn::global_semaphore::create_global_semaphore_with_same_address(
+            test_fixture.mesh_device_.get(),
+            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+            0,                             // initial value
+            tt::tt_metal::BufferType::L1,  // buffer type
+            {SubDeviceId(0)},              // sub_device_ids
+            10                             // attempts
+        );
+
     auto output_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
         input_mesh_tensor,
         dim,
+        from_remote_multi_device_global_semaphore,
+        to_remote_multi_device_global_semaphore,
         ttnn::operations::reduction::ReduceType::Sum,
         operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology::Linear,
         num_links,
         subdevice_managers->worker_subdevice_id.at(devices[0]->id()),
-        true,
         fabric_handle);
 
     // wait for op completion
