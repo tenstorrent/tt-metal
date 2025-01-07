@@ -22,8 +22,7 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Must have between 2 input tensors");
     auto &a = input_tensors.at(0);
     const auto &weights = input_tensors.at(1);
-    TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Input tensor must be Row Major Layout");
-    TT_FATAL(weights.get_layout() == Layout::ROW_MAJOR, "Weights tensor must be Row Major Layout");
+    TT_FATAL(weights.get_layout() == Layout::ROW_MAJOR, "Error");
     TT_FATAL(a.get_dtype() == DataType::UINT32 or a.get_dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
     TT_FATAL(weights.get_dtype() == DataType::BFLOAT16, "Weights tensor must have BFLOAT16 dtype");
     TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharded inputs");
@@ -45,7 +44,9 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding only supports interleaved RM outputs");
         TT_FATAL(!is_block_float(this->output_dtype), "Output cannot be a block float dtype when not tilized");
     }
-    TT_FATAL(a.get_legacy_shape()[1] == 1 && a.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+    if(a.get_layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(a.get_legacy_shape()[1] == 1 && a.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+    }
     switch (this->embeddings_type) {
         case EmbeddingsType::PADDED: TT_FATAL(this->pad_token.has_value(), "Pad token must be specified when PADDED Embeddings Type is specified"); break;
         case EmbeddingsType::BINARY: TT_FATAL(weights.get_legacy_shape()[-2] == 2, "Weight tensor must have 2 embeddings for BINARY Embeddings Type"); break;
@@ -56,9 +57,9 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
 std::vector<TensorSpec> Embeddings::compute_output_specs(const std::vector<Tensor> &input_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     const auto &weight_tensor = input_tensors.at(1);
-    auto num_output_embeddings = input_tensor.logical_shape()[3];
+    auto num_output_embeddings = input_tensor.logical_shape()[-1];
     auto batch_num = input_tensor.logical_shape()[0];
-    auto num_embedding_dims = weight_tensor.logical_shape()[3];
+    auto num_embedding_dims = weight_tensor.logical_shape()[-1];
 
     ttnn::SimpleShape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
     auto output_layout = tilized ? Layout::TILE : Layout::ROW_MAJOR;

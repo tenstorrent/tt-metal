@@ -29,14 +29,6 @@ ttnn::Tensor EmbeddingOperation::invoke(
     Tensor mutable_input_tensor = input_tensor_arg;
     Tensor mutable_weight = weight_arg;
 
-    // TODO: Add support for indices tensor in tile layout
-    // Issue #: 14915
-    TT_FATAL(input_tensor_arg.get_layout() == ttnn::ROW_MAJOR_LAYOUT, "Indices tensor must be in row major layout.");
-
-    if (mutable_input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
-        mutable_input_tensor = ttnn::to_layout(
-            mutable_input_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, mutable_input_tensor.device());
-    }
     if (mutable_weight.get_layout() == ttnn::TILE_LAYOUT) {
         mutable_weight = ttnn::to_layout(
             mutable_weight, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, mutable_weight.device());
@@ -48,8 +40,11 @@ ttnn::Tensor EmbeddingOperation::invoke(
     // If indices tensor is 1 dimensional, batch size is 1
     auto batch_size = (mutable_input_tensor.get_shape().rank() == 1) ? 1 : mutable_input_tensor.get_shape()[0];
     auto sentence_size = mutable_input_tensor.get_shape()[-1];
-    auto input_tensor =
-        ttnn::reshape(mutable_input_tensor, ttnn::Shape{std::array<uint32_t, 4>{batch_size, 1, 1, sentence_size}});
+    auto input_tensor = mutable_input_tensor;
+    if (mutable_input_tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) {
+        input_tensor =
+            ttnn::reshape(mutable_input_tensor, ttnn::Shape{std::array<uint32_t, 4>{batch_size, 1, 1, sentence_size}});
+    }
 
     // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
     bool fused_tilized = false;
