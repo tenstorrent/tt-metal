@@ -585,7 +585,7 @@ private:
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids={});
     void enqueue_write_buffer(
-        std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
         HostDataType src,
         const BufferRegion& region,
         bool blocking,
@@ -617,7 +617,7 @@ private:
         bool blocking);
     friend void EnqueueWriteBufferImpl(
         CommandQueue& cq,
-        std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
         HostDataType src,
         const BufferRegion& region,
         bool blocking);

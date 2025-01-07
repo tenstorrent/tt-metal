@@ -1101,7 +1101,7 @@ void HWCommandQueue::enqueue_read_buffer(
 }
 
 void HWCommandQueue::enqueue_write_buffer(
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     const BufferRegion& region,
     bool blocking,
@@ -2003,7 +2003,7 @@ inline namespace v0 {
 
 void EnqueueWriteBuffer(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     std::vector<uint32_t>& src,
     bool blocking) {
     // TODO(agrebenisan): Move to deprecated
@@ -2012,7 +2012,7 @@ void EnqueueWriteBuffer(
 
 void EnqueueReadBuffer(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst,
     bool blocking) {
     const DeviceAddr offset = 0;
@@ -2045,7 +2045,7 @@ void EnqueueReadSubBuffer(
 
 void EnqueueWriteBuffer(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     bool blocking) {
     const DeviceAddr offset = 0;
@@ -2176,7 +2176,7 @@ void EnqueueReadBufferImpl(
 
 void EnqueueWriteBufferImpl(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     const BufferRegion& region,
     bool blocking,
