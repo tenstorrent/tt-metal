@@ -67,7 +67,7 @@ public:
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -97,8 +97,8 @@ bool RunWriteBWTest(
     std::string const& receiver_side_reader_worker_kernel_path,
     std::string const& receiver_side_writer_worker_kernel_path,
 
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,

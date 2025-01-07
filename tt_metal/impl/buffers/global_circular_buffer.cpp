@@ -24,7 +24,7 @@ namespace v1 {
 namespace experimental {
 
 GlobalCircularBuffer::GlobalCircularBuffer(
-    Device* device,
+    IDevice* device,
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,

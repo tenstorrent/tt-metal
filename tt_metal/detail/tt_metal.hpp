@@ -26,7 +26,7 @@ bool DispatchStateCheck(bool isFastDispatch);
 
 bool InWorkerThread();
 
-std::map<chip_id_t, Device*> CreateDevices(
+std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
     const std::vector<chip_id_t>& device_ids,
     const uint8_t num_hw_cqs = 1,
@@ -35,7 +35,7 @@ std::map<chip_id_t, Device*> CreateDevices(
     const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
     const std::vector<uint32_t>& l1_bank_remap = {});
 
-void CloseDevices(const std::map<chip_id_t, Device*>& devices);
+void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
 /**
  * Copies data from a host buffer into the specified buffer
@@ -116,9 +116,9 @@ void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& 
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
-void LaunchProgram(Device* device, Program& program, bool wait_until_cores_done = true);
-void LaunchProgram(Device* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done = true);
-void WaitProgramDone(Device* device, Program& program);
+void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done = true);
+void LaunchProgram(IDevice* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done = true);
+void WaitProgramDone(IDevice* device, Program& program);
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to
@@ -144,7 +144,7 @@ void WaitProgramDone(Device* device, Program& program);
  * Program & |                                                    | Yes      | | fd_bootloader_mode        | Set when
  * compiling program to initialize fast dispatch           | bool      | | No       |
  */
-void CompileProgram(Device* device, Program& program, bool fd_bootloader_mode = false);
+void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode = false);
 
 /**
  * Writes runtime args that are saved in the program to device
@@ -158,13 +158,13 @@ void CompileProgram(Device* device, Program& program, bool fd_bootloader_mode = 
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
-void WriteRuntimeArgsToDevice(Device* device, Program& program);
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)
 // - Takes the device out of reset
-bool ConfigureDeviceWithProgram(Device* device, Program& program, bool fd_bootloader_mode = false);
+bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootloader_mode = false);
 
 /**
  * Clear profiler control buffer
@@ -176,7 +176,7 @@ bool ConfigureDeviceWithProgram(Device* device, Program& program, bool fd_bootlo
  * |---------------|--------------------------------------------------------------------|-----------------|---------------------------|----------|
  * | device        | Clear profiler control buffer before any core attempts to profler  | Device *        | | True     |
  * */
-void ClearProfilerControlBuffer(Device* device);
+void ClearProfilerControlBuffer(IDevice* device);
 
 /**
  * Initialize device profiling data buffers
@@ -189,7 +189,7 @@ void ClearProfilerControlBuffer(Device* device);
  * | device        | The device holding the program being profiled.    | Device *        |                           |
  * True     |
  * */
-void InitDeviceProfiler(Device* device);
+void InitDeviceProfiler(IDevice* device);
 
 /**
  * Read device side profiler data and dump results into device side CSV log
@@ -203,7 +203,7 @@ void InitDeviceProfiler(Device* device);
  * std::vector<CoreCoord>> & |                           | True     | | last_dump     | Last dump before process dies |
  * bool                                                         |                           | False    |
  * */
-void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cores, bool last_dump = false);
+void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, bool last_dump = false);
 
 /**
  * Traverse all cores and read device side profiler data and dump results into device side CSV log
@@ -215,7 +215,7 @@ void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cor
  * | device        | The device holding the program being profiled.    | Device * |                           | True |
  * | last_dump     | Last dump before process dies                     | bool |                           | False    |
  * */
-void DumpDeviceProfileResults(Device* device, bool last_dump = false);
+void DumpDeviceProfileResults(IDevice* device, bool last_dump = false);
 
 /**
  * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
@@ -279,7 +279,7 @@ void FreshProfilerDeviceLog();
  * | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      | | host_buffer  | Buffer on host to copy data from |
  * std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
  */
-bool WriteToDeviceDRAMChannel(Device* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
+bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
 
 /**
  * Copy data from a device DRAM channel to a host buffer
@@ -297,7 +297,7 @@ bool WriteToDeviceDRAMChannel(Device* device, int dram_channel, uint32_t address
  * | Buffer on host to copy data into                             | std::vector<uint32_t> | | Yes      |
  */
 bool ReadFromDeviceDRAMChannel(
-    Device* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
+    IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
 
 /**
  * Copy data from a host buffer into an L1 buffer. (Note: Current Can not be a CircularBuffer.)
@@ -313,13 +313,13 @@ bool ReadFromDeviceDRAMChannel(
  * copy from          | std::vector<uint32_t> | Buffer must fit into L1                             | Yes      |
  */
 bool WriteToDeviceL1(
-    Device* device,
+    IDevice* device,
     const CoreCoord& logical_core,
     uint32_t address,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type = CoreType::WORKER);
 
-bool WriteRegToDevice(Device* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval);
+bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval);
 
 /**
  * Copy data from an L1 buffer into a host buffer. Must be a buffer, and not a CB.
@@ -338,9 +338,9 @@ bool WriteRegToDevice(Device* device, const CoreCoord& logical_core, uint32_t ad
  * fit L1 buffer                         | Yes      |
  */
 bool ReadFromDeviceL1(
-    Device* device, const CoreCoord& logical_core, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
+    IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
 
-bool ReadRegFromDevice(Device* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
+bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 
 void SetLazyCommandQueueMode(bool lazy);
 
@@ -348,6 +348,6 @@ DeviceAddr AllocateBuffer(Buffer* buffer);
 
 void DeallocateBuffer(Buffer* buffer);
 
-void SynchronizeWorkerThreads(const std::vector<Device*>& workers);
+void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers);
 }  // namespace detail
 }  // namespace tt::tt_metal

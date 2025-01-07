@@ -9,7 +9,7 @@
 
 using namespace tt;
 
-void RunFillUpAllBuffers(tt_metal::Device* device, int loop_count, bool fast_dispatch) {
+void RunFillUpAllBuffers(tt_metal::IDevice* device, int loop_count, bool fast_dispatch) {
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 

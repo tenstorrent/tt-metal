@@ -19,7 +19,7 @@ void py_module(py::module& module) {
     // Single Device APIs
     module.def(
         "create_global_semaphore",
-        [](Device* device,
+        [](IDevice* device,
            const CoreRangeSet& cores,
            uint32_t initial_value,
            BufferType buffer_type,

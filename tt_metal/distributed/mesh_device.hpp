@@ -58,7 +58,7 @@ class SystemMesh {
     ~SystemMesh();
 
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
-    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<Device*>& devices);
+    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<IDevice*>& devices);
 
 public:
     static SystemMesh& instance();
@@ -84,8 +84,8 @@ private:
     MeshShape mesh_device_shape;
     MeshType type;
     std::unique_ptr<MeshDeviceView> view;
-    std::map<chip_id_t, Device*> opened_devices;
-    std::vector<Device*> devices;
+    std::map<chip_id_t, IDevice*> opened_devices;
+    std::vector<IDevice*> devices;
     std::vector<std::shared_ptr<MeshDevice>> submeshes;  // Parent owns submeshes and responsible fortheir destruction
     std::weak_ptr<MeshDevice> parent_mesh;               // Submesh created with reference to parent mesh
 
@@ -97,7 +97,7 @@ private:
         const MeshDeviceConfig& config);
 
     // This is a reference device used to query properties that are the same for all devices in the mesh.
-    Device* reference_device() const;
+    IDevice* reference_device() const;
 
 public:
     MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh = {});
@@ -112,10 +112,10 @@ public:
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
     // If type is not provided, the default behavior is to return the devices based on the MeshType of the MeshDevice.
-    std::vector<Device*> get_devices(const std::optional<MeshType>& type = std::nullopt) const;
-    Device* get_device_index(size_t logical_device_id) const;
-    Device* get_device(chip_id_t physical_device_id) const;
-    Device* get_device(size_t row_idx, size_t col_idx) const;
+    std::vector<IDevice*> get_devices(const std::optional<MeshType>& type = std::nullopt) const;
+    IDevice* get_device_index(size_t logical_device_id) const;
+    IDevice* get_device(chip_id_t physical_device_id) const;
+    IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
     const DeviceIds get_device_ids() const;
 

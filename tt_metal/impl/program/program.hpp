@@ -45,7 +45,7 @@ CBHandle CreateCircularBuffer(
 
 namespace program_utils {
     void assemble_device_commands(
-        ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id);
+        ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
 } // namespace program_utils
 
 class EnqueueProgramCommand;
@@ -152,13 +152,13 @@ class Program {
 
     size_t num_semaphores ( const CoreCoord & core, CoreType core_type ) const;
     size_t num_semaphores () const;
-    void init_semaphores ( const Device & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
+    void init_semaphores ( const IDevice & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
     void compile(Device * device, bool fd_bootloader_mode = false);
 
-    void generate_dispatch_commands(Device* device);
+    void generate_dispatch_commands(IDevice* device);
 
     void invalidate_circular_buffer_allocation();
 
@@ -169,7 +169,7 @@ class Program {
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
     void set_cached();
     void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
-    void allocate_kernel_bin_buf_on_device(Device* device);
+    void allocate_kernel_bin_buf_on_device(IDevice* device);
     void finalize(Device *device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
@@ -210,9 +210,9 @@ class Program {
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
     void set_launch_msg_sem_offsets();
-    void populate_dispatch_data(Device* device);
+    void populate_dispatch_data(IDevice* device);
     const ProgramTransferInfo &get_program_transfer_info() const noexcept;
-    std::shared_ptr<Buffer> get_kernels_buffer(Device* device) const noexcept;
+    std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
     std::vector<uint32_t> &get_program_config_sizes() const noexcept;
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
@@ -221,7 +221,7 @@ class Program {
 
     friend void detail::AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
     friend void program_utils::assemble_device_commands(
-        ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id);
+        ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;

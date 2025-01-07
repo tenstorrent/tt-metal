@@ -187,7 +187,7 @@ static string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint3
     return expected;
 }
 
-static void RunTest(DPrintFixture* fixture, Device* device, tt::DataFormat data_format) {
+static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data_format) {
     // Set up program + CQ, run on just one core
     constexpr CoreCoord core = {0, 0};
     Program program = Program();
@@ -259,56 +259,56 @@ static void RunTest(DPrintFixture* fixture, Device* device, tt::DataFormat data_
 }
 
 TEST_F(DPrintFixture, TestPrintTilesFloat32) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::Float32); }, device);
+            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Float32); }, device);
     }
 }
 TEST_F(DPrintFixture, TestPrintTilesFloat16_b) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::Float16_b); }, device);
+            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Float16_b); }, device);
     }
 }
 TEST_F(DPrintFixture, TestPrintTilesBfp4_b) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::Bfp4_b); }, device);
+            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Bfp4_b); }, device);
     }
 }
 TEST_F(DPrintFixture, TestPrintTilesBfp8_b) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::Bfp8_b); }, device);
+            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Bfp8_b); }, device);
     }
 }
 TEST_F(DPrintFixture, TestPrintTilesInt8) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::Int8); }, device);
+            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Int8); }, device);
     }
 }
 TEST_F(DPrintFixture, TestPrintTilesInt32) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::Int32); }, device);
+            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Int32); }, device);
     }
 }
 TEST_F(DPrintFixture, TestPrintTilesUInt8) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::UInt8); }, device);
+            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::UInt8); }, device);
     }
 }
 TEST_F(DPrintFixture, TestPrintTilesUInt16) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::UInt16); }, device);
+            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::UInt16); }, device);
     }
 }
 TEST_F(DPrintFixture, TestPrintTilesUInt32) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, Device* device) { RunTest(fixture, device, tt::DataFormat::UInt32); }, device);
+            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::UInt32); }, device);
     }
 }

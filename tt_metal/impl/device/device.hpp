@@ -31,7 +31,7 @@ inline namespace v0 {
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
 public:
-    // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
+    // friend void tt_gdb(IDevice* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(
         chip_id_t device_id,
@@ -202,7 +202,6 @@ public:
 
     // Puts device into reset
     bool close() override;
-    friend bool CloseDevice(Device *device);
 
     void enable_async(bool enable) override;
     void synchronize() override;
@@ -212,10 +211,7 @@ public:
     bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }
     bool can_use_passthrough_scheduling() const override;
 
-    template<typename F>
-    void push_work(F&& work, bool blocking = false) {
-        this->work_executor_.push_work(std::forward<F>(work), blocking);
-    }
+    void push_work(std::function<void()> work, bool blocking = false) override; 
 
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops

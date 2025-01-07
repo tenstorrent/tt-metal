@@ -17,7 +17,7 @@
 class DispatchFixture : public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program, const bool skip_finish = false) {
+    void RunProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, const bool skip_finish = false) {
         const uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
@@ -29,14 +29,14 @@ public:
             }
         }
     }
-    void FinishCommands(tt::tt_metal::Device* device) {
+    void FinishCommands(tt::tt_metal::IDevice* device) {
         if (!this->IsSlowDispatch()) {
             tt::tt_metal::CommandQueue& cq = device->command_queue();
             tt::tt_metal::Finish(cq);
         }
     }
     void WriteBuffer(
-        tt::tt_metal::Device* device, std::shared_ptr<tt::tt_metal::Buffer> in_buffer, std::vector<uint32_t>& src_vec) {
+        tt::tt_metal::IDevice* device, std::shared_ptr<tt::tt_metal::Buffer> in_buffer, std::vector<uint32_t>& src_vec) {
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);
         } else {
@@ -45,7 +45,7 @@ public:
         }
     }
     void ReadBuffer(
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer,
         std::vector<uint32_t>& dst_vec) {
         if (this->slow_dispatch_) {
@@ -108,7 +108,7 @@ protected:
         return false;
     }
 
-    void RunTestOnDevice(const std::function<void()>& run_function, tt::tt_metal::Device* device) {
+    void RunTestOnDevice(const std::function<void()>& run_function, tt::tt_metal::IDevice* device) {
         if (SkipTest(device->id())) {
             return;
         }

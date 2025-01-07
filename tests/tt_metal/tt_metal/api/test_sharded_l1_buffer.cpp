@@ -46,7 +46,7 @@ namespace local_test_functions {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool l1_buffer_read_write(Device* device, const L1Config& test_config) {
+bool l1_buffer_read_write(IDevice* device, const L1Config& test_config) {
     bool pass = true;
 
     auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{

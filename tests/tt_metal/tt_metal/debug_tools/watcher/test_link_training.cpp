@@ -15,7 +15,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-static void RunTest(WatcherFixture* fixture, Device* device) {
+static void RunTest(WatcherFixture* fixture, IDevice* device) {
 }
 
 TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {

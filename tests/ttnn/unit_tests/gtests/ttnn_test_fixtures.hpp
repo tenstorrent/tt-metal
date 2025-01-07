@@ -36,7 +36,7 @@ protected:
 
 class TTNNFixtureWithDevice : public TTNNFixture {
 protected:
-    tt::tt_metal::Device* device_ = nullptr;
+    tt::tt_metal::IDevice* device_ = nullptr;
 
     void SetUp() override {
         TTNNFixture::SetUp();
@@ -48,7 +48,7 @@ protected:
         tt::tt_metal::CloseDevice(device_);
     }
 
-    tt::tt_metal::Device& getDevice() { return *device_; }
+    tt::tt_metal::IDevice& getDevice() { return *device_; }
 };
 
 }  // namespace ttnn

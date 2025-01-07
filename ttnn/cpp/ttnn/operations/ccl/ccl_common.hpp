@@ -34,7 +34,7 @@ class EriscDatamoverBuilder;
 
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
     const Tensor& input_tensor,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology& topology);
 
 
@@ -77,7 +77,7 @@ struct RingTopology {
     bool is_first_device_in_line(bool in_clockwise_direction) const;
     bool is_last_device_in_line(bool in_clockwise_direction) const;
 
-    const tt::tt_metal::Device *device;
+    const tt::tt_metal::IDevice*device;
 
     std::vector<CoreCoord> eth_sender_cores;
     std::vector<CoreCoord> eth_receiver_cores;

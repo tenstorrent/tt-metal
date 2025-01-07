@@ -973,7 +973,7 @@ template OptimizedConvBlockConfig get_opt_block_config<Device>(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    Device* device,
+    IDevice* device,
     Conv2dConfig& conv_config,
     Layout input_tensor_layout,
     const DeviceComputeKernelConfig& compute_config,
@@ -1010,7 +1010,7 @@ template ttnn::Tensor prepare_conv_weights<Device>(
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    Device* device,
+    IDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
@@ -1042,7 +1042,7 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     uint32_t weight_block_w_ntiles,
     const ParallelConfig& input_parallel_config,
     const ParallelConfig& output_parallel_config,
-    Device* device,
+    IDevice* device,
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
@@ -1080,7 +1080,7 @@ template ttnn::Tensor prepare_conv_bias<Device>(
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    Device* device,
+    IDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
@@ -1108,7 +1108,7 @@ template ttnn::Tensor conv_bias_layout_convert(
     uint32_t weight_block_h_ntiles,
     uint32_t weight_block_w_ntiles,
     const sliding_window::ParallelConfig& parallel_config,
-    Device* device,
+    IDevice* device,
     uint32_t out_channels,
     bool is_non_tile_mul_width);
 
@@ -1123,7 +1123,7 @@ template ttnn::Tensor conv_bias_layout_convert(
     bool is_non_tile_mul_width);
 
 template bool check_non_tile_mul_width<Device>(
-    Device* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
+    IDevice* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
 
 template bool check_non_tile_mul_width<MeshDevice>(
     MeshDevice* device, const Conv2dConfig& conv_config, const uint32_t in_channels);

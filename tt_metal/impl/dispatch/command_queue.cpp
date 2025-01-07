@@ -68,7 +68,7 @@ enum DispatchWriteOffsets {
 
 EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     NOC noc_index,
     Buffer& buffer,
     void* dst,
@@ -153,7 +153,7 @@ void EnqueueReadBufferCommand::process() {
 
 EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     NOC noc_index,
     const Buffer& buffer,
     const void* src,
@@ -322,7 +322,7 @@ void EnqueueWriteBufferCommand::process() {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
-inline uint32_t get_packed_write_max_unicast_sub_cmds(Device* device) {
+inline uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
     return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 }
 
@@ -330,7 +330,7 @@ inline uint32_t get_packed_write_max_unicast_sub_cmds(Device* device) {
 
 EnqueueProgramCommand::EnqueueProgramCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     NOC noc_index,
     Program& program,
     CoreCoord& dispatch_core,
@@ -551,7 +551,7 @@ void EnqueueProgramCommand::process() {
 
 EnqueueRecordEventCommand::EnqueueRecordEventCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     NOC noc_index,
     SystemMemoryManager& manager,
     uint32_t event_id,
@@ -657,7 +657,7 @@ void EnqueueRecordEventCommand::process() {
 
 EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     SystemMemoryManager& manager,
     const Event& sync_event,
     bool clear_count) :
@@ -696,7 +696,7 @@ void EnqueueWaitForEventCommand::process() {
 
 EnqueueTraceCommand::EnqueueTraceCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     SystemMemoryManager& manager,
     std::shared_ptr<detail::TraceDescriptor>& descriptor,
     Buffer& buffer,
@@ -803,7 +803,7 @@ void EnqueueTraceCommand::process() {
 }
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
-    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager) :
+    uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager) :
     command_queue_id(command_queue_id), device(device), manager(manager) {}
 
 void EnqueueTerminateCommand::process() {
@@ -836,7 +836,7 @@ void EnqueueTerminateCommand::process() {
 }
 
 // HWCommandQueue section
-HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
+HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index) :
     manager(device->sysmem_manager()), completion_queue_thread{} {
     ZoneScopedN("CommandQueue_constructor");
     this->device = device;
@@ -2171,7 +2171,7 @@ void EnqueueProgramImpl(
     CommandQueue& cq, Program& program, bool blocking) {
     ZoneScoped;
 
-    Device* device = cq.device();
+    IDevice* device = cq.device();
     detail::CompileProgram(device, program);
     program.allocate_circular_buffers(device);
     detail::ValidateCircularBufferRegion(program, device);
@@ -2205,7 +2205,7 @@ void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     cq.hw_command_queue().enqueue_trace(trace_id, blocking);
 }
 
-CommandQueue::CommandQueue(Device* device, uint32_t id, CommandQueueMode mode) :
+CommandQueue::CommandQueue(IDevice* device, uint32_t id, CommandQueueMode mode) :
     device_ptr(device), cq_id(id), mode(mode), worker_state(CommandQueueState::IDLE) {
     if (this->async_mode()) {
         num_async_cqs++;

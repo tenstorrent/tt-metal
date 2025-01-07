@@ -55,7 +55,7 @@ size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInter
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
 
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
-    const Tensor& input_tensor, const std::vector<Device*>& devices, const ttnn::ccl::Topology& topology) {
+    const Tensor& input_tensor, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology) {
     uint32_t num_devices = devices.size();
     bool is_linear = topology == ttnn::ccl::Topology::Linear;
     uint32_t device_index = 0;  // Initialize device index

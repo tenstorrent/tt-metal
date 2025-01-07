@@ -1032,6 +1032,10 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     return true;
 }
 
+void Device::push_work(std::function<void()> work, bool blocking = false) {
+    this->work_executor_.push_work(std::move(work), blocking);
+}
+
 bool Device::close() {
     log_info(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {

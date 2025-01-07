@@ -471,7 +471,7 @@ bool DevicePool::close_device(chip_id_t device_id) {
     return pass;
 }
 
-void DevicePool::close_devices(const std::vector<Device*>& devices) {
+void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
@@ -532,7 +532,7 @@ DevicePool::~DevicePool() {
     this->devices.clear();
 }
 
-v1::DeviceHandle DevicePool::get_handle(Device* device) const {
+v1::DeviceHandle DevicePool::get_handle(IDevice* device) const {
     for (size_t index = 0; index < this->devices.size(); ++index) {
         if (this->devices[index].get() == device) {
             return {{index, 0}};

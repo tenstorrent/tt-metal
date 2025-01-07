@@ -12,7 +12,7 @@
 namespace tt {
 namespace tt_metal::detail {
 
-void CloseDevices(const std::map<chip_id_t, Device*>& devices);
+void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
 }  // namespace tt_metal::detail
 
@@ -20,7 +20,7 @@ using Device = tt_metal::Device;
 class DevicePool {
     friend Device;
     friend tt_metal::v1::DeviceHandle;
-    friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, Device*>& devices);
+    friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
 public:
     DevicePool& operator=(const DevicePool&) = delete;
@@ -44,7 +44,7 @@ public:
     tt_metal::v1::DeviceHandle get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::v1::DeviceHandle> get_all_active_devices() const;
     bool close_device(chip_id_t device_id);
-    void close_devices(const std::vector<Device*>& devices);
+    void close_devices(const std::vector<IDevice*>& devices);
     bool is_device_active(chip_id_t id) const;
     void register_worker_thread_for_device(tt_metal::v1::DeviceHandle device, std::thread::id worker_thread_id);
     void unregister_worker_thread_for_device(tt_metal::v1::DeviceHandle device);
@@ -64,7 +64,7 @@ private:
     // Used to track worker thread handles (1 worker thread created per device)
     // when we need to check if a call is made from an application thread or a
     // worker thread
-    std::unordered_map<Device*, std::thread::id> device_to_worker_thread_id;
+    std::unordered_map<IDevice*, std::thread::id> device_to_worker_thread_id;
     std::unordered_set<std::thread::id> worker_thread_ids;
     std::thread::id device_pool_creation_thread_id;
     bool skip_remote_devices;
@@ -81,7 +81,7 @@ private:
     static DevicePool* _inst;
 
     // TODO remove with v0
-    tt_metal::v1::DeviceHandle get_handle(Device* device) const;
+    tt_metal::v1::DeviceHandle get_handle(IDevice* device) const;
 };
 
 }  // namespace tt

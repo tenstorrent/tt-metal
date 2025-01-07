@@ -19,7 +19,7 @@
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
-inline uint32_t get_num_device_cores(Device* device) {
+inline uint32_t get_num_device_cores(IDevice* device) {
     const auto num_cores_x = static_cast<uint32_t>(device->compute_with_storage_grid_size().x);
     const auto num_cores_y = static_cast<uint32_t>(device->compute_with_storage_grid_size().y);
     return num_cores_x * num_cores_y;

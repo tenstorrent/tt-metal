@@ -151,7 +151,7 @@ Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffe
     return pass ? Correctness::Correct : Correctness::Incorrect;
 };
 
-static SubdeviceInfo create_subdevices(std::vector<Device*> const& devices) {
+static SubdeviceInfo create_subdevices(std::vector<IDevice*> const& devices) {
     SubdeviceInfo subdevice_info;
     std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_manager_ids;
     for (auto device : devices) {
@@ -184,7 +184,7 @@ Correctness run_output_check(
 
 void run_programs(
     std::vector<Program>& programs,
-    std::vector<Device*> const& devices,
+    std::vector<IDevice*> const& devices,
     std::optional<std::unordered_map<chip_id_t, SubDeviceId>> const& sub_device_ids = std::nullopt) {
     EXPECT_EQ(programs.size(), devices.size());
     const size_t num_programs = programs.size();
@@ -224,7 +224,7 @@ void run_programs(
 }
 
 std::tuple<std::shared_ptr<Buffer>, std::vector<uint32_t>> build_input_buffer(
-    Device* first_device, size_t tensor_size_bytes, BankedConfig const& test_config) {
+    IDevice* first_device, size_t tensor_size_bytes, BankedConfig const& test_config) {
     auto inputs = std::vector<uint32_t>(tensor_size_bytes / sizeof(uint32_t), 0);
     std::iota(inputs.begin(), inputs.end(), 0);
 
@@ -257,7 +257,7 @@ using mode_variant_t = std::variant<mcast_send, unicast_send>;
 static constexpr size_t PACKET_HEADER_SIZE_BYTES = sizeof(tt::fabric::PacketHeader);
 void generate_sender_worker_kernels(
     Program& program,
-    Device* device,
+    IDevice* device,
     CoreCoord const& worker_core,
     ttnn::ccl::SenderWorkerAdapterSpec const& worker_fabric_connection,
     mode_variant_t const& mode,
@@ -368,8 +368,8 @@ void generate_sender_worker_kernels(
 }
 
 bool RunLoopbackTest(
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
@@ -469,7 +469,7 @@ bool RunLoopbackTest(
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<Device*> devices = {sender_device};
+    std::vector<IDevice*> devices = {sender_device};
     if (!enable_persistent_fabric) {
         devices.push_back(receiver_device);
     }
@@ -493,7 +493,7 @@ void generate_multi_input_test_worker_reader_kernel(
     Program& program,
     std::vector<uint32_t> const& cb_indices,
     std::vector<Tensor const*> const& tensors,
-    Device* device,
+    IDevice* device,
     uint32_t page_size,
     CoreRangeSet const& worker_core_range,
     uint32_t num_pages_per_edm_buffer,
@@ -607,7 +607,7 @@ void generate_multi_input_test_worker_reader_kernel(
 
 void generate_multi_input_test_worker_kernels_for_local_tensor_write(
     Program& program,
-    Device* device,
+    IDevice* device,
     Tensor& input_tensor0,
     Tensor& input_tensor1,
     Tensor& output_tensor0,
@@ -680,7 +680,7 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
 }
 
 bool RunLocalTestWithMultiInputReaders(
-    std::vector<tt_metal::Device*> const& devices,
+    std::vector<tt_metal::IDevice*> const& devices,
     std::vector<Program>& programs,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
 
@@ -704,7 +704,7 @@ bool RunLocalTestWithMultiInputReaders(
     std::optional<SubdeviceInfo>& subdevice_managers,
     bool enable_persistent_fabric) {
     const bool fabric_enabled = test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK;
-    tt_metal::Device* device = devices.at(0);
+    tt_metal::IDevice* device = devices.at(0);
     for (size_t i = 0; i < devices.size(); i++) {
         log_info(tt::LogTest, "Device[{}] ID: {}", i, devices.at(i)->id());
     }
@@ -843,7 +843,7 @@ bool RunLocalTestWithMultiInputReaders(
     ////////////////////////////////////////////////////////////////////////////
     run_programs(
         programs,
-        enable_persistent_fabric ? std::vector<Device*>{devices[0]} : devices,
+        enable_persistent_fabric ? std::vector<IDevice*>{devices[0]} : devices,
         subdevice_managers.has_value() ? subdevice_managers.value().worker_subdevice_id
                                        : std::optional<std::unordered_map<chip_id_t, SubDeviceId>>{std::nullopt}
 
@@ -904,7 +904,7 @@ bool RunLocalTestWithMultiInputReaders(
 }
 
 bool RunLineFabricTest(
-    std::vector<tt_metal::Device*> devices,
+    std::vector<tt_metal::IDevice*> devices,
     std::vector<Program>& programs,
 
     const size_t mcast_first_chip,
@@ -1052,7 +1052,7 @@ bool RunLineFabricTest(
 }
 
 void persistent_fabric_teardown_sequence(
-    std::vector<Device*> const& devices,
+    std::vector<IDevice*> const& devices,
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     tt::fabric::TerminationSignal termination_mode = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) {
@@ -1066,13 +1066,13 @@ void persistent_fabric_teardown_sequence(
     line_fabric.teardown_from_host(termination_mode);
 
     // wait for fabric teardown to finish
-    std::ranges::for_each(devices, [&](Device* d) {
+    std::ranges::for_each(devices, [&](IDevice* d) {
         tt_metal::Finish(d->command_queue(), {subdevice_managers->fabric_subdevice_id.at(d->id())});
     });
 }
 
 void setup_test_with_persistent_fabric(
-    std::vector<Device*> const& devices,
+    std::vector<IDevice*> const& devices,
     std::vector<Program>& programs,
     std::optional<SubdeviceInfo>& subdevice_managers,
     std::optional<std::vector<Program>>& fabric_programs,
@@ -1139,7 +1139,7 @@ int TestLineFabricEntrypoint(
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
-    std::vector<Device*> devices = {
+    std::vector<IDevice*> devices = {
         view.get_device(0, 0), view.get_device(0, 1), view.get_device(0, 2), view.get_device(0, 3)};
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
@@ -1159,7 +1159,7 @@ int TestLineFabricEntrypoint(
         bool success = false;
         try {
             success = RunLineFabricTest(
-                enable_persistent_fabric ? std::vector<Device*>{devices[0]} : devices,
+                enable_persistent_fabric ? std::vector<IDevice*>{devices[0]} : devices,
                 _programs,
                 // fabric_hops,
 
@@ -1251,8 +1251,8 @@ int TestLoopbackEntrypoint(
 
     auto& fabric_sender_program = enable_persistent_fabric ? fabric_programs->at(0) : sender_program;
     auto& fabric_receiver_program = enable_persistent_fabric ? fabric_programs->at(1) : programs.at(1);
-    Device* sender_device = device_0;
-    Device* receiver_device = device_1;
+    IDevice* sender_device = device_0;
+    IDevice* receiver_device = device_1;
 
     static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
     const chip_id_t local_chip_id = 0;
@@ -1399,7 +1399,7 @@ bool TestMultiInputReaderKernel(
 
     auto view = test_fixture.mesh_device_->get_view();
 
-    std::vector<Device*> devices;
+    std::vector<IDevice*> devices;
     devices.reserve(fabric_num_devices);
     for (size_t i = 0; i < fabric_num_devices; i++) {
         devices.push_back(view.get_device(0, i));
@@ -2336,7 +2336,7 @@ bool RunPipelinedWorkersTest(
     T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    Device* device = view.get_device(0, 0);
+    IDevice* device = view.get_device(0, 0);
     ;
 
     // General setup is as follows:
@@ -2871,7 +2871,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
-    std::vector<Device*> devices = {
+    std::vector<IDevice*> devices = {
         view.get_device(0, 1), view.get_device(1, 1), view.get_device(1, 2), view.get_device(0, 2)};
     const size_t num_devices = devices.size();
     TT_FATAL(
@@ -2930,7 +2930,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");
-    std::ranges::for_each(devices, [&](Device* d) {
+    std::ranges::for_each(devices, [&](IDevice* d) {
         tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
     });
     log_info(tt::LogTest, "Main op done");
@@ -2965,7 +2965,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
-    std::vector<Device*> devices = {
+    std::vector<IDevice*> devices = {
         view.get_device(0, 0), view.get_device(0, 1), view.get_device(0, 2), view.get_device(0, 3)};
     const size_t num_devices = devices.size();
     TT_FATAL(
@@ -3021,7 +3021,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");
-    std::ranges::for_each(devices, [&](Device* d) {
+    std::ranges::for_each(devices, [&](IDevice* d) {
         tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
     });
     log_info(tt::LogTest, "Main op done");

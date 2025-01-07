@@ -8,7 +8,7 @@
 
 using namespace tt;
 
-void RunCustomCycle(tt_metal::Device* device, int fastDispatch) {
+void RunCustomCycle(tt_metal::IDevice* device, int fastDispatch) {
     bool pass = true;
 
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         // Run 1
         RunCustomCycle(device, PROFILER_OP_SUPPORT_COUNT);

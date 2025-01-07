@@ -119,7 +119,7 @@ class Program_ {
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core, CoreType core_type) const;
 
     size_t num_semaphores () const;
-    void init_semaphores ( const Device & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
+    void init_semaphores ( const IDevice & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
@@ -130,7 +130,7 @@ class Program_ {
     void allocate_circular_buffers(const Device *device);
 
     bool is_finalized() const;
-    void allocate_kernel_bin_buf_on_device(Device* device);
+    void allocate_kernel_bin_buf_on_device(IDevice* device);
     void finalize(Device *device);
     bool is_cached() const { return this->cached_; }
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const {
@@ -853,7 +853,7 @@ size_t detail::Program_::num_semaphores() const { return semaphores_.size(); }
 
 size_t Program::num_semaphores() const { return pimpl_->num_semaphores(); }
 
-void detail::Program_::init_semaphores(const Device &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
+void detail::Program_::init_semaphores(const IDevice &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
 
     uint64_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
@@ -868,7 +868,7 @@ void detail::Program_::init_semaphores(const Device &device, const CoreCoord &lo
     }
 }
 
-void Program::init_semaphores(const Device &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
+void Program::init_semaphores(const IDevice &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
     pimpl_->init_semaphores(device, logical_core, programmable_core_type_index);
 }
 
@@ -1311,9 +1311,9 @@ void detail::Program_::finalize(Device *device) {
 }
 
 void Program::set_launch_msg_sem_offsets() { pimpl_->set_launch_msg_sem_offsets(); }
-void Program::populate_dispatch_data(Device* device) { pimpl_->populate_dispatch_data(device); }
+void Program::populate_dispatch_data(IDevice* device) { pimpl_->populate_dispatch_data(device); }
 
-void Program::generate_dispatch_commands(Device* device) {
+void Program::generate_dispatch_commands(IDevice* device) {
     bool is_cached = this->is_cached();
     uint64_t command_hash = device->build_key();
     if (not hal.is_coordinate_virtualization_enabled()) {
@@ -1337,7 +1337,7 @@ void Program::generate_dispatch_commands(Device* device) {
     }
 }
 
-void Program::allocate_kernel_bin_buf_on_device(Device* device) { pimpl_->allocate_kernel_bin_buf_on_device(device); }
+void Program::allocate_kernel_bin_buf_on_device(IDevice* device) { pimpl_->allocate_kernel_bin_buf_on_device(device); }
 
 void Program::finalize(Device *device) { pimpl_->finalize(device); }
 
@@ -1636,7 +1636,7 @@ const std::vector<SubDeviceId> &Program::determine_sub_device_ids(const Device *
 
 const ProgramTransferInfo &Program::get_program_transfer_info() const noexcept { return pimpl_->program_transfer_info; }
 
-std::shared_ptr<Buffer> Program::get_kernels_buffer(Device* device) const noexcept {
+std::shared_ptr<Buffer> Program::get_kernels_buffer(IDevice* device) const noexcept {
     if (auto it = pimpl_->kernels_buffer_.find(device->id()); it != pimpl_->kernels_buffer_.end()) {
         return it->second;
     }

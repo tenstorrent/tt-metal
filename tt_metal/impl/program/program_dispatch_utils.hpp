@@ -63,7 +63,7 @@ uint32_t finalize_cbs(
     uint32_t& local_cb_size);
 
 uint32_t finalize_kernel_bins(
-    Device* device,
+    IDevice* device,
     uint32_t programmable_core_type_index,
     const std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
@@ -73,12 +73,12 @@ uint32_t finalize_kernel_bins(
 
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence);
 
-void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, Device* device);
+void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
 
-void assemble_runtime_args_commands(ProgramCommandSequence& program_command_sequence, Program& program, Device* device);
+void assemble_runtime_args_commands(ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device);
 
 void assemble_device_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id);
+    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
 
 void reserve_space_in_kernel_config_buffer(
     WorkerConfigBufferMgr& config_buffer_mgr,
