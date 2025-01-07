@@ -29,6 +29,7 @@ void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 #define STREAM_CHANNEL 6
 #define RUN_ALL_TRISCS 7
 #define RUN_NCRISC 8
+#define RUN_ALL 15
 
 inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
     // Clear bss.
