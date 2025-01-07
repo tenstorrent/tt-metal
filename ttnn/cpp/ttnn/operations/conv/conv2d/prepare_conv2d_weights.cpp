@@ -963,7 +963,7 @@ ttnn::Tensor prepare_conv_bias(
     return bias_tensor_;
 }
 
-template OptimizedConvBlockConfig get_opt_block_config<Device>(
+template OptimizedConvBlockConfig get_opt_block_config<IDevice>(
     bool mm_conv,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -995,7 +995,7 @@ template OptimizedConvBlockConfig get_opt_block_config<MeshDevice>(
     const DeviceComputeKernelConfig& compute_config,
     const ttnn::MemoryConfig& input_memory_config);
 
-template ttnn::Tensor prepare_conv_weights<Device>(
+template ttnn::Tensor prepare_conv_weights<IDevice>(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
@@ -1033,7 +1033,7 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
-template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device<Device>(
+template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device<IDevice>(
     const ttnn::Tensor& weight_tensor,
     std::optional<const ttnn::Tensor>& bias_tensor,
     uint32_t input_channels_alignment,
@@ -1066,7 +1066,7 @@ prepare_conv_weights_biases_and_move_to_device<MeshDevice>(
     const bool parameters_on_device,
     bool is_non_tile_mul_width);
 
-template ttnn::Tensor prepare_conv_bias<Device>(
+template ttnn::Tensor prepare_conv_bias<IDevice>(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
@@ -1122,7 +1122,7 @@ template ttnn::Tensor conv_bias_layout_convert(
     uint32_t out_channels,
     bool is_non_tile_mul_width);
 
-template bool check_non_tile_mul_width<Device>(
+template bool check_non_tile_mul_width<IDevice>(
     IDevice* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
 
 template bool check_non_tile_mul_width<MeshDevice>(

@@ -23,23 +23,6 @@ struct DeviceKey : stl::Key<std ::uint16_t, 12> {
     using Key::Key;
 };
 
-class DeviceHandle {
-    friend DevicePool;
-
-    DeviceKey key;
-
-    DeviceHandle(DeviceKey key) : key(key) {}
-
-public:
-    DeviceHandle() = default;
-
-    // TODO remove with v0
-    auto operator->() const -> IDevice*;
-
-    // TODO remove with v0
-    operator IDevice*() const;
-};
-
 }  // namespace v1
 }  // namespace tt_metal
 }  // namespace tt

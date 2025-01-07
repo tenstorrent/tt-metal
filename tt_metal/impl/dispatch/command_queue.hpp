@@ -517,6 +517,15 @@ class HWCommandQueue {
     void set_num_worker_sems_on_dispatch(uint32_t num_worker_sems);
     void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
     void reset_worker_state(bool reset_launch_msg_state);
+
+    uint32_t get_id() const;
+    std::optional<uint32_t> get_tid() const;
+
+    SystemMemoryManager& sysmem_manager();
+
+    void terminate();
+    void reset_config_buffer_mgr(const uint32_t num_entries);
+
    private:
     uint32_t id;
     uint32_t size_B;
@@ -571,12 +580,10 @@ class HWCommandQueue {
     void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count = false);
     void enqueue_trace(const uint32_t trace_id, bool blocking);
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids);
-    void terminate();
     void increment_num_entries_in_completion_q();
     void set_exit_condition();
 
-    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);
-    void reset_config_buffer_mgr(const uint32_t num_entries);
+    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);    
 
     friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
     friend void EnqueueProgramImpl(
@@ -599,8 +606,7 @@ class HWCommandQueue {
     friend void EnqueueRecordEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
     friend void EnqueueWaitForEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event);
     friend void FinishImpl(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
-    friend CommandQueue;
-    friend Device;
+    friend CommandQueue;    
     friend detail::Program_;
 };
 
@@ -622,10 +628,9 @@ struct CommandInterface {
 inline namespace v0 {
 
 class CommandQueue {
-    friend class IDevice;
     friend class Trace;
 
-   public:
+public:
     enum class CommandQueueMode {
         PASSTHROUGH = 0,
         ASYNC = 1,
@@ -636,8 +641,10 @@ class CommandQueue {
         RUNNING = 1,
         TERMINATE = 2,
     };
-
+    
     CommandQueue() = delete;
+
+    CommandQueue(IDevice* device, uint32_t id, CommandQueueMode mode = CommandQueue::default_mode());
     ~CommandQueue();
 
     // Trace queue constructor
@@ -677,11 +684,8 @@ class CommandQueue {
     }
     // Determine if any CQ is using Async mode
     static bool async_mode_set() { return num_async_cqs > 0; }
-
+    
    private:
-    // Command queue constructor
-    CommandQueue(IDevice* device, uint32_t id, CommandQueueMode mode = CommandQueue::default_mode());
-
     // Initialize Command Queue Mode based on the env-var. This will be default, unless the user excplictly sets the
     // mode using set_mode.
     CommandQueueMode mode;

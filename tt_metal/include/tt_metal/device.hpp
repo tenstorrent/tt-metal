@@ -71,7 +71,7 @@ struct CreateDeviceOptions {
  * @param options Configuration parameter for requested device
  * @return Device handle to the created device.
  */
-DeviceHandle CreateDevice(chip_id_t device_id, CreateDeviceOptions options = {});
+IDevice* CreateDevice(chip_id_t device_id, CreateDeviceOptions options = {});
 
 /**
  * @brief Resets and closes the device.
@@ -79,12 +79,12 @@ DeviceHandle CreateDevice(chip_id_t device_id, CreateDeviceOptions options = {})
  * @param device Handle to the device to close.
  * @return True if the device was successfully closed; otherwise, false.
  */
-bool CloseDevice(DeviceHandle device);
+bool CloseDevice(IDevice* device);
 
 /**
  * @brief Deallocates all buffers on the device.
  */
-void DeallocateBuffers(DeviceHandle device);
+void DeallocateBuffers(IDevice* device);
 
 /**
  * @brief Dumps device-side profiler data to a CSV log.
@@ -93,7 +93,7 @@ void DeallocateBuffers(DeviceHandle device);
  * @param worker_cores CoreRangeSet of worker cores being profiled.
  * @param last_dump If true, indicates the last dump before process termination.
  */
-void DumpDeviceProfileResults(DeviceHandle device, const CoreRangeSet& worker_cores, bool last_dump = false);
+void DumpDeviceProfileResults(IDevice* device, const CoreRangeSet& worker_cores, bool last_dump = false);
 
 /**
  * @brief Retrieves the architecture of the device.
@@ -101,7 +101,7 @@ void DumpDeviceProfileResults(DeviceHandle device, const CoreRangeSet& worker_co
  * @param device The device to query.
  * @return ARCH representing the device architecture.
  */
-ARCH GetArch(DeviceHandle device);
+ARCH GetArch(IDevice* device);
 
 /**
  * @brief Retrieves the ID of the device.
@@ -109,7 +109,7 @@ ARCH GetArch(DeviceHandle device);
  * @param device The device to query.
  * @return Chip ID of the device.
  */
-chip_id_t GetId(DeviceHandle device);
+chip_id_t GetId(IDevice* device);
 
 /**
  * @brief Retrieves the number of DRAM channels on the device.
@@ -117,7 +117,7 @@ chip_id_t GetId(DeviceHandle device);
  * @param device The device to query.
  * @return Number of DRAM channels.
  */
-int GetNumDramChannels(DeviceHandle device);
+int GetNumDramChannels(IDevice* device);
 
 /**
  * @brief Retrieves the available L1 size per worker core on the device.
@@ -125,7 +125,7 @@ int GetNumDramChannels(DeviceHandle device);
  * @param device The device to query.
  * @return L1 size per core in bytes.
  */
-std::uint32_t GetL1SizePerCore(DeviceHandle device);
+std::uint32_t GetL1SizePerCore(IDevice* device);
 
 /**
  * @brief Computes the storage grid size for the device.
@@ -133,7 +133,7 @@ std::uint32_t GetL1SizePerCore(DeviceHandle device);
  * @param device The device to query.
  * @return CoreCoord representing the storage grid size.
  */
-CoreCoord GetComputeWithStorageGridSize(DeviceHandle device);
+CoreCoord GetComputeWithStorageGridSize(IDevice* device);
 
 /**
  * @brief Retrieves the DRAM grid size for the device.
@@ -141,21 +141,21 @@ CoreCoord GetComputeWithStorageGridSize(DeviceHandle device);
  * @param device The device to query.
  * @return CoreCoord representing the DRAM grid size.
  */
-CoreCoord GetDramGridSize(DeviceHandle device);
+CoreCoord GetDramGridSize(IDevice* device);
 
 /**
  * @brief Enables the program cache on the device.
  *
  * @param device The device to modify.
  */
-void EnableProgramCache(DeviceHandle device);
+void EnableProgramCache(IDevice* device);
 
 /**
  * @brief Disables and clears the program cache on the device.
  *
  * @param device The device to modify.
  */
-void DisableAndClearProgramCache(DeviceHandle device);
+void DisableAndClearProgramCache(IDevice* device);
 
 /**
  * @brief Pushes a work function onto the device's work queue.
@@ -164,14 +164,14 @@ void DisableAndClearProgramCache(DeviceHandle device);
  * @param work The work function to execute.
  * @param blocking Indicates whether the operation should be blocking (default: false).
  */
-void PushWork(DeviceHandle device, std::function<void()> work, bool blocking = false);
+void PushWork(IDevice* device, std::function<void()> work, bool blocking = false);
 
 /**
  * @brief Synchronizes operations on the given device.
  *
  * @param device The device to synchronize.
  */
-void Synchronize(DeviceHandle device);
+void Synchronize(IDevice* device);
 
 /**
  * @brief Retrieves a list of Ethernet socket coordinates connected to a specific chip ID.
@@ -180,7 +180,7 @@ void Synchronize(DeviceHandle device);
  * @param connected_chip_id The connected chip ID.
  * @return Vector of CoreCoord representing Ethernet socket coordinates.
  */
-std::vector<CoreCoord> GetEthernetSockets(DeviceHandle device, chip_id_t connected_chip_id);
+std::vector<CoreCoord> GetEthernetSockets(IDevice* device, chip_id_t connected_chip_id);
 
 /**
  * @brief Returns the number of banks for a specific buffer type on the device.
@@ -189,7 +189,7 @@ std::vector<CoreCoord> GetEthernetSockets(DeviceHandle device, chip_id_t connect
  * @param buffer_type The type of buffer.
  * @return Number of banks.
  */
-std::uint32_t GetNumBanks(DeviceHandle device, BufferType buffer_type);
+std::uint32_t GetNumBanks(IDevice* device, BufferType buffer_type);
 
 /**
  * @brief Computes the offset of a specific bank for a buffer type on the device.
@@ -199,7 +199,7 @@ std::uint32_t GetNumBanks(DeviceHandle device, BufferType buffer_type);
  * @param bank_id The ID of the bank.
  * @return Offset of the bank.
  */
-std::int32_t GetBankOffset(DeviceHandle device, BufferType buffer_type, std::uint32_t bank_id);
+std::int32_t GetBankOffset(IDevice* device, BufferType buffer_type, std::uint32_t bank_id);
 
 /**
  * @brief Retrieves bank IDs associated with a logical core for a given buffer type.
@@ -210,7 +210,7 @@ std::int32_t GetBankOffset(DeviceHandle device, BufferType buffer_type, std::uin
  * @return span of const bank IDs.
  */
 stl::Span<const std::uint32_t> BankIdsFromLogicalCore(
-    DeviceHandle device, BufferType buffer_type, CoreCoord logical_core);
+    IDevice* device, BufferType buffer_type, CoreCoord logical_core);
 
 /**
  * @brief Retrieves the machine epsilon for the SFPU on the device.
@@ -218,7 +218,7 @@ stl::Span<const std::uint32_t> BankIdsFromLogicalCore(
  * @param device The device to query.
  * @return SFPU machine epsilon.
  */
-float GetSfpuEps(DeviceHandle device);
+float GetSfpuEps(IDevice* device);
 
 /**
  * @brief Retrieves the representation of NaN for the SFPU on the device.
@@ -226,7 +226,7 @@ float GetSfpuEps(DeviceHandle device);
  * @param device The device to query.
  * @return SFPU NaN value.
  */
-float GetSfpuNan(DeviceHandle device);
+float GetSfpuNan(IDevice* device);
 
 /**
  * @brief Retrieves the representation of infinity for the SFPU on the device.
@@ -234,7 +234,7 @@ float GetSfpuNan(DeviceHandle device);
  * @param device The device to query.
  * @return SFPU infinity value.
  */
-float GetSfpuInf(DeviceHandle device);
+float GetSfpuInf(IDevice* device);
 
 /**
  * @brief Retrieves the current worker mode of the device.
@@ -242,7 +242,7 @@ float GetSfpuInf(DeviceHandle device);
  * @param device The device to query.
  * @return WorkExecutorMode representing the current worker mode.
  */
-WorkExecutorMode GetWorkerMode(DeviceHandle device);
+WorkExecutorMode GetWorkerMode(IDevice* device);
 
 /**
  * @brief Retrieves the number of entries in the program cache on the device.
@@ -250,7 +250,7 @@ WorkExecutorMode GetWorkerMode(DeviceHandle device);
  * @param device The device to query.
  * @return Number of program cache entries.
  */
-std::size_t GetNumProgramCacheEntries(DeviceHandle device);
+std::size_t GetNumProgramCacheEntries(IDevice* device);
 
 }  // namespace v1
 }  // namespace tt::tt_metal

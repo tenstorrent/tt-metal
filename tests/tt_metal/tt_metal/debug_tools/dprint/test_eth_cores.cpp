@@ -89,7 +89,7 @@ TEST_F(DPrintFixture, ActiveEthTestPrint) {
             continue;
         }
         this->RunTestOnDevice(
-            [](DPrintFixture *fixture, Device *device){
+            [](DPrintFixture *fixture, IDevice* device){
                 CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true);
             },
             device
@@ -108,7 +108,7 @@ TEST_F(DPrintFixture, IdleEthTestPrint) {
             continue;
         }
         this->RunTestOnDevice(
-            [](DPrintFixture *fixture, Device *device){
+            [](DPrintFixture *fixture, IDevice* device){
                 CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false);
             },
             device

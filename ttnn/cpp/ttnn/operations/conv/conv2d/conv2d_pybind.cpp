@@ -164,7 +164,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "prepare_conv_weights",
-        prepare_conv_weights<ttnn::Device>,
+        prepare_conv_weights<ttnn::IDevice>,
         py::kw_only(),
         py::arg("weight_tensor"),
         py::arg("input_memory_config"),
@@ -208,7 +208,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "prepare_conv_bias",
-        prepare_conv_bias<ttnn::Device>,
+        prepare_conv_bias<ttnn::IDevice>,
         py::kw_only(),
         py::arg("bias_tensor"),
         py::arg("input_memory_config"),

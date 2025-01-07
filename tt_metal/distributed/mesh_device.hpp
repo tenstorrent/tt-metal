@@ -236,7 +236,7 @@ concept DeviceInterfaceContract =
 
 // For now static_asserts are used to ensure that the concepts are satisfied.
 // This is a temporary compile-time check to make sure that Device/MeshDevice don't deviate from the expected interface.
-static_assert(detail::DeviceInterfaceContract<Device>, "Device must satisfy the DeviceInterfaceContract concept.");
+static_assert(detail::DeviceInterfaceContract<IDevice>, "Device must satisfy the DeviceInterfaceContract concept.");
 static_assert(detail::DeviceInterfaceContract<MeshDevice>, "MeshDevice must satisfy the DeviceInterfaceContract concept.");
 
 }  // namespace tt::tt_metal::distributed

@@ -271,7 +271,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
 
 static void set_reduce_scatter_worker_rt(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     KernelHandle worker_receiver_kernel_id,
     KernelHandle worker_sender_kernel_id,
     KernelHandle worker_reduce_kernel_id,

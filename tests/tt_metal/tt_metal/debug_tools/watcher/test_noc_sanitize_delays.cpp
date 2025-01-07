@@ -145,7 +145,7 @@ TEST_F(WatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
         GTEST_SKIP();
 
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunDelayTestOnCore(dynamic_cast<WatcherDelayFixture*>(fixture), device, core);
         },

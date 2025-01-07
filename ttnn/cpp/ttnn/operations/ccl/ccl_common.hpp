@@ -66,7 +66,7 @@ class LineTopology {
 // Eventual home: ccl_topology_descriptors
 struct RingTopology {
     RingTopology(
-        tt::tt_metal::Device const* device,
+        tt::tt_metal::IDevice const* device,
         Topology topology,
         std::optional<uint32_t> sender_device_id,
         std::optional<uint32_t> receiver_device_id,
@@ -535,21 +535,21 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
-    tt::tt_metal::Device const* device,
+    tt::tt_metal::IDevice const* device,
     FabricEriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id);
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id);
 
 void generate_edm_kernels_for_ring_or_linear_topology(
    tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     RingTopology const& topology_config,
     std::vector<ccl::EriscDatamoverBuilder> const& clockwise_edm_builders,
     std::vector<ccl::EriscDatamoverBuilder> const& counter_clockwise_edm_builders,

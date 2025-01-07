@@ -60,7 +60,7 @@ public:
 
 protected:
     tt::ARCH arch_;
-    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     bool slow_dispatch_;
 
     void SetUp() override {

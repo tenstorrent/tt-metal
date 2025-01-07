@@ -211,7 +211,7 @@ public:
     bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }
     bool can_use_passthrough_scheduling() const override;
 
-    void push_work(std::function<void()> work, bool blocking = false) override; 
+    void push_work(std::function<void()> work, bool blocking) override; 
 
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops

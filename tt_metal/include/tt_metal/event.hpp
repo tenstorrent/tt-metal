@@ -49,7 +49,7 @@ bool EventQuery(const EventHandle& event);
  *
  * @param device device to synchronize.
  */
-void DeviceSynchronize(DeviceHandle device);
+void DeviceSynchronize(IDevice* device);
 
 /**
  * @brief Synchronizes the command queue with the host by waiting for all operations to complete.

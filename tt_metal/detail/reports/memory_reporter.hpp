@@ -56,7 +56,7 @@ void DisableMemoryReports();
  *
  * | Argument      | Description                                       | Type            | Valid Range | Required |
  * |---------------|---------------------------------------------------|-----------------|--------------------------------------------------------|----------|
- * | device        | The device for which memory stats will be dumped. | const Device *  | | True     |
+ * | device        | The device for which memory stats will be dumped. | const IDevice*  | | True     |
  * */
 void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix = "");
 

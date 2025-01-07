@@ -10,7 +10,7 @@ namespace ttnn {
 
 namespace device {
 
-using Device = ttnn::Device;
+using IDevice = ttnn::IDevice;
 
 IDevice& open_device(
     int device_id,

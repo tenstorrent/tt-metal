@@ -29,7 +29,7 @@
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 
 constexpr uint32_t num_sizes = 8;
 namespace tt {

@@ -43,9 +43,9 @@ public:
     OptionalAnyDevice() = default;
     OptionalAnyDevice(std::nullopt_t);
     OptionalAnyDevice(ttnn::AnyDevice device);
-    OptionalAnyDevice(const std::optional<std::reference_wrapper<tt::tt_metal::Device>>& device);
+    OptionalAnyDevice(const std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>& device);
     OptionalAnyDevice(const std::optional<std::reference_wrapper<tt::tt_metal::distributed::MeshDevice>>& mesh_device);
-    OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::Device> device);
+    OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::IDevice> device);
     OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::distributed::MeshDevice> mesh_device);
     OptionalAnyDevice(tt::tt_metal::IDevice& device);
     OptionalAnyDevice(tt::tt_metal::distributed::MeshDevice& mesh_device);

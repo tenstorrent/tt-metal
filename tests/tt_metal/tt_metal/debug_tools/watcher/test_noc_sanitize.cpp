@@ -246,7 +246,7 @@ static void RunTestIEth(WatcherFixture* fixture, IDevice* device) {
 }
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
-void CheckHostSanitization(Device *device) {
+void CheckHostSanitization(IDevice* device) {
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {16, 16};
     uint64_t addr = 0;
@@ -272,7 +272,7 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitize) {
 
     // Only run on device 0 because this test takes down the watcher server.
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAddress);
         },
@@ -284,7 +284,7 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitizeAlignmentL1Write) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1Write);
         },
@@ -296,7 +296,7 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitizeAlignmentL1Read) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1Read);
         },
@@ -308,7 +308,7 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitizeAlignmentL1ReadNCrisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1Read, true);
         },

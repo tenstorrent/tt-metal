@@ -46,7 +46,7 @@ ReduceScatterAsync create_reduce_scatter_struct(
             return std::nullopt;
         }
         auto device = std::find_if(
-            devices.begin(), devices.end(), [id_ = id.value()](Device const* d) { return d->id() == id_; });
+            devices.begin(), devices.end(), [id_ = id.value()](IDevice const* d) { return d->id() == id_; });
         TT_FATAL(
             device != devices.end(),
             "Device with ID {} not found in the list of devices, but it should be here since it was provided "

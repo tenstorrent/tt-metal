@@ -32,7 +32,7 @@
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
 
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;

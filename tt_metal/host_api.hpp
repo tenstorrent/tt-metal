@@ -73,7 +73,7 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id);
 /**
  * Instantiates a device object.
  *
- * Return value: Device *
+ * Return value: IDevice* 
  *
  * | Argument   | Description                | Type            | Valid Range                       | Required |
  * |------------|----------------------------|-----------------|-----------------------------------|----------|
@@ -92,7 +92,7 @@ IDevice* CreateDevice(
 /**
  * Instantiates a device with minimal setup, used to attach to a device in a bad state.
  *
- * Return value: Device *
+ * Return value: IDevice* 
  *
  * | Argument   | Description                | Type            | Valid Range                       | Required |
  * |------------|----------------------------|-----------------|-----------------------------------|----------|
@@ -112,7 +112,7 @@ IDevice* CreateDeviceMinimal(
  *
  * | Argument | Description                | Type     | Valid Range | Required |
  * |----------|----------------------------|----------|-------------|----------|
- * | device   | Pointer to a device object | Device * |             | True     |
+ * | device   | Pointer to a device object | IDevice* |             | True     |
  */
 // clang-format on
 bool CloseDevice(IDevice* device);
@@ -301,7 +301,7 @@ uint32_t CreateSemaphore(
  *
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | device         | The device to create the semaphore on                  | Device *                                                  |              | Yes      |
+ * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
  * | cores          | Range of the Tensix co-ordinates using the semaphore   | const CoreRangeSet &                                      |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
@@ -324,7 +324,7 @@ GlobalSemaphore CreateGlobalSemaphore(
  *
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | device         | The device to create the semaphore on                  | Device *                                                  |              | Yes      |
+ * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
  * | cores          | Range of the Tensix co-ordinates using the semaphore   | CoreRangeSet &&                                           |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
@@ -504,7 +504,7 @@ void SetRuntimeArgs(
  *
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
- * | device       | The device that runtime args are being written to.                     | IDevice*                                                |                                                                            | Yes      |
+ * | device       | The device that runtime args are being written to.                     | IDevice*                                               |                                                                            | Yes      |
  * | kernel       | The kernel that will recieve these runtime args.                       | std::shared_ptr<Kernel>                                |                                                                            | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
  * | runtime_args | The runtime args to be written                                         | std::shared_ptr<RuntimeArgs>                           |                                                                            | Yes      |
@@ -524,7 +524,7 @@ void SetRuntimeArgs(
  * Return value: void
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
- * | device       | The device that runtime args are being written to.                     | IDevice*                                                |                                                                            | Yes      |
+ * | device       | The device that runtime args are being written to.                     | IDevice*                                               |                                                                            | Yes      |
  * | kernel       | The kernel that will recieve these runtime args.                       | std::shared_ptr<Kernel>                                |                                                                            | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector< CoreCoord > &                       | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector<std::shared_ptr<RuntimeArgs>>        | Outer vector size must be equal to size of core_spec vector                | Yes      |
@@ -739,7 +739,7 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids = 
  *
  * | Argument        | Description                                                            | Type                          | Valid Range                        | Required |
  * |-----------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device          | The device holding being traced.                                       | Device *                      |                                    | Yes      |
+ * | device          | The device holding being traced.                                       | IDevice*                      |                                    | Yes      |
  * | cq_id           | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
 */
 // clang-format on
@@ -756,7 +756,7 @@ uint32_t BeginTraceCapture(IDevice* device, const uint8_t cq_id);
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device holding being traced.                                       | Device *                      |                                    | Yes      |
+ * | device       | The device holding being traced.                                       | IDevice*                      |                                    | Yes      |
  * | cq_id        | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
  * | tid          | A unique id from BeginTraceCapture for the trace being captured        | uint32_t                      |                                    | Yes      |
  */
@@ -771,7 +771,7 @@ void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid);
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device holding the trace.                                          | Device *                      |                                    | Yes      |
+ * | device       | The device holding the trace.                                          | IDevice*                      |                                    | Yes      |
  * | cq_id        | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
  * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
@@ -789,7 +789,7 @@ void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device holding the trace.                                          | Device *                      |                                    | Yes      |
+ * | device       | The device holding the trace.                                          | IDevice*                      |                                    | Yes      |
  * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
  */
 // clang-format on
@@ -821,7 +821,7 @@ void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
  *
  * | Argument      | Description                                       | Type            | Valid Range               | Required |
  * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | Device *        |                           | True     |
+ * | device        | The device holding the program being profiled.    | IDevice*        |                           | True     |
  * | program       | The program being profiled.                       | const Program & |                           | True     |
  * */
 // clang-format on
@@ -886,7 +886,7 @@ bool EventQuery(const std::shared_ptr<Event>& event);
  *
  * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device         | The device to synchronize.                                                        | Device *                      |                                    | Yes      |
+ * | device         | The device to synchronize.                                                        | IDevice*                      |                                    | Yes      |
  * | cq_id          | The specific command queue id to synchronize  .                                   | uint8_t                       |                                    | No       |
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */

@@ -24,7 +24,7 @@
 namespace ttnn::ccl::worker_detail {
 
 CCLWorkerArgBuilder::CCLWorkerArgBuilder(
-    Device const* device,
+    IDevice const* device,
     ttnn::ccl::CCLOpConfig const& op_config,
     ttnn::ccl::TensorPartition const& input_tensor_partition,
     ttnn::ccl::TensorPartition const& output_tensor_partition,

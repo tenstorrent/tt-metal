@@ -300,7 +300,7 @@ void add_prefetcher_paged_read_cmd(
     add_bare_prefetcher_cmd(cmds, cmd, true);
 }
 
-void add_prefetcher_linear_read_cmd(Device *device,
+void add_prefetcher_linear_read_cmd(IDevice* device,
                                     vector<uint32_t>& cmds,
                                     vector<uint32_t>& sizes,
                                     CoreCoord worker_core,

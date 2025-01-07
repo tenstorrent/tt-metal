@@ -147,7 +147,7 @@ int main(int argc, char **argv) {
 
     try {
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         tt_metal::Program program = tt_metal::CreateProgram();
 

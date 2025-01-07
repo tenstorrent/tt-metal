@@ -22,6 +22,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hw/inc/circular_buffer_constants.h"
 #include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
@@ -967,7 +968,7 @@ IDevice* CreateDeviceMinimal(
     chip_id_t device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
-    IDevice* dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    auto dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
 }

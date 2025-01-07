@@ -128,7 +128,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
 
 struct CCLWorkerArgBuilder {
     CCLWorkerArgBuilder(
-        tt::tt_metal::Device const* device,
+        tt::tt_metal::IDevice const* device,
         ttnn::ccl::CCLOpConfig const& op_config,
         ttnn::ccl::TensorPartition const& input_tensor_partition,
         ttnn::ccl::TensorPartition const& output_tensor_partition,
@@ -159,7 +159,7 @@ struct CCLWorkerArgBuilder {
 
     std::vector<uint32_t> generate_sender_writer_kernel_ct_args() const;
 
-    tt::tt_metal::Device const* device;
+    tt::tt_metal::IDevice const* device;
     ttnn::ccl::TensorPartition const input_tensor_partition;
     ttnn::ccl::TensorPartition const output_tensor_partition;
     ttnn::ccl::CCLOpConfig const op_config;

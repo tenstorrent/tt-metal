@@ -14,7 +14,7 @@ using std::vector;
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
 static void test_sems_across_core_types(
-    DispatchFixture* fixture, vector<tt::tt_metal::v1::DeviceHandle>& devices, bool active_eth) {
+    DispatchFixture* fixture, vector<tt::tt_metal::IDevice* >& devices, bool active_eth) {
     // just something unique...
     constexpr uint32_t eth_sem_init_val = 33;
     constexpr uint32_t tensix_sem_init_val = 102;

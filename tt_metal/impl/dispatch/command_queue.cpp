@@ -886,6 +886,18 @@ HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index) :
     reset_config_buffer_mgr(dispatch_constants::DISPATCH_MESSAGE_ENTRIES);
 }
 
+uint32_t HWCommandQueue::get_id() const {
+    return this->id;
+}
+
+std::optional<uint32_t> HWCommandQueue::get_tid() const {
+    return this->tid;
+}
+
+SystemMemoryManager& HWCommandQueue::sysmem_manager() {
+    return this->manager;
+}
+
 void HWCommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
     // Not needed for regular dispatch kernel
     if (!this->device->dispatch_s_enabled()) {
@@ -2410,11 +2422,11 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
     log_trace(LogDispatch, "{} running {} complete", this->name(), command.type);
 }
 
-v1::CommandQueueHandle v1::GetCommandQueue(DeviceHandle device, std::uint8_t cq_id) {
+v1::CommandQueueHandle v1::GetCommandQueue(IDevice* device, std::uint8_t cq_id) {
     return v1::CommandQueueHandle{device, cq_id};
 }
 
-v1::CommandQueueHandle v1::GetDefaultCommandQueue(DeviceHandle device) { return GetCommandQueue(device, 0); }
+v1::CommandQueueHandle v1::GetDefaultCommandQueue(IDevice* device) { return GetCommandQueue(device, 0); }
 
 void v1::EnqueueReadBuffer(CommandQueueHandle cq, const BufferHandle& buffer, std::byte *dst, bool blocking) {
     v0::EnqueueReadBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, dst, blocking);
@@ -2436,7 +2448,7 @@ void v1::SetLazyCommandQueueMode(bool lazy) {
     detail::SetLazyCommandQueueMode(lazy);
 }
 
-v1::DeviceHandle v1::GetDevice(CommandQueueHandle cq) {
+IDevice* v1::GetDevice(CommandQueueHandle cq) {
     return cq.device;
 }
 

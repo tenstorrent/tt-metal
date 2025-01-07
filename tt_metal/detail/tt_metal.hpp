@@ -139,7 +139,7 @@ void WaitProgramDone(IDevice* device, Program& program);
  * | Argument                  | Description                                                      | Type      | Valid
  * Range                                        | Required |
  * |---------------------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
- * | device                    | Which device the program is compiled for                         | Device *  | Must be
+ * | device                    | Which device the program is compiled for                         | IDevice*  | Must be
  * initialized via tt_metal::InitializeDevice | Yes      | | program                   | The program to compile |
  * Program & |                                                    | Yes      | | fd_bootloader_mode        | Set when
  * compiling program to initialize fast dispatch           | bool      | | No       |
@@ -154,7 +154,7 @@ void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode =
  * | Argument            | Description                                                            | Type | Valid Range
  * | Required |
  * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device              | The device to whcih runtime args will be written                       | Device * | | Yes |
+ * | device              | The device to whcih runtime args will be written                       | IDevice* | | Yes |
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
@@ -174,7 +174,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootl
  * | Argument      | Description                                                        | Type            | Valid Range
  * | Required |
  * |---------------|--------------------------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | Clear profiler control buffer before any core attempts to profler  | Device *        | | True     |
+ * | device        | Clear profiler control buffer before any core attempts to profler  | IDevice*        | | True     |
  * */
 void ClearProfilerControlBuffer(IDevice* device);
 
@@ -186,7 +186,7 @@ void ClearProfilerControlBuffer(IDevice* device);
  * | Argument      | Description                                       | Type            | Valid Range               |
  * Required |
  * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | Device *        |                           |
+ * | device        | The device holding the program being profiled.    | IDevice*        |                           |
  * True     |
  * */
 void InitDeviceProfiler(IDevice* device);
@@ -198,7 +198,7 @@ void InitDeviceProfiler(IDevice* device);
  *
  * | Argument      | Description                                       | Type | Valid Range               | Required |
  * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | Device * |                           | True |
+ * | device        | The device holding the program being profiled.    | IDevice* |                           | True |
  * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType,
  * std::vector<CoreCoord>> & |                           | True     | | last_dump     | Last dump before process dies |
  * bool                                                         |                           | False    |
@@ -212,7 +212,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
  *
  * | Argument      | Description                                       | Type | Valid Range               | Required |
  * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | Device * |                           | True |
+ * | device        | The device holding the program being profiled.    | IDevice* |                           | True |
  * | last_dump     | Last dump before process dies                     | bool |                           | False    |
  * */
 void DumpDeviceProfileResults(IDevice* device, bool last_dump = false);
@@ -273,7 +273,7 @@ void FreshProfilerDeviceLog();
  * | Argument     | Description                                            | Data type             | Valid range |
  * required |
  * |--------------|--------------------------------------------------------|-----------------------|-------------------------------------------|----------|
- * | device       | The device whose DRAM to write data into               | Device *              | | Yes      | |
+ * | device       | The device whose DRAM to write data into               | IDevice*              | | Yes      | |
  * dram_channel | Channel index of DRAM to write into                    | int                   | On Grayskull, [0, 7]
  * inclusive            | Yes      | | address      | Starting address on DRAM channel to begin writing data | uint32_t
  * | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      | | host_buffer  | Buffer on host to copy data from |
@@ -289,7 +289,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
  * | Argument     | Description                                                  | Data type             | Valid range
  * | required |
  * |--------------|--------------------------------------------------------------|-----------------------|--------------------------------|----------|
- * | device       | The device whose DRAM to read data from                      | Device *              | | Yes      |
+ * | device       | The device whose DRAM to read data from                      | IDevice*              | | Yes      |
  * | dram_channel | Channel index of DRAM to read from                           | int                   | On Grayskull,
  * [0, 7] inclusive | Yes      | | address      | Starting address on DRAM channel from which to begin reading |
  * uint32_t              |                                | Yes      | | size         | Size of buffer to read from
@@ -306,7 +306,7 @@ bool ReadFromDeviceDRAMChannel(
  *
  * | Argument      | Description                                     | Data type             | Valid range | required |
  * |---------------|-------------------------------------------------|-----------------------|-----------------------------------------------------|----------|
- * | device        | The device whose DRAM to write data into        | Device *              | | Yes      | |
+ * | device        | The device whose DRAM to write data into        | IDevice*              | | Yes      | |
  * logical_core  | Logical coordinate of core whose L1 to write to | CoreCoord             | On Grayskull, any valid
  * logical worker coordinate   | Yes      | | address       | Starting address in L1 to write into            | uint32_t
  * | Any non-reserved address in L1 that fits for buffer | Yes      | | host_buffer   | Buffer on host whose data to
@@ -329,7 +329,7 @@ bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t a
  * | Argument             | Description                                 | Data type             | Valid range | required
  * |
  * |----------------------|---------------------------------------------|-----------------------|---------------------------------------------------|----------|
- * | device               | The device whose DRAM to read data from     | Device *              | | Yes      | |
+ * | device               | The device whose DRAM to read data from     | IDevice*              | | Yes      | |
  * logical_core         | Logical coordinate of core whose L1 to read | CoreCoord            | On Grayskull, any valid
  * logical worker coordinate | Yes      | | address              | Starting address in L1 to read from         |
  * uint32_t              |                                                   | Yes      | | size                 | Size

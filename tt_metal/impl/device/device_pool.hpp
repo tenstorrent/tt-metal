@@ -16,10 +16,7 @@ void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
 }  // namespace tt_metal::detail
 
-using Device = tt_metal::Device;
-class DevicePool {
-    friend Device;
-    friend tt_metal::v1::DeviceHandle;
+class DevicePool {        
     friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
 public:
@@ -41,13 +38,13 @@ public:
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {}) noexcept;
 
-    tt_metal::v1::DeviceHandle get_active_device(chip_id_t device_id) const;
-    std::vector<tt_metal::v1::DeviceHandle> get_all_active_devices() const;
+    IDevice* get_active_device(chip_id_t device_id) const;
+    std::vector<IDevice* > get_all_active_devices() const;
     bool close_device(chip_id_t device_id);
     void close_devices(const std::vector<IDevice*>& devices);
     bool is_device_active(chip_id_t id) const;
-    void register_worker_thread_for_device(tt_metal::v1::DeviceHandle device, std::thread::id worker_thread_id);
-    void unregister_worker_thread_for_device(tt_metal::v1::DeviceHandle device);
+    void register_worker_thread_for_device(IDevice* device, std::thread::id worker_thread_id);
+    void unregister_worker_thread_for_device(IDevice* device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
 
 private:
@@ -59,8 +56,8 @@ private:
     std::vector<uint32_t> l1_bank_remap;
     bool using_fast_dispatch;
     std::mutex lock;
-    // TODO replace std::vector<std::unique_ptr<Device>> with stl::SlotMap<v1::DeviceKey, Device> when removing v0
-    std::vector<std::unique_ptr<Device>> devices;
+    // TODO replace std::vector<std::unique_ptr<IDevice>> with stl::SlotMap<v1::DeviceKey, Device> when removing v0
+    std::vector<std::unique_ptr<IDevice>> devices;
     // Used to track worker thread handles (1 worker thread created per device)
     // when we need to check if a call is made from an application thread or a
     // worker thread
@@ -76,12 +73,9 @@ private:
     void init_firmware_on_active_devices() const;
     void init_profiler_devices() const;
     void activate_device(chip_id_t id);
-    void initialize_device(tt_metal::v1::DeviceHandle dev) const;
+    void initialize_device(IDevice* dev) const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
     static DevicePool* _inst;
-
-    // TODO remove with v0
-    tt_metal::v1::DeviceHandle get_handle(IDevice* device) const;
 };
 
 }  // namespace tt

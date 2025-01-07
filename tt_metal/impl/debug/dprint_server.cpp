@@ -41,7 +41,7 @@ using std::to_string;
 using std::tuple;
 using std::uint32_t;
 
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 using namespace tt;
 
 #define CAST_U8P(p) reinterpret_cast<uint8_t*>(p)

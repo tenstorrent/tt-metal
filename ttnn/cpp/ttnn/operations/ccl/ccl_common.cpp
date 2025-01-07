@@ -82,7 +82,7 @@ std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_dev
 }
 
 RingTopology::RingTopology(
-    Device const* device,
+    IDevice const* device,
     Topology topology,
     std::optional<uint32_t> sender_device_id,
     std::optional<uint32_t> receiver_device_id,
@@ -181,7 +181,7 @@ std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_co
 
 void generate_edm_kernels_for_ring_or_linear_topology(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     RingTopology const& topology_config,
     std::vector<ccl::EriscDatamoverBuilder> const& clockwise_edm_builders,
     std::vector<ccl::EriscDatamoverBuilder> const& counter_clockwise_edm_builders,
@@ -235,7 +235,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
 template <typename EDMBuilder>
 KernelHandle generate_edm_kernel_impl(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     EDMBuilder const& edm_builder,
     std::string const& kernel_path,
     CoreCoord const& eth_core,
@@ -271,7 +271,7 @@ KernelHandle generate_edm_kernel_impl(
 
 KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     ccl::FabricEriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id) {
@@ -286,7 +286,7 @@ KernelHandle generate_edm_kernel(
 
 KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id) {
