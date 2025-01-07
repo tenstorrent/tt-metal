@@ -9,7 +9,7 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/types.hpp"
 
 #include <algorithm>

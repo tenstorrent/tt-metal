@@ -13,7 +13,7 @@ namespace tt_metal {
 class Tensor;
 
 inline namespace v0 {
-class Device;
+class IDevice;
 }  // namespace v0
 }  // namespace tt_metal
 }  // namespace tt

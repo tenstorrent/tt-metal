@@ -16,7 +16,7 @@
 #include "tt_metal/common/metal_soc_descriptor.h"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 
 // Create FD kernels for all given device ids. Creates all objects, but need to call create_and_compile_cq_program() use
 // a created Device to fill out the settings.

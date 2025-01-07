@@ -7,7 +7,7 @@
 #include "tt_metal/device.hpp"
 #include "common/core_assignment.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
 #include "tracy/Tracy.hpp"

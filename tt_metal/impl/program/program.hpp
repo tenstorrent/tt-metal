@@ -25,7 +25,7 @@ inline namespace v0 {
 class Buffer;
 class Kernel;
 class CircularBuffer;
-class Device;
+class IDevice;
 class Program;
 class CircularBufferConfig;
 

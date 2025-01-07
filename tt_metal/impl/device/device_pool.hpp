@@ -7,7 +7,7 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "impl/debug/dprint_server.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"
 namespace tt {
 namespace tt_metal::detail {

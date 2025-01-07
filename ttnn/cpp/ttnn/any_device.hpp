@@ -5,7 +5,7 @@
 #pragma once
 
 #include "tt_metal/distributed/mesh_device.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 
 namespace ttnn {
 

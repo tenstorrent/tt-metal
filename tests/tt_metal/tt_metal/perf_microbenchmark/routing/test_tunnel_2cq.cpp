@@ -6,7 +6,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
 

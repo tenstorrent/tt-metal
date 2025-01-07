@@ -14,7 +14,7 @@ class MeshDevice;
 
 inline namespace v0 {
 class CommandQueue;
-class Device;
+class IDevice;
 }  // namespace v0
 }  // namespace tt::tt_metal
 

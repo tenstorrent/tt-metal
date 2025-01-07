@@ -17,7 +17,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 
 using std::map;
 using std::vector;

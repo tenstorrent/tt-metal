@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 
 namespace tt {
 void ClearNocData(tt_metal::IDevice* device);

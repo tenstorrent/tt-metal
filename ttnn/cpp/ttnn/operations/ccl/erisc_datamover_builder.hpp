@@ -15,7 +15,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/impl/program/program.hpp"
 
 #include <vector>

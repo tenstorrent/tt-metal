@@ -13,7 +13,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 
 using std::map;
 using std::vector;

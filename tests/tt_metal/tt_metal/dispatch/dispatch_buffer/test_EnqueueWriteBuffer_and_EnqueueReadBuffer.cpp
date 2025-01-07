@@ -10,7 +10,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 
 using std::vector;
 using namespace tt::tt_metal;

@@ -14,7 +14,7 @@
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 
 using std::vector;

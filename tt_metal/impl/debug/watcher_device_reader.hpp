@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 #include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 #include "llrt/hal.hpp"
 

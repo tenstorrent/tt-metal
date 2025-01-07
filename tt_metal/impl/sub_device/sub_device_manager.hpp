@@ -22,7 +22,7 @@ class LaunchMessageRingBufferState;
 class TraceBuffer;
 
 inline namespace v0 {
-class Device;
+class IDevice;
 }  // namespace v0
 
 namespace detail {

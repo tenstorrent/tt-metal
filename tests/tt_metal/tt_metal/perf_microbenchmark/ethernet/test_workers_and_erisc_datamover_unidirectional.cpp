@@ -14,7 +14,7 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/test_utils/comparison.hpp"

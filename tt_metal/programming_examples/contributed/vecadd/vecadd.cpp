@@ -4,7 +4,7 @@
 
 #include "common/core_coord.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "common/bfloat16.hpp"
 #include <cstddef>
 #include <cstdint>

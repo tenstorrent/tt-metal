@@ -5,7 +5,7 @@
 #pragma once
 
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/dispatch/worker_config_buffer.hpp"

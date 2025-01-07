@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 // Forward declarations
-class Device;
+class IDevice;
 
 }  // namespace v0
 }  // namespace tt::tt_metal

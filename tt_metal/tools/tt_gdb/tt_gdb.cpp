@@ -10,7 +10,7 @@
 #include <filesystem>
 #include <thread>
 
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "build_kernels_for_riscv/build_kernel_options.hpp"
 
 #include "tt_gdb.hpp"

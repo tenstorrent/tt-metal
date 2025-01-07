@@ -9,7 +9,7 @@
 
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
 #include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
@@ -34,7 +34,7 @@ namespace tt_metal {
 inline namespace v0 {
 
 class Program;
-class Device;
+class IDevice;
 class CommandQueue;
 class Trace;
 class CircularBuffer;

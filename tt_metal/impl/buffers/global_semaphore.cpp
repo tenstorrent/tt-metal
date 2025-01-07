@@ -14,7 +14,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_metal {

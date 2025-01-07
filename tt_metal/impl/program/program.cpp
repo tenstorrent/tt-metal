@@ -20,7 +20,7 @@
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"

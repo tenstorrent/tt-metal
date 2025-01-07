@@ -622,7 +622,7 @@ struct CommandInterface {
 inline namespace v0 {
 
 class CommandQueue {
-    friend class Device;
+    friend class IDevice;
     friend class Trace;
 
    public:

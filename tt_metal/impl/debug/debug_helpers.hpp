@@ -7,7 +7,7 @@
 #include <set>
 
 #include "hostdevcommon/dprint_common.h"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/temp/device.hpp"
 
 // Helper function for comparing CoreDescriptors for using in sets.
 struct CoreDescriptorComparator {

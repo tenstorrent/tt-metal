@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class Buffer;
-class Device;
+class IDevice;
 
 class GlobalSemaphore {
 public:

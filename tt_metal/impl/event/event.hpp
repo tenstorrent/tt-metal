@@ -10,7 +10,7 @@
 namespace tt::tt_metal {
 inline namespace v0 {
 
-class Device;
+class IDevice;
 
 struct Event {
     IDevice* device = nullptr;

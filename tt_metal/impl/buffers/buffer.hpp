@@ -32,7 +32,7 @@
 namespace tt::tt_metal {
 inline namespace v0 {
 
-class Device;
+class IDevice;
 
 }  // namespace v0
 
