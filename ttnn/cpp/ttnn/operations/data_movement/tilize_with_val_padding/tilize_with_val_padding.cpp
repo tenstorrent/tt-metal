@@ -52,15 +52,14 @@ MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeValArgs {
             *original_shape = input_tensor.get_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_to_le_4D(input_tensor);
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
             const auto tile = output.get_tensor_spec().tile();
             uint32_t tile_height = tile.get_height();
             uint32_t tile_width = tile.get_width();
-            auto unsqueezed_tensor =
-                ttnn::reshape(output, update_original_shape(*original_shape, tile_height, tile_width));
+            auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
             return unsqueezed_tensor;
         },
         .operation = std::move(base_tilize)});
@@ -127,8 +126,8 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     using namespace tt::constants;
     auto shape = input_tensor.get_legacy_shape();
 
-    shape[2] = tt::round_up(shape[2], tt::constants::TILE_HEIGHT);
-    shape[3] = tt::round_up(shape[3], tt::constants::TILE_WIDTH);
+    shape[-2] = tt::round_up(shape[-2], tt::constants::TILE_HEIGHT);
+    shape[-1] = tt::round_up(shape[-1], tt::constants::TILE_WIDTH);
 
     PadValue pad_value;
     if (input_tensor.get_dtype() == DataType::BFLOAT16 or input_tensor.get_dtype() == DataType::FLOAT32) {

@@ -10,9 +10,10 @@
 #include <immintrin.h>
 
 #include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/blockfloat_common.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "blockfloat_common.hpp"
+#include "tt_metal/tt_stl/span.hpp"
+#include "tracy/Tracy.hpp"
 
 // TODO: empty struct to facilitate Tensor template logic. Reconsider how/why templating is supported in Tensor
 struct bfloat8_b {};
@@ -99,7 +100,7 @@ inline uint32_t create_packed_bfp8_packed_as_u32(
 }
 
 inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
-    const std::vector<float>& fp32_vec,
+    tt::stl::Span<const float> fp32_vec,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {

@@ -24,19 +24,20 @@ struct Conv2dConfig {
     DataType weights_dtype = DataType::BFLOAT16;
     string activation = "";
     uint32_t input_channels_alignment = 32;
-    bool deallocate_activation = false;
-    bool reallocate_halo_output = false;
+    bool deallocate_activation = false; // If user tensor will be deallocated if it's on device.
+    bool reallocate_halo_output = true; // If true after halo device op is done, the output tensor will be reallocated.
+                                        // in case deallocate_activation is set to true.
     uint32_t act_block_h_override = 0; // This argument is ignored when shard_layout == WIDTH_SHARDED.
     uint32_t act_block_w_div = 1; // Amount by which the maximum possible act_block_width is divided. Max act_block_w = in_channels / (total_num_cores * TILE_WIDTH);
                                   // Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
     std::optional<TensorMemoryLayout> shard_layout = std::nullopt;
-    std::optional<CoreRangeSet> core_grid = std::nullopt; // used only if override_sharding_config is true
-    bool transpose_shards = true; // used only if override_sharding_config is true and if height sharding is false
+    std::optional<CoreRangeSet> core_grid = std::nullopt;  // used only if override_sharding_config is true
+    bool transpose_shards = true;  // used only if override_sharding_config is true and if height sharding is false
     Layout output_layout = Layout::TILE;
     bool enable_act_double_buffer = false;
-    bool enable_weights_double_buffer = false; // Used on for block sharded convolutions
+    bool enable_weights_double_buffer = false;  // Used on for block sharded convolutions
     bool enable_split_reader = false;
     bool enable_subblock_padding = false;
     static constexpr auto attribute_names = std::make_tuple(
@@ -94,7 +95,8 @@ bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 2>& padding,
     const std::array<uint32_t, 2>& dilation,
-    uint32_t groups);
+    uint32_t groups,
+    const Conv2dConfig& conv_config);
 
 sliding_window::ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
@@ -106,13 +108,21 @@ sliding_window::ParallelConfig determine_parallel_config(
     const CoreCoord& compute_grid_size,
     ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
-    bool is_out_tiled=true);
+    bool is_out_tiled=true,
+    bool is_non_tile_mul_shard_width=false);
+
+sliding_window::ParallelConfig determine_output_parallel_config(
+    const sliding_window::ParallelConfig& input_parallel_config,
+    const CoreCoord& compute_grid_size,
+    uint32_t out_channels,
+    bool is_mm_conv);
 
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
 uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
-MemoryConfig create_sharded_memory_config_from_parallel_config(const ttnn::Shape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
+MemoryConfig create_sharded_memory_config_from_parallel_config(
+    const ttnn::Shape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
@@ -155,7 +165,7 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
     std::optional<const MemoryConfig> input_memory_config);
 
 template <typename T>
-std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig, bool, bool>
+std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig, bool>
 shard_or_reshard_tensor_if_required(
     T* device,
     const ttnn::Tensor& input_tensor_,
@@ -167,28 +177,9 @@ shard_or_reshard_tensor_if_required(
     uint32_t out_channels,
     bool is_mm_conv,
     bool auto_shard,
-    bool is_non_tile_mul_width=false);
-
-// Converts convolution weights to tilized 2d matrix layout.
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to tilized 2d matrix layout with special block height padding
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
+    bool is_non_tile_mul_width = false);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 
-} // namespace operations::conv
-} // namespace ttnn
+}  // namespace operations::conv
+}  // namespace ttnn

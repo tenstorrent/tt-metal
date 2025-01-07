@@ -124,6 +124,8 @@ message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
+message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
+
 ############################################################################################################################
 
 if(ENABLE_BUILD_TIME_TRACE)
@@ -253,18 +255,11 @@ add_link_options(
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
-if(ENABLE_TRACY)
-    add_compile_definitions(TRACY_ENABLE)
-    add_compile_options(-fno-omit-frame-pointer)
-    add_link_options(-rdynamic)
-endif()
+include(tracy)
 
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
-if(ENABLE_TRACY)
-    include(tracy)
-endif()
 
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)

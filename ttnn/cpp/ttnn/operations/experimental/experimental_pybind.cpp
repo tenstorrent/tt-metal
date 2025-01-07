@@ -33,9 +33,9 @@
 #include "ttnn/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_pybind.hpp"
-#include "ttnn/operations/experimental/ccl/all_reduce/all_reduce_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
+#include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
@@ -75,11 +75,11 @@ void py_module(py::module& module) {
     matmul::detail::bind_group_attn_matmul(module);
 
     plusone::detail::bind_experimental_plusone_operation(module);
-
+    dropout::detail::bind_experimental_dropout_operation(module);
     // CCL ops
-    auto m_experimental_ccl = module.def_submodule("ccl", "experiemental collective communication operations");
-    ccl::py_bind_all_gather_matmul(m_experimental_ccl);
-    ccl::py_bind_all_reduce(m_experimental_ccl);
+    auto m_experimental_ccl =
+        module.def_submodule("ccl_experimental", "experimental collective communication operations");
+    ccl::py_module(m_experimental_ccl);
 }
 
 }  // namespace ttnn::operations::experimental

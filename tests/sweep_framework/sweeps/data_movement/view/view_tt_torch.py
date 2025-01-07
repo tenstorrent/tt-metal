@@ -57,7 +57,7 @@ def parse_md_file_simple_no_regex(file_path):
 parameters = {
     "nightly": {
         "view_specs": parse_md_file_simple_no_regex(
-            "/home/jvega/work/reshape_host_merge/tt-metal/tests/sweep_framework/sweeps/data_movement/view/tt_torch_trace.md"
+            "./tests/sweep_framework/sweeps/data_movement/view/tt_torch_trace.md"
         ),
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "dtype": [ttnn.bfloat16, ttnn.float32],

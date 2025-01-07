@@ -261,6 +261,9 @@ void py_module(py::module& module) {
         - Note: there are various additional constraints related to specific program
           configs chosen. Please look at the error messages carefully and fix
           problems appropriately.
+        - Note: If optional output tensor is specified, then dtype and memory config need to be checked as follows:
+          - if they are default then they should be set based on optional output tensor
+          - if the are not default then they should be compared and if there is a difference an error is reported
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
@@ -276,6 +279,8 @@ void py_module(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
+
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -330,7 +335,8 @@ void py_module(py::module& module) {
                const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
+               const std::optional<const Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -342,7 +348,8 @@ void py_module(py::module& module) {
                     activation,
                     compute_kernel_config,
                     core_grid,
-                    output_tile);
+                    output_tile,
+                    optional_output_tensor);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -356,6 +363,7 @@ void py_module(py::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
+            py::arg("optional_output_tensor") = std::nullopt,
         });
 
     bind_registered_operation(
@@ -381,6 +389,7 @@ void py_module(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -407,7 +416,8 @@ void py_module(py::module& module) {
                const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
+               const std::optional<const Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -420,7 +430,8 @@ void py_module(py::module& module) {
                     activation,
                     compute_kernel_config,
                     core_grid,
-                    output_tile);
+                    output_tile,
+                    optional_output_tensor);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -435,6 +446,7 @@ void py_module(py::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
+            py::arg("optional_output_tensor") = std::nullopt,
         });
 }
 

@@ -7,7 +7,6 @@
 #include "ttnn/operations/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "eth_l1_address_map.h"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 
 /* All Gather Matmul fusion includes */
@@ -20,7 +19,8 @@ namespace experimental {
 
 void AllGatherMatmul::validate(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     TT_ASSERT(
         input_tensors.size() == 4,
         "AllGatherMatmul requires 4 input tensors: [input, weight, all_gather_output, datacopy_output]");
@@ -33,7 +33,7 @@ void AllGatherMatmul::validate(
     this->all_gather_struct.validate({input_tensor});
 
     // Matmul validate.
-    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors);
+    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
 
     // All Gather Matmul validate
     TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
@@ -73,7 +73,7 @@ std::vector<ttnn::TensorSpec> AllGatherMatmul::compute_output_specs(const std::v
 
     // Matmul shape
     ttnn::TensorSpec matmul_output_specs =
-        this->matmul_struct.compute_output_specs({input_tensors[1], input_tensors[2]})[0];
+        this->matmul_struct.compute_output_specs({input_tensors[1], input_tensors[2]}, {})[0];
 
     return {all_gather_output_shape, matmul_output_specs, datacopy_output_shape};
 }

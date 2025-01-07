@@ -8,6 +8,7 @@
 #include <memory>
 #include <utility>
 
+#include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 #include "impl/buffers/buffer_constants.hpp"
 #include "tt_metal/tt_stl/overloaded.hpp"
@@ -32,27 +33,39 @@ namespace tt::tt_metal {
 namespace {
 
 template <typename T>
-Tensor create_owned_tensor_from_span(tt::stl::Span<const T> data, const TensorSpec& spec) {
-    // TODO: support tilized layouts.
-    TT_FATAL(spec.layout() == Layout::ROW_MAJOR, "Unsupported layout: {}", spec.layout());
-    auto buffer = tt::tt_metal::owned_buffer::create(std::vector<T>(data.begin(), data.end()));
-    auto storage = OwnedStorage{std::move(buffer)};
-    return Tensor{std::move(storage), spec};
+Tensor create_owned_tensor_from_row_major_data(
+    std::vector<T>&& data, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
+    TensorSpec result_cpu_spec(
+        spec.logical_shape(),
+        TensorLayout(spec.data_type(), PageConfig(Layout::ROW_MAJOR, spec.tile()), MemoryConfig{}));
+
+    Tensor output(OwnedStorage{owned_buffer::create(std::move(data))}, result_cpu_spec);
+
+    if (spec.layout() == Layout::TILE) {
+        // TODO: whenever possible, perform tiliziation on device.
+        output = output.to(Layout::TILE);
+    }
+
+    if (device.has_value()) {
+        output = output.to(device->get_devices(), spec.memory_config());
+    }
+
+    return output;
 }
 
 // TODO: optimize precomputing multipliers
 template <typename T, typename InternalType>
-std::vector<T> untile_tensor_to_vec(const Tensor& cpu_tensor) {
-    auto tiled_buffer = tt::tt_metal::host_buffer::get_as<InternalType>(cpu_tensor);
-    auto untiled_shape = cpu_tensor.get_logical_shape();
-    auto tiled_shape = cpu_tensor.get_padded_shape();
+std::vector<T> unpad_tensor_to_vec(const Tensor& cpu_tensor) {
+    auto tiled_buffer = host_buffer::get_as<InternalType>(cpu_tensor);
+    const auto untiled_shape = cpu_tensor.get_logical_shape();
+    const auto tiled_shape = cpu_tensor.get_padded_shape();
 
     // Calculate total size of the untiled tensor
     size_t total_size = untiled_shape.volume();
 
     std::vector<T> untiled_data(total_size);
 
-    auto compute_flat_index = [](const std::vector<uint32_t>& indices, ttnn::SimpleShape& shape) -> uint32_t {
+    auto compute_flat_index = [](const std::vector<uint32_t>& indices, const ttnn::SimpleShape& shape) -> uint32_t {
         uint32_t flat_index = 0;
         uint32_t multiplier = 1;
         for (int i = (int)indices.size() - 1; i >= 0; --i) {
@@ -136,7 +149,12 @@ void Tensor::TensorAttributes::update_main_thread_ref_count(Device* worker, uint
 }
 
 Tensor::Tensor(
-    Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) {
+    Storage storage,
+    const ttnn::SimpleShape& logical_shape,
+    const ttnn::SimpleShape& padded_shape,
+    DataType dtype,
+    Layout layout,
+    const std::optional<Tile>& tile) {
     using namespace tt::constants;
 
     if (tile.has_value() and  //
@@ -156,9 +174,14 @@ Tensor::Tensor(
     init(
         std::move(storage),
         TensorSpec(
-            shape.logical_shape(),
-            TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout, tile), memory_config, shape)));
+            logical_shape,
+            TensorLayout::fromPaddedShape(
+                dtype, PageConfig(layout, tile), memory_config, logical_shape, padded_shape)));
 }
+
+Tensor::Tensor(
+    Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
+    Tensor(std::move(storage), shape.logical_shape(), shape.padded_shape(), dtype, layout, tile) {}
 
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec) { init(std::move(storage), std::move(tensor_spec)); }
 
@@ -589,28 +612,53 @@ const Storage& Tensor::get_storage() const {
 }
 
 template <>
-Tensor Tensor::from_span<float>(tt::stl::Span<const float> buffer, const TensorSpec& spec) {
+Tensor Tensor::from_span<float>(
+    tt::stl::Span<const float> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (spec.data_type() == DataType::FLOAT32) {
-        return create_owned_tensor_from_span(buffer, spec);
-    } else if (spec.data_type() == DataType::BFLOAT16) {
-        std::vector<bfloat16> bfloat16_data;
-        bfloat16_data.reserve(buffer.size());
-        std::transform(std::begin(buffer), std::end(buffer), std::back_inserter(bfloat16_data), [](float value) {
-            return bfloat16(value);
-        });
-        return create_owned_tensor_from_span(
-            tt::stl::Span<const bfloat16>(bfloat16_data.data(), bfloat16_data.size()), spec);
-    } else {
-        // TODO: support bf8 and bf4
-        TT_THROW("Unsupported data type for from_span<float>: {}", spec.data_type());
+    switch (spec.data_type()) {
+        case DataType::FLOAT32:
+            return create_owned_tensor_from_row_major_data(
+                std::vector<float>(buffer.begin(), buffer.end()), spec, device);
+        case DataType::BFLOAT16: {
+            std::vector<bfloat16> bfloat16_data;
+            bfloat16_data.reserve(buffer.size());
+            std::transform(std::begin(buffer), std::end(buffer), std::back_inserter(bfloat16_data), [](float value) {
+                return bfloat16(value);
+            });
+            return create_owned_tensor_from_row_major_data(std::move(bfloat16_data), spec, device);
+        }
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: {
+            TT_FATAL(
+                spec.tensor_layout().get_layout() == Layout::TILE,
+                "Tile layout is required for BFLOAT8_B and BFLOAT4_B");
+
+            // TODO: Implement `encode_tensor_data` in terms of a Span, avoid tilizing the data, as pack_fp32_vec_as_*
+            // support row-major input.
+            const auto& tile = spec.tensor_layout().get_page_config().get_tile();
+            auto physical_data =
+                tensor_impl::encode_tensor_data(std::vector<float>(buffer.begin(), buffer.end()), spec);
+            std::vector<uint32_t> packed_block_floats =
+                spec.data_type() == DataType::BFLOAT8_B
+                    ? pack_fp32_vec_as_bfp8_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
+                    : pack_fp32_vec_as_bfp4_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+
+            Tensor tensor(OwnedStorage{owned_buffer::create(std::move(packed_block_floats))}, spec);
+            if (device.has_value()) {
+                tensor = tensor.to(device->get_devices(), spec.memory_config());
+            }
+            return tensor;
+        }
+        default: {
+            TT_THROW("Unsupported data type for from_span<float>: {}", spec.data_type());
+        }
     }
 }
 
 template <typename T>
-Tensor Tensor::from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec) {
+Tensor Tensor::from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -619,19 +667,32 @@ Tensor Tensor::from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec) 
         "Unsupported data type for from_span: got {}, expected: {}",
         spec.data_type(),
         convert_to_data_type<T>());
-    return create_owned_tensor_from_span(buffer, spec);
+    return create_owned_tensor_from_row_major_data(std::vector<T>(buffer.begin(), buffer.end()), spec, device);
 }
 
 template <>
 std::vector<float> Tensor::to_vector<float>() const {
-    auto cpu_tensor = this->cpu().to(Layout::ROW_MAJOR);
-    if (cpu_tensor.get_dtype() == DataType::BFLOAT16) {
-        return untile_tensor_to_vec<float, bfloat16>(cpu_tensor);
-    } else if (cpu_tensor.get_dtype() == DataType::FLOAT32) {
-        return untile_tensor_to_vec<float, float>(cpu_tensor);
-    } else {
-        // TODO: support bf4, bf8.
-        TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.get_dtype());
+    Tensor cpu_tensor = this->cpu();
+    switch (cpu_tensor.get_dtype()) {
+        case DataType::BFLOAT16: return unpad_tensor_to_vec<float, bfloat16>(cpu_tensor.to(Layout::ROW_MAJOR));
+        case DataType::FLOAT32: return unpad_tensor_to_vec<float, float>(cpu_tensor.to(Layout::ROW_MAJOR));
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: {
+            const auto& tile = cpu_tensor.get_tensor_spec().tile();
+            std::vector<uint32_t> packed_data =
+                owned_buffer::get_as<std::uint32_t>(std::get<OwnedStorage>(cpu_tensor.storage()).buffer).get();
+            std::vector<float> unpacked_data =
+                cpu_tensor.get_tensor_spec().data_type() == DataType::BFLOAT8_B
+                    ? unpack_bfp8_tiles_into_float_vec(
+                          packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
+                    : unpack_bfp4_tiles_into_float_vec(
+                          packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+
+            return tensor_impl::decode_tensor_data(unpacked_data, cpu_tensor.tensor_spec());
+        }
+        default: {
+            TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.get_dtype());
+        }
     }
 }
 
@@ -643,23 +704,39 @@ std::vector<T> Tensor::to_vector() const {
         "Unsupported data type for to_vector: got {}, expected: {}",
         cpu_tensor.get_dtype(),
         convert_to_data_type<T>());
-    return untile_tensor_to_vec<T, T>(cpu_tensor);
+    return unpad_tensor_to_vec<T, T>(cpu_tensor);
 }
 
 // Instantiate explicitly for the supported types.
-template Tensor Tensor::from_span<bfloat16>(tt::stl::Span<const bfloat16> buffer, const TensorSpec& spec);
-template Tensor Tensor::from_span<uint32_t>(tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec);
-template Tensor Tensor::from_span<int32_t>(tt::stl::Span<const int32_t> buffer, const TensorSpec& spec);
-template std::vector<bfloat16> Tensor::to_vector<bfloat16>() const;
-template std::vector<uint32_t> Tensor::to_vector<uint32_t>() const;
-template std::vector<int32_t> Tensor::to_vector<int32_t>() const;
+template Tensor Tensor::from_span<bfloat16>(
+    tt::stl::Span<const bfloat16> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+template Tensor Tensor::from_span<int32_t>(
+    tt::stl::Span<const int32_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+template Tensor Tensor::from_span<uint8_t>(
+    tt::stl::Span<const uint8_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+template Tensor Tensor::from_span<uint16_t>(
+    tt::stl::Span<const uint16_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+template Tensor Tensor::from_span<uint32_t>(
+    tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
 
-Tensor Tensor::to(Device* target_device, const MemoryConfig& mem_config,uint8_t cq_id,
+template std::vector<bfloat16> Tensor::to_vector<bfloat16>() const;
+template std::vector<int32_t> Tensor::to_vector<int32_t>() const;
+template std::vector<uint8_t> Tensor::to_vector<uint8_t>() const;
+template std::vector<uint16_t> Tensor::to_vector<uint16_t>() const;
+template std::vector<uint32_t> Tensor::to_vector<uint32_t>() const;
+
+Tensor Tensor::to(
+    Device* target_device,
+    const MemoryConfig& mem_config,
+    uint8_t cq_id,
     const std::vector<SubDeviceId>& sub_device_ids) const {
     return tensor_ops::tensor_to(*this, target_device, mem_config, cq_id, sub_device_ids);
 }
 
-Tensor Tensor::to(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config,uint8_t cq_id,
+Tensor Tensor::to(
+    distributed::MeshDevice* mesh_device,
+    const MemoryConfig& mem_config,
+    uint8_t cq_id,
     const std::vector<SubDeviceId>& sub_device_ids) const {
     std::vector<Device*> workers_to_use = ttnn::distributed::get_mapped_devices(*this, *mesh_device);
     return tensor_ops::tensor_to(*this, workers_to_use, mem_config, cq_id, sub_device_ids);
@@ -701,10 +778,8 @@ const std::string Tensor::write_to_string() const { return tensor_impl::to_strin
 void Tensor::print() const { tensor_ops::tensor_print(*this); }
 
 Tensor Tensor::pad(
-    const tt::tt_metal::LegacyShape& output_tensor_shape,
-    const ttnn::SimpleShape& input_tensor_start,
-    float pad_value) const {
-    return tensor_ops::tensor_pad(*this, output_tensor_shape, input_tensor_start, pad_value);
+    const ttnn::SimpleShape& output_padded_shape, const ttnn::SimpleShape& input_tensor_start, float pad_value) const {
+    return tensor_ops::tensor_pad(*this, output_padded_shape, input_tensor_start, pad_value);
 }
 
 Tensor Tensor::unpad(const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) const {
@@ -987,7 +1062,8 @@ void write_tensor(
                 "Error");
             std::visit(
                 tt::stl::overloaded{
-                    [worker, worker_index, cq_id, &async_safe_tensor, sub_device_ids](const DeviceStorage& device_storage) {
+                    [worker, worker_index, cq_id, &async_safe_tensor, sub_device_ids](
+                        const DeviceStorage& device_storage) {
                         // Copying from host to a single device.
                         void* host_data = std::visit(
                             tt::stl::overloaded{
@@ -1014,7 +1090,8 @@ void write_tensor(
                             /*blocking=*/false,
                             sub_device_ids);
                     },
-                    [worker, worker_index, cq_id, &async_safe_tensor, sub_device_ids](const MultiDeviceStorage& device_storage) {
+                    [worker, worker_index, cq_id, &async_safe_tensor, sub_device_ids](
+                        const MultiDeviceStorage& device_storage) {
                         // Copying from host to multi-device.
                         TT_ASSERT(
                             std::holds_alternative<MultiDeviceHostStorage>(async_safe_tensor.get_storage()),
