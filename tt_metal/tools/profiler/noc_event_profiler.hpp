@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 // NOTE: this ifdef must be **exactly aligned** with ifdef in kernel_profiler.hpp, or
@@ -111,12 +115,13 @@ inline void recordNocEventWithAddr(
     {                                                                      \
         using NocEventType = KernelProfilerNocEventMetadata::NocEventType; \
         if constexpr (enable_noc_tracing) {                                \
-            noc_event_profiler::recordNocEvent(event_type);          \
+            noc_event_profiler::recordNocEvent(event_type);                \
         }                                                                  \
     }
 
 #else
 
+// null macros when noc tracing is disabled
 #define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
 #define RECORD_NOC_EVENT_WITH_ID(type, noc_id, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)

@@ -253,15 +253,17 @@ namespace kernel_profiler{
 
         if (do_noc) {
             const InterleavedAddrGen<true> s = {
-            .bank_base_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS], 
+            .bank_base_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS],
             .page_size = pageSize
             };
 
             uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
+            // template arg here strips out noc tracing (if enabled) for
+            // profiler-related NoC writes to avoid a circular dependency
             noc_async_write<NOC_MAX_BURST_SIZE + 1, false>(
-                reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex]), 
-                dram_bank_dst_noc_addr, 
+                reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex]),
+                dram_bank_dst_noc_addr,
                 send_size);
         }
 
@@ -277,7 +279,8 @@ namespace kernel_profiler{
 
     inline __attribute__((always_inline)) void quick_push ()
     {
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) 
+        // allow compiling quick_push for both NCRISC and BRISC
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
         SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
         mark_time_at_index_inlined(wIndex, hash);
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
@@ -307,6 +310,8 @@ namespace kernel_profiler{
 
         if ( currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
         {
+            // template arg here strips out noc tracing (if enabled) for
+            // profiler-related NoC writes to avoid a circular dependency
             noc_async_write<NOC_MAX_BURST_SIZE + 1,false>(
                     reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID]),
                     dram_bank_dst_noc_addr,
@@ -407,10 +412,12 @@ namespace kernel_profiler{
     template<uint32_t data_id, bool dispatch=false>
     inline __attribute__((always_inline)) void timeStampedData(uint64_t data)
     {
+        // if buffer is full, push all data resident in L1 buffer to host
         if (not bufferHasRoom<dispatch>())
         {
             quick_push();
         }
+        // Don't assume quick_push() can free up buffer space
         if (bufferHasRoom<dispatch>())
         {
             mark_time_at_index_inlined(wIndex, get_const_id(data_id, TS_DATA));

@@ -12,7 +12,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
 #include "tt_metal/common/tilize_untilize.hpp"
-#include "tt_metal/hostdevcommon/profiler_common.h"
 
 using namespace tt::constants;
 using namespace std;
@@ -382,12 +381,7 @@ int main(int argc, char **argv) {
 
         /* Calling the MatMul host program. Read in result into a host vector */
         std::vector<bfloat16> result_vec(dram_buffer_C_size/sizeof(bfloat16));
-        auto start = std::chrono::steady_clock::now();
         matmul_multicore_reuse(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
-        auto end = std::chrono::steady_clock::now();
-        auto delta = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-        log_info("matmul_multicore_reuse took {}us total.",delta);
-
         untilize(result_vec, M, N);
 
         log_info(tt::LogVerif, "Output vector of size {}", result_vec.size());
@@ -396,7 +390,6 @@ int main(int argc, char **argv) {
         log_info(tt::LogVerif, "Metalium vs Golden -- PCC = {}", pearson);
         TT_FATAL(pearson > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pearson);
 
-        tt_metal::detail::DumpDeviceProfileResults(device);
         pass &= CloseDevice(device);
 
     } catch (const std::exception &e) {

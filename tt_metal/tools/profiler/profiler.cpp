@@ -2,13 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
 #include <iostream>
 #include <fstream>
 #include <iomanip>
 #include <filesystem>
 
-#include "third_party/tracy/public/common/TracyTTDeviceData.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tools/profiler/profiler.hpp"
@@ -253,16 +251,17 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp)
 }
 
 void DeviceProfiler::dumpResultToFile(
-    uint32_t run_id,
-    uint32_t run_host_id,
-    int device_id,
-    CoreCoord core,
-    int core_flat,
-    int risc_num,
-    uint64_t data,
-    uint32_t timer_id,
-    uint64_t timestamp) {
-    std::pair<uint32_t, CoreCoord> deviceCore = {device_id, core};
+        uint32_t run_id,
+        uint32_t run_host_id,
+        int device_id,
+        CoreCoord core,
+        int core_flat,
+        int risc_num,
+        uint64_t data,
+        uint32_t timer_id,
+        uint64_t timestamp
+        ){
+    std::pair<uint32_t, CoreCoord> deviceCore = {device_id,core};
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     std::ofstream log_file;
 
@@ -272,37 +271,62 @@ void DeviceProfiler::dumpResultToFile(
     std::string source_file = "";
     uint64_t source_line = 0;
 
-    if (packet_type != kernel_profiler::PacketTypes::TS_DATA) {
-        return;
+    if ((packet_type == kernel_profiler::ZONE_START) || (packet_type == kernel_profiler::ZONE_END))
+    {
+
+        tracy::TTDeviceEventPhase zone_phase = tracy::TTDeviceEventPhase::begin;
+        if (packet_type == kernel_profiler::ZONE_END)
+        {
+            zone_phase = tracy::TTDeviceEventPhase::end;
+        }
+
+        if (hash_to_zone_src_locations.find((uint16_t)timer_id) != hash_to_zone_src_locations.end())
+        {
+            std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
+            getline(source_info, zone_name, ',');
+            getline(source_info, source_file, ',');
+
+            std::string source_line_str;
+            getline(source_info, source_line_str, ',');
+            source_line = stoi(source_line_str);
+        }
+
+        tracy::TTDeviceEvent event = tracy::TTDeviceEvent(run_host_id, device_id, core.x, core.y, risc_num, timer_id, timestamp, source_line, source_file, zone_name, zone_phase);
+
+        auto ret = device_events.insert(event);
+
+        if (!ret.second) return;
     }
 
     firstTimestamp(timestamp);
 
-    if (!std::filesystem::exists(log_path)) {
+    if (!std::filesystem::exists(log_path))
+    {
         log_file.open(log_path);
-        log_file << "[\n";
-    } else {
+        log_file << "ARCH: " << get_string_lowercase(device_architecture) << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
+        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run ID, run host ID,  zone name, type, source line, source file" << std::endl;
+    }
+    else
+    {
         log_file.open(log_path, std::ios_base::app);
     }
 
-    static int64_t last_timestamp = 0;
-    int64_t delta = timestamp - last_timestamp;
-    last_timestamp = timestamp;
-
-    KernelProfilerNocEventMetadata ev_md(data);
-
-    log_file << fmt::format(
-        R"({{ "proc":"{}",  "sx":{},  "sy":{},  "dx":{},  "dy":{},  "num_bytes":{},  "type":"{}", "timestamp":{} }},)",
-        tracy::riscName[risc_num],
-        core.x,
-        core.y,
-        ev_md.dst_x,
-        ev_md.dst_y,
-        uint32_t(ev_md.num_bytes),
-        magic_enum::enum_name(ev_md.noc_xfer_type),
-        timestamp - smallest_timestamp,
-        delta);
-
+    //log_file << fmt::format("{:4},{:3},{:3},{:>7},{:7},{:15},{:15},{:5},{:>25},{:>6},{:6},{}",
+    log_file << fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            device_id,
+            core.x,
+            core.y,
+            tracy::riscName[risc_num],
+            t_id,
+            timestamp,
+            data,
+            run_id,
+            run_host_id,
+            zone_name,
+            magic_enum::enum_name(packet_type),
+            source_line,
+            source_file
+            );
     log_file << std::endl;
     log_file.close();
 }
@@ -429,7 +453,6 @@ void DeviceProfiler::dumpJsonReport(
     bool first_record = true;
     json_rpt_os << "[" << std::endl;
 
-    // log_info(" reporting for {} worker cores",worker_cores.size());
     for (const auto& worker_core : worker_cores) {
         HalProgrammableCoreType CoreType;
         int riscCount;
@@ -500,7 +523,6 @@ void DeviceProfiler::dumpJsonReport(
 
                 uint32_t opTime_H = 0;
                 uint32_t opTime_L = 0;
-                // log_info("worker core {},{} has {} entries",worker_core.x,worker_core.y,bufferEndIndex);
                 for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                      index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
                     if (!newRunStart && profile_buffer[index] == 0 && profile_buffer[index + 1] == 0) {
@@ -627,6 +649,7 @@ void DeviceProfiler::dumpResults (
         Device *device,
         const std::vector<CoreCoord> &worker_cores,
         bool lastDump){
+#if defined(TRACY_ENABLE)
     ZoneScoped;
 
     auto device_id = device->id();
@@ -670,13 +693,14 @@ void DeviceProfiler::dumpResults (
                 device_id,
                 profile_buffer,
                 worker_core);
-        }
 
+        }
     }
     else
     {
         log_warning("DRAM profiler buffer is not initialized");
     }
+#endif
 }
 
 void DeviceProfiler::pushTracyDeviceResults()
