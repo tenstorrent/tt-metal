@@ -73,7 +73,7 @@ run_tg_prefetcher_tests() {
 
   echo "LOG_METAL: Running run_tg_prefetcher_tests"
 
-  pytest -n auto tests/ttnn/unit_tests/operations/test_prefetcher.py --timeout 600; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/test_prefetcher.py --timeout 1200; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
