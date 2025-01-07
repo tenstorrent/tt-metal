@@ -13,7 +13,16 @@
 
 using namespace tt;
 
-std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores_aligned(
+struct CoreSplitResult {
+    uint32_t required_cores = 0;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t units_per_core_group_1 = 0;
+    uint32_t units_per_core_group_2 = 0;
+};
+
+CoreSplitResult split_work_to_cores_aligned(
     const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment) {
     ZoneScoped;
 
@@ -24,7 +33,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     uint32_t units_per_core = alignment;
     uint32_t required_cores = (units_to_divide + units_per_core - 1) / units_per_core;
 
-    // Double units_per_core until it fits within total_cores
+    // += alignment until it fits within total_cores
     while (required_cores > total_cores) {
         units_per_core += alignment;
         required_cores = (units_to_divide + units_per_core - 1) / units_per_core;
@@ -55,8 +64,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     uint32_t units_per_core_group_1 = units_per_core;
     uint32_t units_per_core_group_2 = remaining_units < units_per_core ? remaining_units : 0;
 
-    return std::make_tuple(
-        required_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2);
+    return CoreSplitResult{
+        required_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2};
 }
 
 namespace ttnn::operations::embedding::detail {
@@ -639,8 +648,15 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-        split_work_to_cores_aligned(compute_with_storage_grid_size, problem_size, FACE_HEIGHT);
+    CoreSplitResult work = split_work_to_cores_aligned(compute_with_storage_grid_size, problem_size, FACE_HEIGHT);
+
+    uint32_t num_cores = work.required_cores;
+    CoreRangeSet all_cores = work.all_cores;
+    CoreRangeSet core_group_1 = work.core_group_1;
+    CoreRangeSet core_group_2 = work.core_group_2;
+    uint32_t num_blocks_per_core_group_1 = work.units_per_core_group_1;
+    uint32_t num_blocks_per_core_group_2 = work.units_per_core_group_2;
+
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
 
@@ -699,19 +715,6 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)weight_page_size,
         (std::uint32_t)a.get_logical_shape()[-1],  // width/length of a row
         (std::uint32_t)FACE_HEIGHT};
-
-    /*
-    std::vector<uint32_t> embedding_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)src2_cb_index,
-        (std::uint32_t)in0_is_dram,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)weights_is_dram,
-        (std::uint32_t)weight_page_size,
-        (std::uint32_t)block_height,
-        (std::uint32_t)block_height * input_element_size_bytes};
-    */
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.get_dtype() == DataType::BFLOAT16) {

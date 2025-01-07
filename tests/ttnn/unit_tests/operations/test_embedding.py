@@ -255,10 +255,6 @@ def test_tiled(
 
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
     torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
-    # row_indices = torch.arange(0, vocabulary_size, dtype=torch.float32)
-    # torch_weights = row_indices.unsqueeze(1).expand(-1, hidden_embedding_dim)
-    # print(torch_weights)
-    # torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
     torch_embedding = torch.nn.Embedding.from_pretrained(torch_weights)
     torch_output_tensor = torch_embedding(torch_input_tensor)
 
@@ -273,7 +269,6 @@ def test_tiled(
         memory_config=input_mem_config,
     )
 
-    # output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.embedding(
         input_tensor,
         weights,
@@ -284,11 +279,6 @@ def test_tiled(
         layout=layout,
     )
     output_tensor = ttnn.to_torch(output_tensor)
-
-    # print("Reversed ttnn Tensor:")
-    # print(reverse_embedding_output(output_tensor, torch_weights))
-    # print("Reversed torch Tensor:")
-    # print(reverse_embedding_output(torch_output_tensor, torch_weights))
 
     assert_with_pcc(torch_output_tensor, output_tensor)
 
