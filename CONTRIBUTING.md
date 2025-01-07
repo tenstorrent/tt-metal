@@ -6,7 +6,6 @@ Table of Contents
 - [Table of Contents](#table-of-contents)
   - [Contributing to tt-metal](#contributing-to-tt-metal)
   - [Machine setup](#machine-setup)
-    - [Hugepages setup](#hugepages-setup)
   - [Developing tt-metal](#developing-tt-metal)
     - [Setting logger level](#setting-logger-level)
     - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
