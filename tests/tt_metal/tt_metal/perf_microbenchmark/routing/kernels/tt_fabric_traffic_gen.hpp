@@ -109,23 +109,38 @@ struct input_queue_same_start_rndrobin_fix_size_state_t : public input_queue_raw
         curr_packet_size_words = pkt_size_words;
     }
 
-    inline void packet_update(uint32_t num_dest_endpoints,
-                                  uint32_t dest_endpoint_start_id,
-                                  uint32_t max_packet_size_words,
-                                  uint64_t total_data_words) {
+    inline void packet_update(
+        uint32_t num_dest_endpoints,
+        uint32_t dest_endpoint_start_id,
+        uint32_t max_packet_size_words,
+        uint32_t max_packet_size_mask,
+        uint64_t total_data_words) {
         curr_packet_dest = packet_dest_diff + dest_endpoint_start_id;
         packet_dest_diff = (packet_dest_diff + 1) & (num_dest_endpoints - 1);
         input_queue_raw_state_t::packet_update(num_dest_endpoints, total_data_words);
     }
-    inline void next_packet(uint32_t num_dest_endpoints,
-                                uint32_t dest_endpoint_start_id,
-                                uint32_t max_packet_size_words,
-                                uint64_t total_data_words) {
+    inline void next_packet(
+        uint32_t num_dest_endpoints,
+        uint32_t dest_endpoint_start_id,
+        uint32_t max_packet_size_words,
+        uint32_t max_packet_size_mask,
+        uint64_t total_data_words) {
         if (!data_packets_done) {
-            this->packet_update(num_dest_endpoints, dest_endpoint_start_id, max_packet_size_words, total_data_words);
+            this->packet_update(
+                num_dest_endpoints,
+                dest_endpoint_start_id,
+                max_packet_size_words,
+                max_packet_size_mask,
+                total_data_words);
         } else {
             packet_rnd_seed = 0xffffffff;
             this->gen_last_pkt(num_dest_endpoints, dest_endpoint_start_id, max_packet_size_words, total_data_words);
+        }
+    }
+    inline void next_inline_packet(uint64_t total_data_words) {
+        if (!data_packets_done) {
+            curr_packet_size_words = PACKET_HEADER_SIZE_WORDS;
+            input_queue_raw_state_t::packet_update(0, total_data_words);
         }
     }
 };
