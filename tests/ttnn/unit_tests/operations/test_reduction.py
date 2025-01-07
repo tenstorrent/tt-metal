@@ -78,12 +78,12 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim):
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@pytest.mark.parametrize("dim_1", [3])
+@pytest.mark.parametrize("dim_1", [33])
 @pytest.mark.parametrize("dim_2", [5])
 @pytest.mark.parametrize("dim_3", [6])
 @pytest.mark.parametrize("dim_4", [8])
 @pytest.mark.parametrize("dim_5", [2])
-@pytest.mark.parametrize("dim_6", [4])
+@pytest.mark.parametrize("dim_6", [40])
 @pytest.mark.parametrize("dim_7", [3])
 @pytest.mark.parametrize("dim_8", [6])
 @pytest.mark.parametrize("dim", [[3, 7]])
@@ -105,8 +105,8 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
 
 
 @pytest.mark.parametrize("dim_1", [3])
-@pytest.mark.parametrize("dim_2", [5])
-@pytest.mark.parametrize("dim_3", [4])
+@pytest.mark.parametrize("dim_2", [56])
+@pytest.mark.parametrize("dim_3", [44])
 @pytest.mark.parametrize("dim_4", [6])
 @pytest.mark.parametrize("dim_5", [2])
 @pytest.mark.parametrize("dim_6", [8])
@@ -130,9 +130,9 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
 
 
 @pytest.mark.parametrize("dim_1", [3])
-@pytest.mark.parametrize("dim_2", [5])
+@pytest.mark.parametrize("dim_2", [55])
 @pytest.mark.parametrize("dim_3", [2])
-@pytest.mark.parametrize("dim_4", [3])
+@pytest.mark.parametrize("dim_4", [32])
 @pytest.mark.parametrize("dim_5", [2])
 @pytest.mark.parametrize("dim_6", [9])
 @pytest.mark.parametrize("dim", [[1, 4]])
@@ -153,11 +153,11 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@pytest.mark.parametrize("dim_1", [3])
+@pytest.mark.parametrize("dim_1", [33])
 @pytest.mark.parametrize("dim_2", [5])
 @pytest.mark.parametrize("dim_3", [7])
 @pytest.mark.parametrize("dim_4", [2])
-@pytest.mark.parametrize("dim_5", [5])
+@pytest.mark.parametrize("dim_5", [59])
 @pytest.mark.parametrize("dim", [[1, 4]])
 @pytest.mark.parametrize("keepdim", [True])
 def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keepdim):
@@ -178,8 +178,8 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
 
 @pytest.mark.parametrize("batch_size", [3])
 @pytest.mark.parametrize("c", [5])
-@pytest.mark.parametrize("h", [6])
-@pytest.mark.parametrize("w", [8])
+@pytest.mark.parametrize("h", [37])
+@pytest.mark.parametrize("w", [63])
 @pytest.mark.parametrize("dim", [None, [], 0, 2, [0, 1], [1, 3], [0, 1, 2], [1, 2, 3], [0, 1, 2, 3]])
 @pytest.mark.parametrize("keepdim", [True])
 def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
