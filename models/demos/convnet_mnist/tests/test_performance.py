@@ -119,7 +119,7 @@ def test_perf_device_bare_metal_convnet_mnist(batch_size, expected_perf):
     subdir = "ttnn_convnet_mnist"
     num_iterations = 1
     margin = 0.03
-    expected_perf = 1800 if is_grayskull() else 2800.5
+    expected_perf = 2430 if is_grayskull() else 3358.0
 
     command = f"pytest tests/ttnn/integration_tests/convnet_mnist/test_convnet_mnist.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
