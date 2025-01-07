@@ -1285,7 +1285,6 @@ void assemble_device_commands(
 void reserve_space_in_kernel_config_buffer(
     WorkerConfigBufferMgr& config_buffer_mgr,
     const std::vector<uint32_t>& program_config_sizes,
-    bool kernel_binary_always_stored_in_ringbuffer,
     ProgramBinaryStatus program_binary_status,
     uint32_t num_program_workers,
     uint32_t expected_num_workers_completed,
@@ -1299,12 +1298,7 @@ void reserve_space_in_kernel_config_buffer(
     dispatch_md.stall_first = reservation.first.need_sync;
     dispatch_md.stall_before_program = false;
 
-    if (!kernel_binary_always_stored_in_ringbuffer) {
-        // Program runs on cores without ring buffer. Sync on all
-        // workers before dispatching program data
-        dispatch_md.sync_count = expected_num_workers_completed;
-        dispatch_md.stall_before_program = !dispatch_md.stall_first;
-    } else if (reservation.first.need_sync) {
+    if (reservation.first.need_sync) {
         // TODO: attempt to send RTA only without stalling.
         dispatch_md.sync_count = reservation.first.sync_count;
         // Check if the launch message is the only thing preventing us from
@@ -1312,6 +1306,7 @@ void reserve_space_in_kernel_config_buffer(
         // would also send the kernel binaries in this case, but the rest of the
         // code isn't set up for that.
         auto config_sizes = program_config_sizes;
+        config_sizes[config_sizes.size() - 2] = 0;
         config_sizes[config_sizes.size() - 1] = 0;
         const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> memory_reservation =
             config_buffer_mgr.reserve(config_sizes);

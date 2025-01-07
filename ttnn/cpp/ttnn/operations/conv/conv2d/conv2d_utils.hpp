@@ -95,7 +95,8 @@ bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 2>& padding,
     const std::array<uint32_t, 2>& dilation,
-    uint32_t groups);
+    uint32_t groups,
+    const Conv2dConfig& conv_config);
 
 sliding_window::ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
@@ -107,7 +108,14 @@ sliding_window::ParallelConfig determine_parallel_config(
     const CoreCoord& compute_grid_size,
     ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
-    bool is_out_tiled = true);
+    bool is_out_tiled=true,
+    bool is_non_tile_mul_shard_width=false);
+
+sliding_window::ParallelConfig determine_output_parallel_config(
+    const sliding_window::ParallelConfig& input_parallel_config,
+    const CoreCoord& compute_grid_size,
+    uint32_t out_channels,
+    bool is_mm_conv);
 
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
@@ -170,26 +178,6 @@ shard_or_reshard_tensor_if_required(
     bool is_mm_conv,
     bool auto_shard,
     bool is_non_tile_mul_width = false);
-
-// Converts convolution weights to tilized 2d matrix layout.
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to tilized 2d matrix layout with special block height padding
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(
-    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 

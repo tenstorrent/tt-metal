@@ -517,15 +517,14 @@ void EnqueueProgramCommand::process() {
     program_utils::reserve_space_in_kernel_config_buffer(
         this->config_buffer_mgr,
         program.get_program_config_sizes(),
-        program.kernel_binary_always_stored_in_ringbuffer(),
         program.get_program_binary_status(device->id()),
         num_workers,
         this->expected_num_workers_completed,
         dispatch_metadata);
 
-    // Remove launch buffer from config addrs, since it's not a real core.
+    // Remove launch buffers from config addrs, since they're not real cores.
     const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs{
-        dispatch_metadata.kernel_config_addrs.data(), dispatch_metadata.kernel_config_addrs.size() - 1};
+        dispatch_metadata.kernel_config_addrs.data(), dispatch_metadata.kernel_config_addrs.size() - 2};
 
     RecordProgramRun(program);
 
@@ -1115,30 +1114,36 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
             this->finish(sub_device_ids);
         }
     } else {
-        // this is a streaming command so we don't need to break down to multiple
-        auto command = EnqueueReadInterleavedBufferCommand(
-            this->id,
-            this->device,
-            this->noc_index,
-            buffer,
-            dst,
-            this->manager,
-            this->expected_num_workers_completed,
-            sub_device_ids,
-            src_page_index,
-            pages_to_read);
+        if (pages_to_read > 0) {
+            // this is a streaming command so we don't need to break down to multiple
+            auto command = EnqueueReadInterleavedBufferCommand(
+                this->id,
+                this->device,
+                this->noc_index,
+                buffer,
+                dst,
+                this->manager,
+                this->expected_num_workers_completed,
+                sub_device_ids,
+                src_page_index,
+                pages_to_read);
 
-        this->issued_completion_q_reads.push(std::make_shared<detail::CompletionReaderVariant>(
-            std::in_place_type<detail::ReadBufferDescriptor>,
-            buffer.buffer_layout(),
-            buffer.page_size(),
-            padded_page_size,
-            dst,
-            unpadded_dst_offset,
-            pages_to_read,
-            src_page_index));
-        this->enqueue_command(command, blocking, sub_device_ids);
-        this->increment_num_entries_in_completion_q();
+            this->issued_completion_q_reads.push(std::make_shared<detail::CompletionReaderVariant>(
+                std::in_place_type<detail::ReadBufferDescriptor>,
+                buffer.buffer_layout(),
+                buffer.page_size(),
+                padded_page_size,
+                dst,
+                unpadded_dst_offset,
+                pages_to_read,
+                src_page_index));
+            this->enqueue_command(command, blocking, sub_device_ids);
+            this->increment_num_entries_in_completion_q();
+        } else {
+            if (blocking) {
+                this->finish(sub_device_ids);
+            }
+        }
     }
 }
 
@@ -1946,6 +1951,9 @@ void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
         // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
         // previous launch message.
         this->config_buffer_mgr[i].init_add_buffer(0, launch_msg_buffer_num_entries - 1);
+
+        // There's no ring buffer for active ethernet binaries, so keep track of them separately.
+        this->config_buffer_mgr[i].init_add_buffer(0, 1);
     }
 }
 

@@ -16,8 +16,11 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const std::optional<const DataType> &output_dtype,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<Tensor> optional_output_tensor) {
+    Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
+    Tensor input_b = typecast_to(DataType::BFLOAT16, input_tensor_b);
+
     return ttnn::prim::binary_ng(
-        queue_id, input_tensor_a, input_tensor_b, binary_op_type, output_dtype, memory_config, optional_output_tensor);
+        queue_id, input_a, input_b, binary_op_type, output_dtype, memory_config, optional_output_tensor);
 }
 
 template <BinaryOpType binary_op_type>
@@ -38,7 +41,10 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const std::optional<const DataType> &output_dtype,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    return ttnn::prim::binary_ng(queue_id, input_tensor_a, scalar, binary_op_type, output_dtype, memory_config, optional_output_tensor);
+    Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
+
+    return ttnn::prim::binary_ng(
+        queue_id, input_a, scalar, binary_op_type, output_dtype, memory_config, optional_output_tensor);
 }
 
 template <BinaryOpType binary_op_type>

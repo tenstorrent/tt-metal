@@ -229,8 +229,7 @@ void DevicePool::initialize_device(v1::DeviceHandle handle) const {
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
     // hugepage). Need to do this before FW init so we know what dispatch cores to reset.
-    bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
-    if (using_fast_dispatch) {
+    if (this->using_fast_dispatch) {
         detail::DispatchStateCheck(true);
         dev->init_command_queue_host();
     } else {
@@ -252,7 +251,7 @@ void DevicePool::initialize_device(v1::DeviceHandle handle) const {
     watcher_attach(dev);
 
     // Set up HW command queues on device for FD
-    if (using_fast_dispatch) {
+    if (this->using_fast_dispatch) {
         dev->init_command_queue_device();
     }
 }
@@ -339,7 +338,10 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             this->activate_device(device_id);
         }
     }
-    populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
+    this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+    if (this->using_fast_dispatch) {
+        populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
+    }
 }
 
 void DevicePool::register_worker_thread_for_device(v1::DeviceHandle device, std::thread::id worker_thread_id) {
@@ -482,7 +484,7 @@ void DevicePool::close_devices(const std::vector<Device*>& devices) {
             continue;
         }
         auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
-        auto tunnels_from_mmio = mmio_dev_handle->get_tunnels_from_mmio();
+        auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
         // iterate over all tunnels origination from this mmio device
         for (auto t : tunnels_from_mmio) {
             // iterate over all tunneled devices (tunnel stops) in this tunnel

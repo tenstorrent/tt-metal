@@ -7,6 +7,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
+#include "ttnn/operations/copy.hpp"
 
 namespace ttnn::operations::binary_ng {
 
@@ -44,6 +45,10 @@ struct BinaryNg {
 };
 
 }  // namespace ttnn::operations::binary_ng
+
+inline Tensor typecast_to(DataType dtype, const Tensor& input) {
+    return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
+}
 
 namespace ttnn::experimental {
 constexpr auto add = ttnn::register_operation_with_auto_launch_op<
