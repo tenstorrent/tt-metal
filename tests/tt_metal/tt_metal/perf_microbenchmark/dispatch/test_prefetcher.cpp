@@ -1772,10 +1772,7 @@ void configure_for_single_chip(
         tt_metal::CreateSemaphore(program, {prefetch_d_core}, dispatch_buffer_pages);
 
     const uint32_t prefetch_relay_mux_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
-    const uint32_t prefetch_relay_mux_core_sem_1_id = tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
     const uint32_t prefetch_relay_demux_core_sem_0_id =
-        tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);
-    const uint32_t prefetch_relay_demux_core_sem_1_id =
         tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);
 
     // Dispatch semaphores
@@ -1786,24 +1783,9 @@ void configure_for_single_chip(
 
     const uint32_t dispatch_relay_demux_core_sem_0_id =
         tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
-    const uint32_t dispatch_relay_demux_core_sem_1_id =
-        tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
-    const uint32_t dispatch_relay_demux_core_sem_2_id =
-        tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
     const uint32_t dispatch_relay_mux_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_relay_mux_core}, 0);
 
-    // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
-    // value only to update the rptr:
     TT_ASSERT(prefetch_core_sem_0_id == prefetch_d_core_sem_0_id);
-    TT_ASSERT(prefetch_relay_demux_core_sem_0_id == prefetch_relay_mux_core_sem_0_id);
-    TT_ASSERT(prefetch_core_sem_0_id == prefetch_relay_mux_core_sem_0_id);
-    TT_ASSERT(prefetch_core_sem_1_id == prefetch_relay_demux_core_sem_1_id);
-    TT_ASSERT(prefetch_d_core_sem_1_id == prefetch_relay_mux_core_sem_1_id);
-
-    TT_ASSERT(dispatch_core_sem_0_id == dispatch_relay_demux_core_sem_0_id);
-    TT_ASSERT(dispatch_core_sem_1_id == dispatch_relay_demux_core_sem_1_id);
-    TT_ASSERT(dispatch_core_sem_2_id == dispatch_relay_demux_core_sem_2_id);
-    TT_ASSERT(dispatch_h_core_sem_0_id == dispatch_relay_mux_core_sem_0_id);
 
     const uint32_t prefetch_sync_sem = prefetch_core_sem_0_id;
     const uint32_t prefetch_downstream_cb_sem = prefetch_core_sem_1_id;
@@ -1825,12 +1807,15 @@ void configure_for_single_chip(
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
 
         // prefetch_h
+        // no upstream
+        // downstream is either prefetch_d or mux
         std::vector<uint32_t> prefetch_h_compile_args = {
             prefetch_d_buffer_base,
             dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
             prefetch_d_buffer_pages,
             prefetch_downstream_cb_sem,  // my_downstream_cb_sem_id
-            prefetch_d_upstream_cb_sem,  // downstream_cb_sem_id
+            packetized_path_en_g ? prefetch_relay_mux_core_sem_0_id
+                                 : prefetch_d_upstream_cb_sem,  // downstream_cb_sem_id
             dev_hugepage_base,
             hugepage_issue_buffer_size_g,
             prefetch_q_base,
@@ -1869,9 +1854,8 @@ void configure_for_single_chip(
             my_noc_index,
             my_noc_index);
 
-        // In the case of packetized_enable_g, the prefetch_h downstream is
-        // mux and the prefetch_d upstream is the demux
-        // set the semaphores accordingly
+        // prefetch_d downstream is dispatch_hd or dispatch_h
+        // prefetch_d upstream is either prefetch_h or demux
         std::vector<uint32_t> prefetch_d_compile_args = {
             dispatch_buffer_base,
             dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
@@ -1891,7 +1875,8 @@ void configure_for_single_chip(
             prefetch_sync_sem,  // my_downstream_sync_sem_id
             prefetch_d_buffer_pages,
             prefetch_d_upstream_cb_sem,  // my_upstream_cb_sem_id
-            prefetch_downstream_cb_sem,  // upstream_cb_sem_id
+            packetized_path_en_g ? prefetch_relay_demux_core_sem_0_id
+                                 : prefetch_downstream_cb_sem,  // upstream_cb_sem_id
             dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
             dispatch_constants::PREFETCH_D_BUFFER_BLOCKS,
             0,
@@ -1979,8 +1964,8 @@ void configure_for_single_chip(
                 packet_switch_4B_pack(
                     0x1,
                     dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-                    prefetch_downstream_cb_sem,                          // upstream sem
-                    prefetch_d_upstream_cb_sem),                         // local sem
+                    prefetch_d_upstream_cb_sem,                          // upstream sem
+                    prefetch_relay_mux_core_sem_0_id),                   // local sem
                 packet_switch_4B_pack(0, 0, 0, 0),                       // 20: input 1 packetize info
                 packet_switch_4B_pack(0, 0, 0, 0),                       // 21: input 2 packetize info
                 packet_switch_4B_pack(0, 0, 0, 0),                       // 22: input 3 packetize info
@@ -2054,12 +2039,12 @@ void configure_for_single_chip(
                 // 26: output 0 packetize info:
                 packet_switch_4B_pack(
                     dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-                    prefetch_d_upstream_cb_sem,     // downstream sem
-                    prefetch_downstream_cb_sem,     // local sem
-                    0),                             // remove header
-                packet_switch_4B_pack(0, 0, 0, 0),  // 27: output 1 packetize info
-                packet_switch_4B_pack(0, 0, 0, 0),  // 28: output 2 packetize info
-                packet_switch_4B_pack(0, 0, 0, 0),  // 29: output 3 packetize info
+                    prefetch_d_upstream_cb_sem,          // downstream sem
+                    prefetch_relay_demux_core_sem_0_id,  // prefetch_downstream_cb_sem,     // local sem
+                    0),                                  // remove header
+                packet_switch_4B_pack(0, 0, 0, 0),       // 27: output 1 packetize info
+                packet_switch_4B_pack(0, 0, 0, 0),       // 28: output 2 packetize info
+                packet_switch_4B_pack(0, 0, 0, 0),       // 29: output 3 packetize info
             };
 
             log_info(
@@ -2139,27 +2124,30 @@ void configure_for_single_chip(
         log_info(LogTest, "split dispatcher test, packetized_path_en={}", packetized_path_en_g);
 
         // dispatch_d
+        // upstream is either the prefetch_hd or prefetch_d
+        // downstream is either the dispatch_h or mux
         uint32_t dispatch_d_preamble_size = packetized_path_en_g ? sizeof(dispatch_packet_header_t) : 0;
         std::vector<uint32_t> dispatch_d_compile_args = {
             dispatch_buffer_base,
             dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
             dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS *
                 dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
-            dispatch_cb_sem,
-            split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
+            dispatch_cb_sem,  // my_dispatch_cb_sem_id
+            split_prefetcher_g ? prefetch_d_downstream_cb_sem
+                               : prefetch_downstream_cb_sem,  // upstream_dispatch_cb_sem_id
             dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
-            prefetch_sync_sem,
-            0,  // true base of hugepage
+            prefetch_sync_sem,  // upstream_sync_sem
+            0,                  // true base of hugepage
             0,
             0,
             dispatch_buffer_base,
             (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
-            dispatch_downstream_cb_sem,
-            dispatch_h_cb_sem,
+            dispatch_downstream_cb_sem,                                                   // my_downstream_cb_sem_id
+            packetized_path_en_g ? dispatch_relay_mux_core_sem_0_id : dispatch_h_cb_sem,  // downstream_cb_sem_id
             dispatch_d_preamble_size,
             split_prefetcher_g,
             NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
-            prefetch_downstream_cb_sem,
+            prefetch_downstream_cb_sem,  // prefetch_h_local_downstream_sem_addr
             prefetch_downstream_buffer_pages,
             num_compute_cores,
             0,
@@ -2188,13 +2176,16 @@ void configure_for_single_chip(
             my_noc_index);
 
         // dispatch_h
+        // upstream is either the dispatch_d or demux
+        // downstream is none. dispatch_h is the end of the chain.
         std::vector<uint32_t> dispatch_h_compile_args = {
             dispatch_buffer_base,
             dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
             dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS *
                 dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
-            dispatch_h_cb_sem,
-            dispatch_downstream_cb_sem,
+            dispatch_h_cb_sem,  // my_dispatch_cb_sem_id
+            packetized_path_en_g ? dispatch_relay_demux_core_sem_0_id
+                                 : dispatch_downstream_cb_sem,  // upstream_dispatch_cb_sem_id
             dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
             prefetch_sync_sem,
             0,  // true base of hugepage
@@ -2202,12 +2193,12 @@ void configure_for_single_chip(
             DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE,
             dispatch_buffer_base,
             (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_buffer_pages,
-            0,
-            dispatch_downstream_cb_sem,
+            0,                           // my_downstream_cb_sem_id
+            dispatch_downstream_cb_sem,  // downstream_cb_sem_id
             0,
             split_prefetcher_g,
             NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
-            prefetch_downstream_cb_sem,
+            prefetch_downstream_cb_sem,  // prefetch_h_local_downstream_sem_addr
             prefetch_downstream_buffer_pages,
             num_compute_cores,
             0,
@@ -2299,7 +2290,7 @@ void configure_for_single_chip(
                     0x1,
                     dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
                     dispatch_downstream_cb_sem,                          // upstream sem
-                    dispatch_h_cb_sem),                                  // local sem
+                    dispatch_relay_mux_core_sem_0_id),                   // local sem
                 packet_switch_4B_pack(0, 0, 0, 0),                       // 20: input 1 packetize info
                 packet_switch_4B_pack(0, 0, 0, 0),                       // 21: input 2 packetize info
                 packet_switch_4B_pack(0, 0, 0, 0),                       // 22: input 3 packetize info
@@ -2373,12 +2364,12 @@ void configure_for_single_chip(
                 // 26: output 0 packetize info:
                 packet_switch_4B_pack(
                     dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-                    dispatch_h_cb_sem,              // downstream sem
-                    dispatch_downstream_cb_sem,     // local sem
-                    1),                             // remove header
-                packet_switch_4B_pack(0, 0, 0, 0),  // 27: output 1 packetize info
-                packet_switch_4B_pack(0, 0, 0, 0),  // 28: output 2 packetize info
-                packet_switch_4B_pack(0, 0, 0, 0),  // 29: output 3 packetize info
+                    dispatch_h_cb_sem,                   // downstream sem
+                    dispatch_relay_demux_core_sem_0_id,  // local sem
+                    1),                                  // remove header
+                packet_switch_4B_pack(0, 0, 0, 0),       // 27: output 1 packetize info
+                packet_switch_4B_pack(0, 0, 0, 0),       // 28: output 2 packetize info
+                packet_switch_4B_pack(0, 0, 0, 0),       // 29: output 3 packetize info
             };
 
             log_info(
