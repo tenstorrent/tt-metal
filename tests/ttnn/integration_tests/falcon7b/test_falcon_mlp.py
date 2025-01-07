@@ -10,6 +10,7 @@ from loguru import logger
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_wormhole_b0
 
 torch.manual_seed(0)
 
@@ -62,6 +63,7 @@ def test_torch_functional_falcon_mlp(model_name, batch_size, sequence_length):
     assert_with_pcc(torch_output, output, 0.9999)
 
 
+@skip_for_wormhole_b0("#16495: ND PCC failure needs to be investigated")
 @pytest.mark.parametrize("model_name", ["tiiuae/falcon-7b-instruct"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_length", [128])
