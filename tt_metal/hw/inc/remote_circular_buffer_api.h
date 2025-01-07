@@ -58,7 +58,6 @@ FORCE_INLINE void update_pages_acked(
 #endif
 }  // namespace detail
 
-#ifndef COMPILE_FOR_TRISC
 template <bool update_remote_over_noc = false>
 FORCE_INLINE void resize_remote_sender_cb_interface(uint32_t cb_id, uint32_t page_size, uint8_t noc) {
     ASSERT(page_size % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
@@ -120,12 +119,6 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(uint32_t cb_id, uint32_t p
     receiver_cb_interface.fifo_limit_page_aligned = fifo_limit_page_aligned;
     receiver_cb_interface.fifo_page_size = page_size;
 }
-#else
-template <bool update_remote_over_noc = false>
-FORCE_INLINE void resize_remote_sender_cb_interface(uint32_t cb_id, uint32_t page_size, uint8_t noc) {}
-template <bool update_remote_over_noc = false>
-FORCE_INLINE void resize_remote_receiver_cb_interface(uint32_t cb_id, uint32_t page_size, uint8_t noc) {}
-#endif
 
 #ifndef COMPILE_FOR_TRISC
 
