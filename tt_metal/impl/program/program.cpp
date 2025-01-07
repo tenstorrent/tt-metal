@@ -237,8 +237,7 @@ class Program_ {
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType &core_type);
 
-    CBHandle add_circular_buffer_(
-        const CoreRangeSet& core_range_set, const std::shared_ptr<CircularBuffer>& circular_buffer);
+    CBHandle add_circular_buffer_(const std::shared_ptr<CircularBuffer>& circular_buffer);
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     CBHandle add_circular_buffer(
         const CoreRangeSet& core_range_set,
@@ -618,7 +617,7 @@ void detail::Program_::CircularBufferAllocator::mark_address(uint64_t address, u
 }
 
 CBHandle detail::Program_::add_circular_buffer_(
-    const CoreRangeSet& core_range_set, const std::shared_ptr<CircularBuffer>& circular_buffer) {
+    const std::shared_ptr<CircularBuffer>& circular_buffer) {
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
@@ -626,8 +625,9 @@ CBHandle detail::Program_::add_circular_buffer_(
     } else {
         circular_buffer->assign_global_address();
     }
+
     // Mark which buffer indices are being used on each core the circular buffer is used on
-    for (const CoreRange &core_range : core_range_set.ranges()) {
+    for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord logical_core(x, y);
@@ -678,8 +678,9 @@ CBHandle detail::Program_::add_circular_buffer_(
 
 CBHandle detail::Program_::add_circular_buffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
-    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
-    return add_circular_buffer_(core_range_set, circular_buffer);
+    // Merge ranges to reduce the number of multicasts needed to initialize CBs.
+    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set.merge_ranges(), config);
+    return add_circular_buffer_(circular_buffer);
 }
 
 CBHandle detail::Program_::add_circular_buffer(
@@ -687,9 +688,10 @@ CBHandle detail::Program_::add_circular_buffer(
     const CircularBufferConfig& config,
     const v1::experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
+    // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBuffer> circular_buffer =
-        std::make_shared<CircularBuffer>(core_range_set, config, global_circular_buffer);
-    return add_circular_buffer_(core_range_set, circular_buffer);
+        std::make_shared<CircularBuffer>(core_range_set.merge_ranges(), config, global_circular_buffer);
+    return add_circular_buffer_(circular_buffer);
 }
 
 CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {

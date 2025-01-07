@@ -1152,7 +1152,8 @@ uint32_t CreateSemaphore(
             if constexpr (std::is_same_v<T, CoreRange>) {
                 crs = CoreRangeSet(c);
             } else {
-                crs = c;
+                // Merge ranges to reduce the number of multicasts needed to initialize semaphores.
+                crs = c.merge_ranges();
             }
             std::optional<uint32_t> semaphore_id;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");

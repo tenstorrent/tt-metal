@@ -404,6 +404,14 @@ CoreRange CoreRangeSet::bounding_box() const {
     return {{min_x, min_y}, {max_x, max_y}};
 }
 
+CoreRangeSet CoreRangeSet::merge_ranges() const {
+    if (this->ranges_.size() <= 1) {
+        return *this;
+    }
+    // Merging incidentally optimizes the resulting CoreRangeSet.
+    return CoreRangeSet().merge(*this);
+}
+
 void CoreRangeSet::validate_no_overlap() {
     if (this->ranges_.size() < 2) {
         return;

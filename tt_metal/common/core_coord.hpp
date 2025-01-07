@@ -169,6 +169,12 @@ public:
 
     CoreRange bounding_box() const;
 
+    // Return a CoreRangeSet with the same set of cores covered, but with as
+    // small a number of CoreRanges as possible. This is useful to reduce the
+    // amount of redundant per-core-range processing and NOC transactions for
+    // code that uses this CoreRangeSet.
+    CoreRangeSet merge_ranges() const;
+
 private:
     void validate_no_overlap();
 
