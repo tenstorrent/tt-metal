@@ -29,11 +29,7 @@ void set_or_update_runtime_arguments(
     const BatchNormOperation::tensor_args_t& tensor_args,
     BatchNormOperation::tensor_return_value_t& c,
     F handle_args) {
-    const auto& a = tensor_args.input;
-    const auto& b = tensor_args.batch_mean;
-    const auto& d = tensor_args.batch_var;
-    const auto& e = tensor_args.weight;
-    const auto& f = tensor_args.bias;
+    const auto& [a, b, d, e, f, _] = tensor_args;
     const auto eps = operation_attributes.eps;
 
     const bool weight_has_value = e.has_value();
@@ -68,7 +64,7 @@ void set_or_update_runtime_arguments(
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             handle_args(program, reader_kernel_id, core, std::array<uint32_t, 11>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 16>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
             continue;
         }
@@ -90,14 +86,12 @@ void set_or_update_runtime_arguments(
             cWt};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
-        const auto weight_addr = weight_has_value ? e.value().buffer()->address() : 0;
-        const auto bias_addr = bias_has_value ? f.value().buffer()->address() : 0;
+        const auto weight_addr = weight_has_value ? e->buffer()->address() : 0;
+        const auto bias_addr = bias_has_value ? f->buffer()->address() : 0;
         std::array writer_runtime_args = {
             b.buffer()->address(),  //  batch mean
             d.buffer()->address(),  //  batch var
-            static_cast<uint32_t>(weight_has_value),
-            weight_addr,  // weight
-            static_cast<uint32_t>(bias_has_value),
+            weight_addr,            // weight
             bias_addr,              // bias
             c.buffer()->address(),  // output
             start_tile_id,
@@ -132,12 +126,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& a = tensor_args.input;
-    const auto& b = tensor_args.batch_mean;
-    const auto& d = tensor_args.batch_var;
-    const auto& eps = operation_attributes.eps;
-    const auto& e = tensor_args.weight;
-    const auto& f = tensor_args.bias;
+    const auto& [a, b, d, e, f, _] = tensor_args;
 
     auto program = CreateProgram();
 
@@ -168,13 +157,6 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-
-    Buffer* a_buffer = a.buffer();
-    Buffer* b_buffer = b.buffer();
-    Buffer* c_buffer = output.buffer();
-    Buffer* d_buffer = d.buffer();
-    Buffer* e_buffer = nullptr;
-    Buffer* f_buffer = nullptr;
 
     // Number of tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
@@ -224,24 +206,12 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto [temp_1_cb, temp_1_cb_handle] =
         create_cb(tt::CBIndex::c_17, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
 
-    auto a_is_dram = static_cast<uint32_t>(a_buffer->buffer_type() == tt_metal::BufferType::DRAM);
-    auto b_is_dram = static_cast<uint32_t>(b_buffer->buffer_type() == tt_metal::BufferType::DRAM);
-    auto c_is_dram = static_cast<uint32_t>(c_buffer->buffer_type() == tt_metal::BufferType::DRAM);
-    auto d_is_dram = static_cast<uint32_t>(d_buffer->buffer_type() == tt_metal::BufferType::DRAM);
-    bool e_is_dram = false;
-    bool f_is_dram = false;
-
-    // weight
-    if (weight_has_value) {
-        e_buffer = e->buffer();
-        e_is_dram = static_cast<uint32_t>(e_buffer->buffer_type() == tt_metal::BufferType::DRAM);
-    }
-
-    // bias
-    if (bias_has_value) {
-        f_buffer = f->buffer();
-        f_is_dram = static_cast<uint32_t>(f_buffer->buffer_type() == tt_metal::BufferType::DRAM);
-    }
+    auto a_is_dram = static_cast<uint32_t>(a.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    auto b_is_dram = static_cast<uint32_t>(b.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    auto c_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    auto d_is_dram = static_cast<uint32_t>(d.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    const auto e_is_dram = weight_has_value and e->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    const auto f_is_dram = bias_has_value and f->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
 
     // READER KERNEL
     auto reader_kernel_id = tt_metal::CreateKernel(
@@ -255,7 +225,14 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, d_is_dram, e_is_dram, f_is_dram}));
+        tt_metal::WriterDataMovementConfig(
+            {b_is_dram,
+             c_is_dram,
+             d_is_dram,
+             e_is_dram,
+             f_is_dram,
+             static_cast<uint32_t>(weight_has_value),
+             static_cast<uint32_t>(bias_has_value)}));
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||

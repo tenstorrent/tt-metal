@@ -10,14 +10,7 @@
 namespace ttnn::operations::normalization {
 void BatchNormOperation::validate_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input;
-    const auto& batch_mean = tensor_args.batch_mean;
-    const auto& batch_var = tensor_args.batch_var;
-    const auto& eps = operation_attributes.eps;
-    const auto& weight = tensor_args.weight;
-    const auto& bias = tensor_args.bias;
-
-    auto& output = tensor_args.output;
+    const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
 
     check_tensor(input, "batch_norm", "input");
     check_tensor(batch_mean, "batch_norm", "batch_mean");
@@ -49,8 +42,8 @@ void BatchNormOperation::validate_tensors(
 
     // bias (1, C, 1, 1)
     if (bias.has_value()) {
-        TT_FATAL(bias.value().get_logical_shape()[1] == C, "weight_shape[1] must be the same as input's channel size.");
-        TT_FATAL(bias.value().get_logical_shape()[1] == C, "weight_shape[1] must be the same as input's channel size.");
+        TT_FATAL(bias.value().get_logical_shape()[1] == C, "bias_shape[1] must be the same as input's channel size.");
+        TT_FATAL(bias.value().get_logical_shape()[1] == C, "bias_shape[1] must be the same as input's channel size.");
     }
 }
 
@@ -61,13 +54,7 @@ BatchNormOperation::program_factory_t BatchNormOperation::select_program_factory
 
 void BatchNormOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // We don't support sharding for now
-    const auto& input = tensor_args.input;
-    const auto& batch_mean = tensor_args.batch_mean;
-    const auto& batch_var = tensor_args.batch_var;
-    const auto& weight = tensor_args.weight;
-    const auto& bias = tensor_args.bias;
-    const auto& output = tensor_args.output;
+    const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
 
     TT_FATAL(input.get_layout() == Layout::TILE, "Input tensor must be must be tilized");
     TT_FATAL(

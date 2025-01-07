@@ -11,24 +11,29 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 )
 
 
-def data_gen_with_range_batch_norm(input_shapes, low, high, device, is_input=False, required_grad=False):
+def data_gen_with_range_batch_norm(
+    input_shapes,
+    low,
+    high,
+    device,
+    is_input=False,
+    required_grad=False,
+):
     assert high > low, "Incorrect range provided"
     torch.manual_seed(213919)
     channels = input_shapes[1]
-    if is_input:
-        pt_tensor = torch.rand(input_shapes, requires_grad=required_grad).bfloat16() * (high - low) + low
-        tt_tensor = ttnn.from_torch(
-            pt_tensor,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-    else:
-        pt_tensor = torch.rand(channels, requires_grad=required_grad).bfloat16() * (high - low) + low
-        # pt_tensor = pt_tensor.view(1, channels, 1, 1) # to test each section of TT op
-        reshaped_tensor = pt_tensor.view(1, channels, 1, 1).expand(1, channels, 32, 32)
-        tt_tensor = ttnn.Tensor(reshaped_tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    size = input_shapes if is_input else channels
+    pt_tensor = torch.rand(size, requires_grad=required_grad).bfloat16() * (high - low) + low
+    reshaped_tensor = pt_tensor
+    if not is_input:
+        reshaped_tensor = pt_tensor.view(1, channels, 1, 1)
+    tt_tensor = ttnn.from_torch(
+        reshaped_tensor,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     return pt_tensor, tt_tensor
 
 

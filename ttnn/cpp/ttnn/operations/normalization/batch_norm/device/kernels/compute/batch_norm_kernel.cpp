@@ -116,7 +116,7 @@ void MAIN {
         cb_pop_front(cb_den, 1);
         cb_push_back(cb_affine_or_out, onetile);
 
-        if (weight_has_value) {  // result = result * weight
+        if constexpr (weight_has_value) {  // result = result * weight
             cb_reserve_back(cb_scaled_output, onetile);
             cb_wait_front(cb_affine_or_out, 1);
             cb_wait_front(cb_weight, 1);
@@ -134,7 +134,7 @@ void MAIN {
             cb_pop_front(cb_weight, 1);
             cb_push_back(cb_scaled_output, onetile);
         }
-        if (bias_has_value) {  // result = result + bias
+        if constexpr (bias_has_value) {  // result = result + bias
             cb_reserve_back(cb_output_0, 1);
             cb_wait_front(cb_tmp_1, 1);
             cb_wait_front(cb_bias, 1);

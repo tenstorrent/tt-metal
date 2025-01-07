@@ -14,20 +14,21 @@ void bind_batch_norm_operation(pybind11::module& module) {
         module,
         ttnn::batch_norm,
         R"doc(
-            Applies Spatial Batch Normalization over each channel on :attr:`input_tensor`.Currently support is provided for inference mode only.
+            Applies Spatial Batch Normalization over each channel on :attr:`input_tensor`. Inputs must be must be tilized and interleaved. Currently support is provided for inference mode only.
 
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor of shape `[N, C, H, W]`.
 
 
         Keyword args:
             eps (float, optional): Epsilon value. Defaults to `1e-05`.
-            running_mean (ttnn.Tensor, optional): the running_mean required for inference mode. Defaults to `None`.
-            running_var (ttnn.Tensor, optional): the running_var required for inference mode. Defaults to `None`.
-            weight (ttnn.Tensor, optional): the weight or gamma value. Defaults to `None`.
-            bias (ttnn.Tensor, optional): the bias or beta value. Defaults to `None`.
+            running_mean (ttnn.Tensor, optional): the running_mean of shape `[1, C, 1, 1]`, required in inference mode . Defaults to `None`.
+            running_var (ttnn.Tensor, optional): the running_var of shape `[1, C, 1, 1]`, required in inference mode . Defaults to `None`.
+            weight (ttnn.Tensor, optional): the weight or gamma value of shape `[1, C, 1, 1]`. Defaults to `None`.
+            bias (ttnn.Tensor, optional): the bias or beta value of shape `[1, C, 1, 1]`. Defaults to `None`.
             training (bool, optional): Selection between training mode and inference (evaluation) mode. Defaults to `False` (Inference mode).
+            output (ttnn.Tensor, optional): Preallocated output tensor to store batch norm result of shape `[N, C, H, W]`. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
 
