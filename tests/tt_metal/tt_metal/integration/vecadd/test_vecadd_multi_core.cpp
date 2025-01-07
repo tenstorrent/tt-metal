@@ -12,7 +12,6 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
-// using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -121,11 +120,12 @@ bool vecadd_multi_core(DispatchFixture* fixture, Device* device, uint32_t n_tile
     std::vector<bfloat16> c_data;
     EnqueueReadBuffer(cq, c, c_data, true);
 
-    // Compare partial results (plus or minus some error due to BFP16 precision)
-    size_t n = std::min((size_t)10, (size_t)tile_size * tiles_per_core);
+    size_t data_per_core = tile_size * tiles_per_core;
 
-    for (int j = 0; j < num_core; ++j) {
-        for (int i = j * tile_size * tiles_per_core; i < j * tile_size * tiles_per_core + n; i++) {
+    for (int core = 0; core < num_core; ++core) {
+        const auto core_offset = core * tile_size + tiles_per_core;
+        for (int index = 0; index < data_per_core; index++) {
+            const auto i = core_offset + index;
             float golden = a_data[i].to_float() + b_data[i].to_float();
             pass &= tt::test_utils::is_close<float>(golden, c_data[i].to_float(), 0.015f);
         }
