@@ -2074,13 +2074,16 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
+    auto tensor_a_simple_shape = a.get_logical_shape();
+    std::cout << "input shape in --> " << tensor_a_simple_shape << std::endl;
     uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = ashape[-2] / in0_tile_shape[0];
+    uint32_t Mt = (tensor_a_simple_shape[0] * tensor_a_simple_shape[1] * tensor_a_simple_shape[2]) / in0_tile_shape[0];
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
-
+    std::cout << "Mt: " << Mt << " Kt: " << Kt << " Nt: " << Nt << std::endl;
     if (fuse_batch) {
-        Mt = B * Mt;
+        std::cout << "will test later" << std::endl;
+        // Mt = B * Mt;
         B = 1;
     }
     TT_FATAL(Kt % in0_block_w == 0, "Error");
@@ -2093,6 +2096,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
     uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
+
+    std::cout << "num_blocks_total: " << num_blocks_total << " num_blocks_y: " << num_blocks_y
+              << " num_blocks_x: " << num_blocks_x << "per_core_M: " << per_core_M << " per_core_N: " << per_core_N
+              << std::endl;
 
     // TODO: Max used grid can actually exceed mcast receiver grid if in0 is sharded
     // TODO: Move these validates to op validate and properly check for this

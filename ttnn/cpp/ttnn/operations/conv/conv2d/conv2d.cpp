@@ -261,6 +261,13 @@ Result conv2d(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 num_cores_c);
             mm_output_memory_config = conv_out_memory_config;
+            std::cout << "opt_conv_op_parallel_config = " << opt_conv_op_parallel_config.num_cores_nhw << " "
+                      << opt_conv_op_parallel_config.per_core_out_matrix_height << "    "
+                      << opt_conv_op_parallel_config.per_core_out_matrix_width << std::endl;
+            std::cout << "opt_conv_op_block_config = " << opt_conv_op_block_config.act_block_h_ntiles << " "
+                      << opt_conv_op_block_config.act_block_w_ntiles << "    "
+                      << opt_conv_op_block_config.out_subblock_h_ntiles << " "
+                      << opt_conv_op_block_config.out_subblock_w_ntiles << std::endl;
         }
         Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,

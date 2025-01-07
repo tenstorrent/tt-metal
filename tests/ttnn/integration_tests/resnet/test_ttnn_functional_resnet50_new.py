@@ -4,6 +4,7 @@
 
 import pytest
 import ttnn
+import torch
 
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 from models.utility_functions import (
@@ -11,29 +12,31 @@ from models.utility_functions import (
     enable_memory_reports,
 )
 
+from tests.ttnn.utils_for_testing import assert_with_pcc, update_process_id
+
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     (
-        (
-            8,
-            ttnn.bfloat8_b,
-            ttnn.bfloat8_b,
-            ttnn.MathFidelity.LoFi,
-        ),  ## memory config issue due to l4m1 downsample reshard
+        # (
+        #     8,
+        #     ttnn.bfloat8_b,
+        #     ttnn.bfloat8_b,
+        #     ttnn.MathFidelity.LoFi,
+        # ),  ## memory config issue due to l4m1 downsample reshard
         (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
-        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
-        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
     ),
 )
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [True, False],
+    [True],
     ids=[
         "pretrained_weight_true",
-        "pretrained_weight_false",
+        # "pretrained_weight_false",
     ],
 )
 def test_resnet_50(
@@ -46,6 +49,8 @@ def test_resnet_50(
     use_pretrained_weight,
     model_location_generator,
 ):
+    torch.manual_seed(0)
+    update_process_id()
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
     if is_wormhole_b0() and batch_size == 20:

@@ -12,7 +12,7 @@ from models.utility_functions import (
 )
 from typing import List
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, update_process_id
 
 hardcoded_matmul_config_linear = {
     8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -94,6 +94,18 @@ import math
 
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
+
+
+def write_to_file_special(file_name, data):
+    data = ttnn.to_torch(data).float()
+    data = data.cpu().numpy()
+    with open(file_name, "w") as f:
+        for i in range(data.shape[0]):
+            for j in range(data.shape[1]):
+                for k in range(data.shape[2]):
+                    for l in range(data.shape[3]):
+                        f.write(str(data[i][j][k][l]) + " ")
+                    f.write("\n")
 
 
 # TODO: this function is required because conv is preprocessed before in TTNN model preprocessing flow
@@ -231,6 +243,7 @@ class resnet50Bottleneck:
         # conv1 is 1x1 conv
         logger.debug(f"Running conv1")
         module_input_height = input_height
+        # breakpoint()
         out, [input_height, input_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
@@ -263,7 +276,8 @@ class resnet50Bottleneck:
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-
+        # logger.debug(out)
+        # write_to_file_special("conv1_output.txt", out)
         act_block_h_override = 0
         if is_grayskull():
             if self.conv2_output_channels == 64 and input_height == 56 and batch_size == 20:
@@ -292,6 +306,7 @@ class resnet50Bottleneck:
             run_downsample_before_conv2 = True
 
         # ds_mem_config_grid = None
+        print("Run Downsample Before Conv2: ", run_downsample_before_conv2)
         if run_downsample_before_conv2:
             if input_height == 56 and self.conv1_input_channels == 256 and self.downsample:
                 x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -316,7 +331,25 @@ class resnet50Bottleneck:
             )
 
         reallocate_halo_output = batch_size == 20
+        # breakpoint()
+        # height_sharding = out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        # mem_config = out.memory_config()
+        # #logger.debug(out)
+        # logger.debug(out.shape)
+        # logger.debug(ttnn.get_memory_config(out))
         logger.debug(f"Running conv2")
+        # out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        # out = ttnn.from_device(out)
+        # #logger.debug(out)
+        # #logger.debug(batch_size, input_height, input_width, self.conv1_input_channels)
+        # out = ttnn.reshape(out, (batch_size, input_height, input_width, self.conv2_input_channels))
+        # write_to_file_special("conv2_input.txt", out)
+        # ttnn.dump_device_memory_state(device, "before_reallocate_")
+        # logger.debug(out)
+        # exit()
+        # `breakpoint()
+        logger.debug(out.shape)
+        logger.debug(ttnn.get_memory_config(out))
         out, [input_height, input_width], [self.conv2_weight_tensor, self.conv2_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
@@ -357,9 +390,35 @@ class resnet50Bottleneck:
             return_weights_and_bias=True,
         )
 
+        # write_to_file_special("conv2_output_1.txt", out)
+        # out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        # #out = ttnn.from_device(out)
+        # out = ttnn.reshape(out, (1, 1, batch_size*input_height*input_width, self.conv3_input_channels))
+        # write_to_file_special("conv2_output_2.txt", out)
+        # # def get_num_cores(grid):
+        # #     a = grid[0]
+        # #     b = grid[1]
+        # #     print(a)
+        # #     print(b)
+        # if(mem_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED):
+        #     shard_shape = mem_config.shard_spec.shape
+        #     shard_shape[0] = int(shard_shape[0] / (self.stride * self.stride))
+        #     mem_config.shard_spec.shape = shard_shape
+        # else:
+        #     shard_shape = mem_config.shard_spec.shape
+        #     shard_shape[0] = int(shard_shape[0] / (self.stride * self.stride))
+        #     shard_shape[0] = _nearest_32(shard_shape[0])
+        #     #shard_shape[1] = int(shard_shape[1] / self.stride)
+        #     mem_config.shard_spec.shape = shard_shape
+        # # exit()
+        # logger.debug(mem_config)
+        # logger.debug(out)
+        # out = ttnn.to_memory_config(out, mem_config, dtype=self.model_config["ACTIVATIONS_DTYPE"])
+
         logger.debug(
             f"{batch_size} and {input_height} and {self.conv1_input_channels} and {self.conv1_output_channels}"
         )
+        # write_to_file_special("conv2_output.txt", out)
 
         if (
             is_wormhole_b0()
@@ -373,6 +432,10 @@ class resnet50Bottleneck:
 
         # conv3 is 1x1 conv
         logger.debug(f"Running conv3")
+        # ttnn.dump_device_memory_state(device, "before_reallocate_")
+        # logger.debug(ttnn.get_memory_config(out))
+        # logger.debug(out.shape)
+        # print('hello')
         out, [self.conv3_weight_tensor, self.conv3_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
@@ -405,6 +468,9 @@ class resnet50Bottleneck:
             return_weights_and_bias=True,
         )
 
+        # logger.debug(out)
+        # write_to_file_special("conv3_output.txt", out)
+        # exit()
         if not run_downsample_before_conv2:
             ds_reshard = (
                 False
@@ -434,10 +500,44 @@ class resnet50Bottleneck:
                 enable_subblock_padding=enable_subblock_padding,
             )
 
+        # out_mem_config = ttnn.get_memory_config(out)
+        # logger.debug(out)
+        # ds_out_mem_config = ttnn.get_memory_config(ds_out)
+        logger.debug("downsample done")
         assert ttnn.get_memory_config(out) == ttnn.get_memory_config(
             ds_out
         ), f"{ttnn.get_memory_config(out)} != {ttnn.get_memory_config(ds_out)}"
 
+        # if(ttnn.get_memory_config(out) != ttnn.get_memory_config(ds_out)):
+        #     print("Memory Config Mismatch")
+        #     print(ttnn.get_memory_config(out))
+        #     print(ttnn.get_memory_config(ds_out))
+        #     #ds_out = ttnn.to_memory_config(ds_out, out_mem_config)
+        #     ds_out = ttnn.to_memory_config(ds_out, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        #     ds_out = ttnn.reshape(ds_out, (1, 1, batch_size*input_height*input_width, self.conv3_output_channels))
+        #     ds_out = ttnn.to_memory_config(ds_out, out_mem_config, dtype=self.model_config["ACTIVATIONS_DTYPE"])
+        #     print(ttnn.get_memory_config(ds_out))
+
+        # assert out_mem_config.memory_layout == ds_out_mem_config.memory_layout and out_mem_config.shard_spec.grid == ds_out_mem_config.shard_spec.grid and out_mem_config.shard_spec.orientation == ds_out_mem_config.shard_spec.orientation \
+        # and out_mem_config.shard_spec.shape == ds_out_mem_config.shard_spec.shape, f"{out_mem_config} != {ds_out_mem_config}"
+        # breakpoint()
+        logger.debug(f"out mem config: {ttnn.get_memory_config(out)}")
+        logger.debug(f"ds_out mem config: {ttnn.get_memory_config(ds_out)}")
+        logger.debug(f"out shape: {out.shape}")
+        logger.debug(f"ds_out shape: {ds_out.shape}")
+        # ds_out = ttnn.to_memory_config(ds_out, ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.from_device(out)
+        print(batch_size, input_height, input_width, self.conv3_output_channels)
+        out = ttnn.reshape(out, (1, 1, batch_size * input_height * input_width, self.conv3_output_channels))
+        out = ttnn.to_torch(out)
+        out = ttnn.from_torch(
+            out, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+        )
+        # breakpoint()
+        out = ttnn.to_memory_config(out, ds_out.memory_config())
+        print(out)
+        print(out.shape)
+        # exit()
         if eltwise_binary_out_in_place:
             # underscore version is in_place = True
             out = ttnn.add_(

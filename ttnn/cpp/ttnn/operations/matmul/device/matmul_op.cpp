@@ -1377,9 +1377,18 @@ void Matmul::validate(
                             (program_config.fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1]
                                                        : input_tensor_a.get_legacy_shape()[-2]) /
                             in0_tile_shape[0];
+                        auto simple_shape_tensor_a = input_tensor_a.get_logical_shape();
+                        if (simple_shape_tensor_a[0] != 1 && simple_shape_tensor_a[1] != 1) {
+                            M = tt::div_up(
+                                simple_shape_tensor_a[0] * simple_shape_tensor_a[1] * simple_shape_tensor_a[2],
+                                in0_tile_shape[0]);
+                        }
                         uint32_t K = input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[1];
                         uint32_t per_core_M = program_config.per_core_M;
                         auto shard_shape = input_tensor_a.shard_spec().value().shape;
+                        std::cout << "M: " << M << " per_core_M" << per_core_M << std::endl;
+                        std::cout << "input shard shape " << shard_shape[0] << "    " << shard_shape[1]
+                                  << input_tensor_a.shard_spec().value().grid.num_cores() << std::endl;
                         TT_FATAL(
                             div_up(M, per_core_M) <= input_tensor_a.shard_spec().value().grid.num_cores(), "Error");
                         TT_FATAL(per_core_M == (shard_shape[0] / in0_tile_shape[0]), "Error");
@@ -1660,7 +1669,9 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
 
     TT_FATAL(this->output_dtype.has_value(), "Error");
     if (this->output_mem_config.is_sharded()) {
+        std::cout << "output_mem_config is sharded" << std::endl;
         MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
+        std::cout << "chosen_program_config" << std::endl;
         return std::visit(
             [&](const auto& program_config) -> std::vector<TensorSpec> {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -1669,6 +1680,14 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         (program_config.fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]
                                                    : input_tensor_a.get_padded_shape()[-2]) /
                         in0_tile_shape[0];
+                ttnn:
+                    SimpleShape simple_shape_tensor_a = input_tensor_a.logical_shape();
+                    std::cout << "simple_shape_ta" << simple_shape_tensor_a << std::endl;
+                    if (simple_shape_tensor_a[0] != 1 && simple_shape_tensor_a[1] != 1) {
+                        M = tt::div_up(
+                            simple_shape_tensor_a[0] * simple_shape_tensor_a[1] * simple_shape_tensor_a[2],
+                            in0_tile_shape[0]);
+                    }
                     uint32_t N = input_tensor_b.get_padded_shape()[-1] / in1_tile_shape[1];
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
@@ -1682,6 +1701,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
                         uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                         uint32_t num_cores = num_blocks_x * num_blocks_y;
+                        std::cout << M << " " << N << " " << per_core_M << " " << per_core_N << " " << N << std::endl;
                         CoreRangeSet all_cores =
                             num_cores_to_corerangeset(num_cores, program_config.compute_with_storage_grid_size, true);
                         ShardSpec shard_spec = ShardSpec{
