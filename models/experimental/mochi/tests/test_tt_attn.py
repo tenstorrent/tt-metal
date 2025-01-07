@@ -6,9 +6,16 @@ import ttnn
 from models.experimental.mochi.attn import TtAsymmetricAttention
 from models.utility_functions import skip_for_grayskull
 from genmo.mochi_preview.dit.joint_model.asymm_models_joint import AsymmetricAttention as RefAsymmetricAttention
-from models.experimental.mochi.common import get_mochi_dir, get_cache_path, compute_metrics
+from models.experimental.mochi.common import (
+    get_mochi_dir,
+    get_cache_path,
+    compute_metrics,
+    replicate_attn_mask,
+    to_tt_tensor,
+    to_torch_tensor,
+)
 from models.demos.llama3.tt.llama_common import get_rot_transformation_mat
-from models.experimental.mochi.tests.test_rope import stack_cos_sin
+from models.experimental.mochi.common import stack_cos_sin
 from models.utility_functions import nearest_32
 
 # Common test configurations
@@ -94,48 +101,6 @@ def validate_outputs(tt_outputs, ref_outputs, test_name):
                 logger.error(f"{name} failed with PCC: {pcc}, MSE: {mse}, MAE: {mae}")
 
     assert passing, f"{test_name} output does not meet PCC requirement {PCC_REQUIRED}"
-
-
-def to_tt_tensor(tensor, mesh_device, dtype=ttnn.bfloat16, shard_dim=None):
-    """Convert torch tensor to TT tensor."""
-    if shard_dim is None:
-        return ttnn.from_torch(
-            tensor,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-    else:
-        return ttnn.as_tensor(
-            tensor,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-
-def to_torch_tensor(tensor, mesh_device, dtype=ttnn.bfloat16, dim=-1):
-    return ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim), dtype=dtype)
-
-
-def replicate_attn_mask(mask, mesh_device, dtype):
-    if mesh_device.get_num_devices() > 1:
-        dist_mask = ttnn.as_tensor(
-            mask,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        rep_mask = ttnn.all_gather(dist_mask, dim=-1)
-    else:
-        rep_mask = to_tt_tensor(mask, mesh_device, dtype=dtype)
-    return rep_mask
 
 
 @torch.no_grad()

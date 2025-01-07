@@ -5,7 +5,11 @@ import torch
 from typing import Tuple, Optional
 
 from models.experimental.mochi.mod_rmsnorm import modulated_rmsnorm
-from models.experimental.mochi.common import matmul_config
+from models.experimental.mochi.common import (
+    matmul_config,
+    as_sharded_tensor,
+    col_parallel_linear,
+)
 
 
 class TtAsymmetricAttention(LightweightModule):
@@ -72,78 +76,35 @@ class TtAsymmetricAttention(LightweightModule):
             "qkv_y", self.qkv_bias, weight_cache_path, state_dict, state_dict_prefix
         )
 
-        self.proj_x, self.proj_x_bias = self._col_parallel_linear(
-            "proj_x", self.out_bias, weight_cache_path, state_dict, state_dict_prefix
+        self.proj_x, self.proj_x_bias = col_parallel_linear(
+            "proj_x", self.out_bias, weight_cache_path, state_dict, state_dict_prefix, self.mesh_device
         )
         if update_y:
-            self.proj_y, self.proj_y_bias = self._col_parallel_linear(
-                "proj_y", self.out_bias, weight_cache_path, state_dict, state_dict_prefix
+            self.proj_y, self.proj_y_bias = col_parallel_linear(
+                "proj_y", self.out_bias, weight_cache_path, state_dict, state_dict_prefix, self.mesh_device
             )
 
         # Query and key normalization for stability.
         assert qk_norm
-        self.q_norm_x = RMSNorm(
-            device=mesh_device,
-            dim=self.head_dim,
-            state_dict=state_dict,
-            state_dict_prefix=state_dict_prefix,
-            weight_cache_path=weight_cache_path,
-            weight_dtype=ttnn.bfloat16,
-            weight_key=".q_norm_x",
-        )
-        self.k_norm_x = RMSNorm(
-            device=mesh_device,
-            dim=self.head_dim,
-            state_dict=state_dict,
-            state_dict_prefix=state_dict_prefix,
-            weight_cache_path=weight_cache_path,
-            weight_dtype=ttnn.bfloat16,
-            weight_key=".k_norm_x",
-        )
-        self.q_norm_y = RMSNorm(
-            device=mesh_device,
-            dim=self.head_dim,
-            state_dict=state_dict,
-            state_dict_prefix=state_dict_prefix,
-            weight_cache_path=weight_cache_path,
-            weight_dtype=ttnn.bfloat16,
-            weight_key=".q_norm_y",
-        )
-        self.k_norm_y = RMSNorm(
-            device=mesh_device,
-            dim=self.head_dim,
-            state_dict=state_dict,
-            state_dict_prefix=state_dict_prefix,
-            weight_cache_path=weight_cache_path,
-            weight_dtype=ttnn.bfloat16,
-            weight_key=".k_norm_y",
-        )
+        self.q_norm_x = self._create_rmsmorn(".q_norm_x")
+        self.k_norm_x = self._create_rmsmorn(".k_norm_x")
+        self.q_norm_y = self._create_rmsmorn(".q_norm_y")
+        self.k_norm_y = self._create_rmsmorn(".k_norm_y")
 
         self.X_MM_SEQ_LEN = 512
 
         self.qkv_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x, 3 * self.n_local_heads * self.head_dim, (8, 8))
         self.proj_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x // self.num_devices, dim_x, (8, 8))
 
-    def _as_sharded_tensor(self, tensor, dim, cache_file_name=None):
-        return ttnn.as_tensor(
-            tensor,
-            dtype=ttnn.bfloat16,
+    def _create_rmsmorn(self, key):
+        return RMSNorm(
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=dim),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_file_name,
-        )
-
-    def _as_replicated_tensor(self, tensor, cache_file_name=None):
-        return ttnn.as_tensor(
-            tensor,
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_file_name,
+            dim=self.head_dim,
+            state_dict=self.state_dict,
+            state_dict_prefix=self.state_dict_prefix,
+            weight_cache_path=self.weight_cache_path,
+            weight_dtype=ttnn.bfloat16,
+            weight_key=key,
         )
 
     def _col_parallel_qkv(self, name, bias, weight_cache_path, state_dict, state_dict_prefix):
@@ -163,24 +124,18 @@ class TtAsymmetricAttention(LightweightModule):
             tensor = tensor.reshape(in_dim, -1)  # [ID, ND*3*NLH*DH]
             return tensor
 
-        w = self._as_sharded_tensor(
-            shuffle_heads(w), dim=-1, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight")
+        w = as_sharded_tensor(
+            shuffle_heads(w),
+            self.mesh_device,
+            dim=-1,
+            cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight"),
         )
         if b is not None:
-            b = self._as_sharded_tensor(
-                shuffle_heads(b), dim=-1, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias")
-            )
-        return w, b
-
-    def _col_parallel_linear(self, name, bias, weight_cache_path, state_dict, state_dict_prefix):
-        w = torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
-        b = state_dict[f"{state_dict_prefix}.{name}.bias"] if bias else None
-        w = self._as_sharded_tensor(
-            w, dim=-1, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight")
-        )
-        if b is not None:
-            b = self._as_sharded_tensor(
-                b, dim=-1, cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias")
+            b = as_sharded_tensor(
+                shuffle_heads(b),
+                self.mesh_device,
+                dim=-1,
+                cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),
             )
         return w, b
 
@@ -225,8 +180,8 @@ class TtAsymmetricAttention(LightweightModule):
         scale_y: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-        max_seqlen_in_batch: int,
         trans_mat: ttnn.Tensor,
+        uncond: bool = False,
     ):
         """Prepare QKV tensors for attention computation.
 
@@ -237,8 +192,8 @@ class TtAsymmetricAttention(LightweightModule):
             scale_y: Modulation for text features
             rope_cos: Cosine component for rotary position embedding
             rope_sin: Sine component for rotary position embedding
-            valid_token_indices: Indices of valid tokens
-            max_seqlen_in_batch: Maximum sequence length in batch
+            trans_mat: Transformation matrix for rotary embeddings
+            uncond: Whether to run unconditional attention
 
         Returns:
             q, k, v: Query, key and value tensors prepared for attention
@@ -294,9 +249,7 @@ class TtAsymmetricAttention(LightweightModule):
 
         # Process text features if present
         if B == 1:
-            # TODO: This could be buggy since N is a padded length, which could be greater than max_seqlen_in_batch
-            text_padded_seqlen = max_seqlen_in_batch - N
-            if text_padded_seqlen > 0:
+            if not uncond:
                 # Process text features
                 # TODO: Removing until we support padded sequences
                 # y = y[:, :text_seqlen] # Remove padding tokens
@@ -308,16 +261,15 @@ class TtAsymmetricAttention(LightweightModule):
                 k = ttnn.concat([k_x, k_y], dim=2)
                 v = ttnn.concat([v_x, v_y], dim=2)
 
-                # # TODO: Pad up to necessary length
-                attn_padded_len = 44 * 1024  # TODO: GENERALIZE!
-                q = ttnn.pad(q, [q.shape[0], q.shape[1], attn_padded_len, q.shape[3]], [0, 0, 0, 0], value=0)
-                k = ttnn.pad(k, [k.shape[0], k.shape[1], attn_padded_len, k.shape[3]], [0, 0, 0, 0], value=0)
-                v = ttnn.pad(v, [v.shape[0], v.shape[1], attn_padded_len, v.shape[3]], [0, 0, 0, 0], value=0)
-                print("after pad")
-                print(f"q: {q.shape}, k: {k.shape}, v: {v.shape}")
             else:
-                assert False, "Not supporting empty prompt"
                 q, k, v = q_x, k_x, v_x
+            # # TODO: Pad up to necessary length
+            attn_padded_len = 44 * 1024  # TODO: GENERALIZE!
+            q = ttnn.pad(q, [q.shape[0], q.shape[1], attn_padded_len, q.shape[3]], [0, 0, 0, 0], value=0)
+            k = ttnn.pad(k, [k.shape[0], k.shape[1], attn_padded_len, k.shape[3]], [0, 0, 0, 0], value=0)
+            v = ttnn.pad(v, [v.shape[0], v.shape[1], attn_padded_len, v.shape[3]], [0, 0, 0, 0], value=0)
+            print("after pad")
+            print(f"q: {q.shape}, k: {k.shape}, v: {v.shape}")
         else:
             assert False, "Batch size > 1 not supported"
 
@@ -385,6 +337,7 @@ class TtAsymmetricAttention(LightweightModule):
         M: int,
         L: int,
         dtype: ttnn.bfloat16,
+        uncond: bool = False,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Post attention processing to split and project visual and text features.
 
@@ -403,14 +356,14 @@ class TtAsymmetricAttention(LightweightModule):
         assert B == 1, "Batch size must be 1"
         assert out.shape[1] == B, "Batch size must be 1"
         N = M  # No context parallel support yet
-        local_dim = self.dim_x  # No head parallel support yet
+        local_dim = self.dim_x // self.num_devices  # No head parallel support yet
 
         print(f"B: {B}, M: {M}, L: {L}, N: {N}")
 
         # Split sequence into visual and text tokens, adding back padding
         if B == 1:
             # out = ttnn.reshape(out, (B, -1, local_dim))
-            if out.shape[2] > N:
+            if not uncond:
                 print(f"in post_attention: {out.shape=}")
                 # Split into visual and text features
                 x = out[:, :, :N, :]  # (B, N, local_dim)
@@ -421,9 +374,16 @@ class TtAsymmetricAttention(LightweightModule):
                     # y = ttnn.pad(y, (0, 0, 0, L - y.shape[1], 0, 0))  # (B, L, local_dim)
             else:
                 # Empty prompt case
-                raise ValueError("Not supporting empty prompt")
-                x = out
-                y = ttnn.zeros((B, L, local_dim), dtype=dtype, device=self.mesh_device)
+                x = out[:, :, :N, :]
+                # TODO: see if I can remove Y from uncond case
+                y = ttnn.as_tensor(
+                    torch.zeros(1, B, L, local_dim),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
         else:
             raise ValueError("Batch size > 1 not supported")
 
@@ -481,6 +441,7 @@ class TtAsymmetricAttention(LightweightModule):
         trans_mat: ttnn.Tensor,
         packed_indices,
         attn_mask,
+        uncond: bool = False,
     ) -> ttnn.Tensor:
         # input is replicated
         B, L = y.shape[1], y.shape[2]
@@ -494,8 +455,8 @@ class TtAsymmetricAttention(LightweightModule):
             scale_y=scale_y,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
-            max_seqlen_in_batch=packed_indices["max_seqlen_in_batch_kv"],
             trans_mat=trans_mat,
+            uncond=uncond,
         )
 
         # output is col-sharded
@@ -514,6 +475,7 @@ class TtAsymmetricAttention(LightweightModule):
             M=M,
             L=L,
             dtype=out.dtype,
+            uncond=uncond,
         )
 
         return x, y
