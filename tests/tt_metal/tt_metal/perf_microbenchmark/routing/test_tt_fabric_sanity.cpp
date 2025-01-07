@@ -20,9 +20,33 @@
 
 using std::vector;
 using namespace tt;
+using namespace tt::tt_fabric;
 using json = nlohmann::json;
 
+#define DEFAULT_NUM_HOPS (0xFFFFFFFF)
+
 std::mt19937 global_rng;
+
+std::vector<CoreCoord> eth_chan_to_phys_core = {
+    {9, 0},
+    {1, 0},
+    {8, 0},
+    {2, 0},
+    {7, 0},
+    {3, 0},
+    {6, 0},
+    {4, 0},
+    {9, 6},
+    {1, 6},
+    {8, 6},
+    {2, 6},
+    {7, 6},
+    {3, 6},
+    {6, 6},
+    {4, 6}};
+
+// decides if the tx puts the data directly on eth or if a noc hop is allowed as well
+bool allow_1st_noc_hop = false;
 
 inline std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint32_t end, uint32_t count) {
     std::vector<uint32_t> range(end - start + 1);
@@ -38,7 +62,7 @@ inline std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint3
 
 typedef struct test_board {
     std::vector<chip_id_t> physical_chip_ids;
-    std::map<chip_id_t, chip_id_t> unicast_map;
+    std::vector<std::pair<chip_id_t, chip_id_t>> unicast_map;
     std::map<chip_id_t, tt_metal::Device*> device_handle_map;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
 
@@ -82,12 +106,6 @@ typedef struct test_board {
         // TODO: should we support odd number of chips (for unicast)?
         if ((physical_chip_ids.size() % 2) != 0) {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
-        }
-
-        // shuffle the list of chip IDs and assign consecutive IDs as a pair
-        std::shuffle(physical_chip_ids.begin(), physical_chip_ids.end(), global_rng);
-        for (auto i = 0; i < physical_chip_ids.size(); i += 2) {
-            unicast_map[physical_chip_ids[i]] = physical_chip_ids[i + 1];
         }
 
         device_handle_map = tt::tt_metal::detail::CreateDevices(physical_chip_ids);
@@ -149,6 +167,132 @@ typedef struct test_board {
         }
     }
 
+    void generate_unicast_map(uint32_t num_hops) {
+        std::unordered_map<chip_id_t, std::vector<chip_id_t>> chip_neighbors;
+        std::unordered_map<chip_id_t, std::vector<chip_id_t>> chip_n_hop_neighbors;
+        std::vector<std::pair<chip_id_t, uint32_t>> n_hop_neighbors_cnt;
+        std::queue<chip_id_t> temp_q;
+        uint32_t current_hops;
+        chip_id_t current_chip;
+
+        // shuffle chips to induce randomness
+        std::shuffle(physical_chip_ids.begin(), physical_chip_ids.end(), global_rng);
+
+        // for default setting, generate a random unicast map
+        if (DEFAULT_NUM_HOPS == num_hops) {
+            for (auto i = 0; i < physical_chip_ids.size(); i += 2) {
+                unicast_map.push_back({physical_chip_ids[i], physical_chip_ids[i + 1]});
+            }
+            return;
+        }
+
+        // for each physical chip id, store the neighbors
+        // TDOD: update the logic to find inter-mesh neighbors
+        for (auto chip_id : physical_chip_ids) {
+            auto neighbors = device_handle_map[chip_id]->get_ethernet_connected_device_ids();
+            for (auto neighbor : neighbors) {
+                // only append valid chip IDs since the neighbors could include mmio chips (wh galaxy) or
+                // could be outside of the board type (in case of partial galaxy configurations)
+                if (is_valid_chip_id(neighbor)) {
+                    chip_neighbors[chip_id].push_back(neighbor);
+                }
+            }
+        }
+
+        // for each chip id get the neighbors at hops = num_hops using BFS
+        for (auto chip_id : physical_chip_ids) {
+            std::unordered_map<chip_id_t, bool> visited;
+            uint32_t num_prev_chips;
+            current_hops = 0;
+
+            temp_q.push(chip_id);
+            visited[chip_id] = true;
+
+            while (current_hops < num_hops) {
+                // pull out nodes at depth current_hop - 1
+                num_prev_chips = temp_q.size();
+                for (auto i = 0; i < num_prev_chips; i++) {
+                    current_chip = temp_q.front();
+                    temp_q.pop();
+
+                    for (auto neighbor : chip_neighbors[current_chip]) {
+                        if (visited.contains(neighbor)) {
+                            continue;
+                        }
+                        temp_q.push(neighbor);
+                        visited[neighbor] = true;
+                    }
+                }
+
+                current_hops++;
+            }
+
+            // short-circuit if no n hop neighbor found for the given chip
+            if (temp_q.empty()) {
+                continue;
+            }
+
+            while (!temp_q.empty()) {
+                chip_n_hop_neighbors[chip_id].push_back(temp_q.front());
+                temp_q.pop();
+            }
+
+            // shuffle the list of neighbors to induce randomness
+            std::shuffle(chip_n_hop_neighbors[chip_id].begin(), chip_n_hop_neighbors[chip_id].end(), global_rng);
+
+            n_hop_neighbors_cnt.push_back({chip_id, chip_n_hop_neighbors[chip_id].size()});
+        }
+
+        // error out if no n hop chip pairs exist at all
+        if (!n_hop_neighbors_cnt.size()) {
+            throw std::runtime_error("No n hop chip pairs found");
+        }
+
+        // greedy algo - TODO: still not covering all the possible pairs, need to fix
+        // sort the neighbor count vector to first pick the chips with least number of neigbors
+        // done to avoid cases where the maximum number of n hop unicast pairs are not found
+        auto comp = [](std::pair<chip_id_t, uint32_t> a, std::pair<chip_id_t, uint32_t> b) {
+            return a.second < b.second;
+        };
+        std::sort(n_hop_neighbors_cnt.begin(), n_hop_neighbors_cnt.end(), comp);
+
+        for (auto& [chip_id, neighbor_cnt] : n_hop_neighbors_cnt) {
+            uint32_t temp_neighbor_cnt = UINT32_MAX;
+            chip_id_t selected_chip_id;
+
+            // check if the key exists, since it could have been erased if the chip id has already been picked
+            if (!chip_n_hop_neighbors.contains(chip_id)) {
+                continue;
+            }
+
+            // select the 1st chip from the neighbors that hasnt been picked already
+            for (auto& neighbor_chip_id : chip_n_hop_neighbors[chip_id]) {
+                if (!chip_n_hop_neighbors.contains(neighbor_chip_id)) {
+                    continue;
+                }
+
+                // greedy algo: choose the neighbor with least number of neighbors
+                if (chip_n_hop_neighbors[neighbor_chip_id].size() < temp_neighbor_cnt) {
+                    selected_chip_id = neighbor_chip_id;
+                    temp_neighbor_cnt = chip_n_hop_neighbors[neighbor_chip_id].size();
+                }
+            }
+
+            /* TODO: re-enable once the algo is fixed
+            if (UINT32_MAX == temp_neighbor_cnt)
+                throw std::runtime_error("No neighbor found for this chip");
+            */
+
+            unicast_map.push_back({chip_id, selected_chip_id});
+
+            // remove selected chip as it should not be picked again
+            chip_n_hop_neighbors.erase(selected_chip_id);
+
+            // remove the entry for current chip as it should not be picked again
+            chip_n_hop_neighbors.erase(chip_id);
+        }
+    }
+
     inline uint32_t get_num_available_devices() { return physical_chip_ids.size(); }
 
     inline bool is_valid_chip_id(chip_id_t physical_chip_id) {
@@ -164,9 +308,17 @@ typedef struct test_board {
         }
     }
 
-    inline uint32_t get_mesh_chip_id(chip_id_t physical_chip_id) {
-        auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(physical_chip_id);
-        return (mesh_id << 16 | chip_id);
+    inline std::pair<mesh_id_t, chip_id_t> get_mesh_chip_id(chip_id_t physical_chip_id) {
+        return control_plane->get_mesh_chip_id_from_physical_chip_id(physical_chip_id);
+    }
+
+    inline std::vector<std::pair<chip_id_t, chan_id_t>> get_route_to_chip(
+        mesh_id_t src_mesh_id,
+        chip_id_t src_chip_id,
+        mesh_id_t dst_mesh_id,
+        chip_id_t dst_chip_id,
+        chan_id_t src_chan_id) {
+        return control_plane->get_fabric_route(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_chan_id);
     }
 
 } test_board_t;
@@ -179,6 +331,8 @@ typedef struct test_device {
     std::vector<CoreCoord> worker_cores;
     std::vector<CoreCoord> router_logical_cores;
     std::vector<CoreCoord> router_physical_cores;
+    mesh_id_t mesh_id;
+    chip_id_t logical_chip_id;
     uint32_t mesh_chip_id = 0;
     uint32_t router_mask = 0;
 
@@ -188,7 +342,8 @@ typedef struct test_device {
 
         device_handle = board_handle->get_device_handle(physical_chip_id);
         program_handle = tt_metal::CreateProgram();
-        mesh_chip_id = board_handle->get_mesh_chip_id(physical_chip_id);
+        std::tie(mesh_id, logical_chip_id) = board_handle->get_mesh_chip_id(physical_chip_id);
+        mesh_chip_id = (mesh_id << 16 | logical_chip_id);
 
         // initalize list of worker cores in 8X8 grid
         // TODO: remove hard-coding
@@ -276,6 +431,11 @@ typedef struct test_device {
         return router_physical_cores.front();
     }
 
+    inline std::vector<std::pair<chip_id_t, chan_id_t>> get_route_to_chip(
+        mesh_id_t dst_mesh_id, chip_id_t dst_chip_id, chan_id_t src_chan_id) {
+        return board_handle->get_route_to_chip(mesh_id, logical_chip_id, dst_mesh_id, dst_chip_id, src_chan_id);
+    }
+
 } test_device_t;
 
 typedef struct test_traffic {
@@ -288,6 +448,7 @@ typedef struct test_traffic {
     std::vector<CoreCoord> tx_physical_cores;
     std::vector<CoreCoord> rx_logical_cores;
     std::vector<CoreCoord> rx_physical_cores;
+    std::vector<CoreCoord> available_router_cores;
     std::vector<uint32_t> tx_to_rx_map;
     std::vector<std::vector<uint32_t>> rx_to_tx_map;
     std::vector<uint32_t> tx_to_rx_address_map;
@@ -295,13 +456,18 @@ typedef struct test_traffic {
     std::vector<std::vector<uint32_t>> tx_results;
     std::vector<std::vector<uint32_t>> rx_results;
     uint32_t test_results_address;
+    uint32_t rx_buf_size;
+    uint32_t num_links_to_use;
+    uint32_t link_idx = 0;
 
     test_traffic(
         std::shared_ptr<test_device_t>& tx_device_,
         std::shared_ptr<test_device_t>& rx_device_,
         uint32_t num_src_endpoints,
         uint32_t num_dest_endpoints,
-        uint32_t target_address_) {
+        uint32_t target_address_,
+        uint32_t num_hops,
+        uint32_t num_links_) {
         tx_device = tx_device_;
         rx_device = rx_device_;
         num_tx_workers = num_src_endpoints;
@@ -317,6 +483,9 @@ typedef struct test_traffic {
         if (num_tx_workers < num_rx_workers) {
             throw std::runtime_error("Number of dest endpoints should be less than or equal to src endpoints");
         }
+
+        _get_available_router_cores(num_hops);
+        num_links_to_use = std::min(num_links_, (uint32_t)available_router_cores.size());
 
         _generate_tx_to_rx_mapping();
         _generate_target_addresses();
@@ -342,7 +511,7 @@ typedef struct test_traffic {
         uint32_t test_results_address_) {
         CoreCoord core, dest_core;
         std::vector<uint32_t> zero_buf(2, 0);
-        CoreCoord router_phys_core = tx_device->get_router_core();
+        CoreCoord router_phys_core;
         uint32_t mesh_chip_id = rx_device->mesh_chip_id;
 
         // update the test results address, which will be used later for polling, collecting results
@@ -352,14 +521,17 @@ typedef struct test_traffic {
         for (auto i = 0; i < num_tx_workers; i++) {
             core = tx_logical_cores[i];
             dest_core = rx_logical_cores[tx_to_rx_map[i]];
+            router_phys_core = _assign_router_core();
 
             // setup runtime args
             std::vector<uint32_t> runtime_args = {
                 tx_device->get_endpoint_id(core),      // 0: src_endpoint_id
                 rx_device->get_noc_offset(dest_core),  // 1: dest_noc_offset
-                router_phys_core.x,
-                router_phys_core.y,
-                mesh_chip_id};
+                router_phys_core.x,                    // 2: router_x
+                router_phys_core.y,                    // 3: router_y
+                mesh_chip_id,                          // 4: mesh and chip id
+                rx_buf_size                            // 5: space in rx's L1
+            };
 
             if (ASYNC_WR == fabric_command) {
                 runtime_args.push_back(tx_to_rx_address_map[i]);
@@ -388,10 +560,10 @@ typedef struct test_traffic {
             core = rx_logical_cores[i];
 
             // setup runtime args
-            std::vector<uint32_t> runtime_args;
-
-            // push number of tx workers
-            runtime_args.push_back(rx_to_tx_map[i].size());
+            std::vector<uint32_t> runtime_args = {
+                rx_to_tx_map[i].size(),  // 0: num tx workers
+                rx_buf_size              // 1: space available in L1
+            };
 
             if (ASYNC_WR == fabric_command) {
                 // push the src endpoint IDs
@@ -592,9 +764,11 @@ typedef struct test_traffic {
                 // if only one tx set it to 0x30000 to allow more data writes
                 tx_to_rx_address_map[rx_to_tx_map[i][0]] = 0x30000;
                 rx_to_tx_address_map[i].push_back(0x30000);
+                rx_buf_size = 0xd0000;
             } else {
                 // TODO: for more than 1 tx, limit the size of test data
                 // allocate addresses in the range 0x30000 - 0x100000
+                rx_buf_size = 0x10000;
                 std::vector<uint32_t> address_prefix = get_random_numbers_from_range(3, 9, num_tx);
                 for (auto j = 0; j < num_tx; j++) {
                     address = address_prefix[j] * 0x10000;
@@ -603,6 +777,49 @@ typedef struct test_traffic {
                 }
             }
         }
+    }
+
+    void _get_available_router_cores(uint32_t num_hops) {
+        // if default num hops then any router core can be used
+        if (DEFAULT_NUM_HOPS == num_hops) {
+            available_router_cores = tx_device->router_physical_cores;
+            return;
+        }
+
+        // get the potential routers based on the fabric path
+        for (auto i = 0; i < 16; i++) {
+            std::vector<std::pair<chip_id_t, chan_id_t>> route;
+            std::set<chip_id_t> chips_in_route;
+            chips_in_route.insert(tx_device->physical_chip_id);
+            try {
+                route = tx_device->get_route_to_chip(rx_device->mesh_id, rx_device->logical_chip_id, i);
+            } catch (const std::exception& e) {
+                continue;
+            }
+
+            for (auto& [chip_, chan_] : route) {
+                chips_in_route.insert(chip_);
+            }
+
+            // including the origin chip, the distinct number of chips should be num_hops + 1
+            if (chips_in_route.size() == num_hops + 1) {
+                if ((route.size() > num_hops && allow_1st_noc_hop) || route.size() == num_hops) {
+                    available_router_cores.push_back(eth_chan_to_phys_core[i]);
+                }
+            }
+        }
+
+        // throw error if no potential router core found
+        if (available_router_cores.size() == 0) {
+            throw std::runtime_error("No router cores found for specified num hops");
+        }
+    }
+
+    CoreCoord _assign_router_core() {
+        if (link_idx == num_links_to_use) {
+            link_idx = 0;
+        }
+        return available_router_cores[link_idx++];
     }
 
 } test_traffic_t;
@@ -635,14 +852,13 @@ int main(int argc, char **argv) {
 
     // TODO: use eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE which should be 0x19900, set test results size back
     // to 0x7000
-    constexpr uint32_t default_tunneler_queue_size_bytes = 0x4000; // maximum queue (power of 2)
+    constexpr uint32_t default_tunneler_queue_size_bytes = 0x8000;   // maximum queue (power of 2)
     constexpr uint32_t default_tunneler_test_results_addr = 0x39000; // 0x8000 * 4 + 0x19000; 0x10000 * 4 + 0x19000 = 0x59000 > 0x40000 (256kB)
     constexpr uint32_t default_tunneler_test_results_size = 0x6000;  // 256kB total L1 in ethernet core - 0x39000
 
     constexpr uint32_t default_timeout_mcycles = 1000;
     constexpr uint32_t default_rx_disable_data_check = 0;
     constexpr uint32_t default_rx_disable_header_check = 0;
-    constexpr uint32_t default_tx_skip_pkt_content_gen = 0;
     constexpr uint32_t default_check_txrx_timeout = 1;
 
     constexpr uint32_t src_endpoint_start_id = 4;
@@ -662,8 +878,8 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_dump_stat_json = 0;
     constexpr const char* default_output_dir = "/tmp";
 
-    constexpr uint32_t default_test_device_id_l = 0;
-    constexpr uint32_t default_test_device_id_r = 11;
+    constexpr uint32_t default_test_device_id_l = 0xFFFFFFFF;
+    constexpr uint32_t default_test_device_id_r = 0xFFFFFFFF;
 
     constexpr uint32_t default_target_address = 0x30000;
 
@@ -672,6 +888,12 @@ int main(int argc, char **argv) {
     constexpr const char* default_board_type = "glx32";
 
     constexpr uint32_t default_num_traffic_devices = 0;
+
+    constexpr uint32_t default_num_hops = 0xFFFFFFFF;
+
+    constexpr uint32_t default_num_packets = 0xFFFFFFFF;
+
+    constexpr uint32_t default_num_links = 1;
 
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
@@ -699,7 +921,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --check_txrx_timeout: Check if timeout happens during tx & rx (if enabled, timeout_mcycles will also be used), default = {}", default_check_txrx_timeout);
         log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
         log_info(LogTest, "  --rx_disable_header_check: Disable header check on RX, default = {}", default_rx_disable_header_check);
-        log_info(LogTest, "  --tx_skip_pkt_content_gen: Skip packet content generation during tx, default = {}", default_tx_skip_pkt_content_gen);
+        log_info(LogTest, "  --tx_skip_pkt_content_gen: Skip packet content generation during tx, default = {}", false);
         log_info(LogTest, "  --tx_pkt_dest_size_choice: choice for how packet destination and packet size are generated, default = {}", default_tx_pkt_dest_size_choice); // pkt_dest_size_choices_t
         log_info(LogTest, "  --tx_data_sent_per_iter_low: the criteria to determine the amount of tx data sent per iter is low (unit: words); if both 0, then disable counting it in tx kernel, default = {}", default_tx_data_sent_per_iter_low);
         log_info(LogTest, "  --tx_data_sent_per_iter_high: the criteria to determine the amount of tx data sent per iter is high (unit: words); if both 0, then disable counting it in tx kernel, default = {}", default_tx_data_sent_per_iter_high);
@@ -734,7 +956,7 @@ int main(int argc, char **argv) {
     uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
     uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
     uint32_t rx_disable_header_check = test_args::get_command_option_uint32(input_args, "--rx_disable_header_check", default_rx_disable_header_check);
-    uint32_t tx_skip_pkt_content_gen = test_args::get_command_option_uint32(input_args, "--tx_skip_pkt_content_gen", default_tx_skip_pkt_content_gen);
+    bool tx_skip_pkt_content_gen = test_args::has_command_option(input_args, "--tx_skip_pkt_content_gen");
     uint32_t dump_stat_json = test_args::get_command_option_uint32(input_args, "--dump_stat_json", default_dump_stat_json);
     std::string output_dir = test_args::get_command_option(input_args, "--output_dir", std::string(default_output_dir));
     uint32_t check_txrx_timeout = test_args::get_command_option_uint32(input_args, "--check_txrx_timeout", default_check_txrx_timeout);
@@ -749,7 +971,9 @@ int main(int argc, char **argv) {
     uint32_t atomic_increment =
         test_args::get_command_option_uint32(input_args, "--atomic_increment", default_atomic_increment);
 
-    assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM);
+    // assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE
+    // && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice ==
+    // pkt_dest_size_choices_t::RANDOM);
 
     uint32_t test_device_id_l =
         test_args::get_command_option_uint32(input_args, "--device_id", default_test_device_id_l);
@@ -759,6 +983,9 @@ int main(int argc, char **argv) {
         test_args::get_command_option_uint32(input_args, "--num_src_endpoints", default_num_src_endpoints);
     uint32_t num_dest_endpoints =
         test_args::get_command_option_uint32(input_args, "--num_dest_endpoints", default_num_dest_endpoints);
+    uint32_t num_hops = test_args::get_command_option_uint32(input_args, "--num_hops", default_num_hops);
+    allow_1st_noc_hop = test_args::has_command_option(input_args, "--allow_1st_noc_hop");
+    bool bidirectional_traffic = test_args::has_command_option(input_args, "--bidirectional");
 
     uint32_t tx_signal_address = default_tx_signal_address;
 
@@ -766,6 +993,10 @@ int main(int argc, char **argv) {
 
     uint32_t num_traffic_devices =
         test_args::get_command_option_uint32(input_args, "--num_devices", default_num_traffic_devices);
+
+    uint32_t num_packets = test_args::get_command_option_uint32(input_args, "--num_packets", default_num_packets);
+
+    uint32_t num_links = test_args::get_command_option_uint32(input_args, "--num_links", default_num_links);
 
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
@@ -781,10 +1012,20 @@ int main(int argc, char **argv) {
 
     global_rng.seed(prng_seed);
 
+    // if using fixed packet sizes and num packets is specified, get the test data size
+    if ((1 == tx_pkt_dest_size_choice) && (default_num_packets != num_packets)) {
+        data_kb_per_tx = num_packets * max_packet_size_words * PACKET_WORD_SIZE_BYTES / 1024;
+    }
+
     try {
         test_board_t test_board(board_type);
-
         num_available_devices = test_board.get_num_available_devices();
+
+        // keep the number of test devices even
+        // TODO: handle differently for multicast
+        if (num_traffic_devices % 2) {
+            num_traffic_devices++;
+        }
 
         if (num_traffic_devices > num_available_devices) {
             throw std::runtime_error("Insufficient number of devices available");
@@ -792,34 +1033,62 @@ int main(int argc, char **argv) {
             num_traffic_devices = num_available_devices;
         }
 
-        std::map<chip_id_t, std::shared_ptr<test_device_t>> test_devices;
+        // validate left and right device IDs
+        if ((default_test_device_id_l != test_device_id_l) && !test_board.is_valid_chip_id(test_device_id_l)) {
+            throw std::runtime_error("Invalid left chip id");
+        }
+        if ((default_test_device_id_r != test_device_id_r) && !test_board.is_valid_chip_id(test_device_id_r)) {
+            throw std::runtime_error("Invalid right chip id");
+        }
+
+        // if both left and right device IDs are specified, launch traffic only b/w them
+        if ((default_test_device_id_l != test_device_id_l) && (default_test_device_id_r != test_device_id_r)) {
+            if (test_device_id_l == test_device_id_r) {
+                throw std::runtime_error("Left and right chips should be different");
+            }
+            test_board.unicast_map.push_back({test_device_id_l, test_device_id_r});
+        } else {
+            test_board.generate_unicast_map(num_hops);
+        }
+
+        std::unordered_map<chip_id_t, std::shared_ptr<test_device_t>> test_devices;
         std::vector<test_traffic_t> fabric_traffic;
 
-        // init test devices
+        // init test devices from the list of chips
+        for (auto& chip_id : test_board.physical_chip_ids) {
+            test_devices[chip_id] = std::make_shared<test_device_t>(chip_id, &test_board);
+        }
+
+        // init traffic
+        chip_id_t tx_chip_id, rx_chip_id;
         for (auto& [tx_chip_id, rx_chip_id] : test_board.unicast_map) {
-            test_devices[tx_chip_id] = std::make_shared<test_device_t>(tx_chip_id, &test_board);
-            test_devices[rx_chip_id] = std::make_shared<test_device_t>(rx_chip_id, &test_board);
+            if (num_allocated_devices >= num_traffic_devices) {
+                break;
+            }
 
-            if (num_allocated_devices < num_traffic_devices) {
-                test_traffic_t traffic(
-                    test_devices[tx_chip_id],
-                    test_devices[rx_chip_id],
-                    num_src_endpoints,
-                    num_dest_endpoints,
-                    target_address);
-                fabric_traffic.push_back(traffic);
+            test_traffic_t traffic(
+                test_devices[tx_chip_id],
+                test_devices[rx_chip_id],
+                num_src_endpoints,
+                num_dest_endpoints,
+                target_address,
+                num_hops,
+                num_links);
+            fabric_traffic.push_back(traffic);
 
-                // TODO: should this be optional?
+            if (bidirectional_traffic) {
                 test_traffic_t traffic_r(
                     test_devices[rx_chip_id],
                     test_devices[tx_chip_id],
                     num_src_endpoints,
                     num_dest_endpoints,
-                    target_address);
+                    target_address,
+                    num_hops,
+                    num_links);
                 fabric_traffic.push_back(traffic_r);
-
-                num_allocated_devices += 2;
             }
+
+            num_allocated_devices += 2;
         }
 
         // TODO: check this in a loop for all the devices involved in the traffic
@@ -878,14 +1147,16 @@ int main(int argc, char **argv) {
         };
 
         std::vector<uint32_t> rx_compile_args = {
-            prng_seed,              // 0: prng seed
-            data_kb_per_tx,         // 1: total data kb
-            max_packet_size_words,  // 2: max packet size (in words)
-            fabric_command,         // 3: fabric command
-            target_address,         // 4: target address
-            atomic_increment,       // 5: atomic increment
-            test_results_addr,      // 6: test results addr
-            test_results_size       // 7: test results size in bytes
+            prng_seed,                // 0: prng seed
+            data_kb_per_tx,           // 1: total data kb
+            max_packet_size_words,    // 2: max packet size (in words)
+            fabric_command,           // 3: fabric command
+            target_address,           // 4: target address
+            atomic_increment,         // 5: atomic increment
+            test_results_addr,        // 6: test results addr
+            test_results_size,        // 7: test results size in bytes
+            tx_pkt_dest_size_choice,  // 8: pkt dest and size choice
+            tx_skip_pkt_content_gen,  // 9: skip packet validation
         };
 
         // TODO: launch traffic kernels
