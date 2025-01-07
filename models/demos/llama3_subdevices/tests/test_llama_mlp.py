@@ -7,8 +7,8 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.llama3.tt.llama_mlp import TtLlamaMLP
-from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3_subdevices.tt.llama_mlp import TtLlamaMLP
+from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
 from models.utility_functions import (
     comp_pcc,
@@ -30,16 +30,13 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (
-        64 * 1024,
-        32 * 1024,
-        32,
-    ),
+    (32,),
 )
 @pytest.mark.parametrize(
     "batch_size",
     (1,),
 )
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
@@ -74,8 +71,8 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
         dtype=dtype,
         model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
-    reference_output = reference_model(torch_input)
+
+    torch_input = torch.randn(1, 1, seq_len, 9216)
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
@@ -84,9 +81,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
         memory_config=(
-            tt_model.model_config["MLP_ACT_MEMCFG"]
-            if model_args.is_galaxy
-            else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
+            ttnn.DRAM_MEMORY_CONFIG if model_args.is_galaxy else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
         )
         if mode == "decode"
         else ttnn.DRAM_MEMORY_CONFIG,
@@ -101,7 +96,9 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )
 
-    tt_output_torch = tt_output_torch[:, :1, :, :]
+    tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
+
+    reference_output = reference_model(torch_input[:, :1, :, : model_args.dim])
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

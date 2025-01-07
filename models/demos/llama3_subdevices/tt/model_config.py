@@ -638,6 +638,70 @@ class TtModelArgs:
                 RING_SIZE,
             )
 
+            self.model_config["W1W3_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(9216 // 4, 3840 // RING_SIZE),
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["W2_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(3840, 9216 // 4 // RING_SIZE),
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["FF1_3_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                9216 // 4,
+                3840,
+                RING_SIZE,
+            )
+
+            self.model_config["FF2_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                3840,
+                9216 // 4,
+                RING_SIZE,
+            )
+
+            self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 9216 // 4 // RING_SIZE),
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 3840 // RING_SIZE),
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["FF2_IN_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 3840 // RING_SIZE),
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 9216 // 4 // RING_SIZE),
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             attn_input_sub_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.start_core, 32, self.sub_core_grids, row_wise=True
@@ -754,7 +818,6 @@ class TtModelArgs:
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
             )
-
             self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, self.hidden_dim // 28 // 8),  # shard_grid_cores = 28, num_devices=8
                 core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))}),
