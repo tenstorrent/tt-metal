@@ -47,6 +47,9 @@ tests/scripts/t3000/ @tenstorrent/metalium-developers-infra
 tests/scripts/tg/ @tenstorrent/metalium-developers-infra
 tests/scripts/tgg/ @tenstorrent/metalium-developers-infra
 
+# fabric
+tt_fabric/ @ubcheema @aliuTT
+
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema
 tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap

@@ -20,7 +20,7 @@ Mesh: [
   id: 0,
   board: T3K,
   topology: [1, 1],
-  host_mapping: [[sjc-lab-t3005]]}
+  host_mapping: [[]]}
 ]
 
 Graph: [

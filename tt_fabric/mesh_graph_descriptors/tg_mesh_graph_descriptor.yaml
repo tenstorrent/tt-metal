@@ -23,22 +23,22 @@ Mesh: [
   id: 0,
   board: N150Gateway,
   topology: [1, 1],
-  host_mapping: [[aus-glx-11]]},
+  host_mapping: [[]]},
 {
   id: 1,
   board: N150Gateway,
   topology: [1, 1],
-  host_mapping: [[aus-glx-11]]},
+  host_mapping: [[]]},
 {
   id: 2,
   board: N150Gateway,
   topology: [1, 1],
-  host_mapping: [[aus-glx-11]]},
+  host_mapping: [[]]},
 {
   id: 3,
   board: N150Gateway,
   topology: [1, 1],
-  host_mapping: [[aus-glx-11]]},
+  host_mapping: [[]]},
 {
   id: 4,
   board: Galaxy,

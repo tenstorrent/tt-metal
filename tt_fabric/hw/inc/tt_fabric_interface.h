@@ -5,6 +5,7 @@
 #pragma once
 
 #include "eth_l1_address_map.h"
+#include "noc/noc_parameters.h"
 
 typedef struct tt_fabric_endpoint_sync {
     uint32_t sync_addr : 24;

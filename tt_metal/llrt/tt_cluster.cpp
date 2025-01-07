@@ -502,8 +502,12 @@ void Cluster::write_core(
         tt::watcher_sanitize_host_noc_write(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {core.x, core.y}, addr, sz_in_bytes);
 
     }
-
+    TT_FATAL(
+        this->virtual_to_umd_coord_mapping_.find(core) != this->virtual_to_umd_coord_mapping_.end(),
+        "Cannot find UMD core for virtual core {}",
+        core.str());
     tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
+
     this->driver_->write_to_device(mem_ptr, sz_in_bytes, umd_core, addr, "LARGE_WRITE_TLB");
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
@@ -518,8 +522,12 @@ void Cluster::read_core(
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_read(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {core.x, core.y}, addr, size_in_bytes);
     }
-
+    TT_FATAL(
+        this->virtual_to_umd_coord_mapping_.find(core) != this->virtual_to_umd_coord_mapping_.end(),
+        "Cannot find UMD core for virtual core {}",
+        core.str());
     tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
+
     this->driver_->read_from_device(mem_ptr, umd_core, addr, size_in_bytes, "LARGE_READ_TLB");
 }
 
@@ -922,6 +930,11 @@ std::vector<CoreCoord> Cluster::get_ethernet_sockets(chip_id_t local_chip, chip_
 CoreCoord Cluster::ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord &logical_core) const {
     const metal_SocDescriptor &soc_desc = get_soc_desc(chip_id);
     return soc_desc.get_physical_ethernet_core_from_logical(logical_core);
+}
+
+CoreCoord Cluster::get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const {
+    CoreCoord logical_coord = this->get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(channel);
+    return this->get_virtual_coordinate_from_logical_coordinates(chip_id, logical_coord, CoreType::ETH);
 }
 
 tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
