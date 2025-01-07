@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,10 +8,10 @@ class FabricConnectionManager final {
 public:
     // return if there is/should be a connection - doesn't return whether or not the connection
     // is actually live
-    bool is_logically_connected() const { return has_forward_connection() || has_backward_connection(); }
+    inline bool is_logically_connected() const { return has_forward_connection() || has_backward_connection(); }
 
     // make the connection live
-    void open() {
+    inline void open() {
         if (has_forward_connection()) {
             forward_fabric_sender.open();
         }
@@ -19,9 +19,9 @@ public:
             backward_fabric_sender.open();
         }
     }
-    bool has_forward_connection() const { return connection_flags & FORWARD_CONNECTION_FLAG_MASK; }
-    bool has_backward_connection() const { return connection_flags & BACKWARD_CONNECTION_FLAG_MASK; }
-    void close() {
+    inline bool has_forward_connection() const { return connection_flags & FORWARD_CONNECTION_FLAG_MASK; }
+    inline bool has_backward_connection() const { return connection_flags & BACKWARD_CONNECTION_FLAG_MASK; }
+    inline void close() {
         if (has_forward_connection()) {
             forward_fabric_sender.close();
         }

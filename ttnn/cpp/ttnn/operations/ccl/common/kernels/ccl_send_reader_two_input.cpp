@@ -739,7 +739,6 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& c
         // However, if we're writing locally, then we need to actually write using `noc_index` based coordinates.
         // This can lead to a discrepancy, so to stay consistent, we always generate noc0 based addresses here
         // so we can reliably translate to `noc_index` based addresses writing locally, inside the write function
-        DPRINT << "t_id: " << (uint32_t)cmd_specific_ctx.curr_tile_id << "\n";
         const auto [noc0_dest_noc_addr, contig_pages_] =
             get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT, MEM_LAYOUT>(
                 cmd_specific_ctx.curr_tile_id,

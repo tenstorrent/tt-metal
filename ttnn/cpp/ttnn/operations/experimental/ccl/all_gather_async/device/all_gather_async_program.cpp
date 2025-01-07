@@ -122,7 +122,7 @@ static bool can_command_stream_be_lowered_to_noc_commands(const Tensor& input_te
     // approximately... this is only very rough estimate until unlimited command stream length is enabled
     static constexpr size_t args_per_noc_command = 4;
     static constexpr size_t max_noc_commands = 256;
-    size_t num_tensor_pages = input_tensor.shape().logical_shape().volume() / input_tensor.buffer()->page_size();
+    size_t num_tensor_pages = input_tensor.padded_shape().volume() / input_tensor.buffer()->page_size();
 
     // Interleaved tensors are currently not iterable on host so we can't resolve the page locations
     return input_tensor.is_sharded() &&

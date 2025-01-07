@@ -45,9 +45,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
                                                                   : fabric_connection.get_backward_connection();
 
             pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{unicast_args.distance_in_hops});
-            DPRINT << "wait wr slot\n";
             fabric_conn.wait_for_empty_write_slot();
-            DPRINT << "writing\n";
             fabric_conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
             fabric_conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
         } break;
@@ -58,9 +56,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
             if (fabric_connection.has_forward_connection()) {
                 pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                     1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
-                DPRINT << "wait wr slot\n";
                 fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                DPRINT << "writing\n";
                 fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
                     l1_read_addr, payload_size_bytes);
                 fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
@@ -70,9 +66,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
             if (fabric_connection.has_backward_connection()) {
                 pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                     1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
-                DPRINT << "wait wr slot\n";
                 fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                DPRINT << "writing\n";
                 fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
                     l1_read_addr, payload_size_bytes);
                 fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
@@ -99,7 +93,6 @@ FORCE_INLINE void write_payload_then_advance_read_address(
         ((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0,
         "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
 
-    DPRINT << "here\n";
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: [[fallthrough]];
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST:
