@@ -264,15 +264,18 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
 
             uint32_t q_start_addr = q_base_addr;
 
+            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+
             for (uint32_t i = 0; i < num_cores; ++i) {
                 uint32_t in_tile_offset_by_batch =
                     i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512 * element_size;
                 const auto& core = cores[i];
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = in_tile_offset_by_batch;
-                runtime_args[1] = q_start_addr;
+                auto& runtime_args_reader = reader_args_by_core[core.x][core.y];
+                runtime_args_reader[0] = in_tile_offset_by_batch;
+                runtime_args_reader[1] = q_start_addr;
 
-                auto& runtime_args_writer = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto& runtime_args_writer = writer_args_by_core[core.x][core.y];
                 runtime_args_writer[0] = in_tile_offset_by_batch;
                 runtime_args_writer[1] = q_start_addr;
             }
