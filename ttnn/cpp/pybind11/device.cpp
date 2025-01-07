@@ -254,7 +254,7 @@ void device_module(py::module& m_device) {
             py::arg("device_id"),
             py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
             py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
-        
+
     // *** eps constant ***
     m_device.attr("EPS_GS") = EPS_GS;
     m_device.attr("EPS_WHB0") = EPS_WHB0;
