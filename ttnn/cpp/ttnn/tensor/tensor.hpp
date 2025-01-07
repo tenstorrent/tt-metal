@@ -23,7 +23,7 @@
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "types.hpp"
 

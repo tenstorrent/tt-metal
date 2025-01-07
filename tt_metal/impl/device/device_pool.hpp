@@ -7,8 +7,7 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "impl/debug/dprint_server.hpp"
-#include "tt_metal/temp/device.hpp"
-#include "tt_metal/impl/device/device_handle.hpp"
+#include "tt_metal/device.hpp"
 namespace tt {
 namespace tt_metal::detail {
 
@@ -16,7 +15,7 @@ void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
 }  // namespace tt_metal::detail
 
-class DevicePool {        
+class DevicePool {
     friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
 public:

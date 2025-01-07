@@ -583,7 +583,7 @@ class HWCommandQueue {
     void increment_num_entries_in_completion_q();
     void set_exit_condition();
 
-    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);    
+    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);
 
     friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
     friend void EnqueueProgramImpl(
@@ -606,7 +606,7 @@ class HWCommandQueue {
     friend void EnqueueRecordEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
     friend void EnqueueWaitForEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event);
     friend void FinishImpl(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
-    friend CommandQueue;    
+    friend CommandQueue;
     friend detail::Program_;
 };
 
@@ -641,7 +641,7 @@ public:
         RUNNING = 1,
         TERMINATE = 2,
     };
-    
+
     CommandQueue() = delete;
 
     CommandQueue(IDevice* device, uint32_t id, CommandQueueMode mode = CommandQueue::default_mode());
@@ -684,7 +684,7 @@ public:
     }
     // Determine if any CQ is using Async mode
     static bool async_mode_set() { return num_async_cqs > 0; }
-    
+
    private:
     // Initialize Command Queue Mode based on the env-var. This will be default, unless the user excplictly sets the
     // mode using set_mode.

@@ -10,7 +10,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/device/device_handle.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 
 using namespace tt::tt_metal;
@@ -224,7 +223,7 @@ void DevicePool::initialize(
     _inst->init_profiler_devices();
 }
 
-void DevicePool::initialize_device(IDevice* dev) const {    
+void DevicePool::initialize_device(IDevice* dev) const {
     detail::ClearProfilerControlBuffer(dev);
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
@@ -378,7 +377,7 @@ void DevicePool::unregister_worker_thread_for_device(IDevice* device) {
 const std::unordered_set<std::thread::id>& DevicePool::get_worker_thread_ids() const { return this->worker_thread_ids; }
 
 void DevicePool::init_firmware_on_active_devices() const {
-    for (const auto& dev : this->get_all_active_devices()) {        
+    for (const auto& dev : this->get_all_active_devices()) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
         if (mmio_device_id != dev->id()) {
@@ -407,7 +406,7 @@ void DevicePool::init_firmware_on_active_devices() const {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
-                    log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);                    
+                    log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
                     this->initialize_device(devices[mmio_controlled_device_id].get());
                 }
             }
@@ -444,7 +443,7 @@ IDevice* DevicePool::get_active_device(chip_id_t device_id) const {
 std::vector<IDevice* > DevicePool::get_all_active_devices() const {
     std::vector<IDevice* > user_devices;
     for (const auto& device : this->devices) {
-        if (device->is_initialized()) {        
+        if (device->is_initialized()) {
             user_devices.push_back(device.get());
         }
     }
@@ -460,7 +459,7 @@ bool DevicePool::close_device(chip_id_t device_id) {
     const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
     for (const auto& mmio_controlled_device_id :
          tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-        auto& device = devices[mmio_controlled_device_id];        
+        auto& device = devices[mmio_controlled_device_id];
         if (device->is_initialized()) {
             pass &= device->close();
             // When a device is closed, its worker thread is joined. Stop tracking this

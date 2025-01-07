@@ -9,7 +9,7 @@
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/kernels/data_types.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"

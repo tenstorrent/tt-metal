@@ -6,7 +6,7 @@
 
 #include <string>
 #include <thread>
-#include "tt_metal/device.hpp"
+#include "tt_metal/deprecated/device.hpp"
 #include "common/core_assignment.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/trace/trace.hpp"

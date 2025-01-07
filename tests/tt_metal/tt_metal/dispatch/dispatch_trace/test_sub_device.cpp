@@ -11,7 +11,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"
 #include "command_queue_fixture.hpp"

@@ -6,7 +6,7 @@
 #include "impl/buffers/buffer_constants.hpp"
 #include "ttnn/cpp/ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 
 using namespace tt::tt_metal;
 

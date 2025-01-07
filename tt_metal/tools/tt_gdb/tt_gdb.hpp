@@ -5,7 +5,7 @@
 #include <string>
 #include "llrt/tt_cluster.hpp"
 #include "llrt/llrt.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 
 namespace tt_gdb {
 // Debugger info for UI

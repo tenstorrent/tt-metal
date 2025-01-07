@@ -18,7 +18,6 @@
 #include <variant>
 
 #include "dev_msgs.h"
-#include "device/device_handle.hpp"
 #include "llrt/hal.hpp"
 #include "program_command_sequence.hpp"
 #include "tt_metal/command_queue.hpp"

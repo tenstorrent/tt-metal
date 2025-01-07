@@ -10,7 +10,7 @@
 #include "test_gold_impls.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 
 using std::vector;
 using namespace tt;

@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "tt_metal/distributed/mesh_device_view.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 

@@ -9,7 +9,7 @@
 
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
 #include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
@@ -73,7 +73,7 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id);
 /**
  * Instantiates a device object.
  *
- * Return value: IDevice* 
+ * Return value: IDevice*
  *
  * | Argument   | Description                | Type            | Valid Range                       | Required |
  * |------------|----------------------------|-----------------|-----------------------------------|----------|
@@ -92,7 +92,7 @@ IDevice* CreateDevice(
 /**
  * Instantiates a device with minimal setup, used to attach to a device in a bad state.
  *
- * Return value: IDevice* 
+ * Return value: IDevice*
  *
  * | Argument   | Description                | Type            | Valid Range                       | Required |
  * |------------|----------------------------|-----------------|-----------------------------------|----------|

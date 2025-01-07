@@ -11,7 +11,7 @@
 #include <optional>
 #include <functional>
 
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 
 namespace tt::tt_metal::distributed {
 

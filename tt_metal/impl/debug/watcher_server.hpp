@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 
 namespace tt {
 

@@ -6,7 +6,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "host_api.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 
 using std::vector;
 using namespace tt;

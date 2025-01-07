@@ -10,7 +10,7 @@
 #include "tt_metal/host_api.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 
 using std::vector;
 using namespace tt::tt_metal;

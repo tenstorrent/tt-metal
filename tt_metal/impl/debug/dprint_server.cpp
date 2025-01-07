@@ -25,7 +25,7 @@
 #include "common/bfloat8.hpp"
 
 #include "hostdevcommon/dprint_common.h"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 
 using std::cout;
 using std::endl;

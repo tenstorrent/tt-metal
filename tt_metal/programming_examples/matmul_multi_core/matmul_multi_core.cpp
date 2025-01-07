@@ -11,7 +11,7 @@
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
 #include "tt_metal/common/tilize_untilize.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 
 using namespace tt::constants;
 using namespace std;

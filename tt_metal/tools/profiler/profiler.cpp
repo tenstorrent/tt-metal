@@ -16,7 +16,7 @@
 #include "llrt/rtoptions.hpp"
 #include "dev_msgs.h"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/temp/device.hpp"
+#include "tt_metal/device.hpp"
 
 namespace tt {
 
