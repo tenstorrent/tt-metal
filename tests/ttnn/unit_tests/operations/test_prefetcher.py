@@ -546,7 +546,7 @@ def test_run_prefetcher(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872, "num_command_queues": 2}],
+    [{"trace_region_size": 23887872}],
     indirect=True,
 )
 def test_run_prefetcher_post_commit(
