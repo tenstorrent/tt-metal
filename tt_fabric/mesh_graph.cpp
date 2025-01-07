@@ -58,18 +58,20 @@ void MeshGraph::add_to_connectivity(
     if (src_mesh_id != dest_mesh_id) {
         // Intermesh Connection
         auto& edge = this->inter_mesh_connectivity_[src_mesh_id][src_chip_id];
-        if (edge.find(dest_mesh_id) == edge.end()) {
-            edge.insert({dest_mesh_id, RouterEdge{.port_direction = port_direction, {dest_chip_id}, .weight = 0}});
-        } else {
-            edge[dest_mesh_id].connected_chip_ids.push_back(dest_chip_id);
+        auto [it, is_inserted] = edge.insert(
+            {dest_mesh_id,
+             RouterEdge{.port_direction = port_direction, .connected_chip_ids = {dest_chip_id}, .weight = 0}});
+        if (!is_inserted) {
+            it->second.connected_chip_ids.push_back(dest_chip_id);
         }
     } else {
         // Intramesh Connection
         auto& edge = this->intra_mesh_connectivity_[src_mesh_id][src_chip_id];
-        if (edge.find(dest_chip_id) == edge.end()) {
-            edge.insert({dest_chip_id, RouterEdge{.port_direction = port_direction, {dest_chip_id}, .weight = 0}});
-        } else {
-            edge[dest_mesh_id].connected_chip_ids.push_back(dest_chip_id);
+        auto [it, is_inserted] = edge.insert(
+            {dest_chip_id,
+             RouterEdge{.port_direction = port_direction, .connected_chip_ids = {dest_chip_id}, .weight = 0}});
+        if (!is_inserted) {
+            it->second.connected_chip_ids.push_back(dest_chip_id);
         }
     }
 }
@@ -86,7 +88,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                 {N,
                  RouterEdge{
                      .port_direction = RoutingDirection::N,
-                     std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, N),
+                     .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, N),
                      .weight = 0}});
         }
         if (E < num_chips_in_board && (E / row_size == src_chip_id / row_size)) {
@@ -94,7 +96,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                 {E,
                  RouterEdge{
                      .port_direction = RoutingDirection::E,
-                     std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, E),
+                     .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, E),
                      .weight = 0}});
         }
         if (S < num_chips_in_board) {
@@ -102,7 +104,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                 {S,
                  RouterEdge{
                      .port_direction = RoutingDirection::S,
-                     std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, S),
+                     .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, S),
                      .weight = 0}});
         }
         if (W >= 0 && (W / row_size == src_chip_id / row_size)) {
@@ -110,7 +112,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                 {W,
                  RouterEdge{
                      .port_direction = RoutingDirection::W,
-                     std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, W),
+                     .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, W),
                      .weight = 0}});
         }
     } else if (fabric_type == FabricType::TORUS) {

@@ -19,7 +19,7 @@ Mesh: [
   id: 0,
   board: N300,
   topology: [1, 1],
-  host_mapping: [[aus-wh-01]]}
+  host_mapping: [[]]}
 ]
 
 Graph: [

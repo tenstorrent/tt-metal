@@ -63,7 +63,14 @@ foreach(arch ${ARCHITECTURES})
         string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
 
         add_executable(${TEST_TARGET} ${TEST_SRC})
-        target_link_libraries(${TEST_TARGET} PUBLIC test_metal_common_libs PRIVATE yaml-cpp::yaml-cpp tt_fabric)
+        target_link_libraries(
+            ${TEST_TARGET}
+            PUBLIC
+                test_metal_common_libs
+            PRIVATE
+                yaml-cpp::yaml-cpp
+                tt_fabric
+        )
         target_include_directories(
             ${TEST_TARGET}
             BEFORE

@@ -51,7 +51,9 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                     next_chip_id = src_chip_id - row_size;
                     this->intra_mesh_table_[mesh_id][src_chip_id][dst_chip_id] =
                         intra_mesh_connectivity[mesh_id][src_chip_id].at(next_chip_id).port_direction;
-                    // intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
+                    // TODO: today we are not updating the weight of the edge, should we use weight to balance
+                    //  routing traffic?
+                    //  intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
                 } else if (src_x < dst_x) {
                     // Move South
                     next_chip_id = src_chip_id + row_size;
@@ -188,7 +190,9 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                     // If src is already exit chip, use port directions to next mesh
                     this->inter_mesh_table_[src_mesh_id][src_chip_id][dst_mesh_id] =
                         inter_mesh_connectivity[src_mesh_id][src_chip_id].at(next_mesh_id).port_direction;
-                    // inter_mesh_connectivity[src_mesh_id][src_chip_id][next_mesh_id].weight += 1;
+                    // TODO: today we are not updating the weight of the edge, should we use weight to balance
+                    //  routing traffic?
+                    //  inter_mesh_connectivity[src_mesh_id][src_chip_id][next_mesh_id].weight += 1;
                 } else {
                     // Use direction to exit chip from the intermesh routing table
                     this->inter_mesh_table_[src_mesh_id][src_chip_id][dst_mesh_id] =
