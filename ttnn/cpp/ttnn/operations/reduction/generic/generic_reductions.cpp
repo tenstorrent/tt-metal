@@ -202,8 +202,7 @@ static Tensor reduce_impl(
         if (dim.size() == 1 || linear_type) {
             output_tensor = reduce_4d_loop(/*use_reduce_type=*/true);
         } else if constexpr (reduce_type == ReduceType::Mean) {
-            output_tensor = reduce_4d_loop(
-                /*use_reduce_type=*/false);
+            output_tensor = reduce_4d_loop(/*use_reduce_type=*/false);
             float inv_volume = 1.0f / input_tensor.get_logical_volume();
             output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
         } else {
