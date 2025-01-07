@@ -33,9 +33,9 @@ CoreSplitResult split_work_to_cores_aligned(
     uint32_t units_per_core = alignment;
     uint32_t required_cores = (units_to_divide + units_per_core - 1) / units_per_core;
 
-    // += alignment until it fits within total_cores
-    while (required_cores > total_cores) {
-        units_per_core += alignment;
+    // find units per core and required cores
+    if (required_cores > total_cores) {
+        units_per_core = ((units_to_divide + total_cores - 1) / total_cores + alignment - 1) / alignment * alignment;
         required_cores = (units_to_divide + units_per_core - 1) / units_per_core;
     }
 
