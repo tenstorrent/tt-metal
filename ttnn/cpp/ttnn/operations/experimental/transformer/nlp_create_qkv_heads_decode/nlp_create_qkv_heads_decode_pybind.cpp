@@ -23,7 +23,7 @@ void bind_nlp_create_qkv_heads_decode(pybind11::module& module) {
                const uint32_t num_q_heads,
                const std::optional<uint32_t> num_kv_heads,
                const std::optional<const bool> overlap_qk_coregrid,
-               const std::optional<const Tensor> batch_offset,
+               const std::optional<const Tensor>& batch_offset,
                const std::optional<const uint32_t> slice_size,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<std::array<Tensor, 3>> optional_output_tensors,

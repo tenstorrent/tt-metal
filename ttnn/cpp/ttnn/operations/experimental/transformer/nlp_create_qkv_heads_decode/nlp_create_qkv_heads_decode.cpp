@@ -18,7 +18,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
     const uint32_t num_heads,
     const std::optional<const uint32_t> num_kv_heads,
     const std::optional<const bool> overlap_qk_coregrid,
-    const std::optional<const Tensor> batch_offset,
+    const std::optional<const Tensor>& batch_offset,
     const std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::array<Tensor, 3>> optional_output_tensors) {
@@ -43,7 +43,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
             head_dim,
             overlap_qk_coregrid_val,
             input_on_subcoregrids,
-            std::move(batch_offset),
+            batch_offset,
             slice_size,
             memory_config.value_or(input_tensor.memory_config())},
         {input_tensor},
@@ -58,7 +58,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
     const uint32_t num_heads,
     const std::optional<const uint32_t> num_kv_heads,
     const std::optional<const bool> overlap_qk_coregrid,
-    const std::optional<const Tensor> batch_offset,
+    const std::optional<const Tensor>& batch_offset,
     const std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::array<Tensor, 3>> optional_output_tensors) {
@@ -68,7 +68,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
         num_heads,
         num_kv_heads,
         overlap_qk_coregrid,
-        std::move(batch_offset),
+        batch_offset,
         slice_size,
         memory_config,
         std::move(optional_output_tensors));
