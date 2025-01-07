@@ -308,6 +308,7 @@ void bind_unary_operation_overload_complex_return_complex(
                  - 2, 3, 4
 
             {3}
+            More information about the `BFLOAT8_B  <../tensor.html#limitation-of-bfloat8-b>`_.
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
@@ -1557,8 +1558,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::neg, R"doc(\mathrm{{output\_tensor}}_i = \verb|neg|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::nez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal, R"doc(BFLOAT16, BFLOAT8_B)doc", "bfloat8_b is supported only for non-zero inputs. Inputs containing zero may produce inaccurate results due to the characteristics of the block-FP format. In the block-FP format, 16 consecutive numbers share the same exponent, making it impossible to process them separately. This format isn't ideal when the numbers in the group are very different from each other");
-
+    detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal, R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(BFLOAT8_B is supported only for non-zero inputs. Inputs containing zero may produce inaccurate results due to the characteristics of the block-FP format.)doc");
     detail::bind_unary_operation(module, ttnn::relu, R"doc(\mathrm{{output\_tensor}}_i = \verb|relu|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::relu6, R"doc(\mathrm{{output\_tensor}}_i = \verb|relu6|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::sigmoid, R"doc(\mathrm{{output\_tensor}}_i = \verb|sigmoid|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
