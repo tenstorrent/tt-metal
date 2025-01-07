@@ -172,27 +172,27 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
         return true;
     }
 
-    // 3) When the input is tiled, it is never a NOP if the last two dimensions are permuted. If the input is row major,
-    // it is never a NOP if the last dimension is permuted.
+    // 3) Otherwise, when the input is tiled, it is never a NOP if the last two dimensions are permuted. When it is row
+    // major, it is never a NOP if the last dimension is permuted.
     if (a.get_layout() == Layout::TILE && (dims[rank - 1] != rank - 1 || dims[rank - 2] != rank - 2)) {
         return false;
     } else if (a.get_layout() == Layout::ROW_MAJOR && dims[rank - 1] != rank - 1) {
         return false;
     }
 
-    // 4) Build permuted shape
+    // Build permuted shape
     const auto& shape = a.get_logical_shape();
     ttnn::SmallVector<uint32_t> perm_shape(rank);
     for (uint32_t i = 0; i < rank; ++i) {
         perm_shape[i] = shape[dims[i]];
     }
 
-    // 5) If the shape changed, definitely not a no-op
+    // 4) If the shape changed, definitely not a no-op
     if (perm_shape != shape) {
         return false;
     }
 
-    // 6) If the shape stayed the same, ensure we didn't
+    // 5) If the shape stayed the same, ensure we didn't
     //    relocate a dimension with size > 1
     for (uint32_t i = 0; i < rank; ++i) {
         const uint32_t j = dims[i];

@@ -329,3 +329,26 @@ def test_permute_4d_cnwh(shape, device):
     torch_output = torch.permute(torch_tensor, (1, 0, 3, 2))
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("shape", [[2, 2, 2, 2, 2, 2, 32, 32]])
+@pytest.mark.parametrize("dims", [(5, 4, 3, 2, 1, 0, 7, 6), (5, 4, 3, 2, 1, 0, 6, 7)])
+def test_permute_8d_swapped(shape, dims, device):
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.permute(input_tensor, dims)
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, dims)
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("shape", [[1, 1, 32, 32]])
+def test_permute_identity(shape, device):
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.permute(input_tensor, (0, 1, 2, 3))
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, (0, 1, 2, 3))
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
