@@ -59,11 +59,12 @@ def input_processor_for_mllama(ctx: InputContext, inputs: Union[DecoderOnlyInput
 
 
 def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
-    if "3.1-8B" in ctx.model_config.hf_config._name_or_path and os.environ.get("MESH_DEVICE") == "N150":
+    hf_model_name = ctx.model_config.hf_config._name_or_path
+    if ("3.1-8B" in hf_model_name or "3.2-11B" in hf_model_name) and os.environ.get("MESH_DEVICE") == "N150":
         prompt_len = len(inputs.get("prompt_token_ids"))
         if prompt_len > 65536:
             raise ValueError(
-                f"TT-LLama8B does not support prompts longer than 65536 tokens on N150 (received prompt with {prompt_len} tokens)"
+                f"TT-LLama8B and TT-Llama11B do not support prompts longer than 65536 tokens on N150 (received prompt with {prompt_len} tokens)"
             )
     return inputs
 
