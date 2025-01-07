@@ -201,9 +201,11 @@ class LegacyShape {
     }
     explicit LegacyShape(tt::stl::Span<const uint32_t> shape, tt::stl::Span<const uint32_t> shape_with_tile_padding) :
         rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
-        TT_ASSERT(
-            shape.size() == shape_with_tile_padding.size(),
-            "Shape and shape_with_tile_padding must have the same size");
+        if (shape.size() != shape_with_tile_padding.size()) {
+            TT_ASSERT(
+                shape.size() == shape_with_tile_padding.size(),
+                "Shape and shape_with_tile_padding must have the same size");
+        }
         for (auto index = 0; index < shape.size(); index++) {
             auto padded_dimension = shape_with_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
