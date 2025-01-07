@@ -47,8 +47,7 @@ constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
 constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
 constexpr uint32_t test_command = get_compile_time_arg_val(18);
 
-constexpr uint32_t base_target_address = get_compile_time_arg_val(19);
-uint32_t target_address = base_target_address;
+uint32_t base_target_address = get_compile_time_arg_val(19);
 
 // atomic increment for the ATOMIC_INC command
 constexpr uint32_t atomic_increment = get_compile_time_arg_val(20);
@@ -70,7 +69,9 @@ uint64_t xy_local_addr;
 
 packet_header_t packet_header __attribute__((aligned(16)));
 
+uint32_t target_address;
 uint32_t noc_offset;
+uint32_t rx_addr_hi;
 
 // generates packets with random size and payload on the input side
 inline bool test_buffer_handler_async_wr() {
@@ -91,6 +92,7 @@ inline bool test_buffer_handler_async_wr() {
     uint32_t byte_wr_addr = test_producer.get_local_buffer_write_addr();
     uint32_t words_to_init = std::min(free_words, test_producer.words_before_local_buffer_wrap());
     uint32_t words_initialized = 0;
+    uint32_t curr_payload_bytes = 0;
     while (words_initialized < words_to_init) {
         if (input_queue_state.all_packets_done()) {
             break;
@@ -100,6 +102,16 @@ inline bool test_buffer_handler_async_wr() {
             input_queue_state.next_packet(num_dest_endpoints, dest_endpoint_start_id, max_packet_size_words, max_packet_size_mask, total_data_words);
 
             tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
+            curr_payload_bytes =
+                (input_queue_state.curr_packet_size_words - PACKET_HEADER_SIZE_WORDS) * PACKET_WORD_SIZE_BYTES;
+
+            // check for wrap
+            // if the size of fvc buffer is greater than the rx buffer size and/or rx is slow
+            // data validation on rx could fail as tx could overwrite data
+            // explicit sync is needed to ensure data validation in all scenarios
+            if (target_address + curr_payload_bytes > rx_addr_hi) {
+                target_address = base_target_address;
+            }
 
             packet_header.routing.flags = FORWARD;
             packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
@@ -248,10 +260,13 @@ void kernel_main() {
     uint32_t router_x = get_arg_val<uint32_t>(2);
     uint32_t router_y = get_arg_val<uint32_t>(3);
     dest_device = get_arg_val<uint32_t>(4);
+    uint32_t rx_buf_size = get_arg_val<uint32_t>(5);
 
     if (ASYNC_WR == test_command) {
-        target_address = get_arg_val<uint32_t>(5);
+        base_target_address = get_arg_val<uint32_t>(6);
     }
+    target_address = base_target_address;
+    rx_addr_hi = base_target_address + rx_buf_size;
 
     uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
     noc_async_read_one_packet(
