@@ -16,7 +16,7 @@ training_config:
     num_blocks: 6
     vocab_size: 96
     max_sequence_length: 256
+    runner_type: memory_efficient
     positional_embedding_type: trainable
-    runner_type: default
     experimental:
       use_composite_layernorm: false
