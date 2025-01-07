@@ -310,8 +310,15 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
     /* RUNTIME ARGS */
     // 1D distribution of blocks across cores
+    uint32_t tile_height = output.get_tensor_spec().tile().get_height();
     auto core_assignments = ttnn::distribute_work(
-        output.get_logical_shape(), output.get_padding(), ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff);
+        output.get_logical_shape(),
+        output.get_padding(),
+        ncores,
+        nblocks_per_core,
+        has_cliff,
+        nblocks_per_core_cliff,
+        tile_height);
 
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;

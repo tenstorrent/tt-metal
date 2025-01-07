@@ -38,7 +38,6 @@ void DemuxKernel::GenerateStaticConfigs() {
 }
 
 void DemuxKernel::GenerateDependentConfigs() {
-    auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
     // Upstream, expect EthTunneler or DEMUX
     TT_ASSERT(upstream_kernels_.size() == 1);
     if (auto us = dynamic_cast<EthTunnelerKernel*>(upstream_kernels_[0])) {

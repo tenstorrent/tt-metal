@@ -5,10 +5,14 @@
 import torch
 import pytest
 import ttnn
-import random
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
+
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+    compare_pcc,
+)
+from models.utility_functions import skip_for_grayskull
 
 
+@skip_for_grayskull("Possible accuracy issues with grayskull")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -17,7 +21,30 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
         (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
     ),
 )
-def test_binary_scalar_ops(input_shapes, device):
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.experimental.gte,
+        ttnn.experimental.gt,
+        ttnn.experimental.lte,
+        ttnn.experimental.lt,
+        ttnn.experimental.eq,
+        ttnn.experimental.ne,
+        ttnn.experimental.logical_and,
+        ttnn.experimental.logical_or,
+        ttnn.experimental.logical_xor,
+        ttnn.experimental.ldexp,
+        ttnn.experimental.logaddexp,
+        ttnn.experimental.logaddexp2,
+        ttnn.experimental.squared_difference,
+        ttnn.experimental.add,
+        ttnn.experimental.sub,
+        ttnn.experimental.mul,
+        ttnn.experimental.div,
+        ttnn.experimental.bias_gelu,
+    ],
+)
+def test_binary_scalar_ops(input_shapes, ttnn_fn, device):
     a_shape, b_shape = input_shapes
     a_pt = torch.rand(a_shape).bfloat16()
     b_pt = torch.rand(b_shape).bfloat16()
@@ -25,11 +52,57 @@ def test_binary_scalar_ops(input_shapes, device):
     a_tt = ttnn.from_torch(a_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     b_tt = ttnn.from_torch(b_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     cq_id = 0
-    out_tt = ttnn.experimental.add(a_tt, b_tt, queue_id=cq_id)
-    out_pt = a_pt + b_pt
+    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id)
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+    out_pt = golden_fn(a_pt, b_pt)
 
     comp_pass = compare_pcc([out_tt], [out_pt])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 31, 32]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([5, 2, 64, 1]), torch.Size([1, 3, 1, 128])),
+        (torch.Size([5, 1, 1, 64]), torch.Size([2, 3, 128, 1])),
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.experimental.gte,
+        ttnn.experimental.gt,
+        ttnn.experimental.lte,
+        ttnn.experimental.lt,
+        ttnn.experimental.eq,
+        ttnn.experimental.ne,
+        ttnn.experimental.logical_and,
+        ttnn.experimental.logical_or,
+        ttnn.experimental.logical_xor,
+        ttnn.experimental.ldexp,
+        ttnn.experimental.logaddexp,
+        ttnn.experimental.logaddexp2,
+        ttnn.experimental.squared_difference,
+        ttnn.experimental.add,
+        ttnn.experimental.sub,
+        ttnn.experimental.mul,
+        ttnn.experimental.div,
+        ttnn.experimental.bias_gelu,
+    ],
+)
+def test_binary_scalar_ops_invalid_bcast(input_shapes, ttnn_fn, device):
+    a_shape, b_shape = input_shapes
+    a_pt = torch.rand(a_shape).bfloat16()
+    b_pt = torch.rand(b_shape).bfloat16()
+
+    a_tt = ttnn.from_torch(a_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    b_tt = ttnn.from_torch(b_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    with pytest.raises(RuntimeError) as e:
+        cq_id = 0
+        _ = ttnn_fn(a_tt, b_tt, queue_id=cq_id)
+        assert "Broadcasting rule violation" in str(e.value)
 
 
 @pytest.mark.parametrize(
