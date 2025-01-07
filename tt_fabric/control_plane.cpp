@@ -617,7 +617,14 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
 
 void ControlPlane::configure_routing_tables() const {
     // Configure the routing tables on the chips
+    TT_ASSERT(
+        this->intra_mesh_routing_tables_.size() == this->inter_mesh_routing_tables_.size(),
+        "Intra mesh routing tables num_meshes mismatch with inter mesh routing tables");
     for (mesh_id_t mesh_id = 0; mesh_id < this->intra_mesh_routing_tables_.size(); mesh_id++) {
+        TT_ASSERT(
+            this->intra_mesh_routing_tables_[mesh_id].size() == this->inter_mesh_routing_tables_[mesh_id].size(),
+            "Intra mesh routing tables num_devices in mesh {} mismatch with inter mesh routing tables",
+            mesh_id);
         for (chip_id_t chip_id = 0; chip_id < this->intra_mesh_routing_tables_[mesh_id].size(); chip_id++) {
             this->write_routing_tables_to_chip(mesh_id, chip_id);
         }
