@@ -272,8 +272,11 @@ Tensor all_gather(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto input_tensor = input_tensors.at(0);
 
-            uint32_t unpad_elements_h = input_tensor.get_logical_shape()[-2];
-            uint32_t unpad_elements_w = input_tensor.get_logical_shape()[-1];
+            ttnn::SmallVector<uint32_t> unpad_elements = {
+                input_tensor.get_logical_shape()[-4],
+                input_tensor.get_logical_shape()[-3],
+                input_tensor.get_logical_shape()[-2],
+                input_tensor.get_logical_shape()[-1]};
             bool needs_padding = input_tensor.get_layout() == Layout::TILE &&
                                  (input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
                                   input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
@@ -295,8 +298,7 @@ Tensor all_gather(
                 {input_tensor});
 
             if (needs_padding) {
-                return ttnn::ccl::unpad_output_tensor(
-                    output_tensor, num_devices, unpad_elements_h, unpad_elements_w, dim);
+                return ttnn::ccl::unpad_output_tensor(output_tensor, num_devices, unpad_elements, dim);
             } else {
                 return output_tensor;
             }
