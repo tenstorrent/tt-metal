@@ -356,15 +356,6 @@ Tensor tensor_reshape(
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
     const auto tile = input_tensor.get_tensor_spec().tile();
-    if (input_tensor.get_layout() == Layout::TILE) {
-        if (new_padded_shape[-2] % tile.get_tile_shape()[0] != 0 ||
-            new_padded_shape[-1] % tile.get_tile_shape()[1] != 0) {
-            TT_ASSERT(
-                new_padded_shape[-2] % tile.get_tile_shape()[0] == 0 &&
-                new_padded_shape[-1] % tile.get_tile_shape()[1] == 0 &&
-                "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
-        }
-    }
     auto new_spec = ttnn::TensorSpec(
         new_logical_shape,
         TensorLayout::fromPaddedShape(
@@ -432,7 +423,19 @@ Tensor tensor_reshape(
                         device_buffer->set_shard_spec(shard_spec_buffer);
                         device_storage.insert_buffer(device_buffer);
 
-                        return Tensor(device_storage, new_spec);
+                        MemoryConfig mem_config = input_tensor.memory_config();
+                        mem_config.shard_spec = shard_spec;
+
+                        auto upd_spec = ttnn::TensorSpec(
+                            new_logical_shape,
+                            TensorLayout::fromPaddedShape(
+                                input_tensor.get_dtype(),
+                                input_tensor.get_tensor_spec().page_config(),
+                                mem_config,
+                                new_logical_shape,
+                                new_padded_shape));
+
+                        return Tensor(device_storage, upd_spec);
                     }
                 } else {
                     return Tensor(tensor.get_storage(), new_spec);
