@@ -164,12 +164,12 @@ void JitBuildEnv::init(
     // TODO(pgk) this list is insane
     this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "tt_metal " +
                       "-I" + this->root_ + "tt_metal/include " + "-I" + this->root_ + "tt_metal/hw/inc " + "-I" +
-                      this->root_ + "tt_metal/hw/inc/debug " + "-I" + this->root_ + "tt_metal/hw/inc/" +
-                      this->aliased_arch_name_ + " " + "-I" + this->root_ + "tt_metal/hw/inc/" +
-                      this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " + "-I" + this->root_ +
-                      "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " + "-I" + this->root_ +
-                      "tt_metal/third_party/umd/device/api " + "-I" + this->root_ +
-                      "tt_metal/third_party/umd/device/" + this->arch_name_ + " " +  // TODO(fixme)
+                      this->root_ + "tt_metal/hostdevcommon/api " + "-I" + this->root_ + "tt_metal/hw/inc/debug " +
+                      "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
+                      "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " + "-I" +
+                      this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " + "-I" + this->root_ +
+                      "tt_metal/third_party/umd/device/api " + "-I" + this->root_ + "tt_metal/third_party/umd/device/" +
+                      this->arch_name_ + " " +  // TODO(fixme)
                       "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " + "-I" +
                       this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ +
                       "tt_metal/third_party/tt_llk_" + this->arch_name_ +

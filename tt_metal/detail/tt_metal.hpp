@@ -8,7 +8,7 @@
 
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "umd/device/tt_soc_descriptor.h"
-#include "tt_metal/hostdevcommon/common_values.hpp"
+#include "hostdevcommon/common_values.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"

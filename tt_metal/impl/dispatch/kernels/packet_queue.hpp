@@ -5,7 +5,7 @@
 #pragma once
 
 #include "risc_attribs.h"
-#include "tt_metal/hostdevcommon/common_values.hpp"
+#include "hostdevcommon/common_values.hpp"
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"

@@ -15,7 +15,7 @@
 #include "ttnn/types.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_values.hpp"
+#include "hostdevcommon/common_values.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
 
 namespace ttnn {

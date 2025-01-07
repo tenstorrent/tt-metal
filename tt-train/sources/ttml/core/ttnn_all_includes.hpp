@@ -11,11 +11,11 @@
 
 #include <common/bfloat16.hpp>  // NOLINT
 #include <distributed/mesh_device_view.hpp>
+#include <hostdevcommon/common_values.hpp>                                                         // NOLINT
 #include <tests/tt_metal/test_utils/env_vars.hpp>                                                  // NOLINT
 #include <tt_metal/common/base_types.hpp>                                                          // NOLINT
 #include <tt_metal/common/math.hpp>                                                                // NOLINT
 #include <tt_metal/host_api.hpp>                                                                   // NOLINT
-#include <tt_metal/hostdevcommon/common_values.hpp>                                                // NOLINT
 #include <tt_metal/impl/device/device.hpp>                                                         // NOLINT
 #include <ttnn/core.hpp>                                                                           // NOLINT
 #include <ttnn/cpp/ttnn/operations/copy.hpp>                                                       // NOLINT

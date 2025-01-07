@@ -21,6 +21,7 @@ target_link_libraries(
         span
         Tracy::TracyClient
     PRIVATE
+        TT::Metalium::HostDevCommon
         profiler
         common
         jit_build
@@ -61,6 +62,7 @@ set_target_properties(
 )
 
 add_subdirectory(hw)
+add_subdirectory(hostdevcommon)
 add_subdirectory(common)
 add_subdirectory(jit_build)
 add_subdirectory(llrt)

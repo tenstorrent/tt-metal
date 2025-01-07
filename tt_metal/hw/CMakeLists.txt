@@ -210,3 +210,5 @@ target_include_directories(
         inc/${currentArch}
         $<$<STREQUAL:${currentArch},wormhole>:${CMAKE_CURRENT_SOURCE_DIR}/inc/wormhole/wormhole_b0_defines>
 )
+
+target_link_libraries(hw INTERFACE TT::Metalium::HostDevCommon)
