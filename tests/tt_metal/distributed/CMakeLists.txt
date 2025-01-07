@@ -8,12 +8,7 @@ target_link_libraries(
         test_common_libs
 )
 
-target_include_directories(
-    distributed_unit_tests
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_metal/distributed
-)
+target_include_directories(distributed_unit_tests PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
 
 set_target_properties(
     distributed_unit_tests
