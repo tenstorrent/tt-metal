@@ -1229,7 +1229,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     };
 
     if (bias_buffer != nullptr) {
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)per_core_N);
+        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
     }
 
     std::map<string, string> mm_kernel_defines;
