@@ -4,14 +4,8 @@ import ttnn
 from models.experimental.mochi.common import compute_metrics
 
 from genmo.mochi_preview.dit.joint_model.temporal_rope import apply_rotary_emb_qk_real
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3.tt.llama_common import get_rot_transformation_mat
-
-
-def stack_cos_sin(cos, sin):
-    cos = torch.stack([cos, cos], dim=-1).flatten(-2)
-    sin = torch.stack([sin, sin], dim=-1).flatten(-2)
-    return cos, sin
+from models.experimental.mochi.common import stack_cos_sin
 
 
 @pytest.mark.parametrize("batch, seq_len", [(1, 256), (1, 45056)])
