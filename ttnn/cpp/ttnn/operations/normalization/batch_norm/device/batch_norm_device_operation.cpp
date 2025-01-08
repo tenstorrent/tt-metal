@@ -123,11 +123,13 @@ std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tenso
     const Tensor& batch_mean,
     const Tensor& batch_var,
     const float eps,
+    const float momentum,
+    const bool training,
     std::optional<Tensor> weight,
     std::optional<Tensor> bias,
     std::optional<Tensor> output,
     const std::optional<MemoryConfig>& memory_config) {
-    operation_attributes_t operation_attributes{eps, memory_config.value_or(input.memory_config())};
+    operation_attributes_t operation_attributes{eps, momentum, training, memory_config.value_or(input.memory_config())};
     tensor_args_t tensor_args{input, batch_mean, batch_var, std::move(weight), std::move(bias), std::move(output)};
     return {operation_attributes, tensor_args};
 }
