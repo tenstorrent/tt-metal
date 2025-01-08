@@ -167,5 +167,13 @@ void py_module(py::module& module) {
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::add_, "Binary Add In-place Operation");
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::sub_, "Binary Subtract In-place Operation");
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::mul_, "Binary Multiply In-place Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::gt_, "Binary Greater-Than In-place Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::lt_, "Binary Less-Than In-place Operation");
+    detail::bind_inplace_binary_ng_operation(
+        module, ttnn::experimental::lte_, "Binary Less-than-or-equal-to In-place Operation");
+    detail::bind_inplace_binary_ng_operation(
+        module, ttnn::experimental::gte_, "Binary Greater-than-or-equal-to In-place Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::eq_, "Binary Equal-to In-place Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::ne_, "Binary Not-Equal In-place Operation");
 }
 }  // namespace ttnn::operations::binary_ng

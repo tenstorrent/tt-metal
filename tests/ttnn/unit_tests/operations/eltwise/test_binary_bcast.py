@@ -35,6 +35,12 @@ binary_fns = {
     "add_",
     "sub_",
     "mul_",
+    "gt_",
+    "lt_",
+    "lte_",
+    "gte_",
+    "eq_",
+    "ne_",
 }
 activation_fns = {
     "EXP": torch.exp,
@@ -130,9 +136,13 @@ def rand_bf16_gen(shape, device, *, min=0, max=1):
         ),
         *parameters({"add"}, {((), (), (op,)) for op in activation_fns.keys()}),
     }.difference(
-        parameters({"eq", "ne"}, {square_lhs, sin_rhs, exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
+        parameters({"eq", "ne", "ne_"}, {square_lhs, sin_rhs, exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
+        parameters({"eq_"}, {square_lhs, sin_rhs, exp_floor_lhs_exp_rhs}),
         parameters({"logaddexp", "logaddexp2"}, {floor_lhs_ceil_rhs_cos_post}),
-        parameters({"gte", "lt", "lte"}, {exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
+        parameters({"gte", "lt", "lte", "lt_"}, {exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
+        parameters({"lte_"}, {sin_rhs, log_lhs_sqrt_abs_post}),
+        parameters({"gte_"}, {exp_floor_lhs_exp_rhs}),
+        parameters({"gt_"}, {sin_rhs}),
         parameters({"logical_and", "logical_or", "logical_xor", "bias_gelu"}, {log_lhs_sqrt_abs_post}),
         parameters({"div"}, {exp_post, tanh_post, exp2_post, expm1_post, i0_post, tan_post}),
         parameters({"sub"}, {log_post, log2_post, log10_post}),

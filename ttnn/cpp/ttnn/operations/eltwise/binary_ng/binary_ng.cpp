@@ -201,5 +201,11 @@ template struct BinaryNg<BinaryOpType::LOGADDEXP2>;
 template struct InplaceBinaryNg<BinaryOpType::ADD>;
 template struct InplaceBinaryNg<BinaryOpType::SUB>;
 template struct InplaceBinaryNg<BinaryOpType::MUL>;
+template struct InplaceBinaryNg<BinaryOpType::GT>;
+template struct InplaceBinaryNg<BinaryOpType::LT>;
+template struct InplaceBinaryNg<BinaryOpType::LTE>;
+template struct InplaceBinaryNg<BinaryOpType::GTE>;
+template struct InplaceBinaryNg<BinaryOpType::EQ>;
+template struct InplaceBinaryNg<BinaryOpType::NE>;
 
 }  // namespace ttnn::operations::binary_ng

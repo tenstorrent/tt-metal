@@ -185,4 +185,28 @@ constexpr auto mul_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::mul_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::MUL>>();
 
+constexpr auto gt_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::gt_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::GT>>();
+
+constexpr auto lt_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::lt_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LT>>();
+
+constexpr auto lte_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::lte_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LTE>>();
+
+constexpr auto gte_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::gte_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::GTE>>();
+
+constexpr auto eq_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::eq_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::EQ>>();
+
+constexpr auto ne_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::ne_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::NE>>();
+
 }  // namespace ttnn::experimental
