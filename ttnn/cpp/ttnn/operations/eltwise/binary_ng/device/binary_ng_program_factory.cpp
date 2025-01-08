@@ -5,6 +5,7 @@
 #include "binary_ng_utils.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -184,7 +185,39 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     Buffer* c_buffer = c.buffer();
 
     auto op_type = operation_attributes.binary_op_type;
-    auto compute_kernel_defines = OpConfig(op_type).as_defines();
+    OpConfig op_config(op_type);
+    auto compute_kernel_defines = op_config.as_defines();
+
+    {
+        ttnn::SmallVector<unary::UnaryOpType> lhs_activations = operation_attributes.lhs_activations;
+        ttnn::SmallVector<unary::UnaryOpType> rhs_activations = operation_attributes.rhs_activations;
+        ttnn::SmallVector<unary::UnaryOpType> post_activations = operation_attributes.post_activations;
+
+        if (op_config.process_lhs.has_value()) {
+            lhs_activations.push_back(*op_config.process_lhs);
+        }
+
+        if (op_config.process_rhs.has_value()) {
+            rhs_activations.push_back(*op_config.process_rhs);
+        }
+
+        if (op_config.postprocess.has_value()) {
+            post_activations.insert(post_activations.begin(), *op_config.postprocess);
+        }
+
+        add_activation_defines(compute_kernel_defines, lhs_activations, "LHS");
+        add_activation_defines(compute_kernel_defines, rhs_activations, "RHS");
+
+        if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1 and
+            post_activations[0] == unary::UnaryOpType::RELU) {
+            compute_kernel_defines["PACK_RELU"] = "1";
+            compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
+            unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
+        } else {
+            add_activation_defines(compute_kernel_defines, post_activations, "POST");
+        }
+    }
+
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
 
@@ -193,7 +226,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     auto [a_cb, a_cb_handle] =
         create_cb(tt::CBIndex::c_0, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
 
-    if (compute_kernel_defines.find("PREPROCESS_A_INIT") != compute_kernel_defines.end()) {
+    if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
         auto a_intermediate_format = op_has_exp ? tt::DataFormat::Float16_b : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt_metal::detail::TileSize(a_intermediate_format);
         auto [a_cb_interim, a_cb_interim_handle] = create_cb(
@@ -208,7 +241,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     auto [b_cb, b_cb_handle] =
         create_cb(tt::CBIndex::c_1, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
-    if (compute_kernel_defines.find("PREPROCESS_B_INIT") != compute_kernel_defines.end()) {
+    if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
         auto b_intermediate_format = op_has_exp ? tt::DataFormat::Float16_b : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt_metal::detail::TileSize(b_intermediate_format);
         auto [b_cb_interim, b_cb_interim_handle] = create_cb(

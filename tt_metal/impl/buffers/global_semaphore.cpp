@@ -14,13 +14,13 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
 GlobalSemaphore::GlobalSemaphore(
-    Device* device,
+    IDevice* device,
     const CoreRangeSet& cores,
     uint32_t initial_value,
     BufferType buffer_type,
@@ -30,7 +30,7 @@ GlobalSemaphore::GlobalSemaphore(
 }
 
 GlobalSemaphore::GlobalSemaphore(
-    Device* device,
+    IDevice* device,
     CoreRangeSet&& cores,
     uint32_t initial_value,
     BufferType buffer_type,
@@ -62,7 +62,7 @@ void GlobalSemaphore::setup_buffer(
     this->reset_semaphore_value(initial_value, sub_device_ids);
 }
 
-Device* GlobalSemaphore::device() const { return device_; }
+IDevice* GlobalSemaphore::device() const { return device_; }
 
 DeviceAddr GlobalSemaphore::address() const { return buffer_->address(); }
 

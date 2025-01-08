@@ -18,7 +18,7 @@ namespace ccl {
 namespace reduce_scatter_detail {
 
 ReduceScatterWorkerArgBuilder::ReduceScatterWorkerArgBuilder (
-    Device const* device,
+    IDevice const* device,
     ttnn::ccl::CCLOpConfig const& op_config,
     ttnn::ccl::RingTopology const& topology_config,
     ttnn::ccl::InterleavedTensorWorkerSlice const& worker_input_slice,

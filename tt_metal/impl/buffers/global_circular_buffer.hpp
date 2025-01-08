@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class Buffer;
-class Device;
+class IDevice;
 
 }  // namespace v0
 
@@ -28,7 +28,7 @@ namespace experimental {
 class GlobalCircularBuffer {
 public:
     GlobalCircularBuffer(
-        Device* device,
+        IDevice* device,
         const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type = BufferType::L1,
@@ -60,7 +60,7 @@ private:
     // This can be updated in the future to be its own container with optimized dispatch functions
     std::shared_ptr<Buffer> cb_buffer_;
     std::shared_ptr<Buffer> cb_config_buffer_;
-    Device* device_;
+    IDevice* device_;
     std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;

@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -17,7 +18,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 // Forward declarations
-class Device;
+class IDevice;
 
 }  // namespace v0
 }  // namespace tt::tt_metal
@@ -56,7 +57,10 @@ void generate_ccl_cb_to_tensor_slice_sequence_commands(
     ttnn::ccl::cmd::CclCommandDestArgs const& dest_args);
 void generate_ccl_command_stream_to_kernel_args(
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream,
-    std::vector<uint32_t>& args_out);
+    std::optional<size_t> tensor_index,
+    std::optional<std::vector<size_t>> const& tensor_indices,
+    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider_out,
+    std::vector<uint32_t>& rt_args_out);
 
 // TODO: eventually take a fabric handle
 void generate_multi_input_command_stream_kernel_rt_args(
@@ -64,14 +68,16 @@ void generate_multi_input_command_stream_kernel_rt_args(
     KernelHandle kernel_id,
     std::vector<Tensor const*> const& tensors,
     std::vector<size_t> const& page_sizes,
-    Device* device,
+    IDevice* device,
     uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
     CoreRangeSet const& worker_core_range,
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream0,
     std::optional<std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>> const& ccl_command_stream1,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<std::unordered_map<const Tensor*, Device*>> const& tensor_device_override = std::nullopt);
+    std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override = std::nullopt,
+    std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
+    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);
 // Helper functions for building command processing datamovement kernels
 // TODO: Bundle into command bundle per command stream to cut down
 //       on args and improve usability
@@ -80,7 +86,7 @@ void generate_multi_command_stream_kernel_rt_args(
     KernelHandle kernel_id,
     std::vector<uint32_t> const& cb_ids,
     std::vector<const Tensor*> const& tensors,
-    Device* device,
+    IDevice* device,
     uint32_t page_size,  // TODO: get from tensors
     CoreRangeSet const& worker_core_range,
     uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
@@ -111,15 +117,15 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
 // a) Allows dispatch overheads to be partly or fully hidden
 // b) Allows producer and consumer ops to more natively overlap execution
 void build_sync_kernels(
-    Device* device,
+    IDevice* device,
     tt::tt_metal::Program& program,
     ccl::SyncModeSpec const& sync_details,
     bool terminate_fabric,
     ccl::EdmLineFabricOpInterface& fabric_interface);
 ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_commands(
     tt::tt_metal::Program& program,
-    Device* device,
-    Device* forward_device,
+    IDevice* device,
+    IDevice* forward_device,
     size_t line_size,
     size_t line_index,
     std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos,
@@ -128,7 +134,7 @@ ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_comma
 
 struct CCLWorkerArgBuilder {
     CCLWorkerArgBuilder(
-        tt::tt_metal::Device const* device,
+        tt::tt_metal::IDevice const* device,
         ttnn::ccl::CCLOpConfig const& op_config,
         ttnn::ccl::TensorPartition const& input_tensor_partition,
         ttnn::ccl::TensorPartition const& output_tensor_partition,
@@ -159,7 +165,7 @@ struct CCLWorkerArgBuilder {
 
     std::vector<uint32_t> generate_sender_writer_kernel_ct_args() const;
 
-    tt::tt_metal::Device const* device;
+    tt::tt_metal::IDevice const* device;
     ttnn::ccl::TensorPartition const input_tensor_partition;
     ttnn::ccl::TensorPartition const output_tensor_partition;
     ttnn::ccl::CCLOpConfig const op_config;
