@@ -835,7 +835,6 @@ void Device::clear_l1_state() {
             virtual_core,
             zero_vec_above_tile_header_buffer,
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER));
-
     }
     // TODO: clear idle eriscs as well
 }
