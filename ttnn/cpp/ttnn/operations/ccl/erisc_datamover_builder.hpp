@@ -8,7 +8,6 @@
 #include <optional>
 #include <vector>
 
-#include "eth_l1_address_map.h"
 #include "ttnn/distributed/types.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
@@ -17,6 +16,7 @@
 
 #include "tt_metal/device.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/experimental/hal.hpp"
 
 #include <vector>
 #include <unordered_map>
@@ -33,54 +33,53 @@ struct FabricEriscDatamoverConfig {
 
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
-    static constexpr std::size_t handshake_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE/* + 1024*/;
-    static constexpr std::size_t edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
-    static constexpr std::size_t termination_signal_address =
+    std::size_t handshake_addr = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base()/* + 1024*/;
+    std::size_t edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
+    std::size_t termination_signal_address =
         edm_channel_ack_addr + (2 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
 
     // ----------- Sender Channel 0
-    static constexpr std::size_t sender_channel_0_buffer_index_address = termination_signal_address + field_size;
-    static constexpr std::size_t sender_channel_0_worker_connection_info_address =
+    std::size_t sender_channel_0_buffer_index_address = termination_signal_address + field_size;
+    std::size_t sender_channel_0_worker_connection_info_address =
         sender_channel_0_buffer_index_address + field_size;
-    static constexpr std::size_t sender_channel_0_local_flow_control_semaphore_address =
+    std::size_t sender_channel_0_local_flow_control_semaphore_address =
         sender_channel_0_worker_connection_info_address + field_size;
     // persistent mode field
-    static constexpr std::size_t sender_channel_0_connection_semaphore_address =
+    std::size_t sender_channel_0_connection_semaphore_address =
         sender_channel_0_local_flow_control_semaphore_address + field_size;
     // persistent mode field
-    static constexpr std::size_t sender_channel_0_buffer_index_semaphore_address =
+    std::size_t sender_channel_0_buffer_index_semaphore_address =
         sender_channel_0_connection_semaphore_address + field_size;
 
     static_assert(field_size >= sizeof(tt::fabric::EDMChannelWorkerLocationInfo));
 
     // ----------- Sender Channel 1
-    static constexpr std::size_t sender_channel_1_buffer_index_address =
+    std::size_t sender_channel_1_buffer_index_address =
         sender_channel_0_buffer_index_semaphore_address + field_size;
-    static constexpr std::size_t sender_channel_1_worker_connection_info_address =
+    std::size_t sender_channel_1_worker_connection_info_address =
         sender_channel_1_buffer_index_address + field_size;
-    static constexpr std::size_t sender_channel_1_local_flow_control_semaphore_address =
+    std::size_t sender_channel_1_local_flow_control_semaphore_address =
         sender_channel_1_worker_connection_info_address + field_size;
     // persistent mode field
-    static constexpr std::size_t sender_channel_1_connection_semaphore_address =
+    std::size_t sender_channel_1_connection_semaphore_address =
         sender_channel_1_local_flow_control_semaphore_address + field_size;
     // persistent mode field
-    static constexpr std::size_t sender_channel_1_buffer_index_semaphore_address =
+    std::size_t sender_channel_1_buffer_index_semaphore_address =
         sender_channel_1_connection_semaphore_address + field_size;
 
     // ----------- Receiver Channel
-    static constexpr std::size_t receiver_channel_local_buffer_index_address =
+    std::size_t receiver_channel_local_buffer_index_address =
         sender_channel_1_buffer_index_semaphore_address + field_size;
     // persistent mode field
-    static constexpr std::size_t receiver_channel_downstream_flow_control_semaphore_address =
+    std::size_t receiver_channel_downstream_flow_control_semaphore_address =
         receiver_channel_local_buffer_index_address + field_size;
 
     // Channel Allocations
-    static constexpr std::size_t buffer_region_start =
+    std::size_t max_l1_loading_size = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base();
+    std::size_t buffer_region_start =
         (receiver_channel_downstream_flow_control_semaphore_address + field_size + buffer_alignment) & ~(buffer_alignment - 1); // Align
-    static constexpr std::size_t available_channel_buffering_space =
-        eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - buffer_region_start;
-
-    static_assert(sender_channel_1_buffer_index_address != sender_channel_0_buffer_index_address);
+    std::size_t available_channel_buffering_space =
+        max_l1_loading_size - buffer_region_start;
 
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size);
