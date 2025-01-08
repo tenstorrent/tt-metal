@@ -29,8 +29,11 @@ ttnn.attach_golden_function(ttnn.experimental.ldexp, golden_function=lambda a, b
 ttnn.attach_golden_function(ttnn.experimental.logaddexp, golden_function=lambda a, b: torch.logaddexp(a, b))
 ttnn.attach_golden_function(ttnn.experimental.logaddexp2, golden_function=lambda a, b: torch.logaddexp2(a, b))
 ttnn.attach_golden_function(ttnn.experimental.logical_and, golden_function=lambda a, b: torch.logical_and(a, b))
+ttnn.attach_golden_function(ttnn.experimental.logical_and_, golden_function=lambda a, b: torch.logical_and(a, b))
 ttnn.attach_golden_function(ttnn.experimental.logical_or, golden_function=lambda a, b: torch.logical_or(a, b))
+ttnn.attach_golden_function(ttnn.experimental.logical_or_, golden_function=lambda a, b: torch.logical_or(a, b))
 ttnn.attach_golden_function(ttnn.experimental.logical_xor, golden_function=lambda a, b: torch.logical_xor(a, b))
+ttnn.attach_golden_function(ttnn.experimental.logical_xor_, golden_function=lambda a, b: torch.logical_xor(a, b))
 ttnn.attach_golden_function(
     ttnn.experimental.squared_difference, golden_function=lambda a, b: torch.square(torch.sub(a, b))
 )

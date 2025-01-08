@@ -209,4 +209,16 @@ constexpr auto ne_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::ne_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::NE>>();
 
+constexpr auto logical_and_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::logical_and_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_AND>>();
+
+constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::logical_or_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_OR>>();
+
+constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::logical_xor_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_XOR>>();
+
 }  // namespace ttnn::experimental

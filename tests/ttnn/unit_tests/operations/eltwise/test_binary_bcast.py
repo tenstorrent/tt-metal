@@ -41,6 +41,9 @@ binary_fns = {
     "gte_",
     "eq_",
     "ne_",
+    "logical_and_",
+    "logical_or_",
+    "logical_xor_",
 }
 activation_fns = {
     "EXP": torch.exp,
@@ -143,7 +146,7 @@ def rand_bf16_gen(shape, device, *, min=0, max=1):
         parameters({"lte_"}, {sin_rhs, log_lhs_sqrt_abs_post}),
         parameters({"gte_"}, {exp_floor_lhs_exp_rhs}),
         parameters({"gt_"}, {sin_rhs}),
-        parameters({"logical_and", "logical_or", "logical_xor", "bias_gelu"}, {log_lhs_sqrt_abs_post}),
+        parameters({"logical_and", "logical_or", "logical_xor", "bias_gelu", "logical_or_"}, {log_lhs_sqrt_abs_post}),
         parameters({"div"}, {exp_post, tanh_post, exp2_post, expm1_post, i0_post, tan_post}),
         parameters({"sub"}, {log_post, log2_post, log10_post}),
         parameters({"ldexp"}, {erfinv_post, tan_post, floor_post, ceil_post}),

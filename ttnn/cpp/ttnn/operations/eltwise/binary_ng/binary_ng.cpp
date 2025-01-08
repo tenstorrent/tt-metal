@@ -207,5 +207,8 @@ template struct InplaceBinaryNg<BinaryOpType::LTE>;
 template struct InplaceBinaryNg<BinaryOpType::GTE>;
 template struct InplaceBinaryNg<BinaryOpType::EQ>;
 template struct InplaceBinaryNg<BinaryOpType::NE>;
+template struct InplaceBinaryNg<BinaryOpType::LOGICAL_AND>;
+template struct InplaceBinaryNg<BinaryOpType::LOGICAL_OR>;
+template struct InplaceBinaryNg<BinaryOpType::LOGICAL_XOR>;
 
 }  // namespace ttnn::operations::binary_ng
