@@ -482,16 +482,16 @@ bool ProcessorHooks::hook_program(tt::tt_metal::Program*) { return do_block; }
 void ProcessorHooks::set_block(bool block) { do_block = block; }
 bool ProcessorHooks::get_block() const { return do_block; }
 
-GraphCaptureScopeGuard::GraphCaptureScopeGuard(GraphProcessor::RunMode mode) {
+ScopedGraphCapture::ScopedGraphCapture(GraphProcessor::RunMode mode) {
     GraphProcessor::begin_graph_capture(mode);
     is_active = true;
 }
-GraphCaptureScopeGuard::~GraphCaptureScopeGuard() {
+ScopedGraphCapture::~ScopedGraphCapture() {
     if (is_active) {
         GraphProcessor::end_graph_capture();
     }
 }
-nlohmann::json GraphCaptureScopeGuard::end_graph_capture() {
+nlohmann::json ScopedGraphCapture::end_graph_capture() {
     is_active = false;
     return GraphProcessor::end_graph_capture();
 }

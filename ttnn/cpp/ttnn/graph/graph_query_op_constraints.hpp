@@ -49,7 +49,7 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
         nlohmann::json op_trace;
         // outer graph capture is to avoid dispatching/allocating dummy input tensors
         {
-            auto capture_outer = GraphCaptureScopeGuard(GraphProcessor::RunMode::NO_DISPATCH);
+            auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
 
             // helper lambda to transform TensorSpec to DeviceTensor
             auto transform_arg = [device](auto&& arg) {
@@ -63,7 +63,7 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
 
             // inner graph capture is to capture the actual op graph trace
             {
-                auto capture_inner = GraphCaptureScopeGuard(GraphProcessor::RunMode::NO_DISPATCH);
+                auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
                 std::apply(op, transformed_args);
                 op_trace = capture_inner.end_graph_capture();
             }  // end of inner graph capture

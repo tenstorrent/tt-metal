@@ -124,8 +124,8 @@ INSTANTIATE_TEST_SUITE_P(
     });
 }  // namespace ttnn::graph::test
 
-class TestGraphCaptureScopeGuard : public ttnn::TTNNFixtureWithDevice {};
-TEST_F(TestGraphCaptureScopeGuard, GraphCaptureScopedGuard) {
+class TestScopedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
+TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
     tt::tt_metal::Device* device = &(this->getDevice());
 
     auto operation = [&device](tt::tt_metal::DataType datatype) {
@@ -141,7 +141,7 @@ TEST_F(TestGraphCaptureScopeGuard, GraphCaptureScopedGuard) {
     std::vector<std::string> ref_calltrace;
     nlohmann::json ref_json_trace;
     {
-        auto capture = ttnn::graph::GraphCaptureScopeGuard(IGraphProcessor::RunMode::NO_DISPATCH);
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
         operation(tt::tt_metal::DataType::BFLOAT16);
         ref_json_trace = capture.end_graph_capture();
         ref_calltrace = ttnn::graph::extract_calltrace(ref_json_trace);
@@ -152,9 +152,9 @@ TEST_F(TestGraphCaptureScopeGuard, GraphCaptureScopedGuard) {
 
     // with manual exception in the nested loop
     {
-        auto capture = ttnn::graph::GraphCaptureScopeGuard(IGraphProcessor::RunMode::NO_DISPATCH);
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
         try {
-            auto capture = ttnn::graph::GraphCaptureScopeGuard(IGraphProcessor::RunMode::NO_DISPATCH);
+            auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
             operation(tt::tt_metal::DataType::BFLOAT16);
             throw std::runtime_error("Expected");
         } catch (const std::exception& e) {
@@ -166,9 +166,9 @@ TEST_F(TestGraphCaptureScopeGuard, GraphCaptureScopedGuard) {
 
     // with exception in the operation #1
     {
-        auto capture = ttnn::graph::GraphCaptureScopeGuard(IGraphProcessor::RunMode::NO_DISPATCH);
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
         try {
-            auto capture = ttnn::graph::GraphCaptureScopeGuard(IGraphProcessor::RunMode::NO_DISPATCH);
+            auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
             operation(tt::tt_metal::DataType::INVALID);  // fails at a first create_device_tensor (before softmax)
         } catch (const std::exception& e) {
             EXPECT_TRUE(std::string(e.what()).find("TT_ASSERT") != std::string::npos);
@@ -181,9 +181,9 @@ TEST_F(TestGraphCaptureScopeGuard, GraphCaptureScopedGuard) {
 
     // with exception in the operation #2
     {
-        auto capture = ttnn::graph::GraphCaptureScopeGuard(IGraphProcessor::RunMode::NO_DISPATCH);
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
         try {
-            auto capture = ttnn::graph::GraphCaptureScopeGuard(IGraphProcessor::RunMode::NO_DISPATCH);
+            auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
             operation(tt::tt_metal::DataType::UINT8);  // fails in the softmax::validate (not supported data type)
         } catch (const std::exception& e) {
             EXPECT_TRUE(std::string(e.what()).find("FATAL") != std::string::npos);
@@ -202,7 +202,7 @@ TEST_F(TestGraphCaptureScopeGuard, GraphCaptureScopedGuard) {
 
     // check original again to ensure it's not affected by the thrown exceptions
     {
-        auto capture = ttnn::graph::GraphCaptureScopeGuard(IGraphProcessor::RunMode::NO_DISPATCH);
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
         operation(tt::tt_metal::DataType::BFLOAT16);
         auto json_trace = capture.end_graph_capture();
         // std::cout << json_trace.dump(4);

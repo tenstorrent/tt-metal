@@ -112,26 +112,26 @@ public:
 };
 
 /**
- * @class GraphCaptureScopeGuard
+ * @class ScopedGraphCapture
  * @brief A RAII wrapper around graph capture that ensures proper resource management.
  *
  * This class automatically calls begin_graph_capture upon construction and
  * end_graph_capture when it goes out of scope. It can be ended regularly
- * by calling GraphCaptureScopeGuard::end_graph_capture().
+ * by calling ScopedGraphCapture::end_graph_capture().
  *
  * @note Copy and move operations are deleted to prevent multiple instances
  * managing the same resource.
  */
-class GraphCaptureScopeGuard {
+class ScopedGraphCapture {
 public:
-    GraphCaptureScopeGuard(GraphProcessor::RunMode mode);
-    ~GraphCaptureScopeGuard();
+    ScopedGraphCapture(GraphProcessor::RunMode mode);
+    ~ScopedGraphCapture();
     nlohmann::json end_graph_capture();
 
-    GraphCaptureScopeGuard(const GraphCaptureScopeGuard&) = delete;
-    GraphCaptureScopeGuard(GraphCaptureScopeGuard&&) = delete;
-    GraphCaptureScopeGuard& operator=(const GraphCaptureScopeGuard&) = delete;
-    GraphCaptureScopeGuard& operator=(GraphCaptureScopeGuard&&) = delete;
+    ScopedGraphCapture(const ScopedGraphCapture&) = delete;
+    ScopedGraphCapture(ScopedGraphCapture&&) = delete;
+    ScopedGraphCapture& operator=(const ScopedGraphCapture&) = delete;
+    ScopedGraphCapture& operator=(ScopedGraphCapture&&) = delete;
 
 private:
     bool is_active = false;
