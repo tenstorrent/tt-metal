@@ -297,21 +297,9 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.get_shape();
 
-    auto extract_device_ids = [](const std::vector<tt::tt_metal::Buffer*>& buffers) {
-        std::string device_ids;
-        for (size_t idx = 0; idx < buffers.size(); ++idx) {
-            if (idx > 0) {
-                device_ids += ", ";
-            }
-            device_ids += std::to_string(buffers[idx]->device()->id());
-        }
-        return device_ids;
-    };
-
     std::unordered_map<std::string, std::string> params = {
         {kShape, fmt::format("{}", shape)},
         {kTensorId, fmt::format("{}", tensor_id)},
-        {kDeviceId, extract_device_ids(buffers)},
     };
 
     if (tensor_id_to_counter.count(tensor_id) == 0) {
