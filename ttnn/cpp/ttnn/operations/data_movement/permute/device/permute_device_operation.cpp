@@ -26,6 +26,8 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
         if ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
             (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
             return MultiCoreTileInvariant{};
+        } else if (dims[rank - 1] == rank - 1) {
+            return MultiCoreTileRowInvariant{};
         }
     }
     return MultiCoreBlockedGeneric{};
@@ -42,8 +44,7 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.input_tensor.get_layout() == Layout::ROW_MAJOR ||
             (tensor_args.input_tensor.get_layout() == Layout::TILE &&
-             ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
-              (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1))),
+             ((dims[rank - 1] == rank - 1) || (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1))),
         "Permute operation only supports row-major layout");
 }
 
