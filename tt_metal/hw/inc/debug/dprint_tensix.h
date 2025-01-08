@@ -11,6 +11,8 @@
 #include "dprint.h"
 #include "tensix_types.h"
 
+#include "cpack_common.h"
+
 // Given a Tensix configuration register field name, print the contents of the register.
 // Uses tt_metal/hw/inc/<family>/cfg_defines.h:
 //   For config section "Registers for THREAD", use banks THREAD_0_CFG, THREAD_1_CFG, THREAD_2_CFG
@@ -390,7 +392,7 @@ inline void dprint_tensix_pack_config_grayskull(uint32_t reg_addr, const volatil
     // word 3
     word = cfg[reg_addr + 3];
     dprint_tensix_struct_field(word, 0xffff, 0, "dsmpl_mask");
-    dprint_tensix_struct_field(word, 0x70000, 16, "dsmpl_shcnt", true); // decimal 
+    dprint_tensix_struct_field(word, 0x70000, 16, "dsmpl_shcnt", true);  // decimal
     dprint_tensix_struct_field(word, 0x80000, 19, "r_md");
     dprint_tensix_struct_field(word, 0x100000, 20, "exp_th_en");
     dprint_tensix_struct_field(word, 0xe00000, 21, "r2");
@@ -424,7 +426,7 @@ inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile
     // word 3
     word = cfg[reg_addr + 3];
     dprint_tensix_struct_field(word, 0xffff, 0, "dsmpl_mask");
-    dprint_tensix_struct_field(word, 0x70000, 16, "dsmpl_shcnt", true); // decimal 
+    dprint_tensix_struct_field(word, 0x70000, 16, "dsmpl_shcnt", true);  // decimal
     dprint_tensix_struct_field(word, 0x80000, 19, "r_md");
     dprint_tensix_struct_field(word, 0x100000, 20, "exp_th_en");
     dprint_tensix_struct_field(word, 0x600000, 21, "pck_l1_ac_dis_pck_0_flg");
@@ -517,8 +519,7 @@ inline void dprint_tensix_unpack_config(){
 }
 
 // Choose what register you want printed with reg_id (1-4), ALL not implemented due to dprint buffer size restriction
-inline void dprint_tensix_pack_config(uint reg_id = 1){
-    
+inline void dprint_tensix_pack_config(uint reg_id = 1) {
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
@@ -737,7 +738,7 @@ inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint t
     uint32_t word = cfg[reg_addr];
     dprint_tensix_struct_field(word, 0xfff, 0, "x_stride", true); // decimal
     dprint_tensix_struct_field(word, 0xfff000, 12, "y_stride", true); // decimal
-    
+
     // word 1 zw_stride
     word = cfg[reg_addr + 1];
     dprint_tensix_struct_field(word, 0xfff, 0, "z_stride", true); // decimal
@@ -765,4 +766,8 @@ inline void dprint_tensix_pack_strides(uint reg_id = 0) {
     DPRINT << ENDL();
 }
 
-
+inline void test_read_pack_config() {
+    ckernel::packer::pack_config_u config;
+    config.f = ckernel::packer::read_pack_config(1);
+    DPRINT << config.f.out_data_format << ENDL();
+}

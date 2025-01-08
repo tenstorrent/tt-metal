@@ -9,6 +9,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "debug/dprint.h"
 #include "debug/dprint_tensix.h"
+
 namespace NAMESPACE {
 
 void MAIN {
@@ -47,6 +48,9 @@ void MAIN {
     //dprint_tensix_pck_edge_offset();
     //dprint_tensix_pack_counters();
     //dprint_tensix_pack_strides();
+
+    // TESTING READ FOR CONFIG REGISTERS
+    // test_read_pack_config();
 
     release_dst();
 }
