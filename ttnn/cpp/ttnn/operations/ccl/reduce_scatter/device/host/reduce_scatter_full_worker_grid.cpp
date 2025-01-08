@@ -67,7 +67,7 @@ struct EdmInterfaceAddresses {
 // 2) Compute the semaphore and buffer addresses (for each EDM channel and worker)
 // For now - the mapping between workers and EDM channels is 1:1
 static void add_worker_config_to_edm_builders(
-    Device* device,
+    IDevice* device,
     RingReduceScatterWrappedTensorSlicer&
         tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
     std::vector<WorkerAttributes> const& all_worker_attributes,
@@ -271,7 +271,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
 
 static void set_reduce_scatter_worker_rt(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     KernelHandle worker_receiver_kernel_id,
     KernelHandle worker_sender_kernel_id,
     KernelHandle worker_reduce_kernel_id,
@@ -327,7 +327,6 @@ static void set_reduce_scatter_worker_rt(
             edm_noc_coord = ttnn::ccl::WorkerXY(
                 device->ethernet_core_from_logical_core(sender_edm).x,
                 device->ethernet_core_from_logical_core(sender_edm).y);
-            TT_ASSERT(edm_noc_coord.y == 0 || edm_noc_coord.y == 6);
             edm_core_semaphore_address =
                 edm_interface_addresses.worker_sender_edm_semaphore_addresses.at(global_worker_index);
             edm_core_buffer_address =

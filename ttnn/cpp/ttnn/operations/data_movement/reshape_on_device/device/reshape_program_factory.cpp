@@ -28,7 +28,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     uint32_t num_tiles = a.volume() / tt::constants::TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
@@ -213,7 +213,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();

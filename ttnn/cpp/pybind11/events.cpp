@@ -6,6 +6,7 @@
 
 #include "tt_metal/impl/event/event.hpp"
 #include "pybind11/pybind11.h"
+#include <pybind11/stl.h>
 
 using namespace tt::tt_metal;
 
@@ -20,7 +21,7 @@ void py_module(py::module& module) {
     // Single Device APIs
     module.def(
         "create_event",
-        py::overload_cast<Device*>(&create_event),
+        py::overload_cast<IDevice*>(&create_event),
         py::arg("device"),
         R"doc(
             Create an Event Object on a single device.

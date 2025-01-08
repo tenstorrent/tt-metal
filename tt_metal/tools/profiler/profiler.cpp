@@ -16,7 +16,7 @@
 #include "llrt/rtoptions.hpp"
 #include "dev_msgs.h"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 namespace tt {
 
@@ -384,7 +384,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
     }
 }
 
-void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& worker_cores, bool lastDump) {
+void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& worker_cores, bool lastDump) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 

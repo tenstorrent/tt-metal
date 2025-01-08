@@ -52,7 +52,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
-    Device* device = input.device();
+    IDevice* device = input.device();
 
     uint32_t num_units = output.get_logical_volume() / output.get_logical_shape()[-1];
 

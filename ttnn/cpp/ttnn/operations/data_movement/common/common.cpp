@@ -5,24 +5,52 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace data_movement {
-ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor) {
-    auto shape = tensor.get_shape();
+
+ttnn::Shape squeeze_shape_to_4D(ttnn::Shape shape) {
     if (shape.rank() <= 4) {
+        return shape;
+    }
+    std::array<uint32_t, 4> shape_4d;
+    shape_4d[0] = 1;
+    int extra_rank = shape.rank() - 4;
+    for (int i = extra_rank; i >= 0; i--) {
+        shape_4d[0] *= shape[i];
+    }
+    shape_4d[1] = shape[1 + extra_rank];
+    shape_4d[2] = shape[2 + extra_rank];
+    shape_4d[3] = shape[3 + extra_rank];
+    return ttnn::Shape(shape_4d);
+}
+
+ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
+    auto shape = tensor.get_shape();
+    auto rank = shape.rank();
+    TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4! Instead is {}", shape.rank());
+    if (rank == 4) {
         return tensor;
-    } else {
-        auto rank = shape.rank();
+    }
+    int i = 0;
+    // This is a workaround for now, it will be fixed in another PR
+    if (shape[i] == 1) {
         auto squeezed = tensor;
-        while (rank > 4) {
+        while (rank > 4 && shape[i] == 1) {
             squeezed = ttnn::squeeze(squeezed, 0);
             rank = squeezed.get_shape().rank();
+            i++;
         }
-        return squeezed;
+        if (rank <= 4) {
+            return squeezed;
+        }
+        return ttnn::reshape(squeezed, squeeze_shape_to_4D(shape));
     }
-};
+    return ttnn::reshape(tensor, squeeze_shape_to_4D(shape));
+}
 
 ttnn::Tensor pad_to_tile_vol(
     uint8_t queue_id,

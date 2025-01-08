@@ -8,7 +8,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/test_tiles.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
 #include <algorithm>
@@ -61,7 +61,7 @@ void matmul_multicore_reuse_mcast(
     uint32_t N,
     uint32_t K,
     uint32_t B,
-    Device* device) {
+    IDevice* device) {
     /*
      * Setup program to execute along with its buffers and kernels to use
      * Core range is just single core
@@ -485,7 +485,7 @@ int main(int argc, char** argv) {
     try {
         /* Silicon accelerator setup */
         constexpr int device_id = 0;
-        Device* device = CreateDevice(device_id);
+        IDevice* device = CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Matmul Parameters Setup

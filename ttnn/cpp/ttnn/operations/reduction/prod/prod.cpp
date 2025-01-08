@@ -59,7 +59,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     }
     // Apply prod
     ttnn::SmallVector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
-    tt::tt_metal::LegacyShape input_shape = formatted_input_tensor.get_legacy_shape();
+    const auto input_shape = formatted_input_tensor.get_shape();
     std::array<uint32_t, 4> required = {
         ((dim == 1 || dim == -3) ? input_shape[0] : 1),
         ((dim == 1 || dim == -3) ? 1 : input_shape[1]),
@@ -75,7 +75,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
             ttnn_shape,
             formatted_input_tensor.get_dtype(),
             formatted_input_tensor.get_layout(),
-            std::optional<std::reference_wrapper<tt::tt_metal::Device>>(*ttnn_device),
+            std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*ttnn_device),
             output_mem_config),
         dimension,
         output_mem_config);
@@ -105,7 +105,7 @@ Tensor ProdOperation::invoke(
     } else if (dim == 2 || dim == -2) {
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
-        tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
+        const auto input_shape = input_a.get_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
         return ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
@@ -114,7 +114,7 @@ Tensor ProdOperation::invoke(
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         // unpad
-        tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
+        const auto input_shape = input_a.get_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
         Tensor new_unpad_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);

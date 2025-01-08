@@ -11,7 +11,7 @@
 #include <optional>
 #include <functional>
 
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -65,8 +65,8 @@ enum class MeshType { RowMajor, Ring, Line };
 
 class MeshDeviceView {
 public:
-    using device_pointer = Device*;
-    using const_device_pointer = const Device*;
+    using device_pointer = IDevice*;
+    using const_device_pointer = const IDevice*;
     using DeviceView = std::vector<device_pointer>;
     using DeviceViews = std::vector<std::vector<device_pointer>>;
     using CoordinateMapper = std::function<std::optional<Coordinate>(int device_id)>;
@@ -128,7 +128,7 @@ private:
 };
 
 // Helper function to create a MeshDeviceView
-inline MeshDeviceView make_mesh_device_view(std::vector<Device*> devices, MeshDeviceView::CoordinateMapper mapper) {
+inline MeshDeviceView make_mesh_device_view(std::vector<IDevice*> devices, MeshDeviceView::CoordinateMapper mapper) {
     return MeshDeviceView(std::move(devices), std::move(mapper));
 }
 
