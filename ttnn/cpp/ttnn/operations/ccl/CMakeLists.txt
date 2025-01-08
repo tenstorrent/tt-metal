@@ -5,7 +5,9 @@ set(CCL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl_host_datastructures.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/types/ccl_types_args_emitters.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/host/command_backend_runtime_args_overrider.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/uops/ccl_command.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/uops/command_lowering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/uops/ccl_host_commands.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/host/ccl_worker_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/host/ccl_command_stream_builders.cpp

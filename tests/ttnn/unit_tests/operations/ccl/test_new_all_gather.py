@@ -184,27 +184,34 @@ def run_all_gather_impl(
         output_mem_config = mem_config
     ###
 
-    if rand_tensor:
-        output_tensor = torch.rand(output_shape).bfloat16()
-    else:
-        output_tensor = torch.zeros(output_shape)
-        tile_id = 1
-        for w in range(output_shape[0]):
-            for z in range(output_shape[1]):
-                for y in range(0, output_shape[2], 32):
-                    for x in range(0, output_shape[3], 32):
-                        output_tensor[w, z, y : y + 32, x : x + 32] = tile_id
-                        tile_id += 1
+    input_tensor_mesh_list = []
+    output_tensor_goldens_list = []
 
-    input_tensors = torch.chunk(output_tensor, num_devices, dim)
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
-        )
-        logger.info(f"using device {mesh_device.get_devices()[i].id()}")
+    for i in range(num_iters):
+        if rand_tensor:
+            output_tensor = torch.rand(output_shape).bfloat16()
+        else:
+            output_tensor = torch.zeros(output_shape)
+            tile_id = 1
+            for w in range(output_shape[0]):
+                for z in range(output_shape[1]):
+                    for y in range(0, output_shape[2], 32):
+                        for x in range(0, output_shape[3], 32):
+                            output_tensor[w, z, y : y + 32, x : x + 32] = tile_id
+                            tile_id += 1
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        output_tensor_goldens_list.append(output_tensor)
+        input_tensors = torch.chunk(output_tensor, num_devices, dim)
+        tt_input_tensors = []
+        for i, t in enumerate(input_tensors):
+            tt_input_tensors.append(
+                ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
+            )
+            logger.info(f"using device {mesh_device.get_devices()[i].id()}")
+
+        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+
+        input_tensor_mesh_list.append(input_tensor_mesh)
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     worker_sub_device = ttnn.SubDevice(
@@ -220,22 +227,24 @@ def run_all_gather_impl(
             mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
         )
 
+    tt_out_tensor_list = []
     if trace_mode:
         tt_out_tensor = run_with_trace(
             mesh_device,
             all_gather_topology,
-            input_tensor_mesh,
+            input_tensor_mesh_list[0],
             dim,
             num_links,
             output_mem_config,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
+        tt_out_tensor_list.append(tt_out_tensor)
     else:
         for i in range(num_iters):
             if use_cluster_axis_api:
                 tt_out_tensor = ttnn.experimental.all_gather_async(
-                    input_tensor_mesh,
+                    input_tensor_mesh_list[i],
                     dim,
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
@@ -249,7 +258,7 @@ def run_all_gather_impl(
 
             else:
                 tt_out_tensor = ttnn.experimental.all_gather_async(
-                    input_tensor_mesh,
+                    input_tensor_mesh_list[i],
                     dim,
                     num_links=num_links,
                     memory_config=output_mem_config,
@@ -257,6 +266,7 @@ def run_all_gather_impl(
                     subdevice_id=worker_sub_device_id,
                     enable_persistent_fabric_mode=enable_persistent_fabric,
                 )
+            tt_out_tensor_list.append(tt_out_tensor)
 
             logger.info(f"Waiting for op {i}")
             for d in mesh_device.get_devices():
@@ -266,17 +276,20 @@ def run_all_gather_impl(
     if enable_persistent_fabric and teardown_persistent_fabric:
         teardown_fabric_interface(mesh_device)
 
-    for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-        logger.info(f"Checking for device {t.device().id()}")
+    for tensor_index in range(len(tt_out_tensor_list)):
+        tt_out_tensor = tt_out_tensor_list[tensor_index]
+        output_tensor = output_tensor_goldens_list[tensor_index]
+        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+            tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+            logger.info(f"Checking for device {t.device().id()}")
 
-        if input_dtype == ttnn.bfloat16:
-            eq, output = comp_equal(tt_output_tensor, output_tensor)
-        else:
-            eq, output = comp_pcc(tt_output_tensor, output_tensor)
-        if not eq:
-            logger.error(f"output mismatch for tensor {i}")
-        assert eq, f"{i} FAILED: {output}"
+            if input_dtype == ttnn.bfloat16:
+                eq, output = comp_equal(tt_output_tensor, output_tensor)
+            else:
+                eq, output = comp_pcc(tt_output_tensor, output_tensor)
+            if not eq:
+                logger.error(f"output mismatch for tensor {i}")
+            assert eq, f"{i} FAILED: {output}"
 
 
 # Enumerate the post-commit cases explicitly
@@ -386,6 +399,15 @@ def test_all_gather(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
+        (
+            4,
+            [1, 4, 32, 1280],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
     ],
 )
 @pytest.mark.parametrize("num_links", [1])
@@ -431,6 +453,8 @@ def test_all_gather_sharded(
         input_shard_shape=input_shard_shape,
         shard_grid=shard_grid,
         tensor_mem_layout=tensor_mem_layout,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
     )
 
 

@@ -14,8 +14,7 @@ namespace tt {
 
 namespace tt_metal {
 
-namespace program_utils {
-#define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)
+namespace program_dispatch {
 
 struct ProgramDispatchMetadata {
     std::vector<ConfigBufferEntry> kernel_config_addrs;
@@ -37,6 +36,11 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     uint32_t crta_base_offset,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes);
+
+// Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
+// program data structures in L1. Will be used when assembling dispatch commands for this program
+template <typename T>
+void finalize_program_offsets(T& workload_type, Device* device);
 
 uint32_t finalize_rt_args(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
@@ -80,6 +84,8 @@ void assemble_runtime_args_commands(ProgramCommandSequence& program_command_sequ
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id);
 
+void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
+
 void reserve_space_in_kernel_config_buffer(
     WorkerConfigBufferMgr& config_buffer_mgr,
     const std::vector<uint32_t>& program_config_sizes,
@@ -91,7 +97,6 @@ void reserve_space_in_kernel_config_buffer(
 void update_program_dispatch_commands(
     Program& program,
     ProgramCommandSequence& cached_program_command_sequence,
-    const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
@@ -100,11 +105,23 @@ void update_program_dispatch_commands(
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
-    int num_unicast_txns = -1);
+    std::pair<bool, int> unicast_go_signal_update = {false, -1});
+
+void write_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    CoreType dispatch_core_type,
+    bool stall_first,
+    bool stall_before_program);
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
-}  // namespace program_utils
+template <typename WorkloadType, typename DeviceType>
+uint32_t program_base_addr_on_core(
+    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType programmable_core_type);
+
+}  // namespace program_dispatch
 
 }  // namespace tt_metal
 
