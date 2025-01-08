@@ -31,6 +31,7 @@ void set_or_update_runtime_arguments(
     F handle_args) {
     const auto& [a, b, d, e, f, _] = tensor_args;
     const auto eps = operation_attributes.eps;
+    const auto momentum = operation_attributes.momentum;
 
     const bool weight_has_value = e.has_value();
     const bool bias_has_value = f.has_value();
@@ -63,17 +64,21 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 11>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 12>{0});
             handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
             continue;
         }
 
         uint32_t cHtWt = cHt * cWt;
-        class bfloat16 bfloat_scalar(eps);
-        uint32_t packed_scalar = pack_two_bfloat16_into_uint32({bfloat_scalar, bfloat_scalar});
+        class bfloat16 bfloat_scalar_eps(eps);
+        uint32_t packed_scalar_eps = pack_two_bfloat16_into_uint32({bfloat_scalar_eps, bfloat_scalar_eps});
+        class bfloat16 bfloat_scalar_momentum(momentum);
+        uint32_t packed_scalar_momentum =
+            pack_two_bfloat16_into_uint32({bfloat_scalar_momentum, bfloat_scalar_momentum});
         std::array reader_runtime_args = {
-            packed_scalar,
+            packed_scalar_eps,
+            packed_scalar_momentum,
             a.buffer()->address(),
             start_tile_id,
             num_tiles_per_core,
@@ -187,6 +192,13 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         tt::CBIndex::c_16, program, all_device_cores, e_single_tile_size, b_num_tiles_per_cb, e_data_format);  // weight
     auto [f_cb, f_cb_handle] = create_cb(
         tt::CBIndex::c_18, program, all_device_cores, f_single_tile_size, b_num_tiles_per_cb, f_data_format);  // bias
+    auto [momentum_cb, momentum_cb_handle] = create_cb(
+        tt::CBIndex::c_24,
+        program,
+        all_device_cores,
+        d_single_tile_size,
+        b_num_tiles_per_cb,
+        d_data_format);  // momentum
 
     // Temporary buffers to store intermediate results
     auto [den_cb, den_cb_handle] = create_cb(
@@ -232,13 +244,16 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
              e_is_dram,
              f_is_dram,
              static_cast<uint32_t>(weight_has_value),
-             static_cast<uint32_t>(bias_has_value)}));
+             static_cast<uint32_t>(bias_has_value),
+             static_cast<uint32_t>(operation_attributes.training)}));
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
                             c_data_format == tt::DataFormat::Float32;
     std::vector<uint32_t> compute_kernel_args = {
-        static_cast<uint32_t>(weight_has_value), static_cast<uint32_t>(bias_has_value)};
+        static_cast<uint32_t>(weight_has_value),
+        static_cast<uint32_t>(bias_has_value),
+        static_cast<uint32_t>(operation_attributes.training)};
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp",
