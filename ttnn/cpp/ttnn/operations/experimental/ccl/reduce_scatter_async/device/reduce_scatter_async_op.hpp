@@ -8,6 +8,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn {
 struct ReduceScatterAsync {
@@ -23,8 +24,8 @@ struct ReduceScatterAsync {
         std::optional<std::vector<Tensor>>& foreward_output_tensors,
         std::optional<std::vector<Tensor>>& backward_output_tensors,
         std::optional<size_t> num_links_preferred,
-        const std::optional<std::shared_ptr<const GlobalSemaphore>>& from_remote_sem,
-        const std::optional<std::shared_ptr<const GlobalSemaphore>>& to_remote_sem,
+        const std::shared_ptr<const GlobalSemaphore>& from_remote_sem,
+        const std::shared_ptr<const GlobalSemaphore>& to_remote_sem,
         std::optional<SubDeviceId>& sub_device_id,
         std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) :
         binary_op_type(binary_op_type),
@@ -55,8 +56,8 @@ struct ReduceScatterAsync {
     std::optional<std::vector<Tensor>> foreward_output_tensors;
     std::optional<std::vector<Tensor>> backward_output_tensors;
     std::optional<size_t> num_links_preferred;
-    std::optional<std::shared_ptr<const GlobalSemaphore>> from_remote_sem;
-    std::optional<std::shared_ptr<const GlobalSemaphore>> to_remote_sem;
+    std::shared_ptr<const GlobalSemaphore> from_remote_sem;
+    std::shared_ptr<const GlobalSemaphore> to_remote_sem;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle;
     std::optional<SubDeviceId> sub_device_id;
 
@@ -104,8 +105,8 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     const uint32_t line_index,
     ttnn::ccl::Topology topology,
     std::optional<size_t> num_links_preferred,
-    const std::optional<std::shared_ptr<const GlobalSemaphore>>& from_remote_sem_opt,
-    const std::optional<std::shared_ptr<const GlobalSemaphore>>& to_remote_sem_opt,
+    const std::shared_ptr<const GlobalSemaphore>& from_remote_sem,
+    const std::shared_ptr<const GlobalSemaphore>& to_remote_sem,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 }
 };  // namespace ccl
@@ -122,8 +123,8 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<std::vector<Tensor>> foreward_output_tensors,
     std::optional<std::vector<Tensor>> backward_output_tensors,
     std::optional<size_t> num_links_preferred,
-    const std::optional<std::vector<std::shared_ptr<const GlobalSemaphore>>>& from_remote_sems,
-    const std::optional<std::vector<std::shared_ptr<const GlobalSemaphore>>>& to_remote_sems,
+    const std::vector<std::shared_ptr<const GlobalSemaphore>>& from_remote_sems,
+    const std::vector<std::shared_ptr<const GlobalSemaphore>>& to_remote_sems,
     std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 }  // namespace reduce_scatter_detail
@@ -135,24 +136,26 @@ namespace ccl {
 Tensor reduce_scatter(
     const Tensor& input_tensor,
     const int32_t dim,
+    const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
+    const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt,  // TODO make reference
-    bool create_semaphore_handles = true,
+    std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt,                 // TODO make reference
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
 Tensor reduce_scatter(
     const Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
+    const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
+    const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt,  // TODO make reference
-    bool create_semaphore_handles = true,
+    std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt,                 // TODO make reference
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
 
 }  // namespace ccl
