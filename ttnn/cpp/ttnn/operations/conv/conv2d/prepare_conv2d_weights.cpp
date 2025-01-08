@@ -508,27 +508,6 @@ void validate_weights_format(const std::string& weights_format) {
 }
 
 template <typename T>
-bool check_non_tile_mul_width(T* device, const Conv2dConfig& conv_config, const uint32_t in_channels) {
-    auto num_cores_c = conv_config.transpose_shards ? device->compute_with_storage_grid_size().y
-                                                    : device->compute_with_storage_grid_size().x;
-    auto elem_size = conv_config.weights_dtype == DataType::BFLOAT8_B ? 1 : 2;
-    bool is_non_tile_mul_width =
-        (conv_config.shard_layout == TensorMemoryLayout::BLOCK_SHARDED) && conv_config.act_block_h_override == 0 &&
-        (conv_config.weights_dtype == DataType::BFLOAT8_B || conv_config.weights_dtype == DataType::BFLOAT16) &&
-        conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size * in_channels) % (16 * num_cores_c)) == 0;
-    return is_non_tile_mul_width;
-}
-
-bool check_non_tile_height(const Conv2dConfig& conv_config, const uint32_t out_channels) {
-    bool use_non_tile_height = conv_config.shard_layout.value() == TensorMemoryLayout::HEIGHT_SHARDED &&
-                               out_channels <= 256 && conv_config.act_block_h_override == 0 &&
-                               (conv_config.dtype == DataType::BFLOAT16 || conv_config.dtype == DataType::FLOAT32) &&
-                               conv_config.output_layout == Layout::ROW_MAJOR;
-    use_non_tile_height = use_non_tile_height && conv_config.input_channels_alignment != 16;
-    return use_non_tile_height;
-}
-
-template <typename T>
 ttnn::Tensor conv_bias_layout_convert(
     const ttnn::Tensor& bias_tensor,
     DataType bias_dtype,
@@ -1137,12 +1116,6 @@ template ttnn::Tensor conv_bias_layout_convert(
     MeshDevice* device,
     uint32_t out_channels,
     bool is_non_tile_mul_width);
-
-template bool check_non_tile_mul_width<IDevice>(
-    IDevice* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
-
-template bool check_non_tile_mul_width<MeshDevice>(
-    MeshDevice* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
 
 }  // namespace conv2d
 }  // namespace operations::conv

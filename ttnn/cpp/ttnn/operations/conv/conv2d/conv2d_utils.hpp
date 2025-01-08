@@ -34,6 +34,11 @@ bool use_matmul_for_1x1_conv(
     uint32_t groups,
     const Conv2dConfig& conv_config);
 
+template <typename T>
+bool check_non_tile_mul_width(T* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
+
+bool check_non_tile_height(const Conv2dConfig& conv_config, const uint32_t out_channels);
+
 sliding_window::ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
@@ -93,12 +98,9 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     const DeviceComputeKernelConfig& compute_config,
     const sliding_window::ParallelConfig& input_parallel_config,
     const sliding_window::ParallelConfig& output_parallel_config,
-    TensorMemoryLayout shard_layout,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
     uint32_t output_height,
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,

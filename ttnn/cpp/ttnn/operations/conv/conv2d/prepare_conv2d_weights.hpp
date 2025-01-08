@@ -119,10 +119,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     const bool parameters_on_device = true,
     bool is_non_tile_mul_width = false);
 
-template <typename T>
-bool check_non_tile_mul_width(T* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
-
-bool check_non_tile_height(const Conv2dConfig& conv_config, const uint32_t out_channels);
 }  // namespace conv2d
 }  // namespace operations::conv
 }  // namespace ttnn

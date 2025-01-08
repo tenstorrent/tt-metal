@@ -78,6 +78,27 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
     return divisor;
 }
 
+template <typename T>
+bool check_non_tile_mul_width(T* device, const Conv2dConfig& conv_config, const uint32_t in_channels) {
+    auto num_cores_c = conv_config.transpose_shards ? device->compute_with_storage_grid_size().y
+                                                    : device->compute_with_storage_grid_size().x;
+    auto elem_size = conv_config.weights_dtype == DataType::BFLOAT8_B ? 1 : 2;
+    bool is_non_tile_mul_width =
+        (conv_config.shard_layout == TensorMemoryLayout::BLOCK_SHARDED) && conv_config.act_block_h_override == 0 &&
+        (conv_config.weights_dtype == DataType::BFLOAT8_B || conv_config.weights_dtype == DataType::BFLOAT16) &&
+        conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size * in_channels) % (16 * num_cores_c)) == 0;
+    return is_non_tile_mul_width;
+}
+
+bool check_non_tile_height(const Conv2dConfig& conv_config, const uint32_t out_channels) {
+    bool use_non_tile_height = conv_config.shard_layout.value() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                               out_channels <= 256 && conv_config.act_block_h_override == 0 &&
+                               (conv_config.dtype == DataType::BFLOAT16 || conv_config.dtype == DataType::FLOAT32) &&
+                               conv_config.output_layout == Layout::ROW_MAJOR;
+    use_non_tile_height = use_non_tile_height && conv_config.input_channels_alignment != 16;
+    return use_non_tile_height;
+}
+
 ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
@@ -842,12 +863,9 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     const DeviceComputeKernelConfig& compute_config,
     const ParallelConfig& input_parallel_config,
     const ParallelConfig& output_parallel_config,
-    TensorMemoryLayout shard_layout,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
     uint32_t output_height,
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
@@ -1229,6 +1247,12 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
     return packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 }
 
+template bool check_non_tile_mul_width<IDevice>(
+    IDevice* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
+
+template bool check_non_tile_mul_width<MeshDevice>(
+    MeshDevice* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
+
 template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config<IDevice>(
     IDevice* device,
     const ttnn::Tensor& input_tensor_,
@@ -1287,14 +1311,11 @@ template DeviceComputeKernelConfig get_conv_default_compute_kernel_config<ttnn::
 template std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,
     const DeviceComputeKernelConfig& compute_config,
-    const sliding_window::ParallelConfig& input_parallel_config,
-    const sliding_window::ParallelConfig& output_parallel_config,
-    TensorMemoryLayout shard_layout,
+    const ParallelConfig& input_parallel_config,
+    const ParallelConfig& output_parallel_config,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
     uint32_t output_height,
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
@@ -1303,14 +1324,11 @@ template std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig
 template std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,
     const DeviceComputeKernelConfig& compute_config,
-    const sliding_window::ParallelConfig& input_parallel_config,
-    const sliding_window::ParallelConfig& output_parallel_config,
-    TensorMemoryLayout shard_layout,
+    const ParallelConfig& input_parallel_config,
+    const ParallelConfig& output_parallel_config,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
     uint32_t output_height,
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
