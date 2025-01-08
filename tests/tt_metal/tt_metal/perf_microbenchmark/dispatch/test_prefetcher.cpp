@@ -30,6 +30,7 @@
 #include "tt_metal/impl/dispatch/kernel_config/prefetch.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/mux.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/demux.hpp"
+#include "umd/device/tt_xy_pair.h"
 
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)
 
@@ -1614,7 +1615,7 @@ void initialize_dram_banks(Device* device) {
 std::chrono::duration<double> run_test(
     uint32_t iterations,
     Device* device,
-    Program& program,
+    std::shared_ptr<Program> program,
     Device* device_r,
     Program& program_r,
     vector<uint32_t>& cmd_sizes,
@@ -1659,7 +1660,7 @@ std::chrono::duration<double> run_test(
     if (test_device_id_g != 0) {
         tt_metal::detail::LaunchProgram(device_r, program_r, false);
     }
-    tt_metal::detail::WaitProgramDone(device, program);
+    tt_metal::detail::WaitProgramDone(device, *program);
     if (test_device_id_g != 0) {
         tt_metal::detail::WaitProgramDone(device_r, program_r);
     }
@@ -1680,7 +1681,7 @@ void TestPrefetcherDemuxKernel::GenerateStaticConfigs() {}
 void TestPrefetcherDemuxKernel::GenerateDependentConfigs() {}
 void TestPrefetcherDemuxKernel::ConfigureCore() {}
 
-void TestPrefetcherDispatchKernel::CreateKernel() {
+std::vector<uint32_t> TestPrefetcherDispatchKernel::CreateCompileArgs() {
     std::vector<uint32_t> compile_args = {
         static_config.dispatch_cb_base.value(),
         static_config.dispatch_cb_log_page_size.value(),
@@ -1718,6 +1719,25 @@ void TestPrefetcherDispatchKernel::CreateKernel() {
         static_config.dev_completion_q_rd_ptr.value(),
         // 29 and 30 are populated by configure_kernel_variant_for_test
     };
+
+    return compile_args;
+}
+
+void TestPrefetcherDispatchKernel::CreateKernel() {
+    configure_kernel_variant_for_test(
+        *program_,
+        "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+        CreateCompileArgs(),
+        logical_core_,
+        device_->worker_core_from_logical_core(logical_core_),
+        device_->worker_core_from_logical_core(dependent_config.upstream_logical_core.value()),
+        device_->worker_core_from_logical_core(dependent_config.downstream_logical_core.value()),
+        device_,
+        MY_NOC_INDEX,
+        DISPATCH_UPSTREAM_NOC_INDEX,
+        MY_NOC_INDEX,
+        static_config.is_d_variant.value(),
+        static_config.is_h_variant.value());
 }
 
 void TestPrefetcherDispatchKernel::GenerateStaticConfigs() {
@@ -1733,7 +1753,7 @@ void TestPrefetcherDispatchKernel::GenerateStaticConfigs() {
         dispatch_constants::get(DISPATCH_CORE_TYPE)
             .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
     const auto prefetch_d_pages = prefetch_d_buffer_size_g >> dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-    ;
+
     const auto prefetch_downstream_buffer_pages = split_prefetcher_g ? prefetch_d_pages : dispatch_pages;
     CoreCoord myCore;
     // d and hd
@@ -1742,10 +1762,11 @@ void TestPrefetcherDispatchKernel::GenerateStaticConfigs() {
     } else {
         myCore = dispatch_h_core;
     }
+    logical_core_ = tt_cxy_pair(test_device_id_g, myCore.x, myCore.y);
 
     // Common with all variants
     static_config.dispatch_cb_base = l1_buf_base_g;
-    static_config.dispatch_cb_log_page_size = l1_buf_base_g;
+    static_config.dispatch_cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
     static_config.dispatch_cb_blocks = dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
     static_config.dispatch_cb_pages = dispatch_pages;
     static_config.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, {myCore}, 0);
@@ -1753,8 +1774,6 @@ void TestPrefetcherDispatchKernel::GenerateStaticConfigs() {
     static_config.dispatch_s_sync_sem_base_addr = 0;
     static_config.split_prefetch = split_prefetcher_g;
     static_config.packed_write_max_unicast_sub_cmds = num_compute_cores;
-    static_config.max_num_worker_sems = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
-    static_config.max_num_go_signal_noc_data_entries = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
     static_config.mcast_go_signal_addr = 0;
     static_config.unicast_go_signal_addr = 0;
     static_config.distributed_dispatcher = 0;
@@ -1767,90 +1786,107 @@ void TestPrefetcherDispatchKernel::GenerateStaticConfigs() {
         static_config.completion_queue_size = DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE;
         static_config.my_downstream_cb_sem_id = 0;
         static_config.prefetch_h_max_credits = 0;
+        static_config.max_num_worker_sems = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+        static_config.max_num_go_signal_noc_data_entries = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
     } else if (static_config.is_d_variant.value()) {
         static_config.split_dispatch_page_preamble_size = packetized_path_en_g ? sizeof(dispatch_packet_header_t) : 0;
         static_config.completion_queue_size = 0;
         static_config.my_downstream_cb_sem_id = tt_metal::CreateSemaphore(*program_, {myCore}, dispatch_pages);
-        static_config.prefetch_h_max_credits = prefetch_downstream_buffer_pages;
+        static_config.prefetch_h_max_credits = 0;
+        static_config.max_num_worker_sems = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+        static_config.max_num_go_signal_noc_data_entries = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
     } else {
         static_config.split_dispatch_page_preamble_size = 0;
         static_config.completion_queue_size = DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE;
         static_config.my_downstream_cb_sem_id = 0;
         static_config.prefetch_h_max_credits = prefetch_downstream_buffer_pages;
+        static_config.max_num_worker_sems = 1;
+        static_config.max_num_go_signal_noc_data_entries = 1;
     }
 }
 
 void TestPrefetcherDispatchKernel::GenerateDependentConfigs() {
     if (static_config.is_d_variant.value() && static_config.is_h_variant.value()) {
+        log_info(LogTest, "TestPrefetcherDispatchKernel::GenerateDependentConfigs() HD");
         // upstream is prefetch_d or prefetch_hd
         // downstream is none
         const auto prefetch_kernel = dynamic_cast<TestPrefetcherPrefetchKernel*>(upstream_kernels_[0]);
         TT_ASSERT(prefetch_kernel, "dispatch_hd upstream is prefetch");
-        dependent_config.upstream_dispatch_cb_sem_id = prefetch_kernel->static_config.my_downstream_cb_sem_id;
-        dependent_config.upstream_sync_sem = prefetch_kernel->static_config.downstream_sync_sem_id;
+        dependent_config.upstream_dispatch_cb_sem_id = prefetch_kernel->static_config.my_downstream_cb_sem_id.value();
+        dependent_config.upstream_sync_sem = prefetch_kernel->static_config.downstream_sync_sem_id.value();
         dependent_config.downstream_cb_base = 0;
         dependent_config.downstream_cb_size = 0;
         dependent_config.downstream_cb_sem_id = 0;
         dependent_config.prefetch_h_noc_xy = 0;
         dependent_config.prefetch_h_local_downstream_sem_addr = 0;
+        dependent_config.upstream_logical_core = prefetch_kernel->GetLogicalCore();
+        dependent_config.downstream_logical_core = UNUSED_LOGICAL_CORE;
     } else if (static_config.is_d_variant.value()) {
+        log_info(LogTest, "TestPrefetcherDispatchKernel::GenerateDependentConfigs() D");
         // upstream is prefetch_d or prefetch_hd
         // downstream is mux or dispatch_h
         const auto prefetch_kernel = dynamic_cast<TestPrefetcherPrefetchKernel*>(upstream_kernels_[0]);
         TT_ASSERT(prefetch_kernel, "dispatch_d upstream is prefetch");
         dependent_config.upstream_dispatch_cb_sem_id = prefetch_kernel->static_config.my_downstream_cb_sem_id;
         dependent_config.upstream_sync_sem = prefetch_kernel->static_config.downstream_sync_sem_id;
+        dependent_config.upstream_logical_core = prefetch_kernel->GetLogicalCore();
+
         if (packetized_path_en_g) {
             const auto mux_kernel = dynamic_cast<TestPrefetcherMuxKernel*>(downstream_kernels_[0]);
             TT_ASSERT(mux_kernel, "dispatch_d (sdis) downstream with packetized_en is mux");
             dependent_config.downstream_cb_base = mux_kernel->static_config.rx_queue_start_addr_words.value() * 16;
             dependent_config.downstream_cb_size = mux_kernel->static_config.rx_queue_size_words.value() * 16;
             dependent_config.downstream_cb_sem_id = mux_kernel->static_config.input_packetize_local_sem[0].value();
+            dependent_config.downstream_logical_core = mux_kernel->GetLogicalCore();
         } else {
             const auto dispatch_kernel = dynamic_cast<TestPrefetcherDispatchKernel*>(downstream_kernels_[0]);
             TT_ASSERT(
                 dispatch_kernel && dispatch_kernel->static_config.is_h_variant.value(),
-                "dispatch_d (sdis)downstream without packetized_en is dispatch_h");
+                "dispatch_d (sdis) downstream without packetized_en is dispatch_h");
             dependent_config.downstream_cb_base = dispatch_kernel->static_config.dispatch_cb_base.value();
             dependent_config.downstream_cb_size =
                 dispatch_kernel->static_config.dispatch_cb_pages.value() *
                 (1 << dispatch_kernel->static_config.dispatch_cb_log_page_size.value());
             dependent_config.downstream_cb_sem_id = dispatch_kernel->static_config.my_dispatch_cb_sem_id.value();
+            dependent_config.downstream_logical_core = dispatch_kernel->GetLogicalCore();
         }
         dependent_config.prefetch_h_noc_xy = 0;
         dependent_config.prefetch_h_local_downstream_sem_addr = 0;
     } else {
+        log_info(LogTest, "TestPrefetcherDispatchKernel::GenerateDependentConfigs() H");
         // upstream is demux or dispatch_d
         // downstream is none. dispatch_h is at the end of the chain. but still needs to talk to the prefetch_h via sem
         // for exec_buf
         if (packetized_path_en_g) {
             const auto demux_kernel = dynamic_cast<TestPrefetcherDemuxKernel*>(upstream_kernels_[0]);
             TT_ASSERT(demux_kernel, "dispatch_h (sdis) upstream with packetized_en is demux");
+            dependent_config.upstream_dispatch_cb_sem_id = demux_kernel->static_config.output_depacketize_local_sem_id[0].value();
+            dependent_config.upstream_logical_core = demux_kernel->GetLogicalCore();
         } else {
             const auto dispatch_kernel = dynamic_cast<TestPrefetcherDispatchKernel*>(upstream_kernels_[0]);
             TT_ASSERT(
                 dispatch_kernel && dispatch_kernel->static_config.is_d_variant.value(),
                 "dispatch_h (sdis) upstream without packetized_en is dispatch_d");
+            dependent_config.upstream_dispatch_cb_sem_id = dispatch_kernel->static_config.my_downstream_cb_sem_id;
+            dependent_config.upstream_logical_core = dispatch_kernel->GetLogicalCore();
         }
-        // dependent_config.upstream_sync_sem = 0;
         dependent_config.downstream_cb_base = 0;
         dependent_config.downstream_cb_size = 0;
         dependent_config.downstream_cb_sem_id = 0;
         const auto prefetch_h_kernel = dynamic_cast<TestPrefetcherPrefetchKernel*>(downstream_kernels_[0]);
         TT_ASSERT(prefetch_h_kernel, "dispatch_h (sdis) downstream has a prefetch kernel");
         const auto phys_prefetch_h_core = device_->worker_core_from_logical_core(prefetch_core);
-        //         NOC_XY_ENCODING(phys_prefetch_core.x, phys_prefetch_core.y),
-        // prefetch_downstream_cb_sem,  // prefetch_h_local_downstream_sem_addr
-        // prefetch_downstream_buffer_pages,
+        dependent_config.upstream_sync_sem = prefetch_h_kernel->static_config.downstream_sync_sem_id.value();
         dependent_config.prefetch_h_noc_xy = NOC_XY_ENCODING(phys_prefetch_h_core.x, phys_prefetch_h_core.y);
-        dependent_config.prefetch_h_local_downstream_sem_addr =
-            prefetch_h_kernel->static_config.my_downstream_cb_sem_id;
+        dependent_config.prefetch_h_local_downstream_sem_addr = prefetch_h_kernel->static_config.my_upstream_cb_sem_id.value();
+        dependent_config.downstream_logical_core = UNUSED_LOGICAL_CORE;
     }
 }
 
 void TestPrefetcherDispatchKernel::ConfigureCore() {}
 
-void TestPrefetcherPrefetchKernel::CreateKernel() {
+
+std::vector<uint32_t> TestPrefetcherPrefetchKernel::CreateCompileArgs() {
     std::vector<uint32_t> compile_args = {
         dependent_config.downstream_cb_base.value(),
         static_config.downstream_cb_log_page_size.value(),
@@ -1881,43 +1917,18 @@ void TestPrefetcherPrefetchKernel::CreateKernel() {
         // 26 and 27 are appended by configure kernel variant
     };
 
-    const auto phys_prefetch_core = device_->worker_core_from_logical_core(prefetch_core);
-    const auto phys_prefetch_d_core = device_->worker_core_from_logical_core(prefetch_d_core);
-    const auto phys_dispatch_core = device_->worker_core_from_logical_core(dispatch_core);
-    const auto phys_dispatch_h_core = device_->worker_core_from_logical_core(dispatch_h_core);
-    const auto phys_prefetch_relay_mux_core = device_->worker_core_from_logical_core(prefetch_relay_mux_core);
-    const auto phys_prefetch_relay_demux_core = device_->worker_core_from_logical_core(prefetch_relay_demux_core);
+    return compile_args;
+}
 
-    CoreCoord my_core;
-    CoreCoord phy_my_core;
-    CoreCoord phy_upstream;
-    CoreCoord phy_downstream;
-
-    if (static_config.is_h_variant.value() && static_config.is_d_variant.value()) {
-        my_core = prefetch_core;
-        phy_my_core = phys_prefetch_core;
-        phy_downstream = phys_dispatch_core;
-        phy_upstream = {0xffffffff, 0xffffffff};
-    } else if (static_config.is_h_variant.value()) {
-        my_core = prefetch_core;
-        phy_my_core = phys_prefetch_core;
-        phy_upstream = {0xffffffff, 0xffffffff};
-        phy_downstream = packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
-    } else {
-        my_core = prefetch_d_core;
-        phy_my_core = phys_prefetch_d_core;
-        phy_upstream = packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core;
-        phy_downstream = phys_dispatch_core;
-    }
-
+void TestPrefetcherPrefetchKernel::CreateKernel() {
     configure_kernel_variant_for_test(
         *program_,
         "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-        compile_args,
-        my_core,
-        phy_my_core,
-        phy_upstream,
-        phy_downstream,
+        CreateCompileArgs(),
+        logical_core_,
+        device_->worker_core_from_logical_core(logical_core_),
+        device_->worker_core_from_logical_core(dependent_config.upstream_logical_core.value()),
+        device_->worker_core_from_logical_core(dependent_config.downstream_logical_core.value()),
         device_,
         MY_NOC_INDEX,
         MY_NOC_INDEX,
@@ -1946,73 +1957,69 @@ void TestPrefetcherPrefetchKernel::GenerateStaticConfigs() {
         myCoreCoord = prefetch_d_core;
     }
 
-    logical_core_ = {0, myCoreCoord.x, myCoreCoord.y};
+    logical_core_ = tt_cxy_pair{test_device_id_g, myCoreCoord.x, myCoreCoord.y};
 
     // Common to all variants
     static_config.downstream_cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
-    static_config.downstream_cb_pages = dispatch_buffer_pages;
     static_config.my_downstream_cb_sem_id =
         tt_metal::CreateSemaphore(*program_, {myCoreCoord}, prefetch_downstream_buffer_pages);
 
-    // unused for prefetch_d
+    // pcie is unused for prefetch_d
     if (static_config.is_h_variant.value()) {
+        // pcie base is set in ctor
         static_config.pcie_size = hugepage_issue_buffer_size_g;
-        static_config.prefetch_q_base = l1_buf_base_g;
-        static_config.prefetch_q_size = prefetch_q_size;
-        static_config.prefetch_q_rd_ptr_addr =
-            dispatch_constants::get(DISPATCH_CORE_TYPE)
-                .get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
-        static_config.prefetch_q_pcie_rd_ptr_addr =
-            dispatch_constants::get(DISPATCH_CORE_TYPE)
-                .get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
-
-        static_config.cmddat_q_base = cmddat_q_base;
-        static_config.cmddat_q_size = cmddat_q_size_g;
     } else {
         static_config.pcie_size = 0;
-        static_config.prefetch_q_base = 0;
-        static_config.prefetch_q_size = 0;
-        static_config.prefetch_q_rd_ptr_addr = 0;
-        static_config.prefetch_q_pcie_rd_ptr_addr = 0;
-
-        static_config.cmddat_q_base = 0;
-        static_config.cmddat_q_size = 0;
     }
+
+    static_config.prefetch_q_base = l1_buf_base_g;
+    static_config.prefetch_q_size = prefetch_q_size;
+    static_config.prefetch_q_rd_ptr_addr =
+        dispatch_constants::get(DISPATCH_CORE_TYPE)
+            .get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+    static_config.prefetch_q_pcie_rd_ptr_addr =
+        dispatch_constants::get(DISPATCH_CORE_TYPE)
+            .get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
+
+    static_config.cmddat_q_base = cmddat_q_base;
+    static_config.cmddat_q_size = cmddat_q_size_g;
+    static_config.cmddat_q_pages = prefetch_d_pages;
+    static_config.cmddat_q_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+    static_config.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
 
     // unused for prefetch_h
     if (static_config.is_d_variant.value()) {
+        static_config.downstream_cb_pages = dispatch_buffer_pages; // to dispatch
         static_config.scratch_db_base = scratch_db_base;
         static_config.scratch_db_size = scratch_db_size_g;
     } else {
+        static_config.downstream_cb_pages = prefetch_d_pages; // to prefetch_h
         static_config.scratch_db_base = 0;
         static_config.scratch_db_size = 0;
     }
 
     // prefetch_d specific
-    if (static_config.is_d_variant.value()) {
-        static_config.downstream_sync_sem_id = tt_metal::CreateSemaphore(*program_, {myCoreCoord}, 0);
-        static_config.cmddat_q_pages = prefetch_d_pages;
+    if (static_config.is_d_variant.value() && !static_config.is_h_variant.value()) {
         static_config.my_upstream_cb_sem_id = tt_metal::CreateSemaphore(*program_, {myCoreCoord}, 0);
-        static_config.cmddat_q_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
     } else {
-        static_config.downstream_sync_sem_id = 0;
-        static_config.cmddat_q_pages = 0;
         static_config.my_upstream_cb_sem_id = 0;
-        static_config.cmddat_q_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
     }
+    static_config.downstream_sync_sem_id = tt_metal::CreateSemaphore(*program_, {myCoreCoord}, 0);
 }
 
 void TestPrefetcherPrefetchKernel::GenerateDependentConfigs() {
     if (static_config.is_h_variant.value() && static_config.is_d_variant.value()) {
+        log_info(LogTest, "TestPrefetcherPrefetchKernel::GenerateDependentConfigs() HD");
         // no upstream
         // downstream will only be dispatch
         const auto dispatch_kernel = dynamic_cast<TestPrefetcherDispatchKernel*>(downstream_kernels_[0]);
         dependent_config.downstream_cb_base = dispatch_kernel->static_config.dispatch_cb_base.value();
         dependent_config.downstream_cb_sem_id = dispatch_kernel->static_config.my_dispatch_cb_sem_id.value();
+        dependent_config.downstream_logical_core = dispatch_kernel->GetLogicalCore();
         dependent_config.upstream_cb_sem_id = 0;
+        dependent_config.upstream_logical_core = UNUSED_LOGICAL_CORE;
     } else if (static_config.is_h_variant.value()) {
+        log_info(LogTest, "TestPrefetcherPrefetchKernel::GenerateDependentConfigs() H");
         // no upstream
         // downstream is prefetch_d or mux
         if (packetized_path_en_g) {
@@ -2020,14 +2027,18 @@ void TestPrefetcherPrefetchKernel::GenerateDependentConfigs() {
             const auto mux_kernel = dynamic_cast<TestPrefetcherMuxKernel*>(downstream_kernels_[0]);
             dependent_config.downstream_cb_base = mux_kernel->static_config.rx_queue_start_addr_words.value() * 16;
             dependent_config.downstream_cb_sem_id = mux_kernel->static_config.input_packetize_local_sem[0].value();
+            dependent_config.downstream_logical_core = mux_kernel->GetLogicalCore();
         } else {
             // prefetch_d
             const auto prefetch_d_kernel = dynamic_cast<TestPrefetcherPrefetchKernel*>(downstream_kernels_[0]);
             dependent_config.downstream_cb_base = prefetch_d_kernel->static_config.prefetch_q_base.value();
             dependent_config.downstream_cb_sem_id = prefetch_d_kernel->static_config.my_upstream_cb_sem_id.value();
+            dependent_config.downstream_logical_core = prefetch_d_kernel->GetLogicalCore();
         }
         dependent_config.upstream_cb_sem_id = 0;
+        dependent_config.upstream_logical_core = UNUSED_LOGICAL_CORE;
     } else {
+        log_info(LogTest, "TestPrefetcherPrefetchKernel::GenerateDependentConfigs() D");
         // d variant
         // downstream is dispatch_hd or dispatch_h
         // upstream is either prefetch_h or demux (queue 0)
@@ -2035,14 +2046,17 @@ void TestPrefetcherPrefetchKernel::GenerateDependentConfigs() {
             const auto demux_kernel = dynamic_cast<TestPrefetcherDemuxKernel*>(upstream_kernels_[0]);
             dependent_config.upstream_cb_sem_id =
                 demux_kernel->static_config.output_depacketize_local_sem_id[0].value();
+            dependent_config.upstream_logical_core = demux_kernel->GetLogicalCore();
         } else {
             const auto prefetch_h_kernel = dynamic_cast<TestPrefetcherPrefetchKernel*>(upstream_kernels_[0]);
             dependent_config.upstream_cb_sem_id = prefetch_h_kernel->static_config.my_downstream_cb_sem_id.value();
+            dependent_config.upstream_logical_core = prefetch_h_kernel->GetLogicalCore();
         }
 
         const auto dispatch_kernel = dynamic_cast<TestPrefetcherDispatchKernel*>(downstream_kernels_[0]);
         dependent_config.downstream_cb_sem_id = dispatch_kernel->static_config.my_dispatch_cb_sem_id.value();
         dependent_config.downstream_cb_base = dispatch_kernel->static_config.dispatch_cb_base.value();
+        dependent_config.downstream_logical_core = dispatch_kernel->GetLogicalCore();
     }
 }
 
@@ -2070,9 +2084,21 @@ public:
             case tt::tt_metal::DISPATCH_HD:
                 return new TestPrefetcherDispatchKernel(
                     node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true, dev_completion);
+            case tt::tt_metal::DISPATCH_H:
+                return new TestPrefetcherDispatchKernel(
+                    node_id, device_id, servicing_device_id, cq_id, noc_selection, true, false, dev_completion);
+            case tt::tt_metal::DISPATCH_D:
+                return new TestPrefetcherDispatchKernel(
+                    node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true, dev_completion);
             case tt::tt_metal::PREFETCH_HD:
                 return new TestPrefetcherPrefetchKernel(
                     node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true, dev_issue);
+            case tt::tt_metal::PREFETCH_H:
+                return new TestPrefetcherPrefetchKernel(
+                    node_id, device_id, servicing_device_id, cq_id, noc_selection, true, false, dev_issue);
+            case tt::tt_metal::PREFETCH_D:
+                return new TestPrefetcherPrefetchKernel(
+                    node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true, dev_issue);
             default: TT_THROW("worker_type {} not implemented for test_prefetcher", magic_enum::enum_name(worker_type));
         }
     }
@@ -2214,6 +2240,7 @@ void configure_for_single_chip(
             0,  // unused
             0,  // unused
         };
+        print_vector("split prefetch prefetch_h", prefetch_h_compile_args);
 
         CoreCoord phys_prefetch_h_downstream_core =
             packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
@@ -2263,6 +2290,7 @@ void configure_for_single_chip(
             0,
             0,
         };
+        print_vector("split prefetch prefetch_d", prefetch_d_compile_args);
 
         CoreCoord phys_prefetch_d_upstream_core =
             packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core;
@@ -2528,6 +2556,7 @@ void configure_for_single_chip(
             host_completion_queue_wr_ptr,
             completion_q_wr_ptr,
             completion_q_rd_ptr};
+        print_vector("split dispatch dispatch_d", dispatch_d_compile_args);
 
         CoreCoord phys_dispatch_d_downstream_core =
             packetized_path_en_g ? phys_dispatch_relay_mux_core : phys_dispatch_h_core;
@@ -2582,6 +2611,7 @@ void configure_for_single_chip(
             completion_q_wr_ptr,
             completion_q_rd_ptr};
 
+        print_vector("split dispatch dispatch_h", dispatch_h_compile_args);
         CoreCoord phys_dispatch_h_upstream_core =
             packetized_path_en_g ? phys_dispatch_relay_demux_core : phys_dispatch_core;
         configure_kernel_variant_for_test(
@@ -2832,9 +2862,8 @@ void configure_cores(Device* device, uint32_t dev_hugepage_base) {
     dirty_host_completion_buffer(host_hugepage_completion_buffer);
 }
 
-void configure_for_single_chip_new(
+std::shared_ptr<Program> configure_for_single_chip_new(
     Device* device,
-    Program& program,
     void* host_hugepage_base,
     uint32_t prefetch_q_base,
     uint32_t packetized_path_test_results_addr,
@@ -2842,8 +2871,28 @@ void configure_for_single_chip_new(
     uint32_t dev_hugepage_base) {
     const auto dev_hugepage_completion_buffer_base = dev_hugepage_base + hugepage_issue_buffer_size_g;
     auto generator = std::make_unique<TestPrefetcherKernelGen>(dev_hugepage_base, dev_hugepage_completion_buffer_base);
-    auto fd_topology = default_topology;
+    std::vector<dispatch_kernel_node_t> fd_topology;
+    // Select topology for test
+    if (split_prefetcher_g && split_dispatcher_g) {
+        fd_topology = split_dispatcher_prefetcher_topology;
+    } else if (split_prefetcher_g) {
+        fd_topology = split_prefetcher_topology;
+    } else if (split_dispatcher_g) {
+        fd_topology = split_dispatcher_topology;
+    } else {
+        fd_topology = default_topology;
+    }
     auto fd_kernels = connect_fd_graph_edges(fd_topology, std::move(generator));
+    auto compiled_program = create_and_compile_cq_program(device, fd_kernels);
+    for (auto& fd_kernel : fd_kernels) {
+        if (auto prefetch_kernel = dynamic_cast<TestPrefetcherPrefetchKernel*>(fd_kernel); prefetch_kernel != nullptr) {
+            print_vector(fmt::format("Prefetch Kernel New Args {}{}", prefetch_kernel->static_config.is_h_variant, prefetch_kernel->static_config.is_d_variant), prefetch_kernel->CreateCompileArgs());
+        } else if (auto dispatch_kernel = dynamic_cast<TestPrefetcherDispatchKernel*>(fd_kernel); dispatch_kernel != nullptr) {
+            print_vector(fmt::format("Dispatch Kernel New Args {}{}", dispatch_kernel->static_config.is_h_variant, dispatch_kernel->static_config.is_d_variant), dispatch_kernel->CreateCompileArgs());
+        }
+    }
+
+    return std::move(compiled_program);
 }
 
 int main(int argc, char** argv) {
@@ -2857,7 +2906,6 @@ int main(int argc, char** argv) {
     tt_metal::Device* device;
     tt_metal::Device* device_r;
 
-    try {
         int num_devices = tt_metal::GetNumAvailableDevices();
         if (test_device_id_g >= num_devices) {
             log_info(
@@ -2872,38 +2920,39 @@ int main(int argc, char** argv) {
         if (test_device_id_g == 0) {
             device_r = device;
         } else {
-            const auto& device_active_eth_cores = device->get_active_ethernet_cores();
-            auto remote_chips = tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id_l);
-            // remove mmio chip from the set. get_devices_controlled_by_mmio_device() returns a set that
-            // holds mmio chips as well as remote chips accessed through that mmmio chip.
-            remote_chips.erase(device_id_l);
-            if (device_active_eth_cores.size() == 0) {
-                log_info(
-                    LogTest,
-                    "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
-                    device_id_l);
-                tt_metal::CloseDevice(device);
-                throw std::runtime_error("Test cannot run on specified device.");
-            }
+            TT_THROW("Multi chip test is not implemented");
+            // const auto& device_active_eth_cores = device->get_active_ethernet_cores();
+            // auto remote_chips = tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id_l);
+            // // remove mmio chip from the set. get_devices_controlled_by_mmio_device() returns a set that
+            // // holds mmio chips as well as remote chips accessed through that mmmio chip.
+            // remote_chips.erase(device_id_l);
+            // if (device_active_eth_cores.size() == 0) {
+            //     log_info(
+            //         LogTest,
+            //         "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
+            //         device_id_l);
+            //     tt_metal::CloseDevice(device);
+            //     throw std::runtime_error("Test cannot run on specified device.");
+            // }
 
-            device_id_r = test_device_id_g;
-            for (auto eth_core : device_active_eth_cores) {
-                auto [connected_device_id, eth_receiver_core] = device->get_connected_ethernet_core(eth_core);
-                if (remote_chips.find(connected_device_id) != remote_chips.end()) {
-                    device_id_r = connected_device_id;
-                    break;
-                }
-            }
-            if (device_id_r == device_id_l) {
-                log_info(LogTest, "Device {} does not have a remote device connected to it.", device_id_l);
-                tt_metal::CloseDevice(device);
-                throw std::runtime_error("Test cannot run on specified device.");
-            }
+            // device_id_r = test_device_id_g;
+            // for (auto eth_core : device_active_eth_cores) {
+            //     auto [connected_device_id, eth_receiver_core] = device->get_connected_ethernet_core(eth_core);
+            //     if (remote_chips.find(connected_device_id) != remote_chips.end()) {
+            //         device_id_r = connected_device_id;
+            //         break;
+            //     }
+            // }
+            // if (device_id_r == device_id_l) {
+            //     log_info(LogTest, "Device {} does not have a remote device connected to it.", device_id_l);
+            //     tt_metal::CloseDevice(device);
+            //     throw std::runtime_error("Test cannot run on specified device.");
+            // }
 
-            device_r = tt_metal::CreateDevice(device_id_r);
+            // device_r = tt_metal::CreateDevice(device_id_r);
         }
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        // tt_metal::Program program = tt_metal::CreateProgram();
         tt_metal::Program program_r = tt_metal::CreateProgram();
 
         const auto l1_unreserved = dispatch_constants::get(DISPATCH_CORE_TYPE)
@@ -2938,19 +2987,22 @@ int main(int argc, char** argv) {
 
         host_hugepage_completion_buffer_base_g = (void*)((uint8_t*)host_hugepage_base + hugepage_issue_buffer_size_g);
 
-        if (test_device_id_g == 0) {
-            configure_for_single_chip(
-                device,
-                program,
-                host_hugepage_base,
-                prefetch_q_base,
-                packetized_path_test_results_addr,
-                packetized_path_test_results_size,
-                dev_hugepage_base);
-            configure_cores(device, dev_hugepage_base);
-        } else {
-            TT_THROW("Multi chip test is not implemented");
-        }
+        // configure_for_single_chip(
+        //     device,
+        //     program,
+        //     host_hugepage_base,
+        //     prefetch_q_base,
+        //     packetized_path_test_results_addr,
+        //     packetized_path_test_results_size,
+        //     dev_hugepage_base);
+        auto program = configure_for_single_chip_new(
+            device,
+            host_hugepage_base,
+            prefetch_q_base,
+            packetized_path_test_results_addr,
+            packetized_path_test_results_size,
+            dev_hugepage_base);
+        configure_cores(device, dev_hugepage_base);
 
         if ((1 << DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE) * device->num_banks(BufferType::DRAM) > cmddat_q_size_g) {
             log_fatal(
@@ -3156,14 +3208,14 @@ int main(int argc, char** argv) {
         if (test_device_id_g != 0) {
             pass &= tt_metal::CloseDevice(device_r);
         }
-    } catch (const std::exception& e) {
-        pass = false;
-        tt_metal::CloseDevice(device);
-        if (device_r) {
-            tt_metal::CloseDevice(device_r);
-        }
-        log_fatal(e.what());
-    }
+    // } catch (const std::exception& e) {
+    //     pass = false;
+    //     tt_metal::CloseDevice(device);
+    //     if (device_r) {
+    //         tt_metal::CloseDevice(device_r);
+    //     }
+    //     log_fatal(e.what());
+    // }
 
     tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
