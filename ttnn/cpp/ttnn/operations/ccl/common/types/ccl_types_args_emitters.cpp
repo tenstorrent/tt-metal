@@ -72,7 +72,7 @@ args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const&
     TT_ASSERT(false);
 }
 
-static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
+std::pair<CoreCoord, CoreCoord> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
     auto const& core_range = shard_spec.grid.bounding_box();
     log_trace(
         tt::LogOp,
