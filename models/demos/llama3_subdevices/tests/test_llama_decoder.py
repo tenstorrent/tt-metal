@@ -6,13 +6,13 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.llama3.tt.llama_common import (
+from models.demos.llama3_subdevices.tt.llama_common import (
     precompute_freqs,
     PagedAttentionConfig,
 )
-from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
-from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
+from models.demos.llama3_subdevices.tt.llama_decoder import TtTransformerBlock
+from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 from models.utility_functions import (
     comp_pcc,
@@ -55,6 +55,7 @@ from models.utility_functions import skip_for_grayskull
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_llama_decoder_inference(
     max_seq_len,
     batch_size,

@@ -283,10 +283,23 @@ class TtModelArgs:
             )
 
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
-
+            core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
+            core_range = ttnn.CoreRange(
+                grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
+            )
+            num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
-                ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
+                ttnn.create_sharded_memory_config(
+                    shape=(1, 1, 32, 2048 // num_cores_ln),
+                    core_grid=ttnn.CoreRangeSet(
+                        {
+                            core_range,
+                        }
+                    ),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    use_height_and_width_as_shard_shape=True,
+                )
                 if self.is_galaxy
                 else ttnn.create_sharded_memory_config(
                     (
