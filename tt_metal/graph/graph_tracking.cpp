@@ -48,7 +48,7 @@ void GraphTracker::track_allocate_cb(
     uint64_t addr,
     uint64_t size,
     bool is_globally_allocated,
-    const Device* device) {
+    const IDevice* device) {
     if (processors.empty()) {
         return;
     }
@@ -57,7 +57,7 @@ void GraphTracker::track_allocate_cb(
     }
 }
 
-void GraphTracker::track_deallocate_cb(const Device* device) {
+void GraphTracker::track_deallocate_cb(const IDevice* device) {
     if (processors.empty()) {
         return;
     }
@@ -66,7 +66,7 @@ void GraphTracker::track_deallocate_cb(const Device* device) {
     }
 }
 
-void GraphTracker::track_program(Program* program, const Device* device) {
+void GraphTracker::track_program(Program* program, const IDevice* device) {
     TT_ASSERT(program);
     TT_ASSERT(device);
     if (processors.empty()) {
