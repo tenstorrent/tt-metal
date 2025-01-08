@@ -146,7 +146,7 @@ public:
     // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
     // 2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
     void reshape(const MeshShape& new_shape);
-    void close_devices();
+    void close();
     const MeshDeviceView& get_view() const;
 
     std::string to_string() const;
@@ -210,45 +210,5 @@ struct MeshSubDeviceManagerId {
 
     std::vector<SubDeviceManagerId> sub_device_manager_ids;
 };
-
-namespace detail {
-template <typename T>
-concept HasMethodsForArchitectureQueries = requires(T& device) {
-    { device.compute_with_storage_grid_size() } -> std::same_as<CoreCoord>;
-    { device.dram_grid_size() } -> std::same_as<CoreCoord>;
-    { device.arch() } -> std::same_as<tt::ARCH>;
-    { device.num_dram_channels() } -> std::same_as<int>;
-};
-
-template <typename T>
-concept HasMethodsForAllocator = requires(T& device) {
-    { device.get_memory_allocation_statistics(std::declval<BufferType>(), std::declval<SubDeviceId>()) } -> std::same_as<allocator::Statistics>;
-};
-
-template <typename T>
-concept HasMethodsForProgramCache = requires(T& device) {
-    { device.num_program_cache_entries() } -> std::same_as<size_t>;
-    { device.enable_program_cache() } -> std::same_as<void>;
-    { device.disable_and_clear_program_cache() } -> std::same_as<void>;
-};
-
-template <typename T>
-concept HasMethodsForAsync = requires(T& device) {
-    { device.enable_async(std::declval<bool>()) } -> std::same_as<void>;
-};
-
-template <typename T>
-concept DeviceInterfaceContract =
-    HasMethodsForArchitectureQueries<T> &&
-    HasMethodsForAllocator<T> &&
-    HasMethodsForProgramCache<T> &&
-    HasMethodsForAsync<T>;
-
-}  // namespace detail
-
-// For now static_asserts are used to ensure that the concepts are satisfied.
-// This is a temporary compile-time check to make sure that Device/MeshDevice don't deviate from the expected interface.
-static_assert(detail::DeviceInterfaceContract<IDevice>, "Device must satisfy the DeviceInterfaceContract concept.");
-static_assert(detail::DeviceInterfaceContract<MeshDevice>, "MeshDevice must satisfy the DeviceInterfaceContract concept.");
 
 }  // namespace tt::tt_metal::distributed

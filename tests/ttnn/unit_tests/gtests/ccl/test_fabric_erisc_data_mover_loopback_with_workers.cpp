@@ -87,7 +87,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        mesh_device_->close_devices();
+        mesh_device_->close();
     }
 
     tt::ARCH arch_;

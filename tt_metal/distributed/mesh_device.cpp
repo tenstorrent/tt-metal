@@ -455,7 +455,7 @@ void MeshDevice::initialize(
     }
 }
 
-MeshDevice::~MeshDevice() { close_devices(); }
+MeshDevice::~MeshDevice() { close(); }
 
 IDevice* MeshDevice::get_device_index(size_t logical_device_id) const {
     TT_FATAL(logical_device_id >= 0 and logical_device_id < num_devices(), "Invalid device index");
@@ -544,9 +544,9 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
     this->view = std::make_unique<MeshDeviceView>(*this);
 }
 
-void MeshDevice::close_devices() {
+void MeshDevice::close() {
     for (const auto& submesh : this->submeshes) {
-        submesh->close_devices();
+        submesh->close();
     }
     if (!this->opened_devices.empty()) {
         tt::tt_metal::detail::CloseDevices(this->opened_devices);

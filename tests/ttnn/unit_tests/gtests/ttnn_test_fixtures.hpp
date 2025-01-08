@@ -75,7 +75,7 @@ protected:
             return;
         }
 
-        mesh_device_->close_devices();
+        mesh_device_->close();
         mesh_device_.reset();
     }
     std::shared_ptr<MeshDevice> mesh_device_;

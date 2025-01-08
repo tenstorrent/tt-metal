@@ -29,7 +29,7 @@ protected:
 
     void TearDown() override {
         if (mesh_device_) {
-            mesh_device_->close_devices();
+            mesh_device_->close();
             mesh_device_.reset();
         }
     }

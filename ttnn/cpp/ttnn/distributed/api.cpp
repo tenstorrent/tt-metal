@@ -30,7 +30,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
 }
 
-void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close_devices(); }
+void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }
 
 std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage())) {

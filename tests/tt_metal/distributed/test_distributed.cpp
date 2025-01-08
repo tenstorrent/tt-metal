@@ -21,7 +21,7 @@ TEST(MeshDeviceSuite, Test1x1SystemMeshInitialize) {
     EXPECT_NO_THROW({
         auto mesh = tt::tt_metal::distributed::MeshDevice::create(
             config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
-        mesh->close_devices();
+        mesh->close();
     });
 }
 
