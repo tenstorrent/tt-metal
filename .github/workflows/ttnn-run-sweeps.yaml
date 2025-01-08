@@ -81,6 +81,7 @@ on:
           - eltwise.unary.log1p.log1p
           - eltwise.unary.log2.log2
           - eltwise.unary.log10.log10
+          - eltwise.unary.sqrt.sqrt_forge
           - eltwise.unary.bitwise.bitwise_and.bitwise_and
           - eltwise.unary.bitwise.bitwise_and.bitwise_and_sharded
           - eltwise.unary.bitwise.bitwise_and.bitwise_and_unary
