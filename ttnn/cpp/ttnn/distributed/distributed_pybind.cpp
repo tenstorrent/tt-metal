@@ -90,7 +90,7 @@ void py_module(py::module& module) {
             py::arg("physical_device_ids"),
             py::arg("mesh_type"))
         .def("get_num_devices", &MeshDevice::num_devices)
-        .def("get_mesh_id", &MeshDevice::get_mesh_id)
+        .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
             "get_device",

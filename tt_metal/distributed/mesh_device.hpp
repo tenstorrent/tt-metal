@@ -150,7 +150,7 @@ public:
     const MeshDeviceView& get_view() const;
 
     std::string to_string() const;
-    MeshDeviceID get_mesh_id() const;
+    MeshDeviceID id() const;
     bool is_parent_mesh() const;
 
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;

@@ -300,8 +300,8 @@ void SystemMesh::Impl::register_mesh_device(
     for (auto device : devices) {
         physical_device_ids.push_back(device->id());
     }
-    assigned_mesh_device_devices_.insert({mesh_device->get_mesh_id(), mesh_device});
-    assigned_devices_.insert({mesh_device->get_mesh_id(), physical_device_ids});
+    assigned_mesh_device_devices_.insert({mesh_device->id(), mesh_device});
+    assigned_devices_.insert({mesh_device->id(), physical_device_ids});
 }
 
 std::vector<chip_id_t> SystemMesh::Impl::request_available_devices(const MeshDeviceConfig& config) const {
@@ -412,12 +412,12 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     log_trace(
         LogMetal,
         "Instantiating submesh {}: {}x{} with offset: {} {}",
-        submesh->get_mesh_id(),
+        submesh->id(),
         submesh_shape.num_rows,
         submesh_shape.num_cols,
         offset.row,
         offset.col);
-    log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->get_mesh_id(), submesh->devices);
+    log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->id(), submesh->devices);
 
     return submesh;
 }
@@ -567,7 +567,7 @@ const MeshDeviceView& MeshDevice::get_view() const {
     return *view;
 }
 
-MeshDeviceID MeshDevice::get_mesh_id() const { return this->mesh_id; }
+MeshDeviceID MeshDevice::id() const { return this->mesh_id; }
 
 bool MeshDevice::is_parent_mesh() const { return this->parent_mesh.expired(); }
 
