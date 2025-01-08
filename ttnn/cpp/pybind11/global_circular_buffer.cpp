@@ -31,7 +31,7 @@ void py_module(py::module& module) {
         py::arg("sender_receiver_core_mapping"),
         py::arg("size"),
         py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Create a GlobalCircularBuffer Object on a single device.
 
@@ -59,7 +59,7 @@ void py_module(py::module& module) {
         py::arg("sender_receiver_core_mapping"),
         py::arg("size"),
         py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Create a GlobalCircularBuffer Object on a single device.
 
