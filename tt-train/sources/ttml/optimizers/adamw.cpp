@@ -70,7 +70,7 @@ void MorehAdamW::step() {
 
         auto gradients = tensor_ptr->get_grad();
         // synchronize gradients for multi-device case, no-op if single device
-        gradients = synchronize_tensor(gradients);
+        gradients = distributed::synchronize_tensor(gradients);
 
         auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
         ttnn::moreh_adamw(
@@ -179,7 +179,7 @@ void AdamW::step() {
 
         auto gradients = tensor_ptr->get_grad();
         // synchronize gradients for multi-device case, no-op if single device
-        gradients = synchronize_tensor(gradients);
+        gradients = distributed::synchronize_tensor(gradients);
 
         if (m_config.weight_decay != 0.0F) {
             auto weight_decay_update = ttnn::multiply(

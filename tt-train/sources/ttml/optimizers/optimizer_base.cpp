@@ -9,6 +9,8 @@
 
 namespace ttml::optimizers {
 
+namespace distributed {
+
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor) {
     auto* device = &autograd::ctx().get_device();
     auto devices_count = device->get_devices().size();
@@ -24,6 +26,8 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor) {
     result = ttnn::multiply(result, 1.0F / static_cast<float>(devices_count));
     return result;
 }
+
+}  // namespace distributed
 
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }

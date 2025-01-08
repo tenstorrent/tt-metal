@@ -8,7 +8,11 @@
 
 namespace ttml::optimizers {
 
+namespace distributed {
+
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor);
+
+}  // namespace distributed
 
 class OptimizerBase {
 public:

@@ -50,7 +50,7 @@ void SGD::step() {
         auto gradients = tensor_ptr->get_grad();
 
         // synchronize gradients for multi-device case, no-op if single device
-        gradients = synchronize_tensor(gradients);
+        gradients = distributed::synchronize_tensor(gradients);
 
         if (m_config.weight_decay != 0.0F) {
             gradients = ttnn::add(
