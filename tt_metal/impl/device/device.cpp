@@ -941,7 +941,7 @@ void Device::init_command_queue_host() {
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc);
         // Need to do this since CommandQueue constructor is private
-        sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
+        sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
     }
 }
 
@@ -983,7 +983,7 @@ void Device::initialize_synchronous_sw_cmd_queue() {
     // This queue is used for all host bound functions using the Software CQ in SD mode.
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         // Need to do this since CommandQueue constructor is private
-        sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
+        sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
         sw_command_queues_[cq_id]->set_mode(CommandQueue::CommandQueueMode::PASSTHROUGH);
     }
 }
