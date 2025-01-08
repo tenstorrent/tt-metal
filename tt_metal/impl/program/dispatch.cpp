@@ -307,6 +307,7 @@ void finalize_program_offsets(T& workload, IDevice* device) {
         program_config.sem_size = sem_size;
         program_config.cb_offset = cb_offset;
         program_config.cb_size = cb_size;
+        program_config.local_cb_size = local_cb_size;
         program_config.kernel_text_offset = kernel_text_offset;
         program_config.kernel_text_size = kernel_text_size;
         program.get_program_config_sizes()[index] = offset;
