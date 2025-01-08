@@ -19,6 +19,10 @@ bfloat4_b = DataType.BFLOAT4_B
 
 BufferType = ttnn._ttnn.tensor.BufferType
 TensorMemoryLayout = ttnn._ttnn.tensor.TensorMemoryLayout
+HeightSharded = TensorMemoryLayout.HEIGHT_SHARDED
+BlockSharded = TensorMemoryLayout.BLOCK_SHARDED
+WidthSharded = TensorMemoryLayout.WIDTH_SHARDED
+
 # TODO: MemoryConfig = ttnn._ttnn.types.MemoryConfig
 MemoryConfig = ttnn._ttnn.tensor.MemoryConfig
 MathFidelity = ttnn._ttnn.tensor.MathFidelity
