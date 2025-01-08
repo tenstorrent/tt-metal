@@ -30,14 +30,12 @@ ttnn::Tensor permute_impl(
     const ttnn::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
-
     // Get the device
     IDevice* device = a.device();
     uint32_t rank = a.get_shape().rank();
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt);
+        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value);
     };
 
     if (rank > 4) {

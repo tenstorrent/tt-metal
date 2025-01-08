@@ -243,7 +243,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    const std::optional<float> pad_value = std::nullopt;
+    const std::optional<float> pad_value = operation_attributes.pad_value;
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.get_logical_shape();
@@ -262,6 +262,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     uint32_t output_page_size = detail::tile_size(tensor_return_value);
 
     uint32_t num_tiles = detail::num_tiles(input_tensor);
+    uint32_t num_output_tiles = detail::num_tiles(tensor_return_value);
 
     tt::tt_metal::Device* device = input_tensor.device();
 
@@ -273,10 +274,25 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
 
     uint32_t N = operation_attributes.dims.size();
 
+    const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
+
+    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.get_padded_shape()[N - 2] /
+                                                           tile_shape[0]);  // only last row of Xt should have padding
+
     // auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     CoreCoord compute_with_storage_grid_size = {1u, 1u};
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    auto
+        [padded_num_cores,
+         padded_all_cores,
+         padded_core_group_1,
+         padded_core_group_2,
+         padded_num_tiles_per_core_group_1,
+         padded_num_tiles_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, padded_num_tensor_tiles);
+
+    all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src0_cb_index, cb_data_format}})
@@ -288,12 +304,11 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     uint32_t X = input_shape[dims[N - 2]];
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t element_size = input_tensor.element_size();
-    const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
+
     const auto& face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
 
     bool needs_padding = (X % tile_shape[1] != 0) && pad_value.has_value();
     if (needs_padding) {
-        output_cb_index = padding_cb_index;
         tt::tt_metal::CircularBufferConfig cb_src1_config =
             tt::tt_metal::CircularBufferConfig(face_shape[1] * element_size, {{padding_cb_index, cb_data_format}})
                 .set_page_size(padding_cb_index, face_shape[1] * element_size);
@@ -360,6 +375,9 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_tile = 0;
     uint32_t num_tiles_per_core = 0;
+    uint32_t start_tile_padding = 0;
+    uint32_t num_tiles_per_core_padding = 0;
+    uint32_t end_tile_padding = 0;
     for (const auto& core : cores) {
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -369,17 +387,33 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
             // no-op
             num_tiles_per_core = 0;
         }
+        if (needs_padding) {
+            if (padded_core_group_1.contains(core)) {
+                num_tiles_per_core_padding = padded_num_tiles_per_core_group_1;
+            } else if (padded_core_group_2.contains(core)) {
+                num_tiles_per_core_padding = padded_num_tiles_per_core_group_2;
+            } else {
+                // no-op
+                num_tiles_per_core_padding = 0;
+            }
+        }
         uint32_t end_tile = start_tile + num_tiles_per_core;
         reader_runtime_args[1] = num_tiles_per_core;
         reader_runtime_args[2] = start_tile;
 
         writer_runtime_args[1] = start_tile;  // for some reason num_tiles comes first in writer unary
         writer_runtime_args[2] = end_tile;    // start tile is second in writer unary
+        if (needs_padding) {
+            end_tile_padding = start_tile_padding + num_tiles_per_core_padding;
+            writer_runtime_args[3] = start_tile_padding;
+            writer_runtime_args[4] = end_tile_padding;
+        }
 
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
 
         start_tile = end_tile;
+        start_tile_padding = end_tile_padding;
     }
 
     return {

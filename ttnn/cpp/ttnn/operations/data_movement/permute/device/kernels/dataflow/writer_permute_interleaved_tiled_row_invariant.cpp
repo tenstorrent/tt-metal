@@ -225,6 +225,7 @@ void kernel_main() {
     }
     output_tiled_shape[N - 2] = X_t;
     output_tiled_shape[N - 1] = W_t;
+    dprint_array<N, uint32_t>(output_tiled_shape, "output_tiled_shape");
     DPRINT << ENDL();
 
     for (uint32_t tile = start_tile; tile < end_tile; ++tile) {
@@ -332,7 +333,7 @@ void kernel_main() {
                         // // DPRINT << "write_noc_base_addr: " << write_noc_base_addr << ENDL();
                         // tt_l1_ptr uint16_t* l1_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(l1_read_addr);
                         // DPRINT << "l1_ptr[0]: " << BF16(l1_ptr[0]) << ENDL();
-                        DPRINT << ENDL();
+                        // DPRINT << ENDL();
                     }
                     // Perform asynchronous write
                     noc_async_write(l1_read_addr, write_noc_base_addr, SUBTILE_LINE_BYTES);
@@ -353,7 +354,11 @@ void kernel_main() {
 
     // add padding
     if constexpr (needs_padding) {
+        DPRINT << "Adding padding" << ENDL();
         cb_wait_front(tt::CBIndex::c_1, 1);
+        uint32_t l1_read_addr = get_read_ptr(tt::CBIndex::c_1);
+        tt_l1_ptr uint16_t* l1_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(l1_read_addr);
+        DPRINT << "l1_ptr[0]: " << BF16(l1_ptr[0]) << ENDL();
 
         uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_1);
 
@@ -363,13 +368,31 @@ void kernel_main() {
 
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Map tile_idx to (n, h, w_t)
-            uint32_t n = tile_idx / (H * W_t);
-            uint32_t remainder1 = tile_idx % (H * W_t);
-            uint32_t h = remainder1 / W_t;
-            uint32_t w_t = remainder1 % W_t;
+
+            // input tiled shape is [...., X_t, W_t],
+            // we want to iterate across:
+            // [0, ...., X_t-1, 0] to [N-1, ...., Xt-1, W_t-1]
+            // tile_idx is between [0, prod(N, ..., Xt, W_t)/Xt)
+
+            // calculate dest_multi_idx
+            size_t remaining = tile_idx;
+            for (uint32_t i = 0; i < N; ++i) {
+                size_t dim = N - 1 - i;
+                if (dim == N - 2) {
+                    dest_multi_idx[dim] = x_t;
+                    continue;
+                }
+                dest_multi_idx[dim] = remaining % output_tiled_shape[dim];
+                remaining /= output_tiled_shape[dim];
+            }
+            dprint_array<N, uint32_t>(dest_multi_idx, "dest_multi_idx");
 
             // Calculate linear_idx of padded tile inside output tensor buffer
-            uint32_t linear_idx = n * H * X_t * W_t + h * X_t * W_t + x_t * W_t + w_t;
+            uint32_t linear_idx = 0;
+            for (uint32_t i = 0; i < N; ++i) {
+                linear_idx = (linear_idx * output_tiled_shape[i]) + dest_multi_idx[i];
+            }
+            DPRINT << "linear_idx: " << linear_idx << ENDL();
 
             for (uint8_t face_c = face_c_start; face_c < NUM_FACES_H; ++face_c) {
                 // Offset to the start of the current face along the channel dimension/height of the tile
