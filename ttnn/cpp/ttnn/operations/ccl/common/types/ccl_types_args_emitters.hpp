@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "common/core_coord.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 #include <vector>
@@ -11,6 +12,7 @@
 namespace tt {
 namespace tt_metal {
 class Tensor;
+class ShardSpec;
 
 inline namespace v0 {
 class Device;
@@ -48,6 +50,8 @@ args_list_t emit_compile_time(Shape4D<T> const& shape) {
 args_list_t emit_address_generator_runtime_args(
     tt::tt_metal::Device const* const d, tt::tt_metal::Tensor const& tensor);
 args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const& tensor);
+
+std::pair<CoreCoord, CoreCoord> shard_grid_from_shard_spec(const tt::tt_metal::ShardSpec& shard_spec);
 
 struct ShardedAddrGenArgBuilder {
     static bool shard_grid_is_transposed(tt::tt_metal::Tensor const& t);

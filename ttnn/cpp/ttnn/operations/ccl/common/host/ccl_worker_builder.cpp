@@ -20,6 +20,7 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
 
 namespace ttnn::ccl::worker_detail {
 
@@ -571,6 +572,32 @@ size_t generate_ccl_core_descriptor_info_command_args(
     return num_ccl_command_args_added;
 }
 
+static size_t generate_ccl_noc_transfer_burst_command_args(
+    const ttnn::ccl::cmd::HostCclCommandNocTransferBurst& noc_burst_descriptor,
+    size_t tensor_index,
+    ttnn::ccl::tensor_address_runtime_args_overrider &rt_args_overrider_out,
+    std::vector<uint32_t>& args_out) {
+    ttnn::ccl::cmd::CclCommandArgHeader hdr;
+    hdr.code = ttnn::ccl::cmd::CclCommandArgCode::SET_NOC_TRANSFER_BURST_START_INFO;
+    TT_FATAL(noc_burst_descriptor.num_transfers_total > 0, "Internal Error. num_transfers_total uninitialized when generating runtime args for noc read/write commands");
+    hdr.inline_value0 = noc_burst_descriptor.num_transfers_total;
+    // Bank base address must be set in the next arg since we may need the full 32-bit value
+    args_out.push_back(hdr.to_uint32());
+    rt_args_overrider_out.add_runtime_arg_index(tensor_index, args_out.size());
+    args_out.push_back(noc_burst_descriptor.bank_base_address);
+
+    for (auto const& transfer_group : noc_burst_descriptor.transfer_burst_groupings) {
+        args_out.push_back(transfer_group.num_transfers_per_packet);
+        for (auto const& transfer : transfer_group.transfer_infos) {
+            args_out.push_back(transfer.noc_addr & 0xFFFFFFFF);
+            args_out.push_back(transfer.noc_addr >> 32);
+            args_out.push_back(transfer.noc_transfer_size_bytes);
+        }
+    }
+
+    return 1;
+}
+
 void validate_ccl_command_dest_args(ttnn::ccl::cmd::CclCommandDestArgs const& dest_args) {
     bool valid = std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args) ||
                  std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args) ||
@@ -597,8 +624,14 @@ void validate_command(ttnn::ccl::cmd::CclHostLowLevelWorkerCommand const& comman
 
 void generate_ccl_command_stream_to_kernel_args(
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream,
+    std::optional<size_t> tensor_index,
+    std::optional<std::vector<size_t>> const& tensor_indices,
+    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider_out,
     std::vector<uint32_t>& rt_args_out) {
     std::optional<v2::TensorSlice> last_tensor_slice = std::nullopt;
+
+    bool fill_args_overrider = rt_args_overrider_out != nullptr;
+    TT_FATAL(!fill_args_overrider || tensor_index != std::nullopt, "Internal Error: When generating CCL command stream to kernel args, a runtime args overrider was provided but no tensor command index map was provided.");
     std::optional<std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs>>
         last_src_addr_type = std::nullopt;
     std::optional<std::pair<ttnn::ccl::cmd::CclCommandAddrType, ttnn::ccl::cmd::CclCommandAddrArgs>>
@@ -618,9 +651,30 @@ void generate_ccl_command_stream_to_kernel_args(
         static_assert(sizeof(ttnn::ccl::cmd::CclCommandHeader) == sizeof(uint32_t));
         const size_t old_rt_args_start_index = rt_args_out.size();
         rt_args_out.push_back(0);
-
         // populate the body (ccl command args)of the command
         size_t num_ccl_command_args_added = 0;
+
+        // populate the src_addr_type
+        num_ccl_command_args_added += generate_ccl_address_info_command_args(
+            last_src_addr_type,
+            {command.source_addr_type, command.source_addr_args},
+            ttnn::ccl::cmd::SRC_DEST_TYPE::SRC,
+            rt_args_out);
+        last_src_addr_type = {command.source_addr_type, command.source_addr_args};
+
+        // populate the dest_addr_type
+        num_ccl_command_args_added += generate_ccl_address_info_command_args(
+            last_dest_addr_type,
+            {command.dest_addr_type, command.dest_addr_args},
+            ttnn::ccl::cmd::SRC_DEST_TYPE::DEST,
+            rt_args_out);
+        last_dest_addr_type = {command.dest_addr_type, command.dest_addr_args};
+
+        // populate the core_desc_type
+        num_ccl_command_args_added += generate_ccl_core_descriptor_info_command_args(
+            last_core_descriptor, {command.core_desc_type, command.core_desc_args}, rt_args_out);
+        last_core_descriptor = {command.core_desc_type, command.core_desc_args};
+
         switch (command.command_code) {
             case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
             case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB: {
@@ -645,6 +699,26 @@ void generate_ccl_command_stream_to_kernel_args(
                     std::get<ttnn::ccl::cmd::CclCommandWaitValue>(command.command_args), rt_args_out);
                 break;
 
+            case ttnn::ccl::cmd::CclCommandCode::NOC_READ_BURST:
+                TT_FATAL(fill_args_overrider, "Internal Error: When generating noc read burst command args, an rt args override must be provided so that runtime args can be overridden on re-invocations of the owning operation");
+                num_ccl_command_args_added += generate_ccl_noc_transfer_burst_command_args(
+                    std::get<ttnn::ccl::cmd::HostCclCommandNocTransferBurst>(command.command_args), tensor_indices->at(tensor_index.value()), *rt_args_overrider_out, rt_args_out);
+                break;
+
+            case ttnn::ccl::cmd::CclCommandCode::NOC_WRITE_BURST:
+                TT_FATAL(fill_args_overrider, "Internal Error: When generating noc write burst command args, an rt args override must be provided so that runtime args can be overridden on re-invocations of the owning operation");
+                num_ccl_command_args_added += generate_ccl_noc_transfer_burst_command_args(
+                    std::get<ttnn::ccl::cmd::HostCclCommandNocTransferBurst>(command.command_args), tensor_indices->at(tensor_index.value()), *rt_args_overrider_out, rt_args_out);
+                break;
+
+            case ttnn::ccl::cmd::CclCommandCode::FLOW_CONTROLLED_NOC_READ_BURST:
+                TT_THROW("Command encoding support for CclCommandCode::FLOW_CONTROLLED_NOC_READ_BURST is unimplemented");
+                break;
+
+            case ttnn::ccl::cmd::CclCommandCode::NOC_WRITE_AND_ATOMIC_INC:
+                TT_THROW("Command encoding support for CclCommandCode::NOC_WRITE_AND_ATOMIC_INC is unimplemented");
+                break;
+
             case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
                 TT_THROW(
                     "CCL command STREAM_EDM_TO_TENSOR is not useable, supported, or intended to be supported in CCL "
@@ -659,26 +733,6 @@ void generate_ccl_command_stream_to_kernel_args(
                 TT_THROW("Unsupported CCL command code: {}. Support missing", static_cast<int>(command.command_code));
                 break;
         }
-
-        // populate the src_addr_type
-        num_ccl_command_args_added += generate_ccl_address_info_command_args(
-            last_src_addr_type,
-            {command.source_addr_type, command.source_addr_args},
-            ttnn::ccl::cmd::SRC_DEST_TYPE::SRC,
-            rt_args_out);
-        last_src_addr_type = {command.source_addr_type, command.source_addr_args};
-
-        // populate the dest_addr_type
-        num_ccl_command_args_added += generate_ccl_address_info_command_args(
-            last_dest_addr_type,
-            {command.dest_addr_type, command.dest_addr_args},
-            ttnn::ccl::cmd::SRC_DEST_TYPE::DEST,
-            rt_args_out);
-        last_dest_addr_type = {command.dest_addr_type, command.dest_addr_args};
-        // populate the core_desc_type
-        num_ccl_command_args_added += generate_ccl_core_descriptor_info_command_args(
-            last_core_descriptor, {command.core_desc_type, command.core_desc_args}, rt_args_out);
-        last_core_descriptor = {command.core_desc_type, command.core_desc_args};
 
         // populate the fabric_transfer_type
         // Handled by header
@@ -916,6 +970,9 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                     [&ss](CclCommandWaitValue const& a) { ss << fmt::format("(wait_value: {})", a.target_value); },
                     [&ss](CclCommandInlineReadWrite const& a) { ss << fmt::format("(value: {})", a.value); },
                     [&ss](CclCommandReadWrite const& a) { ss << fmt::format("(size_bytes: {})", a.size_bytes); },
+                    [&ss](HostCclCommandNocTransferBurst const& a) {
+                        ss << fmt::format("(base_addr: {}, n_transfers: {})", a.bank_base_address, a.num_transfers_total);
+                    },
                     [&ss](auto const&&) { ss << "ERROR"; }},
                 args);
         };
@@ -934,6 +991,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                             a.noc0_end_x,
                             a.noc0_end_y);
                     },
+                    [&ss](CclCommandCoreDescriptorTypeNone const& a) { ss << fmt::format("(None)"); },
                 },
                 args);
         };
@@ -999,7 +1057,22 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& ccl_command_stream1,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connections,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<std::unordered_map<const Tensor*, Device*>> const& tensor_device_override) {
+    std::optional<std::unordered_map<const Tensor*, Device*>> const& tensor_device_override,
+    std::optional<std::vector<size_t>> const& tensor_indices,
+    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider) {
+
+    bool fill_args_overrider = rt_args_overrider != nullptr;
+
+    if (fill_args_overrider) {
+        TT_FATAL(tensor_indices.has_value(), "Internal Error. Tensor indices must be provided when using rt_args_overrider");
+        TT_FATAL(tensor_indices.value().size() == tensors.size(), "Internal Error. Tensor indices must match the number of tensors");
+        for (auto tensor_index : tensor_indices.value()) {
+            while (rt_args_overrider->size() <= tensor_index) {
+                rt_args_overrider->add_tensor();
+            }
+        }
+    }
+
     // TODO: see if we can pull the kernel defines to understand if we built the kernel in single command stream mode
     log_trace(
         tt::LogOp,
@@ -1031,6 +1104,9 @@ void generate_multi_input_command_stream_kernel_rt_args(
     rt_args.reserve(100);
     for (size_t i = 0; i < tensors.size(); i++) {
         if (tensors[i]) {
+            if (fill_args_overrider) {
+                rt_args_overrider->add_runtime_arg_index(tensor_indices.value()[i], rt_args.size());
+            }
             rt_args.push_back(tensors[i]->buffer()->address());
         } else {
             // take up the rt arg with filler value  in case user built a kernel across a core range
@@ -1095,7 +1171,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
         // Update the command stream start arg index argument to point to here (i.e. where
         // this command stream's commands will start)
         rt_args[command_stream_start_arg_indices[i]] = rt_args.size();
-        generate_ccl_command_stream_to_kernel_args((*command_streams[i]), rt_args);
+        generate_ccl_command_stream_to_kernel_args((*command_streams[i]), i, tensor_indices, rt_args_overrider, rt_args);
     }
 
     log_trace(tt::LogOp, "\tMulti-input command processor RT Args");
@@ -1104,6 +1180,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
         log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
     }
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
+
 }
 
 void generate_multi_command_stream_kernel_rt_args(

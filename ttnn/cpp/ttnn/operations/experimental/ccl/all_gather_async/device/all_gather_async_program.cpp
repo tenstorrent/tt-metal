@@ -19,12 +19,13 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
+#include "ttnn/cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+
+#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 #include <sstream>
 #include <type_traits>
 #include <ranges>
-
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-
 #include <optional>
 using namespace tt::constants;
 
@@ -116,6 +117,20 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }
 
+static bool can_command_stream_be_lowered_to_noc_commands(const Tensor& input_tensor) {
+    static constexpr size_t baseline_arg_count = 12;
+    // approximately... this is only very rough estimate until unlimited command stream length is enabled
+    static constexpr size_t args_per_noc_command = 4;
+    static constexpr size_t max_noc_commands = 256;
+    size_t page_num_elements =
+        input_tensor.layout() == Layout::TILE ? TILE_HEIGHT * TILE_WIDTH : input_tensor.padded_shape()[-1];
+    size_t num_tensor_pages = input_tensor.padded_shape().volume() / page_num_elements;
+
+    // Interleaved tensors are currently not iterable on host so we can't resolve the page locations
+    return input_tensor.is_sharded() &&
+           (num_tensor_pages * args_per_noc_command + baseline_arg_count < max_noc_commands);
+}
+
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
@@ -133,6 +148,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
+    const bool lower_command_stream_to_noc_commands = can_command_stream_be_lowered_to_noc_commands(input_tensor);
 
     TT_FATAL(semaphore_opt.has_value(), "Semaphore is required for compile time");
 
@@ -254,6 +270,13 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     log_trace(tt::LogOp, "reader_tensor_slices[0] size: {}", reader_tensor_slices[0].size());
 
     CoreCoord drain_sync_core;
+    // For now these are a little disconnected from the commands - they'll need to be unified and explicitly
+    // associated with each other but this is for bootstrapping the feature
+    constexpr size_t reader_tensor_command_map_idx = 0;
+    constexpr size_t writer_tensor_command_map_idx = 1;
+    std::unordered_map<CoreCoord, ttnn::ccl::tensor_address_runtime_args_overrider> reader_rt_args_overrider_map;
+    std::unordered_map<CoreCoord, ttnn::ccl::tensor_address_runtime_args_overrider> writer_rt_args_overrider_map;
+
     for (std::size_t link = 0; link < num_links; link++) {
         CoreCoord core = {num_workers_per_link - 1, link};
         if (link == 0) {
@@ -300,6 +323,10 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             ttnn::ccl::cmd::uops::read_tensor_slice_to_cb_for_eventual_fabric_write(
                 input_worker_slice_v2, src0_cb_index));
 
+        if (lower_command_stream_to_noc_commands) {
+            reader_cmd_stream =
+                ttnn::ccl::tensor_slice_commands_to_noc_commands(reader_cmd_stream, input_tensor, packet_size_bytes);
+        }
         ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
             program,
             worker_sender_reader_kernel_id,
@@ -309,9 +336,12 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             num_pages_per_packet,
             {core},
             reader_cmd_stream,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt);
+            std::nullopt,                                        // cmd stream 1
+            std::nullopt,                                        // fabric fwd connection
+            std::nullopt,                                        // fabric bwd connection
+            std::nullopt,                                        // tensor device override
+            std::vector<size_t>{reader_tensor_command_map_idx},  // tensor indices
+            &reader_rt_args_overrider_map[core]);
 
         // WRITER COMMAND STREAM and RT ARGS
         std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> writer_cmd_stream;
@@ -353,6 +383,11 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_core_semaphore_set(&semaphore, 0));
         }
 
+        if (lower_command_stream_to_noc_commands) {
+            writer_cmd_stream =
+                ttnn::ccl::tensor_slice_commands_to_noc_commands(writer_cmd_stream, output_tensor, packet_size_bytes);
+        }
+
         // set the rt args
         ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
             program,
@@ -365,7 +400,10 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             writer_cmd_stream,
             std::nullopt,
             {forward_fabric_connection},
-            {backward_fabric_connection});
+            {backward_fabric_connection},
+            std::nullopt,
+            std::vector<size_t>{writer_tensor_command_map_idx},  // tensor indices
+            &writer_rt_args_overrider_map[core]);
     }
 
     if (!enable_persistent_fabric_mode) {
@@ -373,7 +411,14 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores](
+        [worker_sender_reader_kernel_id,
+         reader_rt_args_overrider_map,
+         writer_rt_args_overrider_map,
+         reader_tensor_command_map_idx,
+         writer_tensor_command_map_idx,
+         worker_sender_writer_kernel_id,
+         semaphore,
+         sender_worker_cores](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -388,10 +433,12 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             for (const auto& core : sender_worker_cores) {
                 // reader
                 auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-                worker_reader_sender_runtime_args.at(0) = input.buffer()->address();
+                reader_rt_args_overrider_map.at(core).override_runtime_args(
+                    reader_tensor_command_map_idx, input.buffer()->address(), worker_reader_sender_runtime_args);
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-                worker_writer_sender_runtime_args.at(0) = output.buffer()->address();
+                writer_rt_args_overrider_map.at(core).override_runtime_args(
+                    writer_tensor_command_map_idx, output.buffer()->address(), worker_writer_sender_runtime_args);
             }
         };
 
