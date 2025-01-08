@@ -185,6 +185,10 @@ constexpr auto mul_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::mul_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::MUL>>();
 
+constexpr auto div_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::div_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::DIV>>();
+
 constexpr auto gt_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::gt_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::GT>>();
@@ -209,6 +213,14 @@ constexpr auto ne_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::ne_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::NE>>();
 
+constexpr auto squared_difference_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::squared_difference_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::SQUARED_DIFFERENCE>>();
+
+constexpr auto bias_gelu_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::bias_gelu_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::BIAS_GELU>>();
+
 constexpr auto logical_and_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::logical_and_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_AND>>();
@@ -220,5 +232,17 @@ constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::logical_xor_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_XOR>>();
+
+constexpr auto ldexp_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::ldexp_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LDEXP>>();
+
+constexpr auto logaddexp_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::logaddexp_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP>>();
+
+constexpr auto logaddexp2_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::logaddexp2_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP2>>();
 
 }  // namespace ttnn::experimental

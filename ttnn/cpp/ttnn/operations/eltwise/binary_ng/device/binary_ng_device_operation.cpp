@@ -102,6 +102,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
+
     for (int i = -1; i >= -larger_rank; --i) {
         auto a_dim = (i >= -rank_a) ? input_shape_a[i] : 1;
         auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
@@ -261,59 +262,6 @@ BinaryNgDeviceOperation::invoke(
             output_dtype,
             std::nullopt},
         tensor_args_t{input_tensor_a_arg, std::nullopt, std::move(optional_output_tensor)}};
-}
-//
-std::tuple<BinaryNgDeviceOperation::operation_attributes_t, BinaryNgDeviceOperation::tensor_args_t>
-BinaryNgDeviceOperation::invoke(
-    const Tensor& input_tensor_a_arg,
-    const Tensor& input_tensor_b_arg,
-    BinaryOpType binary_op_type,
-    const std::optional<const DataType>& output_dtype,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
-    auto subtile_broadcast_type = get_subtile_broadcast_type(
-        input_tensor_a_arg.get_logical_shape()[-2],
-        input_tensor_a_arg.get_logical_shape()[-1],
-        input_tensor_b_arg.get_logical_shape()[-2],
-        input_tensor_b_arg.get_logical_shape()[-1]);
-
-    return {
-        operation_attributes_t{
-            binary_op_type,
-            {lhs_activations.begin(), lhs_activations.end()},
-            {rhs_activations.begin(), rhs_activations.end()},
-            {post_activations.begin(), post_activations.end()},
-            std::nullopt,
-            input_tensor_a_arg.memory_config(),
-            input_tensor_a_arg.get_dtype(),
-            output_dtype,
-            std::nullopt,
-            subtile_broadcast_type},
-        tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, std::nullopt}};
-}
-
-std::tuple<BinaryNgDeviceOperation::operation_attributes_t, BinaryNgDeviceOperation::tensor_args_t>
-BinaryNgDeviceOperation::invoke(
-    const Tensor& input_tensor_a_arg,
-    float scalar,
-    BinaryOpType binary_op_type,
-    const std::optional<const DataType>& output_dtype,
-    tt::stl::Span<const unary::UnaryOpType> lhs_activations,
-    tt::stl::Span<const unary::UnaryOpType> rhs_activations,
-    tt::stl::Span<const unary::UnaryOpType> post_activations) {
-    return {
-        operation_attributes_t{
-            binary_op_type,
-            {lhs_activations.begin(), lhs_activations.end()},
-            {rhs_activations.begin(), rhs_activations.end()},
-            {post_activations.begin(), post_activations.end()},
-            scalar,
-            input_tensor_a_arg.memory_config(),
-            input_tensor_a_arg.get_dtype(),
-            output_dtype,
-            std::nullopt},
-        tensor_args_t{input_tensor_a_arg, std::nullopt, std::nullopt}};
 }
 
 }  // namespace ttnn::operations::binary_ng

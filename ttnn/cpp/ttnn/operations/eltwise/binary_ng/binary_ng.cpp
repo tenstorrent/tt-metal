@@ -119,10 +119,12 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
 
     return ttnn::prim::binary_ng(
         queue_id,
-        input_tensor_a,
-        input_tensor_b,
+        input_a,
+        input_b,
         binary_op_type,
         output_dtype,
+        input_tensor_a.memory_config(),
+        input_tensor_a,
         lhs_activations,
         rhs_activations,
         post_activations);
@@ -136,11 +138,14 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
-    return invoke(
+    return ttnn::prim::binary_ng(
         DefaultQueueId,
         input_tensor_a,
         input_tensor_b,
+        binary_op_type,
         output_dtype,
+        input_tensor_a.memory_config(),
+        input_tensor_a,
         lhs_activations,
         rhs_activations,
         post_activations);
@@ -159,10 +164,12 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
 
     return ttnn::prim::binary_ng(
         queue_id,
-        input_tensor_a,
+        input_a,
         scalar,
         binary_op_type,
         output_dtype,
+        input_tensor_a.memory_config(),
+        input_tensor_a,
         lhs_activations,
         rhs_activations,
         post_activations);
@@ -176,8 +183,17 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
-    return invoke(
-        DefaultQueueId, input_tensor_a, scalar, output_dtype, lhs_activations, rhs_activations, post_activations);
+    return ttnn::prim::binary_ng(
+        DefaultQueueId,
+        input_tensor_a,
+        scalar,
+        binary_op_type,
+        output_dtype,
+        input_tensor_a.memory_config(),
+        input_tensor_a,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
 }
 
 template struct BinaryNg<BinaryOpType::ADD>;
@@ -201,14 +217,20 @@ template struct BinaryNg<BinaryOpType::LOGADDEXP2>;
 template struct InplaceBinaryNg<BinaryOpType::ADD>;
 template struct InplaceBinaryNg<BinaryOpType::SUB>;
 template struct InplaceBinaryNg<BinaryOpType::MUL>;
+template struct InplaceBinaryNg<BinaryOpType::DIV>;
 template struct InplaceBinaryNg<BinaryOpType::GT>;
 template struct InplaceBinaryNg<BinaryOpType::LT>;
 template struct InplaceBinaryNg<BinaryOpType::LTE>;
 template struct InplaceBinaryNg<BinaryOpType::GTE>;
 template struct InplaceBinaryNg<BinaryOpType::EQ>;
 template struct InplaceBinaryNg<BinaryOpType::NE>;
+template struct InplaceBinaryNg<BinaryOpType::SQUARED_DIFFERENCE>;
+template struct InplaceBinaryNg<BinaryOpType::BIAS_GELU>;
 template struct InplaceBinaryNg<BinaryOpType::LOGICAL_AND>;
 template struct InplaceBinaryNg<BinaryOpType::LOGICAL_OR>;
 template struct InplaceBinaryNg<BinaryOpType::LOGICAL_XOR>;
+template struct InplaceBinaryNg<BinaryOpType::LDEXP>;
+template struct InplaceBinaryNg<BinaryOpType::LOGADDEXP>;
+template struct InplaceBinaryNg<BinaryOpType::LOGADDEXP2>;
 
 }  // namespace ttnn::operations::binary_ng

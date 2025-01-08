@@ -167,6 +167,7 @@ void py_module(py::module& module) {
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::add_, "Binary Add In-place Operation");
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::sub_, "Binary Subtract In-place Operation");
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::mul_, "Binary Multiply In-place Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::div_, "Binary Divide In-place Operation");
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::gt_, "Binary Greater Than In-place Operation");
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::lt_, "Binary Less Than In-place Operation");
     detail::bind_inplace_binary_ng_operation(
@@ -176,10 +177,19 @@ void py_module(py::module& module) {
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::eq_, "Binary Equal In-place Operation");
     detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::ne_, "Binary Not Equal In-place Operation");
     detail::bind_inplace_binary_ng_operation(
+        module, ttnn::experimental::squared_difference_, "Binary Squared Difference In-place Operation");
+    detail::bind_inplace_binary_ng_operation(
+        module, ttnn::experimental::bias_gelu_, "Binary Bias GELU In-place Operation");
+    detail::bind_inplace_binary_ng_operation(
         module, ttnn::experimental::logical_and_, "Binary Logical And In-place Operation");
     detail::bind_inplace_binary_ng_operation(
         module, ttnn::experimental::logical_or_, "Binary Logical Or In-place Operation");
     detail::bind_inplace_binary_ng_operation(
         module, ttnn::experimental::logical_xor_, "Binary Logical Xor In-place Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::ldexp_, "Binary Ldexp In-place Operation");
+    detail::bind_inplace_binary_ng_operation(
+        module, ttnn::experimental::logaddexp_, "Binary Logaddexp In-place Operation");
+    detail::bind_inplace_binary_ng_operation(
+        module, ttnn::experimental::logaddexp2_, "Binary Logaddexp2 In-place Operation");
 }
 }  // namespace ttnn::operations::binary_ng
