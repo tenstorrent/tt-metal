@@ -28,9 +28,9 @@ struct Conv2dConfig {
     // If user tensor will be deallocated if it's on device.
     bool deallocate_activation = false;
 
-    // If true && dellocate_activation is true, then after halo device op is done, the output tensor of halo will be reallocated.
+    // If true && dellocate_activation is true, then after halo device op is done,
+    // the output tensor of halo will be reallocated.
     bool reallocate_halo_output = true;
-    
 
     // Has to be a multiple of 32.
     //  Smaller -> Smaller CBs, Lower L1 Usage, Lower perf.
