@@ -352,3 +352,21 @@ def test_permute_identity(shape, device):
     torch_output = torch.permute(torch_tensor, (0, 1, 2, 3))
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape", [[1, 1, 32, 32, 32], [1, 1, 1, 2, 33], [1, 1, 2, 1, 33], [1, 2, 1, 33, 1], [33, 33, 33, 33, 33]]
+)
+@pytest.mark.parametrize("perm", [(0, 1, 3, 2, 4), (3, 2, 1, 0, 4), (0, 3, 2, 1, 4), (1, 3, 2, 0, 4), (0, 3, 1, 2, 4)])
+def test_permute_5d_xc(shape, perm, device):
+    torch.manual_seed(2005)
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2, 4))
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, (0, 1, 3, 2, 4))
+    # print(torch_tensor)
+    # print(torch_output)
+    # print(output_tensor)
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)

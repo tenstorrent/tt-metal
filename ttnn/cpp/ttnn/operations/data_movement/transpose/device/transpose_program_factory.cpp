@@ -566,7 +566,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
                     static_cast<uint32_t>(pad_value.value()) | (static_cast<uint32_t>(pad_value.value()) << 16);
             } else {
                 padding_val_packed = std::bit_cast<uint32_t>(pad_value.value());
-                ;
             }
         }
     }

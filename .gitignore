@@ -3,7 +3,7 @@
 .idea
 runtime
 *.log
-*.csv
+# *.csv
 *.xlsx
 *.code-workspace
 /tt-perf*
@@ -58,9 +58,9 @@ docs/doxygen_build
 **.swo
 **.swn
 
-*profile_log*.csv
-**/profiler/output/*
-generated
+# *profile_log*.csv
+# **/profiler/output/*
+# generated
 
 env/
 tags
