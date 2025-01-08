@@ -470,11 +470,9 @@ bool DevicePool::close_device(chip_id_t device_id) {
     const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
     for (const auto& mmio_controlled_device_id :
          tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-        auto& device = devices[mmio_controlled_device_id];
-        if (device->is_initialized()) {
+        if (this->is_device_active(mmio_controlled_device_id)) {
+            auto& device = devices[mmio_controlled_device_id];
             pass &= device->close();
-            // When a device is closed, its worker thread is joined. Stop tracking this
-            // worker thread.
             this->unregister_worker_thread_for_device(device.get());
         }
     }
