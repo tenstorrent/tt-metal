@@ -75,8 +75,8 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim):
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@pytest.mark.parametrize("batch_size", [3])
-@pytest.mark.parametrize("c", [5])
+@pytest.mark.parametrize("batch_size", [32])
+@pytest.mark.parametrize("c", [32])
 @pytest.mark.parametrize("h", [37])
 @pytest.mark.parametrize("w", [63])
 @pytest.mark.parametrize("dim", [None, [], 0, 2, [0, 1], [1, 3], [0, 1, 2], [1, 2, 3], [0, 1, 2, 3]])
