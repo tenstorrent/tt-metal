@@ -71,6 +71,10 @@ protected:
     }
 
     void TearDown() override {
+        if (!mesh_device_) {
+            return;
+        }
+
         mesh_device_->close_devices();
         mesh_device_.reset();
     }
