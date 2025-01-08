@@ -26,6 +26,9 @@ def num_cores_to_rectangle_grid(num_cores, device):
 
     Return None if rectangle grid is not possible.
     """
+    is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
+    if is_mesh_device:
+        device = device.get_device(device.get_device_ids()[0])
     x = device.compute_with_storage_grid_size().x
     while x > 0 and num_cores % x != 0:
         x -= 1

@@ -1287,7 +1287,8 @@ Matmul create_matmul_struct(
         parameters.transpose_a,
         parameters.transpose_b,
         output_tile,
-        parameters.global_cb};
+        parameters.global_cb,
+        parameters.multi_global_cb};
 }
 
 Tensor matmul(
@@ -1496,7 +1497,7 @@ void Matmul::validate(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
                         "Input tensor B must be width sharded when using gather_in0.");
-                    if (!this->global_cb.has_value()) {
+                    if (!this->global_cb.has_value() && !this->multi_global_cb.has_value()) {
                         TT_FATAL(
                             input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
                             "Input tensor A and B must be sharded on the same cores when using gather_in0.");
@@ -2131,6 +2132,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.hop_cores,
                     this->untilize_out,
                     this->global_cb,
+                    this->multi_global_cb,
                     program_config.num_global_cb_receivers);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,

@@ -221,7 +221,8 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                     transpose_a,
                     transpose_b,
                     /*output_tile=*/std::nullopt,
-                    /*global_cb=*/std::nullopt});
+                    /*global_cb=*/std::nullopt,
+                    /*multi_global_cb=*/std::nullopt});
 
             return operation::run(
                 ttnn::experimental::AllGatherMatmul{/* All Gather Params */

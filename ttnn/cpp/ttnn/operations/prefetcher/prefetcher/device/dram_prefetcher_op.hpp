@@ -9,21 +9,26 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/cpp/ttnn/global_circular_buffer.hpp"
 
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 
+
 namespace ttnn::operations::dram_prefetcher {
 
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
-    const std::vector<Tensor>& tensors,
-    const Tensor& tensor_addrs,
+    const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
-    const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_cb);
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb);
+operation::ProgramWithCallbacks dram_prefetcher_multi_core_multi_device(
+    const std::vector<Tensor>& input_tensors,
+    const uint32_t num_layers,
+    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>& multi_global_cb);
 
 struct DramPrefetcher {
-    const Tensor tensor_addrs = Tensor();
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
+    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer> multi_global_cb;
     const uint32_t num_layers;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
