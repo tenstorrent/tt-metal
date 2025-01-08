@@ -55,7 +55,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 
-    Device* device = output_grad.device();
+    IDevice* device = output_grad.device();
     auto arch = device->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);

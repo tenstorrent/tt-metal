@@ -93,20 +93,20 @@ Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> tran
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable);
 
 // Given a multi-device tensor, returns all the devices it is mapped to.
-std::vector<Device*> get_devices(const Tensor& multi_device_tensor);
+std::vector<IDevice*> get_devices(const Tensor& multi_device_tensor);
 
 uint32_t num_buffers_in_tensor(const Tensor& tensor);
 
 Tensor get_shard_for_device(
-    const Tensor& tensor, Device* target_device, std::optional<int> buffer_index = std::nullopt);
+    const Tensor& tensor, IDevice* target_device, std::optional<int> buffer_index = std::nullopt);
 
 void insert_buffer_and_shape_for_device(
-    Device* target_device,
+    IDevice* target_device,
     const Tensor& shard,
     Tensor& tensor_to_modify,
     std::optional<int> buffer_index = std::nullopt);
 
-Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor);
+Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor);
 
 inline bool is_tensor_on_device(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 

@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
     // construct const buffer with the pad_value
-    Device* device = a.device();
+    IDevice* device = a.device();
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
     uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
     auto pad_value_const_buffer =
@@ -182,7 +182,7 @@ operation::ProgramWithCallbacks pad_tile(
     CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     auto output_shape = output_padded_shape;
 
@@ -460,7 +460,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     TT_ASSERT(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     // construct const buffer with the pad_value
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
@@ -814,7 +814,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -1024,7 +1024,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t shard_height_unpadded,
     uint32_t num_cores_x_unpadded,
     uint32_t num_cores_y_unpadded) {
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
@@ -1217,7 +1217,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     // input shard spec
     auto shard_spec_unpadded = a.shard_spec().value();
@@ -1374,7 +1374,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     auto unpadded_stick_bytes = W * input_tensor.element_size();
     auto padded_stick_bytes = W_padded * input_tensor.element_size();
 
-    Device *device = input_tensor.device();
+    IDevice*device = input_tensor.device();
 
     // input shard spec
     auto input_shard_spec = input_tensor.shard_spec().value();

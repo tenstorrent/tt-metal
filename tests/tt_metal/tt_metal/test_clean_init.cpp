@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
             /*
             * Silicon accelerator setup
             */
-            Device *device = devices[device_id];
+            IDevice* device = devices[device_id];
 
             /*
             * Setup program and command queue to execute along with its buffers and kernels to use

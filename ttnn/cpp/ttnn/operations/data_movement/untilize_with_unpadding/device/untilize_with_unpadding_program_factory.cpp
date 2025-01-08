@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     int32_t num_tiles = a.volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -217,7 +217,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     const auto& input_shape = a.get_padded_shape();
     const auto& output_shape = output.get_padded_shape();
 
-    Device* device = a.device();
+    IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.volume() / input_shape[-1] / TILE_HEIGHT;
@@ -390,7 +390,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,

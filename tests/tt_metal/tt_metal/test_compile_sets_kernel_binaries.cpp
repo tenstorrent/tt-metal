@@ -40,7 +40,7 @@ std::string get_latest_kernel_binary_path(const string& kernel_root_path, const 
     return kernel->name() + "/" + latest_hash;
 }
 
-void construct_program(Program& program, Device* device, CoreCoord& core) {
+void construct_program(Program& program, IDevice* device, CoreCoord& core) {
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 2048;
     uint32_t dram_buffer_size =

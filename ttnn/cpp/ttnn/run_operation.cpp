@@ -22,7 +22,7 @@ namespace tt::tt_metal::operation {
 
 namespace detail {
 
-Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
+IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (auto& input_tensor : input_tensors) {
         if (std::holds_alternative<DeviceStorage>(input_tensor.tensor_attributes->storage)) {
             return input_tensor.workers.at(0);
@@ -263,7 +263,7 @@ OutputTensors run_without_autoformat(
     uint8_t cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    Device* device = detail::get_device(input_tensors, optional_input_tensors);
+    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
     Tensors input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
@@ -347,7 +347,7 @@ Tensors run_with_autoformat(
     uint8_t cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    Device* device = detail::get_device(input_tensors, optional_input_tensors);
+    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
 
     Tensors formatted_input_tensors;
     formatted_input_tensors.reserve(input_tensors.size());
@@ -419,7 +419,7 @@ Tensors run_with_autoformat(
     uint8_t cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    Device* device = detail::get_device(input_tensors, optional_input_tensors);
+    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
 
     TT_ASSERT(input_tensors.size() == input_formatting.size());
     TT_ASSERT(optional_input_tensors.size() == optional_input_formatting.size());
@@ -500,7 +500,7 @@ void launch_with_autoformat(
 void validate_workers_and_storage(
     const std::vector<Tensor>& inputs,
     const std::vector<std::optional<const Tensor>>& optional_inputs,
-    const std::vector<Device*>& workers) {
+    const std::vector<IDevice*>& workers) {
     bool single_device_storage = false;
     bool multi_device_storage = false;
     // Verify that storage types are consistent - cannot mix single and multi-device storage. For multi-device tensors,
@@ -541,12 +541,12 @@ void validate_workers_and_storage(
     }
 }
 
-std::vector<Device*> get_workers_for_op_output(
+std::vector<IDevice*> get_workers_for_op_output(
     const std::vector<Tensor>& inputs,
     const std::vector<std::optional<const Tensor>>& optional_inputs,
     bool enable_autoformat_device) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    std::vector<Device*> workers_for_op = {};
+    std::vector<IDevice*> workers_for_op = {};
     // Infer output workers from inputs. For multi-device tensors the number
     // of workers used for the op (and assigned to the ouput) is the minimum
     // number of workers across all inputs. Additionally, in this case, at least

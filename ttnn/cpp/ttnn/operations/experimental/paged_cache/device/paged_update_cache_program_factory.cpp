@@ -18,7 +18,7 @@ using namespace tt::constants;
 using namespace tt;
 
 bool enable_fp32_dest(
-    const tt_metal::Device* device,
+    const tt_metal::IDevice* device,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const tt::DataFormat& input_cb_data_format) {
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -38,7 +38,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     const bool share_cache) {
     Program program{};
 
-    tt_metal::Device* device = input_tensor.device();
+    tt_metal::IDevice* device = input_tensor.device();
 
     tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor.get_dtype());
     uint32_t cache_single_tile_size = tt_metal::detail::TileSize(cache_cb_data_format);

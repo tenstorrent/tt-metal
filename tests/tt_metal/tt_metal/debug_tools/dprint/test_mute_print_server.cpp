@@ -20,7 +20,7 @@ const std::string golden_output =
 R"(Printing int from arg: 0
 Printing int from arg: 2)";
 
-static void RunTest(DPrintFixture* fixture, Device* device) {
+static void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -67,7 +67,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 }
 
 TEST_F(DPrintFixture, TensixTestPrintMuting) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

@@ -43,11 +43,11 @@ public:
     OptionalAnyDevice() = default;
     OptionalAnyDevice(std::nullopt_t);
     OptionalAnyDevice(ttnn::AnyDevice device);
-    OptionalAnyDevice(const std::optional<std::reference_wrapper<tt::tt_metal::Device>>& device);
+    OptionalAnyDevice(const std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>& device);
     OptionalAnyDevice(const std::optional<std::reference_wrapper<tt::tt_metal::distributed::MeshDevice>>& mesh_device);
-    OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::Device> device);
+    OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::IDevice> device);
     OptionalAnyDevice(std::reference_wrapper<tt::tt_metal::distributed::MeshDevice> mesh_device);
-    OptionalAnyDevice(tt::tt_metal::Device& device);
+    OptionalAnyDevice(tt::tt_metal::IDevice& device);
     OptionalAnyDevice(tt::tt_metal::distributed::MeshDevice& mesh_device);
 
     OptionalAnyDevice(const OptionalAnyDevice&) = default;
@@ -65,8 +65,8 @@ private:
 
 // Converts an instance of AnyDevice to a vector of the underlying Devices.
 // TODO: Consider moving the helper into a dedicated header with the related utils.
-inline std::vector<Device*> get_workers_from_device(OptionalAnyDevice device) {
-    return device.has_value() ? device->get_devices() : std::vector<Device*>{};
+inline std::vector<IDevice*> get_workers_from_device(OptionalAnyDevice device) {
+    return device.has_value() ? device->get_devices() : std::vector<IDevice*>{};
 }
 
 template <typename T>
@@ -114,7 +114,7 @@ static Tensor full_impl(
     const tt::tt_metal::LegacyShape& shape,
     T value,
     const Layout layout,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> optional_output_tensor) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
@@ -155,7 +155,7 @@ static Tensor full_impl(
 }  // namespace detail
 
 template <typename T, std::size_t rank = 4>
-Tensor create_scalar(T scalar, DataType data_type, Layout layout, Device* device) {
+Tensor create_scalar(T scalar, DataType data_type, Layout layout, IDevice* device) {
     using namespace tt::constants;
     static_assert(rank >= 2, "Rank must be at least 2 when creating a tensor with TILE_LAYOUT");
     std::array<std::uint32_t, rank> intended_shape = {};
@@ -190,10 +190,10 @@ inline ttnn::Tensor full_impl(
     const T fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,
-    const std::vector<Device*>& workers = {},
+    const std::vector<IDevice*>& workers = {},
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
-    const std::vector<Device*>& workers_to_use =
+    const std::vector<IDevice*>& workers_to_use =
         optional_output_tensor.has_value() ? optional_output_tensor->get_workers(/*blocking=*/true) : workers;
 
     Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
@@ -371,7 +371,7 @@ struct EmptyLike {
         const std::optional<Layout>& layout = std::nullopt,
         detail::OptionalAnyDevice device_arg = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        const std::vector<Device*>& devices =
+        const std::vector<IDevice*>& devices =
             device_arg.has_value() ? device_arg->get_devices() : tensor.get_workers(/*blocking=*/true);
         Layout layout_value = layout.value_or(tensor.get_layout());
         DataType dtype_value = dtype.value_or(tensor.get_dtype());

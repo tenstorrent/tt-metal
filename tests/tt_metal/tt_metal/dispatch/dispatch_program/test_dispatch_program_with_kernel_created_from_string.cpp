@@ -28,7 +28,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
     }
     )";
 
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         Program program = CreateProgram();
         tt_metal::CreateKernelFromString(
             program,
@@ -56,7 +56,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     }
     )";
 
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         Program program = CreateProgram();
         tt_metal::CreateKernelFromString(
             program,
@@ -83,7 +83,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     }
     )";
 
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         const std::unordered_set<CoreCoord>& active_ethernet_cores = device->get_active_ethernet_cores(true);
         if (active_ethernet_cores.empty()) {
             const chip_id_t device_id = device->id();

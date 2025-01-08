@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "tt_metal/distributed/mesh_device_view.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
@@ -61,7 +61,7 @@ class SystemMesh {
     ~SystemMesh();
 
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
-    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<Device*>& devices);
+    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<IDevice*>& devices);
 
 public:
     static SystemMesh& instance();
@@ -87,8 +87,8 @@ private:
     MeshShape mesh_device_shape;
     MeshType type;
     std::unique_ptr<MeshDeviceView> view;
-    std::map<chip_id_t, Device*> opened_devices;
-    std::vector<Device*> devices;
+    std::map<chip_id_t, IDevice*> opened_devices;
+    std::vector<IDevice*> devices;
     std::vector<std::shared_ptr<MeshDevice>>
         submeshes;  // Parent owns submeshes and is responsible for their destruction
     std::weak_ptr<MeshDevice> parent_mesh;               // Submesh created with reference to parent mesh
@@ -102,7 +102,7 @@ private:
         const MeshDeviceConfig& config);
 
     // This is a reference device used to query properties that are the same for all devices in the mesh.
-    Device* reference_device() const;
+    IDevice* reference_device() const;
 
 public:
     MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh = {});
@@ -117,10 +117,10 @@ public:
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
     // If type is not provided, the default behavior is to return the devices based on the MeshType of the MeshDevice.
-    std::vector<Device*> get_devices(const std::optional<MeshType>& type = std::nullopt) const;
-    Device* get_device_index(size_t logical_device_id) const;
-    Device* get_device(chip_id_t physical_device_id) const;
-    Device* get_device(size_t row_idx, size_t col_idx) const;
+    std::vector<IDevice*> get_devices(const std::optional<MeshType>& type = std::nullopt) const;
+    IDevice* get_device_index(size_t logical_device_id) const;
+    IDevice* get_device(chip_id_t physical_device_id) const;
+    IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
     MeshCommandQueue& command_queue();
     const DeviceIds get_device_ids() const;
@@ -244,7 +244,7 @@ concept DeviceInterfaceContract =
 
 // For now static_asserts are used to ensure that the concepts are satisfied.
 // This is a temporary compile-time check to make sure that Device/MeshDevice don't deviate from the expected interface.
-static_assert(detail::DeviceInterfaceContract<Device>, "Device must satisfy the DeviceInterfaceContract concept.");
+static_assert(detail::DeviceInterfaceContract<IDevice>, "Device must satisfy the DeviceInterfaceContract concept.");
 static_assert(detail::DeviceInterfaceContract<MeshDevice>, "MeshDevice must satisfy the DeviceInterfaceContract concept.");
 
 }  // namespace tt::tt_metal::distributed

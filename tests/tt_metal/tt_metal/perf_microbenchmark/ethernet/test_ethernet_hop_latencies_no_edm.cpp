@@ -32,7 +32,7 @@
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
 
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
@@ -81,7 +81,7 @@ namespace tt {
 namespace tt_metal {
 
 std::vector<uint32_t> get_eth_receiver_rt_args(
-    Device* device,
+    IDevice* device,
     bool is_starting_core,
     uint32_t num_samples,
     uint32_t max_concurrent_samples,
@@ -124,7 +124,7 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
 }
 
 std::vector<uint32_t> get_eth_sender_rt_args(
-    Device* device,
+    IDevice* device,
     bool is_starting_core,
     uint32_t num_samples,
     uint32_t max_concurrent_samples,
@@ -169,7 +169,7 @@ struct hop_eth_sockets {
 };
 
 void build_and_run_roundtrip_latency_test(
-    std::vector<Device*> devices,
+    std::vector<IDevice*> devices,
     std::vector<hop_eth_sockets> hop_eth_sockets,
     std::size_t num_samples,
     std::size_t sample_page_size,
@@ -188,7 +188,7 @@ void build_and_run_roundtrip_latency_test(
     receiver_kernel_ids.reserve(n_hops);
     sender_kernel_ids.reserve(n_hops);
 
-    std::unordered_map<Device*, Program*> device_program_map;
+    std::unordered_map<IDevice*, Program*> device_program_map;
     for (std::size_t i = 0; i < n_hops; i++) {
         if (device_program_map.find(devices.at(i)) == device_program_map.end()) {
             programs.emplace_back();
@@ -196,11 +196,11 @@ void build_and_run_roundtrip_latency_test(
         }
     }
 
-    std::unordered_map<Device*, uint32_t> device_visits;
+    std::unordered_map<IDevice*, uint32_t> device_visits;
 
     for (std::size_t i = 0; i < n_hops; i++) {
         auto previous_hop = i == 0 ? n_hops - 1 : i - 1;
-        Device* device = devices.at(i);
+        IDevice* device = devices.at(i);
         auto& program = *device_program_map.at(device);
         auto const& eth_sender_core = hop_eth_sockets.at(i).sender_core;
         auto const& eth_receiver_core = hop_eth_sockets.at(previous_hop).receiver_core;
@@ -344,12 +344,12 @@ void build_and_run_roundtrip_latency_test(
 
 auto is_device_pcie_connected(chip_id_t device_id) { return device_id < 4; }
 
-std::vector<hop_eth_sockets> build_eth_sockets_list(std::vector<Device*> const& devices) {
+std::vector<hop_eth_sockets> build_eth_sockets_list(std::vector<IDevice*> const& devices) {
     std::vector<hop_eth_sockets> sockets;
     std::unordered_map<uint64_t, std::size_t> n_edge_visits;
     for (std::size_t i = 0; i < devices.size(); i++) {
-        Device* curr_device = devices.at(i);
-        Device* next_device = i == devices.size() - 1 ? devices.at(0) : devices.at(i + 1);
+        IDevice* curr_device = devices.at(i);
+        IDevice* next_device = i == devices.size() - 1 ? devices.at(0) : devices.at(i + 1);
         uint64_t edge = (static_cast<uint64_t>(curr_device->id()) << 32) | static_cast<uint64_t>(next_device->id());
         bool edge_needs_tunneling =
             !is_device_pcie_connected(curr_device->id()) || !is_device_pcie_connected(next_device->id());
@@ -452,13 +452,13 @@ int main(int argc, char** argv) {
     auto get_device_list = [](const MeshDeviceView& view, std::size_t n_hops) {
         switch (n_hops) {
             case 2:
-                return std::vector<Device*>{
+                return std::vector<IDevice*>{
                     view.get_device(0, 0),
                     view.get_device(0, 1),
                 };
 
             case 4:
-                return std::vector<Device*>{
+                return std::vector<IDevice*>{
                     view.get_device(1, 1),
                     view.get_device(0, 1),
                     view.get_device(0, 2),
@@ -466,7 +466,7 @@ int main(int argc, char** argv) {
                 };
 
             case 8:
-                return std::vector<Device*>{
+                return std::vector<IDevice*>{
                     view.get_device(1, 1),
                     view.get_device(1, 0),
                     view.get_device(0, 0),
@@ -478,7 +478,7 @@ int main(int argc, char** argv) {
                 };
 
             case 12:  // Does an extra loop through the inner ring
-                return std::vector<Device*>{
+                return std::vector<IDevice*>{
                     view.get_device(1, 1),
                     view.get_device(1, 0),
                     view.get_device(0, 0),
@@ -493,7 +493,7 @@ int main(int argc, char** argv) {
                     view.get_device(1, 2),
                 };
 
-            default: TT_THROW("Unsupported hop_count"); return std::vector<Device*>{};
+            default: TT_THROW("Unsupported hop_count"); return std::vector<IDevice*>{};
         };
     };
 

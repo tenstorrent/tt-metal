@@ -72,7 +72,7 @@ protected:
             device_id, this->num_cqs_, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
     }
 
-    tt::tt_metal::Device* device_ = nullptr;
+    tt::tt_metal::IDevice* device_ = nullptr;
     tt::ARCH arch_;
     uint8_t num_cqs_;
 };
@@ -145,8 +145,8 @@ protected:
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
-    std::vector<tt::tt_metal::Device*> devices_;
-    std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
 class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};

@@ -21,7 +21,7 @@ namespace unit_tests::basic::device {
 /// @param grid_size - grid size. will ping all cores from {0,0} to grid_size (non-inclusive)
 /// @return
 bool l1_ping(
-    tt_metal::Device* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& grid_size) {
+    tt_metal::IDevice* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& grid_size) {
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (int y = 0; y < grid_size.y; y++) {
@@ -52,7 +52,7 @@ bool l1_ping(
 /// @param num_channels - num_channels. will ping all channels from {0} to num_channels (non-inclusive)
 /// @return
 bool dram_ping(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& dram_byte_address,
     const unsigned int& num_channels) {
@@ -236,7 +236,7 @@ TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
 TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     tt_metal::Program program = tt_metal::CreateProgram();
-    Device* device = this->devices_.at(0);
+    IDevice* device = this->devices_.at(0);
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);
 

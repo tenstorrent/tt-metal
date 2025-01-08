@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     Program program = CreateProgram();
 
     // This should allocate input_tensor DRAM buffer on the device
-    Device* device = input_tensor.device();
+    IDevice* device = input_tensor.device();
 
     tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t in0_tile_size = tt::tt_metal::detail::TileSize(in0_cb_data_format);
@@ -563,7 +563,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = input_tensor.device();
+    IDevice* device = input_tensor.device();
 
     // convert data format
     tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());

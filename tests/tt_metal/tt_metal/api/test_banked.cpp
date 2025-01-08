@@ -34,7 +34,7 @@ namespace local_test_functions {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked_reader, const bool banked_writer) {
+bool reader_cb_writer(IDevice* device, const BankedConfig& cfg, const bool banked_reader, const bool banked_writer) {
     bool pass = true;
 
     const uint32_t cb_id = 0;
@@ -162,7 +162,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
+bool reader_datacopy_writer(IDevice* device, const BankedConfig& cfg) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;

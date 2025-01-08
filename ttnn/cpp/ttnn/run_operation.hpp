@@ -165,13 +165,13 @@ void launch_with_autoformat(
     const OptionalConstTensors& optional_input_tensors = {},
     const OptionalTensors& optional_output_tensors = {});
 
-std::vector<Device*> get_workers_for_op_output(
+std::vector<IDevice*> get_workers_for_op_output(
     const std::vector<Tensor>& inputs,
     const std::vector<std::optional<const Tensor>>& optional_inputs = {},
     bool enable_autoformat_device = true);
 
 namespace detail {
-Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});
+IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});
 }
 
 }  // namespace operation

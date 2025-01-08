@@ -108,7 +108,7 @@ inline std::vector<std::uint32_t> transpose_tiles(
 }
 
 inline bool move_tiles_to_dram(
-    tt_metal::Device* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
+    tt_metal::IDevice* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into u32
     int tile_size_bytes = 32 * 32 * 2;
@@ -131,7 +131,7 @@ inline bool move_tiles_to_dram(
 }
 
 inline bool move_tiles_to_dram(
-    tt_metal::Device* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, std::shared_ptr<Buffer> buffer) {
+    tt_metal::IDevice* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, std::shared_ptr<Buffer> buffer) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
     int tile_size_bytes = 32 * 32 * 2;

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 
 using namespace tt;
@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     /* Silicon accelerator setup */
-    Device* device = CreateDevice(0);
+    IDevice* device = CreateDevice(0);
 
     /* Setup program to execute along with its buffers and kernels to use */
     CommandQueue& cq = device->command_queue();

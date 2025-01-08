@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_height, num_units_per_shard_height_last,
         num_units_per_shard_width_last;
 
-    tt_metal::Device* device = input.device();
+    tt_metal::IDevice* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());

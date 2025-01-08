@@ -16,7 +16,7 @@
 #include "ttnn/operations/functions.hpp"
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 
 using tt::tt_metal::Layout;
 using tt::tt_metal::LegacyShape;
@@ -57,7 +57,7 @@ Tensor host_function(const Tensor& input_tensor) {
 }
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
-bool run_test(Device* device, const tt::tt_metal::LegacyShape& shape, float low, float high, Args... args) {
+bool run_test(IDevice* device, const tt::tt_metal::LegacyShape& shape, float low, float high, Args... args) {
     auto input_tensor = ttnn::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     using ttnn::operations::unary::UnaryOpType;

@@ -6,7 +6,7 @@
 #include "test_tiles.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
@@ -14,7 +14,7 @@ using namespace tt;
 //
 void measure_latency(const string& kernel_name) {
     const int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     CoreCoord producer_logical_core =

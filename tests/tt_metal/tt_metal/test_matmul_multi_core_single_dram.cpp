@@ -154,7 +154,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     int num_cores_r,
     int num_cores_c,
     int per_core_M,
@@ -297,7 +297,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         int num_cores_r = compute_with_storage_grid_size.y;

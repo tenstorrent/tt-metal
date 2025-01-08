@@ -14,7 +14,7 @@ using std::vector;
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
 static void test_sems_across_core_types(
-    DispatchFixture* fixture, vector<tt::tt_metal::v1::DeviceHandle>& devices, bool active_eth) {
+    DispatchFixture* fixture, vector<tt::tt_metal::IDevice* >& devices, bool active_eth) {
     // just something unique...
     constexpr uint32_t eth_sem_init_val = 33;
     constexpr uint32_t tensix_sem_init_val = 102;
@@ -26,7 +26,7 @@ static void test_sems_across_core_types(
         compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::IDLE_ETH));
     }
 
-    for (Device* device : devices) {
+    for (IDevice* device : devices) {
         if (not device->is_mmio_capable()) {
             continue;
         }
@@ -93,7 +93,7 @@ static void test_sems_across_core_types(
 }
 
 TEST_F(DispatchFixture, EthTestBlank) {
-    Device* device = devices_[0];
+    IDevice* device = devices_[0];
     Program program = CreateProgram();
 
     // TODO: tweak when FD supports idle eth
@@ -118,7 +118,7 @@ TEST_F(DispatchFixture, EthTestBlank) {
 TEST_F(DispatchFixture, TensixTestInitLocalMemory) {
     // This test will hang/assert if there is a failure
 
-    Device* device = devices_[0];
+    IDevice* device = devices_[0];
     CoreCoord core = {0, 0};
     Program program;
 
@@ -147,7 +147,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
         return;
     }
 
-    Device* device = devices_[0];
+    IDevice* device = devices_[0];
     Program program = CreateProgram();
 
     // TODO: tweak when FD supports idle eth
@@ -192,7 +192,7 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         bool found_overlapping_core = false;
         CoreCoord core_coord;

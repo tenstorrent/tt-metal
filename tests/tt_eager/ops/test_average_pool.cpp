@@ -10,12 +10,12 @@
 #include "common/constants.hpp"
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
 using tt::tt_metal::LegacyShape;
 using tt::tt_metal::Tensor;
 
-Tensor run_avg_pool_2d_resnet(tt::tt_metal::LegacyShape& tensor_shape, Device* device) {
+Tensor run_avg_pool_2d_resnet(tt::tt_metal::LegacyShape& tensor_shape, IDevice* device) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto input_tensor = ttnn::random::random(tensor_shape, DataType::BFLOAT16);
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(tensor_shape, false, false);

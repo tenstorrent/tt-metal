@@ -26,8 +26,8 @@ namespace ttnn {
 using ccl::EriscDatamoverBuilder;
 
 struct AllGatherAsync {
-    std::optional<Device*> forward_device;
-    std::optional<Device*> backward_device;
+    std::optional<IDevice*> forward_device;
+    std::optional<IDevice*> backward_device;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
@@ -38,8 +38,8 @@ struct AllGatherAsync {
     bool enable_persistent_fabric_mode;
 
     AllGatherAsync(
-        std::optional<Device*> forward_device,
-        std::optional<Device*> backward_device,
+        std::optional<IDevice*> forward_device,
+        std::optional<IDevice*> backward_device,
         uint32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -90,7 +90,7 @@ AllGatherAsync create_all_gather_async_struct(
     const uint32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ccl::Topology topology,
     const std::optional<std::vector<GlobalSemaphore>>& semaphores,
     bool enable_persistent_fabric_mode);
@@ -100,8 +100,8 @@ AllGatherAsync create_all_gather_async_struct(
 // All Gather Variants
 operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
-    std::optional<Device*> forward_device,
-    std::optional<Device*> backward_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,

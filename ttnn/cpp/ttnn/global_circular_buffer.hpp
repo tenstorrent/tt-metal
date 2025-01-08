@@ -17,7 +17,7 @@ struct MultiDeviceGlobalCircularBuffer {
 
 // Single Device APIs
 GlobalCircularBuffer create_global_circular_buffer(
-    Device* device,
+    IDevice* device,
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,

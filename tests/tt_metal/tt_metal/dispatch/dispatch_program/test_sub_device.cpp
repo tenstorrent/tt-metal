@@ -11,7 +11,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -41,7 +41,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_1.size / sizeof(uint32_t));
 
     std::array sub_device_ids_to_block = {SubDeviceId{0}};
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
 
         shard_config_1.device = device;
@@ -94,7 +94,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     uint32_t num_iters = 5;
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
         device->load_sub_device_manager(sub_device_manager);
 
@@ -115,7 +115,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
 TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthPrograms) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     uint32_t num_iters = 5;
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";

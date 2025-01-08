@@ -16,7 +16,7 @@
 #include "tt_metal/common/metal_soc_descriptor.h"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
     bool pass = true;
     try {
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CommandQueue& cq = device->command_queue();
 

@@ -64,7 +64,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, Device*> devices_;
+    std::map<chip_id_t, IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -78,8 +78,8 @@ struct ChipSenderReceiverEthCore {
 };
 
 std::tuple<Program, Program> build(
-    Device* device0,
-    Device* device1,
+    IDevice* device0,
+    IDevice* device1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,
@@ -128,8 +128,8 @@ std::tuple<Program, Program> build(
 }
 
 void run(
-    Device* device0,
-    Device* device1,
+    IDevice* device0,
+    IDevice* device1,
     Program& program0,
     Program& program1,
     KernelHandle local_kernel,

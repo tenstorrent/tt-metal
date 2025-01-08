@@ -20,7 +20,7 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    Device* device = output.device();
+    IDevice* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
     auto core_h = grid.y;
 

@@ -19,10 +19,10 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Some machines will run this test on different physical cores, so wildcard the exact coordinates.
 const std::string golden_output =
-R"(DPRINT server timed out on Device *, worker core (x=*,y=*), riscv 4, waiting on a RAISE signal: 1
+    R"(DPRINT server timed out on Device *, worker core (x=*,y=*), riscv 4, waiting on a RAISE signal: 1
 )";
 
-static void RunTest(DPrintFixture* fixture, Device* device) {
+static void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 

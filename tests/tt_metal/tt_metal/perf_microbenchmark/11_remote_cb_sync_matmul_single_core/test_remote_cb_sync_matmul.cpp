@@ -97,7 +97,7 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
 
 std::tuple<std::vector<tt_metal::Program>, ::tt_metal::v1::experimental::GlobalCircularBuffer>
 create_programs(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const CoreRangeSet& dram_reader_core,
     const CoreRangeSet& l1_receiver_cores,
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
@@ -529,7 +529,7 @@ bool validation_fp16(
 }
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const vector<uint32_t>& input_vec,
     uint32_t ht,
     uint32_t wt,
@@ -687,7 +687,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};

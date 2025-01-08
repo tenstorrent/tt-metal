@@ -12,7 +12,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class Program;
-class Device;
+class IDevice;
 
 }  // namespace v0
 namespace detail {
@@ -56,9 +56,9 @@ void DisableMemoryReports();
  *
  * | Argument      | Description                                       | Type            | Valid Range | Required |
  * |---------------|---------------------------------------------------|-----------------|--------------------------------------------------------|----------|
- * | device        | The device for which memory stats will be dumped. | const Device *  | | True     |
+ * | device        | The device for which memory stats will be dumped. | const IDevice*  | | True     |
  * */
-void DumpDeviceMemoryState(const Device* device, const std::string& prefix = "");
+void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix = "");
 
 class MemoryReporter {
 public:
@@ -67,9 +67,9 @@ public:
     MemoryReporter(const MemoryReporter&) = delete;
     MemoryReporter(MemoryReporter&& other) noexcept = delete;
 
-    void flush_program_memory_usage(uint64_t program_id, const Device* device);
+    void flush_program_memory_usage(uint64_t program_id, const IDevice* device);
 
-    void dump_memory_usage_state(const Device* device, const std::string& prefix = "") const;
+    void dump_memory_usage_state(const IDevice* device, const std::string& prefix = "") const;
 
     static void toggle(bool state);
     static MemoryReporter& inst();

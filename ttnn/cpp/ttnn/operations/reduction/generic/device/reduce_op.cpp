@@ -206,7 +206,7 @@ Tensor reduce(
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 const auto& input_tensor = input_tensors.at(0);
-                Device* device;
+                IDevice* device;
 
                 // Get the device
                 if (input_tensor.storage_type() != StorageType::DEVICE) {

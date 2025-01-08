@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         int clock_freq_mhz = get_tt_npu_clock(device);
         auto grid_coord = device->compute_with_storage_grid_size();

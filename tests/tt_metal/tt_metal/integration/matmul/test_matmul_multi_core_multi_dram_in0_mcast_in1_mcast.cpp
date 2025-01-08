@@ -31,7 +31,7 @@ std::tuple<
     uint32_t,
     uint32_t>
 create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
@@ -213,7 +213,7 @@ create_program(
 }
 
 bool write_runtime_args_to_device(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     int start_core_x,
     int start_core_y,
@@ -364,7 +364,7 @@ bool write_runtime_args_to_device(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::Device* device) {
+bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::IDevice* device) {
     bool pass = true;
     int start_core_x = 0;
     int start_core_y = 0;

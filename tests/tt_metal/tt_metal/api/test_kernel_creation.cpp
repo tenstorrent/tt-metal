@@ -54,7 +54,7 @@ TEST_F(DispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
     }
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
-        Device* device = this->devices_.at(id);
+        IDevice* device = this->devices_.at(id);
         const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
         std::vector<CoreCoord> dispatch_cores =

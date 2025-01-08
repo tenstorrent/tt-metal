@@ -15,7 +15,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/program/program.hpp"
 
 #include <vector>
@@ -146,7 +146,7 @@ class FabricEriscDatamoverBuilder {
         bool build_in_worker_connection_mode=false);
 
     static FabricEriscDatamoverBuilder build(
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         CoreCoord const& ethernet_core,
         chip_id_t local_chip_id,
@@ -168,7 +168,7 @@ class FabricEriscDatamoverBuilder {
         // TODO
     }
 
-    void teardown_from_host(Device *d, tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
+    void teardown_from_host(IDevice*d, tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
 //    protected:
    friend class EdmLineFabricOpInterface;
@@ -231,19 +231,19 @@ class EdmLineFabricOpInterface {
 
 
     //   The constructor will assemble/connect the line across the specified device sequence, for all available links.
-    EdmLineFabricOpInterface (std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt, bool build_in_worker_connection_mode = false);
+    EdmLineFabricOpInterface (std::vector<IDevice*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt, bool build_in_worker_connection_mode = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
-    EdmLineFabricOpInterface (Device* local_device, std::optional<Device*> forward_device, std::optional<Device*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links, bool build_in_worker_connection_mode = false);
+    EdmLineFabricOpInterface (IDevice* local_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links, bool build_in_worker_connection_mode = false);
 
-    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
-    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(Device* local_device, std::optional<Device*> forward_device, std::optional<Device*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
+    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(std::vector<IDevice*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
+    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(IDevice* local_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
 
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique connections
     // than available will result in an error.
-    SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::Device* device, Direction direction);
+    SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::IDevice* device, Direction direction);
 
     // builds the ethernet kernels for all EDMs in the "fabric"
     void build_kernels() const;
@@ -258,14 +258,14 @@ class EdmLineFabricOpInterface {
     std::vector<edm_termination_info_t> generate_ordered_termination_info_farthest_to_nearest() const;
 
     // Generates a list of termination infos for the local chip's EDMs
-    std::vector<edm_termination_info_t> generate_local_chip_fabric_termination_infos(Device *device) const;
+    std::vector<edm_termination_info_t> generate_local_chip_fabric_termination_infos(IDevice*device) const;
 
     // Accessors
     size_t get_num_links() const { return num_links; }
 
     size_t get_device_count() const { return device_sequence.size(); }
 
-    size_t get_index_of_device(Device *device) const {
+    size_t get_index_of_device(IDevice*device) const {
         for (size_t i = 0; i < device_sequence.size(); i++) {
             if (device_sequence[i] == device) {
                 return i;
@@ -291,7 +291,7 @@ class EdmLineFabricOpInterface {
     std::unordered_map<size_t, size_t> next_forward_direction_edm_available;
     std::unordered_map<size_t, size_t> next_backward_direction_edm_available;
 
-    std::vector<Device*> device_sequence;
+    std::vector<IDevice*> device_sequence;
     std::vector<Program*> programs;
 
     size_t num_links;

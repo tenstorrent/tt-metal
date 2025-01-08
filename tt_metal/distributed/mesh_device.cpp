@@ -88,8 +88,8 @@ public:
     size_t get_num_devices() const;
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
-    Device* get_device(const chip_id_t physical_device_id) const;
-    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<Device*>& devices);
+    IDevice* get_device(const chip_id_t physical_device_id) const;
+    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<IDevice*>& devices);
 
     static MeshShape get_system_mesh_shape(size_t system_num_devices);
     static std::unordered_map<LogicalCoordinate, PhysicalCoordinate> get_system_mesh_translation_map(
@@ -295,7 +295,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
 }
 
 void SystemMesh::Impl::register_mesh_device(
-    const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<Device*>& devices) {
+    const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<IDevice*>& devices) {
     std::vector<chip_id_t> physical_device_ids;
     for (auto device : devices) {
         physical_device_ids.push_back(device->id());
@@ -341,7 +341,7 @@ const MeshShape& SystemMesh::get_shape() const { return pimpl_->get_shape(); }
 size_t SystemMesh::get_num_devices() const { return pimpl_->get_num_devices(); }
 
 void SystemMesh::register_mesh_device(
-    const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<Device*>& devices) {
+    const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<IDevice*>& devices) {
     pimpl_->register_mesh_device(mesh_device, devices);
 }
 
@@ -358,7 +358,7 @@ static MeshDeviceID generate_unique_mesh_id() {
     return next_id++;
 }
 
-Device* MeshDevice::reference_device() const { return this->devices.at(0); }
+IDevice* MeshDevice::reference_device() const { return this->devices.at(0); }
 
 MeshDevice::MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh) :
     mesh_device_shape(mesh_device_shape),
@@ -457,12 +457,12 @@ void MeshDevice::initialize(
 
 MeshDevice::~MeshDevice() { close_devices(); }
 
-Device* MeshDevice::get_device_index(size_t logical_device_id) const {
+IDevice* MeshDevice::get_device_index(size_t logical_device_id) const {
     TT_FATAL(logical_device_id >= 0 and logical_device_id < num_devices(), "Invalid device index");
     return this->devices.at(logical_device_id);
 }
 
-Device* MeshDevice::get_device(chip_id_t physical_device_id) const {
+IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
     for (auto device : this->devices) {
         if (device->id() == physical_device_id) {
             return device;
@@ -471,12 +471,12 @@ Device* MeshDevice::get_device(chip_id_t physical_device_id) const {
     TT_THROW("Physical Device ID: {} not found in assigned devices", physical_device_id);
 }
 
-std::vector<Device*> MeshDevice::get_devices(const std::optional<MeshType>& requested_type) const {
+std::vector<IDevice*> MeshDevice::get_devices(const std::optional<MeshType>& requested_type) const {
     return this->view->get_devices(requested_type.value_or(this->type));
 }
 
 // TODO: Remove this function once we have a proper view interface
-Device* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
+IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
     return this->get_device_index(row_idx * num_cols() + col_idx);
 }
 

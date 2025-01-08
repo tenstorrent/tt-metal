@@ -225,7 +225,7 @@ std::string get_compute_kernel_name(const ReduceDim& reduce_dim) {
     return compute_kernel_name;
 }
 
-void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig& test_config) {
+void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfig& test_config) {
     Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};

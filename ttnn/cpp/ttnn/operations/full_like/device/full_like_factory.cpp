@@ -53,7 +53,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     auto fill_value = operation_attributes.fill_value;
     DataType dtype{operation_attributes.dtype};
     Layout layout{operation_attributes.layout};
-    Device* device = input.device();
+    IDevice* device = input.device();
     MemoryConfig memory_config{operation_attributes.memory_config};
 
     auto num_tiles = input.volume() / TILE_HW;

@@ -7,7 +7,7 @@
 
 #include "ttml.hpp"
 
-ttnn::device::Device* device = nullptr;
+ttnn::device::IDevice* device = nullptr;
 
 void print_tensor(const tt::tt_metal::Tensor& tensor) {
     // IMPORTANT. This function prints the tensor data assuming the tensor is in ROW_MAJOR layout

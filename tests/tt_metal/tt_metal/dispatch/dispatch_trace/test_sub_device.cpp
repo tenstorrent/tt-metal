@@ -11,7 +11,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"
 #include "command_queue_fixture.hpp"
@@ -22,7 +22,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     uint32_t num_iters = 5;
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
         device->load_sub_device_manager(sub_device_manager);
 
@@ -70,7 +70,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
 TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceBasicEthPrograms) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     uint32_t num_iters = 5;
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
@@ -127,7 +127,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceProg
     SubDevice sub_device_2(std::array{CoreRangeSet(std::array{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
     SubDevice sub_device_3(std::array{CoreRangeSet(std::array{CoreRange({2, 4}, {3, 4}), CoreRange({5, 1}, {6, 3})})});
     uint32_t num_iters = 5;
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
@@ -230,7 +230,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations)
             CoreRangeSet(CoreRange({4, 4}, {4, 4})),
             CoreRangeSet(CoreRange({5, 5}, {5, 5}))}),
         std::exception);
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
         auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_2, sub_device_1}, 3200);
         device->load_sub_device_manager(sub_device_manager_1);

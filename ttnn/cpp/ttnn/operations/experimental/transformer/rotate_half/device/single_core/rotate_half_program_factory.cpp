@@ -30,7 +30,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
     uint32_t num_rows = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT;
     uint32_t half_row_size = input.get_legacy_shape()[-1] / TILE_WIDTH / 2;
 
-    tt_metal::Device* device = input.device();
+    tt_metal::IDevice* device = input.device();
 
     // Used for half of tensor that is multiplied
     uint32_t src_mul_cb_index = 0;

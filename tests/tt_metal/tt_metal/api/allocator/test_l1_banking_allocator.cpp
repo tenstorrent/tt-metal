@@ -13,7 +13,7 @@
 
 namespace unit_tests::test_l1_banking_allocator {
 
-uint64_t get_alloc_limit(const tt::tt_metal::Device* device) {
+uint64_t get_alloc_limit(const tt::tt_metal::IDevice* device) {
     const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
     uint32_t l1_unreserved_base = device->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());

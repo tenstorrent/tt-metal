@@ -280,7 +280,7 @@ void py_module(py::module& module) {
     )doc");
     module.def(
         "get_device_tensor",
-        py::overload_cast<const Tensor&, const Device*>(&ttnn::distributed::get_device_tensor),
+        py::overload_cast<const Tensor&, const IDevice*>(&ttnn::distributed::get_device_tensor),
         py::arg("tensor"),
         py::arg("device"),
         py::kw_only(),

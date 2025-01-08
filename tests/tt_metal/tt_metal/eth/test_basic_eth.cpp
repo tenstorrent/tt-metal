@@ -41,7 +41,7 @@ namespace unit_tests::erisc::kernels {
 
 bool reader_kernel_no_send(
     DispatchFixture* fixture,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
     const CoreCoord& eth_reader_core,
@@ -107,7 +107,7 @@ bool reader_kernel_no_send(
 
 bool writer_kernel_no_receive(
     DispatchFixture* fixture,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
     const CoreCoord& eth_writer_core,
@@ -173,7 +173,7 @@ bool writer_kernel_no_receive(
 }
 
 bool noc_reader_and_writer_kernels(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const uint32_t byte_size,
     const uint32_t eth_dst_l1_address,
     const uint32_t eth_src_l1_address,

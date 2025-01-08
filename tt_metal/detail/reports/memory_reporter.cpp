@@ -5,7 +5,7 @@
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/program/program.hpp"
 
 #include <algorithm>
@@ -47,7 +47,7 @@ void write_headers(
 }
 
 void write_detailed_report_info(
-    const Device* device,
+    const IDevice* device,
     const BufferType& buffer_type,
     std::ofstream& detailed_memory_usage_report,
     size_t total_allocatable,
@@ -69,7 +69,7 @@ void write_detailed_report_info(
 }
 
 void write_memory_usage(
-    const Device* device,
+    const IDevice* device,
     const BufferType& buffer_type,
     std::ofstream& memory_usage_summary_report,
     std::ofstream& detailed_memory_usage_report,
@@ -93,7 +93,7 @@ void write_memory_usage(
 }
 
 void populate_reports(
-    const Device* device,
+    const IDevice* device,
     std::ofstream& memory_usage_summary_report,
     std::ofstream& detailed_memory_usage_report,
     std::ofstream& l1_usage_summary_report) {
@@ -104,7 +104,7 @@ void populate_reports(
         device, BufferType::L1, memory_usage_summary_report, detailed_memory_usage_report, l1_usage_summary_report);
 }
 
-void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const Device* device) {
+void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const IDevice* device) {
     if (not this->program_memory_usage_summary_report_.is_open()) {
         this->init_reports();
     }
@@ -120,7 +120,7 @@ void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const Devic
         this->program_l1_usage_summary_report_);
 }
 
-void MemoryReporter::dump_memory_usage_state(const Device* device, const std::string& prefix) const {
+void MemoryReporter::dump_memory_usage_state(const IDevice* device, const std::string& prefix) const {
     std::ofstream memory_usage_summary_report, l1_usage_summary_report, detailed_memory_usage_report;
 
     fs::create_directories(metal_reports_dir());
@@ -144,7 +144,7 @@ void MemoryReporter::init_reports() {
     write_headers(
         this->program_memory_usage_summary_report_, this->program_l1_usage_summary_report_, /*add_program_id=*/true);
 }
-void DumpDeviceMemoryState(const Device* device, const std::string& prefix) {
+void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix) {
     MemoryReporter::inst().dump_memory_usage_state(device, std::move(prefix));
 }
 

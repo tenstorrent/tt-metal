@@ -8,6 +8,7 @@
 #include <mutex>
 #include <utility>
 
+#include "tt_metal/device.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "impl/dispatch/work_executor.hpp"
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
@@ -23,46 +24,14 @@
 #include "tt_metal/tt_stl/span.hpp"
 #include "program_cache.hpp"
 
-namespace tt {
-
-namespace tt_metal {
-// Fwd declares
-enum class BufferType;
-
-inline namespace v0 {
-
-class Buffer;
-class Program;
-class CommandQueue;
-class SubDevice;
-
-}  // namespace v0
-
-class JitBuildEnv;
-class HWCommandQueue;
-class TraceBuffer;
-
-using on_close_device_callback = std::function<void ()>;
-
-// TODO: These should be moved into arch specific host files that get exported here
-static constexpr float  EPS_GS = 0.001953125f;
-static constexpr float  EPS_WHB0 = 1.19209e-7f;
-static constexpr float  EPS_BH = EPS_WHB0;
-
-static constexpr float  NAN_GS = 6.9752e19;
-static constexpr float  NAN_WHB0 = 7.0040e+19;
-static constexpr float  NAN_BH = NAN_WHB0;
-
-static constexpr float  INF_GS = 1.6948e38;
-static constexpr float  INF_WHB0 = 1.7014e+38;
-static constexpr float  INF_BH = INF_WHB0;
+namespace tt::tt_metal {
 
 inline namespace v0 {
 
 // A physical PCIexpress Tenstorrent device
-class Device {
+class Device : public IDevice {
 public:
-    // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
+    // friend void tt_gdb(IDevice* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(
         chip_id_t device_id,
@@ -74,7 +43,7 @@ public:
         uint32_t worker_core = 0,
         uint32_t completion_queue_reader_core = 0);
 
-    ~Device();
+    ~Device() override;
 
     // TODO: Add copy/move semantics
     Device(const Device &other) = delete;
@@ -83,215 +52,206 @@ public:
     Device(Device &&other) = default;
     Device& operator=(Device &&other) = default;
 
-    tt::ARCH arch() const;
+    tt::ARCH arch() const override;
 
-    chip_id_t id() const { return id_; }
+    chip_id_t id() const override { return id_; }
 
-    uint32_t build_key() const { return build_key_; }
+    uint32_t build_key() const override { return build_key_; }
 
-    uint8_t num_hw_cqs() const { return num_hw_cqs_; }
+    uint8_t num_hw_cqs() const override { return num_hw_cqs_; }
 
-    bool is_initialized() const { return this->initialized_; }
+    bool is_initialized() const override { return this->initialized_; }
 
-    int num_dram_channels() const;
-    uint32_t l1_size_per_core() const;
-    uint32_t dram_size_per_channel() const;
-    CoreCoord grid_size() const;
-    CoreCoord logical_grid_size() const;
-    CoreCoord dram_grid_size() const;
-    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const;
+    int num_dram_channels() const override;
+    uint32_t l1_size_per_core() const override;
+    uint32_t dram_size_per_channel() const override;
+    CoreCoord grid_size() const override;
+    CoreCoord logical_grid_size() const override;
+    CoreCoord dram_grid_size() const override;
+    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
 
     // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
-    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const;
+    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
-    CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const;
+    CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
-    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
-    std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment();
+    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
+    std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() override;
 
-    CoreCoord virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const;
-    CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
+    CoreCoord virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const override;
+    CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const override;
 
     // Ethernet API
-    CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const;
-    CoreCoord logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const;
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const;
-    std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const;
-    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const;
-    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const;
-    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const;
-    bool is_inactive_ethernet_core(CoreCoord logical_core) const;
+    CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const override;
+    CoreCoord logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const override;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const override;
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
+    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const override;
+    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
+    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
+    bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
 
-    CoreCoord compute_with_storage_grid_size() const;
+    CoreCoord compute_with_storage_grid_size() const override;
 
-    CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const;
-    uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const;
+    CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
+    uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
 
-    const std::unique_ptr<Allocator> &get_initialized_allocator() const;
-    const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const;
+    const std::unique_ptr<Allocator> &get_initialized_allocator() const override;
+    const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const override;
 
-    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type) const;
-    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const;
+    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type) const override;
+    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const override;
 
-    uint32_t num_banks(const BufferType &buffer_type) const;
-    uint32_t num_banks(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
-    uint32_t bank_size(const BufferType &buffer_type) const;
-    uint32_t bank_size(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
+    uint32_t num_banks(const BufferType &buffer_type) const override;
+    uint32_t num_banks(const BufferType &buffer_type, SubDeviceId sub_device_id) const override;
+    uint32_t bank_size(const BufferType &buffer_type) const override;
+    uint32_t bank_size(const BufferType &buffer_type, SubDeviceId sub_device_id) const override;
 
-    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
-    uint32_t dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const;
+    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const override;
+    uint32_t dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const override;
 
-    CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const;
-    uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const;
+    CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
+    uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
 
-    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id) const;
-    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const;
+    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id) const override;
+    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const override;
 
-    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
-    CoreCoord logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const;
+    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const override;
+    CoreCoord logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const override;
 
-    const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel) const;
-    const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const;
+    const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel) const override;
+    const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const override;
 
-    const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core) const;
-    const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const;
+    const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core) const override;
+    const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const override;
 
-    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
-    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const;
+    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const override;
+    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const override;
 
-    uint32_t get_allocator_alignment() const;
-    uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const;
+    uint32_t get_allocator_alignment() const override;
+    uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const override;
 
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const;
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
 
-    size_t get_l1_small_size() const;
-    size_t get_l1_small_size(SubDeviceId sub_device_id) const;
+    size_t get_l1_small_size() const override;
+    size_t get_l1_small_size(SubDeviceId sub_device_id) const override;
 
-    const std::unordered_set<Buffer *> &get_allocated_buffers() const;
-    const std::unordered_set<Buffer *> &get_allocated_buffers(SubDeviceId sub_device_id) const;
+    const std::unordered_set<Buffer *> &get_allocated_buffers() const override;
+    const std::unordered_set<Buffer *> &get_allocated_buffers(SubDeviceId sub_device_id) const override;
 
-    void deallocate_buffers();
-    void deallocate_buffers(SubDeviceId sub_device_id);
+    void deallocate_buffers() override;
+    void deallocate_buffers(SubDeviceId sub_device_id) override;
 
-    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;
-    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const;
+    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const override;
+    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const override;
 
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
     // core.y represents different channels along one <x>
-    const std::set<CoreCoord> &ethernet_cores() const { return this->ethernet_cores_; }
+    const std::set<CoreCoord> &ethernet_cores() const override { return this->ethernet_cores_; }
 
-    const std::set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }
+    const std::set<CoreCoord> &storage_only_cores() const override { return this->storage_only_cores_; }
 
-    uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const;
-    uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const;
+    uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
+    uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
     // machine epsilon
-    float sfpu_eps() const;
+    float sfpu_eps() const override;
 
     // machine nan
-    float sfpu_nan() const;
+    float sfpu_nan() const override;
 
     // machine inf
-    float sfpu_inf() const;
+    float sfpu_inf() const override;
 
-    const JitBuildEnv& build_env() const { return this->build_env_; }
-    const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const;
-    const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const;
-    const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const;
-    const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const;
-    const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const;
+    const JitBuildEnv& build_env() const override { return this->build_env_; }
+    const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const override;
+    const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const override;
+    const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
+    const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
+    const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const override;
 
-    SystemMemoryManager& sysmem_manager() { return *sysmem_manager_; }
-    HWCommandQueue& hw_command_queue(size_t cq_id = 0);
-    CommandQueue& command_queue(size_t cq_id = 0);
+    SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
+    HWCommandQueue& hw_command_queue(size_t cq_id = 0) override;
+    CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Metal trace device capture mode
-    void begin_trace(const uint8_t cq_id, const uint32_t tid);
-    void end_trace(const uint8_t cq_id, const uint32_t tid);
-    void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking);
-    void release_trace(const uint32_t tid);
-    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid);
-    uint32_t get_trace_buffers_size() const { return trace_buffers_size_; }
-    void set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
+    void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
+    void end_trace(const uint8_t cq_id, const uint32_t tid) override;
+    void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) override;
+    void release_trace(const uint32_t tid) override;
+    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
+    uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
+    void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }
 
-    bool using_slow_dispatch() const;
-    bool using_fast_dispatch() const;
+    bool using_slow_dispatch() const override;
+    bool using_fast_dispatch() const override;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false);
-    void build_firmware();
-    void reset_cores();
-    void initialize_and_launch_firmware();
-    void init_command_queue_host();
-    void init_command_queue_device();
-    void initialize_synchronous_sw_cmd_queue();
-    void update_dispatch_cores_for_multi_cq_eth_dispatch();
+    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false) override;
+    void build_firmware() override;
+    void reset_cores() override;
+    void initialize_and_launch_firmware() override;
+    void init_command_queue_host() override;
+    void init_command_queue_device() override;
+    void initialize_synchronous_sw_cmd_queue() override;
+    void update_dispatch_cores_for_multi_cq_eth_dispatch() override;
 
     // Puts device into reset
-    bool close();
-    friend bool CloseDevice(Device *device);
+    bool close() override;
 
-    void enable_async(bool enable);
-    void synchronize();
-    WorkExecutorMode get_worker_mode() { return work_executor_.get_worker_mode(); }
-    void set_worker_queue_mode(const WorkerQueueMode& mode) { this->work_executor_.set_worker_queue_mode(mode); }
-    WorkerQueueMode get_worker_queue_mode() { return this->work_executor_.get_worker_queue_mode(); }
-    bool is_worker_queue_empty() const { return work_executor_.worker_queue.empty(); }
-    bool can_use_passthrough_scheduling() const;
+    void enable_async(bool enable) override;
+    void synchronize() override;
+    WorkExecutorMode get_worker_mode() override { return work_executor_.get_worker_mode(); }
+    void set_worker_queue_mode(const WorkerQueueMode& mode) override { this->work_executor_.set_worker_queue_mode(mode); }
+    WorkerQueueMode get_worker_queue_mode() override { return this->work_executor_.get_worker_queue_mode(); }
+    bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }
+    bool can_use_passthrough_scheduling() const override;
 
-    template<typename F>
-    void push_work(F&& work, bool blocking = false) {
-        this->work_executor_.push_work(std::forward<F>(work), blocking);
-    }
+    void push_work(std::function<void()> work, bool blocking) override;
 
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
-    void enable_program_cache();
-    void disable_and_clear_program_cache();
-    program_cache::detail::ProgramCache& get_program_cache() { return program_cache_; }
-    std::size_t num_program_cache_entries();
+    void enable_program_cache() override;
+    void disable_and_clear_program_cache() override;
+    program_cache::detail::ProgramCache& get_program_cache() override { return program_cache_; }
+    std::size_t num_program_cache_entries() override;
 
-    HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const;
+    HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
 
-    template <typename T = DeviceAddr>
-    T get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
+    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
 
-    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type);
+    bool dispatch_s_enabled() const override;
+    bool distributed_dispatcher() const override;
+    NOC dispatch_go_signal_noc() const override;
+    size_t get_device_kernel_defines_hash() override;
 
-    bool dispatch_s_enabled() const;
-    bool distributed_dispatcher() const;
-    NOC dispatch_go_signal_noc() const;
-    size_t get_device_kernel_defines_hash();
+    uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
+    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
+    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;
 
-    uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
-
-    SubDeviceManagerId get_active_sub_device_manager_id() const;
-    SubDeviceManagerId get_default_sub_device_manager_id() const;
-    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
-    void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
-    void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id);
-    void clear_loaded_sub_device_manager();
-    LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id);
-    CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const;
-    const std::vector<SubDeviceId> &get_sub_device_ids() const;
-    uint32_t num_sub_devices() const;
+    SubDeviceManagerId get_active_sub_device_manager_id() const override;
+    SubDeviceManagerId get_default_sub_device_manager_id() const override;
+    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
+    void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
+    void clear_loaded_sub_device_manager() override;
+    LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) override;
+    CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
+    const std::vector<SubDeviceId> &get_sub_device_ids() const override;
+    uint32_t num_sub_devices() const override;
 
     // TODO #15944: Temporary api until migration to actual fabric is complete
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
-    std::optional<SubDeviceId> get_fabric_sub_device_id() const;
+    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    std::optional<SubDeviceId> get_fabric_sub_device_id() const override;
 
-    uint32_t get_completion_queue_reader_core() const { return completion_queue_reader_core_; }
+    uint32_t get_completion_queue_reader_core() const override { return completion_queue_reader_core_; }
 
-    bool is_mmio_capable() const;
-    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const { return tunnels_from_mmio_; }
-
-    static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
+    bool is_mmio_capable() const override;
+    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override { return tunnels_from_mmio_; }
 
 private:
     static_assert(detail::SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES, "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
@@ -383,12 +343,4 @@ private:
 };
 
 }  // namespace v0
-
-template <typename T>
-inline T Device::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
-    return hal.get_dev_addr<T>(this->get_programmable_core_type(virtual_core), addr_type);
-}
-
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -30,7 +30,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
 
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -339,7 +339,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
     uint32_t cache_CHtWt = cache_tensor.get_legacy_shape()[1] * cache_HtWt;
     uint32_t update_idxt = update_idx / TILE_HEIGHT;
     uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

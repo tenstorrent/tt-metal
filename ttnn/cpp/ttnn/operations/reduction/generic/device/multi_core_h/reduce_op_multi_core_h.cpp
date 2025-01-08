@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     uint32_t num_tiles = a.volume() / TILE_HW;
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     bool in_sharded = a.is_sharded();
     bool out_sharded = output.is_sharded();

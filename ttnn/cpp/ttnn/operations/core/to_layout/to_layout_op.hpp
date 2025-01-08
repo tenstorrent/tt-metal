@@ -30,7 +30,7 @@ struct ToLayout {
         const ttnn::Layout layout,
         const std::optional<ttnn::DataType>& dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        Device* device = nullptr);
+        IDevice* device = nullptr);
 
     static Tensor invoke(
         const ttnn::Tensor& tensor_arg,

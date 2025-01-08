@@ -88,7 +88,7 @@ operation::ProgramWithCallbacks embeddings_fused(
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device* device = a.device();
+    IDevice* device = a.device();
     auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -386,7 +386,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device* device = a.device();
+    IDevice* device = a.device();
     auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -608,7 +608,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device* device = a.device();
+    auto device = a.device();
     auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////

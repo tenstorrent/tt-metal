@@ -300,7 +300,7 @@ void add_prefetcher_paged_read_cmd(
     add_bare_prefetcher_cmd(cmds, cmd, true);
 }
 
-void add_prefetcher_linear_read_cmd(Device *device,
+void add_prefetcher_linear_read_cmd(IDevice* device,
                                     vector<uint32_t>& cmds,
                                     vector<uint32_t>& sizes,
                                     CoreCoord worker_core,
@@ -425,7 +425,7 @@ void add_prefetcher_cmd(
 
 // Model a paged read by updating worker data with interleaved/paged DRAM data, for validation later.
 void add_paged_dram_data_to_device_data(
-    Device* device,
+    IDevice* device,
     const CoreRange& workers,
     DeviceData& device_data,
     uint32_t start_page,
@@ -458,7 +458,7 @@ void add_paged_dram_data_to_device_data(
 
 // Packed page read from dram to linear write to worker
 void gen_dram_packed_read_cmd(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -523,7 +523,7 @@ void gen_dram_packed_read_cmd(
 
 // Interleaved/Paged Read of DRAM to Worker L1
 void gen_dram_read_cmd(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -580,7 +580,7 @@ void gen_dram_read_cmd(
 
 // Interleaved/Paged Write to DRAM.
 void gen_dram_write_cmd(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -602,7 +602,7 @@ void gen_dram_write_cmd(
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 }
 
-void gen_wait_and_stall_cmd(Device* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes) {
+void gen_wait_and_stall_cmd(IDevice* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes) {
     vector<uint32_t> dispatch_cmds;
 
     CQDispatchCmd wait;
@@ -621,7 +621,7 @@ void gen_wait_and_stall_cmd(Device* device, vector<uint32_t>& prefetch_cmds, vec
 
 // This is pretty much a blit: copies from worker core's start of data back to the end of data
 void gen_linear_read_cmd(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -656,7 +656,7 @@ void gen_linear_read_cmd(
 }
 
 void gen_dispatcher_delay_cmd(
-    Device* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, uint32_t count) {
+    IDevice* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, uint32_t count) {
     vector<uint32_t> dispatch_cmds;
 
     CQDispatchCmd delay;
@@ -667,7 +667,7 @@ void gen_dispatcher_delay_cmd(
 }
 
 void gen_paged_read_dram_test(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -711,7 +711,7 @@ void gen_paged_read_dram_test(
 //  3. Do previous 2 steps in a loop, reading and writing new data until DEVICE_DATA_SIZE bytes is written to worker
 //  core.
 void gen_paged_write_read_dram_test(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -767,7 +767,7 @@ void gen_paged_write_read_dram_test(
 }
 
 void gen_pcie_test(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -797,7 +797,7 @@ static void pad_host_data(DeviceData& device_data) {
 }
 
 void gen_host_test(
-    Device* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, DeviceData& device_data) {
+    IDevice* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, DeviceData& device_data) {
     constexpr uint32_t max_data_size = DEVICE_DATA_SIZE;
 
     // Read data from a worker so we can get reasonable BW measurements
@@ -836,7 +836,7 @@ void gen_host_test(
 }
 
 void gen_rnd_linear_cmd(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -858,7 +858,7 @@ void gen_rnd_linear_cmd(
 }
 
 void gen_rnd_dram_paged_cmd(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -910,7 +910,7 @@ void gen_rnd_dram_paged_cmd(
 }
 
 void gen_rnd_inline_cmd(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -954,7 +954,7 @@ void gen_rnd_debug_cmd(vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_si
 }
 
 void gen_packed_read_test(
-    Device* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, DeviceData& device_data) {
+    IDevice* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, DeviceData& device_data) {
     static constexpr uint32_t min_read_size = 128;
     bool done = false;
     while (!done) {
@@ -985,7 +985,7 @@ void gen_packed_read_test(
 }
 
 void gen_rnd_test(
-    Device* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, DeviceData& device_data) {
+    IDevice* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, DeviceData& device_data) {
     while (device_data.size() * sizeof(uint32_t) < DEVICE_DATA_SIZE) {
         // Assumes terminate is the last command...
         uint32_t cmd = std::rand() % CQ_PREFETCH_CMD_TERMINATE;
@@ -1019,7 +1019,7 @@ void gen_rnd_test(
 }
 
 void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
-    Device* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t> exec_buf_cmds, vector<uint32_t>& cmd_sizes) {
+    IDevice* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t> exec_buf_cmds, vector<uint32_t>& cmd_sizes) {
     vector<uint32_t> empty_payload;  // don't give me grief, it is just a test
 
     // Add the semaphore release for prefetch_h
@@ -1074,7 +1074,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
 }
 
 void gen_smoke_test(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -1432,7 +1432,7 @@ void gen_smoke_test(
 }
 
 void gen_prefetcher_cmds(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& prefetch_cmds,
     vector<uint32_t>& cmd_sizes,
     DeviceData& device_data,
@@ -1498,7 +1498,7 @@ void nt_memcpy(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n)
 }
 
 void write_prefetcher_cmd(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& cmds,
     uint32_t& cmd_offset,
     dispatch_constants::prefetch_q_entry_type cmd_size16b,
@@ -1546,7 +1546,7 @@ void write_prefetcher_cmd(
 
 void write_prefetcher_cmds(
     uint32_t iterations,
-    Device* device,
+    IDevice* device,
     vector<uint32_t> prefetch_cmds,  // yes copy for dram_exec_buf
     vector<uint32_t>& cmd_sizes,
     void* host_hugepage_base,
@@ -1615,7 +1615,7 @@ void write_prefetcher_cmds(
 }
 
 // Clear DRAM (helpful for paged write to DRAM debug to have a fresh slate)
-void initialize_dram_banks(Device* device) {
+void initialize_dram_banks(IDevice* device) {
     auto num_banks = device->num_banks(BufferType::DRAM);
     auto bank_size = DRAM_DATA_SIZE_WORDS * sizeof(uint32_t);  // device->bank_size(BufferType::DRAM);
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
@@ -1628,9 +1628,9 @@ void initialize_dram_banks(Device* device) {
 
 std::chrono::duration<double> run_test(
     uint32_t iterations,
-    Device* device,
+    IDevice* device,
     Program& program,
-    Device* device_r,
+    IDevice* device_r,
     Program& program_r,
     vector<uint32_t>& cmd_sizes,
     vector<uint32_t>& terminate_sizes,
@@ -1686,7 +1686,7 @@ std::chrono::duration<double> run_test(
 }
 
 void configure_for_single_chip(
-    Device* device,
+    IDevice* device,
     Program& program,
     void*& host_hugepage_base,
     uint32_t prefetch_q_base,
@@ -2379,9 +2379,9 @@ void configure_for_single_chip(
 // This is, sadly, copied and modified from above
 // TODO: clean up, maybe leverage runtime structures
 void configure_for_multi_chip(
-    Device* device,
+    IDevice* device,
     Program& program,
-    Device* device_r,
+    IDevice* device_r,
     Program& program_r,
     int device_id_l,
     int device_id_r,
@@ -3200,8 +3200,8 @@ int main(int argc, char** argv) {
         int device_id_l = test_device_id_g;
         int device_id_r = -1;
 
-        tt_metal::Device* device = tt_metal::CreateDevice(test_device_id_g);
-        tt_metal::Device* device_r = nullptr;
+        tt_metal::IDevice* device = tt_metal::CreateDevice(test_device_id_g);
+        tt_metal::IDevice* device_r = nullptr;
         if (test_device_id_g == 0) {
             device_r = device;
         } else {

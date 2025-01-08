@@ -5,23 +5,22 @@
 #pragma once
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device_handle.hpp"
 
 namespace tt::tt_metal {
+
 namespace v1 {
 
 using ProgramHandle = v0::Program;
-class DeviceHandle;
 
 class CommandQueueHandle {
 private:
-    explicit constexpr CommandQueueHandle(DeviceHandle device, std::uint8_t id = 0) : device{device}, id{id} {}
+    explicit constexpr CommandQueueHandle(IDevice* device, std::uint8_t id = 0) : device{device}, id{id} {}
 
-    DeviceHandle device;
+    IDevice* device;
     std::uint8_t id;
 
-    friend CommandQueueHandle GetCommandQueue(DeviceHandle device, std::uint8_t id);
-    friend DeviceHandle GetDevice(CommandQueueHandle cq);
+    friend CommandQueueHandle GetCommandQueue(IDevice* device, std::uint8_t id);
+    friend IDevice* GetDevice(CommandQueueHandle cq);
     friend std::uint8_t GetId(CommandQueueHandle cq);
 };
 

@@ -50,8 +50,8 @@ const size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& 
 
 bool eth_direct_sender_receiver_kernels(
     DispatchFixture* fixture,
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
     const size_t& byte_size,
     const size_t& src_eth_l1_byte_address,
     const size_t& dst_eth_l1_byte_address,
@@ -163,8 +163,8 @@ bool eth_direct_sender_receiver_kernels(
 
 // Tests ethernet direct send/receive from ERISC_L1_UNRESERVED_BASE
 bool send_over_eth(
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
     const CoreCoord& sender_core,
     const CoreCoord& receiver_core,
     const size_t& byte_size) {

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
@@ -40,7 +40,7 @@ uint32_t configure_crta_offsets_for_kernel_groups(
 // Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
 // program data structures in L1. Will be used when assembling dispatch commands for this program
 template <typename T>
-void finalize_program_offsets(T& workload_type, Device* device);
+void finalize_program_offsets(T& workload_type, IDevice* device);
 
 uint32_t finalize_rt_args(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
@@ -67,7 +67,7 @@ uint32_t finalize_cbs(
     uint32_t& local_cb_size);
 
 uint32_t finalize_kernel_bins(
-    Device* device,
+    IDevice* device,
     uint32_t programmable_core_type_index,
     const std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
@@ -77,12 +77,13 @@ uint32_t finalize_kernel_bins(
 
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence);
 
-void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, Device* device);
+void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
 
-void assemble_runtime_args_commands(ProgramCommandSequence& program_command_sequence, Program& program, Device* device);
+void assemble_runtime_args_commands(
+    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device);
 
 void assemble_device_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id);
+    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
 
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
 

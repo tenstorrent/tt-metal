@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement {
 
 cached_program_t fold_multi_core(const Tensor& input, const Tensor& output, uint32_t stride_h, uint32_t stride_w) {
     Program program = CreateProgram();
-    Device* device = output.device();
+    IDevice* device = output.device();
 
     auto all_cores = input.shard_spec()->grid;
     auto shard_shape = input.shard_spec()->shape;

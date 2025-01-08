@@ -27,7 +27,7 @@ namespace unit_tests::dram::direct {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_only(
-    tt_metal::Device* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& reader_core) {
+    tt_metal::IDevice* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& reader_core) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -86,7 +86,7 @@ bool reader_only(
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool writer_only(
-    tt_metal::Device* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& writer_core) {
+    tt_metal::IDevice* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& writer_core) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -150,7 +150,7 @@ struct ReaderWriterConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_config) {
+bool reader_writer(tt_metal::IDevice* device, const ReaderWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t cb_index = 0;
@@ -239,7 +239,7 @@ struct ReaderDatacopyWriterConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriterConfig& test_config) {
+bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;

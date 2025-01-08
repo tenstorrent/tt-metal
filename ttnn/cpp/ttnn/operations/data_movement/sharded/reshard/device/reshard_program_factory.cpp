@@ -553,7 +553,7 @@ compute_width_sharded_reshard_runtime_args(
     const std::vector<CoreCoord>& remote_cores,
     const BufferType& remote_buffer_type,
     const CoreType& remote_core_type,
-    Device* device,
+    IDevice* device,
     uint32_t element_size) {
     const uint32_t num_local_shards = local_cores.size();
     const uint32_t num_remote_shards = remote_cores.size();

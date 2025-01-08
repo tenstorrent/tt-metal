@@ -22,7 +22,7 @@ class LaunchMessageRingBufferState;
 class TraceBuffer;
 
 inline namespace v0 {
-class Device;
+class IDevice;
 }  // namespace v0
 
 namespace detail {
@@ -33,9 +33,9 @@ public:
         MAX_NUM_SUB_DEVICES <= std::numeric_limits<SubDeviceId::Id>::max(),
         "MAX_NUM_SUB_DEVICES must be less than or equal to the max value of SubDeviceId::Id");
     // Constructor used for the default/global device
-    SubDeviceManager(Device* device, std::unique_ptr<Allocator>&& global_allocator);
+    SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&& global_allocator);
     // Constructor used for regular sub-devices
-    SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, Device* device);
+    SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
 
     SubDeviceManager(const SubDeviceManager& other) = delete;
     SubDeviceManager& operator=(const SubDeviceManager& other) = delete;
@@ -84,7 +84,7 @@ private:
     // TODO: We have a max number of sub-devices, so we can use a fixed size array
     std::vector<SubDevice> sub_devices_;
     std::vector<SubDeviceId> sub_device_ids_;
-    Device* device_;
+    IDevice* device_;
 
     DeviceAddr local_l1_size_;
     std::vector<std::unique_ptr<Allocator>> sub_device_allocators_;

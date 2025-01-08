@@ -27,7 +27,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
@@ -147,7 +147,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     uint32_t num_unpadded_sticks = output.volume() / output.get_legacy_shape()[-1];
 
@@ -413,7 +413,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t shard_height_padded,
     uint32_t num_cores_x_padded,
     uint32_t num_cores_y_padded) {
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.get_legacy_shape();
@@ -570,7 +570,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     uint32_t num_padded_sticks = a.volume() / a.get_legacy_shape()[-1];
     uint32_t num_unpadded_sticks = output.volume() / output.get_legacy_shape()[-1];
@@ -849,7 +849,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     uint32_t num_unpadded_tiles = output.volume() / TILE_HW;
 

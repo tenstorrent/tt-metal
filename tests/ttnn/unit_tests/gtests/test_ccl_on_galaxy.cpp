@@ -214,17 +214,17 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
     // Create the outer ring on which Reduce Scatter will be run. This allows us to verify that there are no deadlocks
     // when we send CCLs to the first tunnel (forward path).
     auto view = ttnn::MeshDeviceView(*mesh);
-    std::vector<Device*> ring_devices = view.get_devices_on_row(0);  // Tunnel 0
-    std::vector<Device*> ring_devices_1 =
+    std::vector<IDevice*> ring_devices = view.get_devices_on_row(0);  // Tunnel 0
+    std::vector<IDevice*> ring_devices_1 =
         view.get_devices_on_column(mesh_shape.num_cols - 1);  // Orthogonal to tunnel .. no deadlocks
-    ring_devices_1 = std::vector<Device*>(ring_devices_1.begin() + 1, ring_devices_1.end());
-    std::vector<Device*> ring_devices_2 =
+    ring_devices_1 = std::vector<IDevice*>(ring_devices_1.begin() + 1, ring_devices_1.end());
+    std::vector<IDevice*> ring_devices_2 =
         view.get_devices_on_row(7);  // Tunnel 7 .. potential deadlocks with lack of buffering
     std::reverse(ring_devices_2.begin(), ring_devices_2.end());
-    ring_devices_2 = std::vector<Device*>(ring_devices_2.begin() + 1, ring_devices_2.end());
-    std::vector<Device*> ring_devices_3 = view.get_devices_on_column(0);  // Orthogonal to tunnel .. no deadlocks
+    ring_devices_2 = std::vector<IDevice*>(ring_devices_2.begin() + 1, ring_devices_2.end());
+    std::vector<IDevice*> ring_devices_3 = view.get_devices_on_column(0);  // Orthogonal to tunnel .. no deadlocks
     std::reverse(ring_devices_3.begin(), ring_devices_3.end());
-    ring_devices_3 = std::vector<Device*>(ring_devices_3.begin() + 1, ring_devices_3.end() - 1);
+    ring_devices_3 = std::vector<IDevice*>(ring_devices_3.begin() + 1, ring_devices_3.end() - 1);
 
     ring_devices.insert(ring_devices.end(), ring_devices_1.begin(), ring_devices_1.end());
     ring_devices.insert(ring_devices.end(), ring_devices_2.begin(), ring_devices_2.end());

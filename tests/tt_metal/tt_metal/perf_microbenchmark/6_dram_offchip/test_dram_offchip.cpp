@@ -52,7 +52,7 @@ template <typename T>
 std::vector<T> slice_vec(std::vector<T> const& v, int m, int n);
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const CoreRangeSet& all_cores,
     const uint32_t& num_reqs_at_a_time,
     const uint32_t& single_tile_size,
@@ -60,7 +60,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     const uint32_t& access_type);
 
 bool assign_runtime_args_to_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
@@ -76,7 +76,7 @@ bool assign_runtime_args_to_program(
     const tt::DataFormat& tile_format);
 
 bool validation(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Buffer& input_buffer,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
@@ -165,7 +165,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
         int clock_freq_mhz = get_tt_npu_clock(device);
@@ -362,7 +362,7 @@ std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const CoreRangeSet& all_cores,
     const uint32_t& num_reqs_at_a_time,
     const uint32_t& single_tile_size,
@@ -393,7 +393,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 }
 
 bool assign_runtime_args_to_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
@@ -432,7 +432,7 @@ bool assign_runtime_args_to_program(
 }
 
 bool validation(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Buffer& input_buffer,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,

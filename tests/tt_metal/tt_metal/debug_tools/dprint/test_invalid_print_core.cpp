@@ -20,7 +20,7 @@ TEST_F(DPrintFixture, TensixTestPrintInvalidCore) {
 
     // We expect that even though illegal worker cores were requested, device setup did not hang.
     // So just make sure that device setup worked and then close the device.
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         EXPECT_TRUE(device != nullptr);
     }
     tt::llrt::RunTimeOptions::get_instance().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);

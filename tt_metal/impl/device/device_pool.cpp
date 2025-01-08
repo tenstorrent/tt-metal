@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 #include <numa.h>
 
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/device/device_handle.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 
 using namespace tt::tt_metal;
@@ -234,8 +234,7 @@ void DevicePool::initialize(
     _inst->init_profiler_devices();
 }
 
-void DevicePool::initialize_device(v1::DeviceHandle handle) const {
-    const auto dev = devices[handle.key.index()].get();
+void DevicePool::initialize_device(IDevice* dev) const {
     detail::ClearProfilerControlBuffer(dev);
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
@@ -295,7 +294,7 @@ void DevicePool::activate_device(chip_id_t id) {
             dev->build_firmware();
             this->firmware_built_keys.insert(dev->build_key());
         }
-        this->devices[id] = std::unique_ptr<Device>(dev);
+        this->devices[id] = std::unique_ptr<IDevice>(dev);
     } else {
         const auto& dev = this->devices[id];
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
@@ -355,7 +354,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     }
 }
 
-void DevicePool::register_worker_thread_for_device(v1::DeviceHandle device, std::thread::id worker_thread_id) {
+void DevicePool::register_worker_thread_for_device(IDevice* device, std::thread::id worker_thread_id) {
     TT_FATAL(
         std::this_thread::get_id() == this->device_pool_creation_thread_id,
         "Worker threads can only be registered in the thread where the Device(s) were created");
@@ -375,7 +374,7 @@ void DevicePool::register_worker_thread_for_device(v1::DeviceHandle device, std:
     this->worker_thread_ids.insert(worker_thread_id);
 }
 
-void DevicePool::unregister_worker_thread_for_device(v1::DeviceHandle device) {
+void DevicePool::unregister_worker_thread_for_device(IDevice* device) {
     TT_FATAL(
         std::this_thread::get_id() == this->device_pool_creation_thread_id,
         "Worker threads can only be unregistered in the thread where the Device(s) were created");
@@ -389,8 +388,7 @@ void DevicePool::unregister_worker_thread_for_device(v1::DeviceHandle device) {
 const std::unordered_set<std::thread::id>& DevicePool::get_worker_thread_ids() const { return this->worker_thread_ids; }
 
 void DevicePool::init_firmware_on_active_devices() const {
-    for (const auto& handle : this->get_all_active_devices()) {
-        const auto dev = this->devices[handle.key.index()].get();
+    for (const auto& dev : this->get_all_active_devices()) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
         if (mmio_device_id != dev->id()) {
@@ -413,14 +411,14 @@ void DevicePool::init_firmware_on_active_devices() const {
             tt::Cluster::instance().get_device_tunnel_depth(mmio_device_id));
 
         auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
-        this->initialize_device(handle);
+        this->initialize_device(dev);
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
-                    this->initialize_device({{mmio_controlled_device_id, 0}});
+                    this->initialize_device(devices[mmio_controlled_device_id].get());
                 }
             }
         }
@@ -448,16 +446,16 @@ DevicePool::DevicePool() {
     }
 }
 
-v1::DeviceHandle DevicePool::get_active_device(chip_id_t device_id) const {
+IDevice* DevicePool::get_active_device(chip_id_t device_id) const {
     TT_ASSERT(this->is_device_active(device_id), "DevicePool does not contain active device {}", device_id);
-    return {{device_id, 0}};
+    return this->devices[device_id].get();
 }
 
-std::vector<v1::DeviceHandle> DevicePool::get_all_active_devices() const {
-    std::vector<v1::DeviceHandle> user_devices;
-    for (int id = 0; id < this->devices.size(); id++) {
-        if (this->is_device_active(id)) {
-            user_devices.push_back({{id, 0}});
+std::vector<IDevice* > DevicePool::get_all_active_devices() const {
+    std::vector<IDevice* > user_devices;
+    for (const auto& device : this->devices) {
+        if (device->is_initialized()) {
+            user_devices.push_back(device.get());
         }
     }
     return user_devices;
@@ -473,16 +471,15 @@ bool DevicePool::close_device(chip_id_t device_id) {
     for (const auto& mmio_controlled_device_id :
          tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
         if (this->is_device_active(mmio_controlled_device_id)) {
-            pass &= this->devices[mmio_controlled_device_id]->close();
-            // When a device is closed, its worker thread is joined. Stop tracking this
-            // worker thread.
-            this->unregister_worker_thread_for_device({{mmio_controlled_device_id, 0}});
+            auto& device = devices[mmio_controlled_device_id];
+            pass &= device->close();
+            this->unregister_worker_thread_for_device(device.get());
         }
     }
     return pass;
 }
 
-void DevicePool::close_devices(const std::vector<Device*>& devices) {
+void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
@@ -526,7 +523,7 @@ void DevicePool::close_devices(const std::vector<Device*>& devices) {
         dev->close();
         // When a device is closed, its worker thread is joined. Stop tracking this
         // worker thread.
-        this->unregister_worker_thread_for_device(this->get_handle(dev));
+        this->unregister_worker_thread_for_device(dev);
     }
 }
 
@@ -541,15 +538,6 @@ DevicePool::~DevicePool() {
         }
     }
     this->devices.clear();
-}
-
-v1::DeviceHandle DevicePool::get_handle(Device* device) const {
-    for (size_t index = 0; index < this->devices.size(); ++index) {
-        if (this->devices[index].get() == device) {
-            return {{index, 0}};
-        }
-    }
-    return {};
 }
 
 }  // namespace tt

@@ -59,7 +59,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     auto shard_spec = a.shard_spec().value();
     auto all_cores = shard_spec.grid;

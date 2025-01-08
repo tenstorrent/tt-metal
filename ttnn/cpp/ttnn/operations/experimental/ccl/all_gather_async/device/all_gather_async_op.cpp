@@ -19,14 +19,14 @@ AllGatherAsync create_all_gather_async_struct(
     const uint32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
     const std::optional<std::vector<GlobalSemaphore>>& semaphores,
     bool enable_persistent_fabric_mode) {
     uint32_t num_devices = devices.size();
 
-    std::optional<Device*> forward_device = std::nullopt;
-    std::optional<Device*> backward_device = std::nullopt;
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
     std::optional<GlobalSemaphore> semaphore = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < num_devices; ++i) {
@@ -58,7 +58,7 @@ AllGatherAsync create_all_gather_async_struct(
 }
 
 std::optional<std::vector<GlobalSemaphore>> get_global_semaphores(
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const CoreRange& core_range,
     std::optional<SubDeviceId> subdevice_id,
     bool create_semaphore_handles) {
@@ -302,7 +302,7 @@ Tensor all_gather_async(
             const auto& input_device_tensor = input_tensors.at(0);
 
             const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            std::vector<Device*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate.col)
+            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate.col)
                                                                : mesh_view.get_devices_on_row(coordinate.row);
 
             const auto& input_tensor = input_tensors.at(0);

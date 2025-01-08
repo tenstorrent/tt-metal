@@ -22,7 +22,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::auto_format {
 
-Tensor AutoFormat::move_tensor_to_device(const Tensor& input, Device* device, const MemoryConfig& mem_config) {
+Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
         return ttnn::data_transfer_to_device(input, device, mem_config);
     } else {
@@ -45,7 +45,7 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
 // Used in backward_ops.cpp
 // See: Remove auto format within permute_op.cpp #9404
 Tensor AutoFormat::move_tensor_to_device_and_pad(
-    const Tensor& input, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
+    const Tensor& input, IDevice* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     using namespace tt::constants;
     const auto intended_shape = input.get_shape();
     const auto device_shape = input.get_legacy_shape();
@@ -62,7 +62,7 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(
 
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
-    Device* device,
+    IDevice* device,
     const tt::tt_metal::LegacyShape& padded_shape,
     float pad_value,
     Layout target_layout,
@@ -153,7 +153,7 @@ Tensor AutoFormat::format_input_tensor(
 Tensor AutoFormat::format_output_tensor(
     const Tensor& output,
     const tt::tt_metal::LegacyShape& shape,
-    Device* device,
+    IDevice* device,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
     bool unpad_output = output.get_legacy_shape() != shape;

@@ -46,7 +46,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device* device = output_grad.device();
+    IDevice* device = output_grad.device();
     auto grid = device->compute_with_storage_grid_size();
     auto arch = device->arch();
     const auto num_cores_y = grid.y;

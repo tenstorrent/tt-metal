@@ -44,7 +44,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle> schedule_kernel_comp
 
 static std::tuple<std::array<uint32_t, 7>, std::array<uint32_t, 10>, std::array<uint32_t, 5>> get_rt_args(
     tt::tt_metal::Program& program,
-    Device* device,
+    IDevice* device,
     bool is_starting_core,
     CoreCoord const& eth_sender_core,
     CoreCoord const& eth_receiver_core,

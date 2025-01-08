@@ -23,7 +23,7 @@ using ttnn::operations::unary::UnaryWithParam;
 
 namespace reuse_mcast_1d_optimized_helpers {
 
-uint32_t get_preferred_noc(const ttnn::CoreCoord src, const ttnn::CoreCoord dst, const tt_metal::Device* device) {
+uint32_t get_preferred_noc(const ttnn::CoreCoord src, const ttnn::CoreCoord dst, const tt_metal::IDevice* device) {
     /*
         NOC0: Preferred +x -> +y
         NOC1: Preferred -y -> -x
@@ -57,7 +57,7 @@ uint32_t get_preferred_noc(const ttnn::CoreCoord src, const ttnn::CoreCoord dst,
 operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Program& program,
     const Tensor& a,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -953,7 +953,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 }
 
 operation::ProgramWithCallbacks create_program_mcast_in1(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -1696,7 +1696,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 operation::ProgramWithCallbacks create_program_gather_in0(
     tt_metal::Program& program,
     const Tensor& a,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -2049,7 +2049,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.get_dtype());
     }
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);

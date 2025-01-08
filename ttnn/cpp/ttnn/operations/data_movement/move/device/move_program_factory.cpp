@@ -18,7 +18,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 std::vector<CoreRange> get_multicast_regions(
-    const Device* device, const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
+    const IDevice* device, const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
     TT_ASSERT(0 < all_cores.ranges().size() and all_cores.ranges().size() <= 2);
     CoreCoord logical_zero = {0, 0};
     TT_ASSERT(logical_controller == logical_zero);
@@ -69,7 +69,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     uint32_t page_size = input.buffer()->page_size();
 
     uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
-    tt::tt_metal::Device* device = output.device();
+    tt::tt_metal::IDevice* device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =

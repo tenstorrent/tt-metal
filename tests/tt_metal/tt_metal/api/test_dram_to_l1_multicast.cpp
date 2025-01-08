@@ -23,7 +23,7 @@ struct DRAMtoL1MulticastConfig {
     CoreCoord exclude_direction;
 };
 
-bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::Device* device, const DRAMtoL1MulticastConfig& cfg) {
+bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::IDevice* device, const DRAMtoL1MulticastConfig& cfg) {
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
 

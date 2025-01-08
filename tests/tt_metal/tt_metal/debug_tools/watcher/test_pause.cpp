@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture* fixture, Device* device) {
+static void RunTest(WatcherFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -140,7 +140,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherPause) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

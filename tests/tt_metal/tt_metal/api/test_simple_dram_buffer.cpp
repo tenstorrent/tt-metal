@@ -8,12 +8,12 @@
 #include "host_api.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
 
 namespace tt::test::buffer::detail {
-bool SimpleDramReadOnly(Device* device, size_t local_address, size_t byte_size) {
+bool SimpleDramReadOnly(IDevice* device, size_t local_address, size_t byte_size) {
     std::vector<uint32_t> inputs =
         generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     std::vector<uint32_t> outputs;
@@ -26,7 +26,7 @@ bool SimpleDramReadOnly(Device* device, size_t local_address, size_t byte_size) 
     }
     return pass;
 }
-bool SimpleDramWriteOnly(Device* device, size_t local_address, size_t byte_size) {
+bool SimpleDramWriteOnly(IDevice* device, size_t local_address, size_t byte_size) {
     std::vector<uint32_t> inputs =
         generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     std::vector<uint32_t> outputs;

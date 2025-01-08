@@ -107,7 +107,7 @@ Tensor::TensorAttributes::TensorAttributes() :
 Tensor::TensorAttributes::TensorAttributes(Storage storage, TensorSpec tensor_spec) :
     storage(std::move(storage)), tensor_spec(std::move(tensor_spec)), metadata_populated(true) {}
 
-void Tensor::TensorAttributes::increment_main_thread_ref_count(Device* worker) {
+void Tensor::TensorAttributes::increment_main_thread_ref_count(IDevice* worker) {
     if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and not tt::tt_metal::detail::InWorkerThread()) {
         main_thread_ref_count++;
         if (track_ref_count) {
@@ -120,7 +120,7 @@ void Tensor::TensorAttributes::increment_main_thread_ref_count(Device* worker) {
     }
 }
 
-void Tensor::TensorAttributes::decrement_main_thread_ref_count(Device* worker) {
+void Tensor::TensorAttributes::decrement_main_thread_ref_count(IDevice* worker) {
     if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and not tt::tt_metal::detail::InWorkerThread()) {
         main_thread_ref_count--;
         if (track_ref_count) {
@@ -135,7 +135,7 @@ void Tensor::TensorAttributes::decrement_main_thread_ref_count(Device* worker) {
 
 uint32_t Tensor::TensorAttributes::record_main_thread_ref_count() { return main_thread_ref_count; }
 
-void Tensor::TensorAttributes::update_main_thread_ref_count(Device* worker, uint32_t ref_count) {
+void Tensor::TensorAttributes::update_main_thread_ref_count(IDevice* worker, uint32_t ref_count) {
     if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and not tt::tt_metal::detail::InWorkerThread()) {
         if (track_ref_count) {
             tt::log_info(
@@ -244,7 +244,7 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
     tensor_attributes->num_workers_completed = this->tensor_attributes->num_shards_to_be_populated;
 }
 
-Tensor::Tensor(const std::vector<Device*>& workers) :
+Tensor::Tensor(const std::vector<IDevice*>& workers) :
     tensor_attributes(std::make_shared<TensorAttributes>()), workers(workers) {
     if (workers.empty()) {
         return;
@@ -256,7 +256,7 @@ Tensor::Tensor(const std::vector<Device*>& workers) :
         }
         MultiDeviceStorage storage;
         std::transform(
-            workers.cbegin(), workers.cend(), std::back_inserter(storage.ordered_device_ids), [](const Device* worker) {
+            workers.cbegin(), workers.cend(), std::back_inserter(storage.ordered_device_ids), [](const IDevice* worker) {
                 return worker->id();
             });
         return Storage(std::move(storage));
@@ -434,8 +434,8 @@ void Tensor::deallocate(bool force) {
                                 : this->tensor_attributes->main_thread_ref_count;
                         if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
                             this->tensor_attributes->deallocated = true;
-                            auto dealloc_lambda = std::make_shared<std::function<void(Device*)>>(
-                                [force, attr = this->tensor_attributes](Device* worker) mutable {
+                            auto dealloc_lambda = std::make_shared<std::function<void(IDevice*)>>(
+                                [force, attr = this->tensor_attributes](IDevice* worker) mutable {
                                     ZoneScopedN("ShardDeallocate");
                                     TT_ASSERT(
                                         std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(attr->storage),
@@ -518,10 +518,10 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
     this->tensor_attributes->num_workers_completed++;
 }
 
-std::vector<Device*> Tensor::get_workers(bool blocking) const {
+std::vector<IDevice*> Tensor::get_workers(bool blocking) const {
     ZoneScoped;
     // Initialize an empty worker vector (remains empty for host side storage)
-    std::vector<Device*> workers = {};
+    std::vector<IDevice*> workers = {};
 
     if (this->tensor_attributes->dynamic_storage) {
         // Tensor is populated by launch_with_autoformat
@@ -542,7 +542,7 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
                 if (this->workers.size() != 1) {
                     // Not populated - sync.
                     this->wait_for_tensor_data_populated();
-                    workers = std::vector<Device*>{this->device()};
+                    workers = std::vector<IDevice*>{this->device()};
                 } else {
                     // Already populated.
                     workers = this->workers;
@@ -726,7 +726,7 @@ template std::vector<uint16_t> Tensor::to_vector<uint16_t>() const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>() const;
 
 Tensor Tensor::to(
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& mem_config,
     uint8_t cq_id,
     const std::vector<SubDeviceId>& sub_device_ids) const {
@@ -738,12 +738,12 @@ Tensor Tensor::to(
     const MemoryConfig& mem_config,
     uint8_t cq_id,
     const std::vector<SubDeviceId>& sub_device_ids) const {
-    std::vector<Device*> workers_to_use = ttnn::distributed::get_mapped_devices(*this, *mesh_device);
+    std::vector<IDevice*> workers_to_use = ttnn::distributed::get_mapped_devices(*this, *mesh_device);
     return tensor_ops::tensor_to(*this, workers_to_use, mem_config, cq_id, sub_device_ids);
 }
 
 Tensor Tensor::to(
-    const std::vector<Device*>& workers,
+    const std::vector<IDevice*>& workers,
     const MemoryConfig& mem_config,
     uint8_t cq_id,
     const std::vector<SubDeviceId>& sub_device_ids) const {
@@ -765,7 +765,7 @@ Tensor Tensor::extract_shard(const uint32_t& core_id) const {
     return tensor_impl::extract_shard_wrapper(*this, core_id);
 }
 
-Tensor Tensor::to(Layout target_layout, Device* worker) const {
+Tensor Tensor::to(Layout target_layout, IDevice* worker) const {
     return tensor_ops::tensor_to(*this, target_layout, worker);
 }
 
@@ -851,7 +851,7 @@ bool Tensor::is_scalar() const {
     return logical_shape.rank() == 0 || logical_shape.volume() == 1;
 }
 
-Tensor create_device_tensor(const TensorSpec& tensor_spec, Device* device) {
+Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     ZoneScoped;
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
@@ -874,7 +874,7 @@ Tensor create_device_tensor(
     const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
-    Device* device,
+    IDevice* device,
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
     return create_device_tensor(
@@ -885,7 +885,7 @@ Tensor create_device_tensor(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    Device* device,
+    IDevice* device,
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
     return create_device_tensor(
@@ -1001,7 +1001,7 @@ Tensor allocate_tensor_on_devices(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
     // Top level wrapper to asynchronously create a device tensor (single- or multi-device).
@@ -1125,7 +1125,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
     return output;
 };
 
-bool validate_worker_modes(const std::vector<Device*>& workers) {
+bool validate_worker_modes(const std::vector<IDevice*>& workers) {
     bool worker_modes_match = true;
     auto first_worker_mode = workers.at(0)->get_worker_mode();
     for (auto worker : workers) {

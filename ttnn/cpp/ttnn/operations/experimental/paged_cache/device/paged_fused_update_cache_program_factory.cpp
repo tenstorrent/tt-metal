@@ -18,7 +18,7 @@ using namespace tt::constants;
 using namespace tt;
 
 bool enable_fp32_dest_acc(
-    const tt_metal::Device* device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
+    const tt_metal::IDevice* device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -47,7 +47,7 @@ struct UpdateCacheKernels {
 UpdateCacheKernels setup_kernels_for_update_cache(
     Program& program,
     const UpdateCacheParams& params,
-    const Device* device,
+    const IDevice* device,
     bool use_index_tensor,
     bool is_paged_cache,
     bool share_cache,
@@ -152,7 +152,7 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
     Program program{};
 
     uint32_t num_caches = 2;
-    tt_metal::Device* device = input_tensor1.device();
+    tt_metal::IDevice* device = input_tensor1.device();
 
     tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor1.get_dtype());
     uint32_t cache_single_tile_size = tt_metal::detail::TileSize(cache_cb_data_format);

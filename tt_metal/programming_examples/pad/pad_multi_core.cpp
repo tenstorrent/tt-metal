@@ -8,7 +8,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 int main(int argc, char** argv) {
     // get program/device
     int device_id = 0;
-    Device* device = CreateDevice(device_id);
+    IDevice* device = CreateDevice(device_id);
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
 

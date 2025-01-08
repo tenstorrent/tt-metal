@@ -16,8 +16,8 @@ struct ReduceScatterAsync {
         const uint32_t scatter_dim,
         const uint32_t ring_size,
         const uint32_t ring_index,
-        const std::optional<Device*> forward_device,
-        const std::optional<Device*> backward_device,
+        const std::optional<IDevice*> forward_device,
+        const std::optional<IDevice*> backward_device,
         const MemoryConfig& output_mem_config,
         const ttnn::ccl::Topology topology,
         std::optional<std::vector<Tensor>>& foreward_output_tensors,
@@ -47,8 +47,8 @@ struct ReduceScatterAsync {
     const uint32_t scatter_dim;
     const uint32_t ring_size;
     const uint32_t ring_index;
-    const std::optional<Device*> forward_device;
-    const std::optional<Device*> backward_device;
+    const std::optional<IDevice*> forward_device;
+    const std::optional<IDevice*> backward_device;
     const MemoryConfig output_mem_config;
     const ttnn::ccl::Topology topology;
     // const
@@ -96,8 +96,8 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     Tensor& partial_output_tensor_to_backward_direction,
     std::optional<Tensor>& foreward_direction_remote_output_tensor,
     std::optional<Tensor>& backward_direction_remote_output_tensor,
-    std::optional<Device*> forward_device,
-    std::optional<Device*> backward_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     ttnn::operations::binary::BinaryOpType reduce_op,
     const uint32_t dim,
     const uint32_t line_size,
@@ -117,7 +117,7 @@ ReduceScatterAsync create_reduce_scatter_struct(
     const ttnn::operations::binary::BinaryOpType binary_op_type,
     const uint32_t dim,
     const MemoryConfig& output_mem_config,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
     std::optional<std::vector<Tensor>> foreward_output_tensors,
     std::optional<std::vector<Tensor>> backward_output_tensors,

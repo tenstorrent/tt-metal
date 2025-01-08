@@ -214,7 +214,7 @@ int main(int argc, char** argv) {
 
         // Device setup
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         CoreCoord logical_core(0, 0);
         CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
 

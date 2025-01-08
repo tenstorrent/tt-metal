@@ -314,7 +314,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
     m_tensor.def(
         "load_tensor",
-        py::overload_cast<const std::string&, Device*>(&load_tensor),
+        py::overload_cast<const std::string&, IDevice*>(&load_tensor),
         py::arg("file_name"),
         py::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");

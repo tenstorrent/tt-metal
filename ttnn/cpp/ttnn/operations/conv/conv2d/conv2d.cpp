@@ -131,7 +131,8 @@ Result conv2d(
         in_channels_padded = tt::round_up(in_channels, conv_config.input_channels_alignment);
     }
 
-    uint32_t nhw_out_padded_ntile_per_core = conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
+    uint32_t nhw_out_padded_ntile_per_core =
+        conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
 
     OptimizedConvBlockConfig opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
@@ -287,7 +288,7 @@ Result Conv2dOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    Device* device,
+    IDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,

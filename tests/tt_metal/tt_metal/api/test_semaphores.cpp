@@ -14,7 +14,7 @@ using namespace tt;
 
 namespace unit_tests::initialize_semaphores {
 
-void initialize_program(tt_metal::Device* device, tt_metal::Program& program, const CoreRange& core_range) {
+void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, const CoreRange& core_range) {
     uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t num_tiles = 2048;
 
@@ -59,7 +59,7 @@ void initialize_program(tt_metal::Device* device, tt_metal::Program& program, co
 }
 
 void create_and_read_max_num_semaphores(
-    tt_metal::Device* device, tt_metal::Program& program, const CoreRange& core_range) {
+    tt_metal::IDevice* device, tt_metal::Program& program, const CoreRange& core_range) {
     std::vector<uint32_t> golden;
     for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
@@ -92,7 +92,7 @@ void create_and_read_max_num_semaphores(
 }
 
 void try_creating_more_than_max_num_semaphores(
-    tt_metal::Device* device, tt_metal::Program& program, const CoreRange& core_range) {
+    tt_metal::IDevice* device, tt_metal::Program& program, const CoreRange& core_range) {
     ASSERT_TRUE(program.num_semaphores() == 0);
     create_and_read_max_num_semaphores(device, program, core_range);
     constexpr static uint32_t val = 5;

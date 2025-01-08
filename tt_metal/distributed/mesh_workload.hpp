@@ -56,7 +56,7 @@ private:
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
     template <typename T>
-    friend void program_dispatch::finalize_program_offsets(T&, Device*);
+    friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
     template <typename WorkloadType, typename DeviceType>
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend MeshCommandQueue;
@@ -68,7 +68,9 @@ public:
     void add_program(const LogicalDeviceRange& device_range, Program&& program);
     const std::unordered_map<LogicalDeviceRange, Program>& get_programs() const { return this->programs_; }
     const std::vector<LogicalDeviceRange> get_logical_device_ranges() const { return this->logical_device_ranges_; }
-    Program& get_program_on_device_range(const LogicalDeviceRange& device_range) { return this->programs_.at(device_range); }
+    Program& get_program_on_device_range(const LogicalDeviceRange& device_range) {
+        return this->programs_.at(device_range);
+    }
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);
     MeshCommandQueue* get_last_used_command_queue() const;

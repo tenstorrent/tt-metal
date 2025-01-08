@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool src0_sharded = a.memory_config().is_sharded();

@@ -31,7 +31,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
 
     const bool weight_has_value = weight.has_value();
 
-    tt::tt_metal::Device* device = target.device();
+    tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -160,7 +160,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
 
     const bool weight_has_value = weight.has_value();
 
-    tt::tt_metal::Device* device = target.device();
+    tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -286,7 +286,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
 
     const bool weight_has_value = weight.has_value();
 
-    tt::tt_metal::Device* device = target.device();
+    tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 

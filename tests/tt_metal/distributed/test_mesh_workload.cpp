@@ -482,7 +482,7 @@ void verify_cb_config(
 
 void validate_sems(
     std::shared_ptr<MeshDevice>& mesh_device,
-    Device* device,
+    IDevice* device,
     CoreRange& crs,
     MeshWorkload& mesh_workload,
     std::vector<uint32_t>& expected_semaphore_values) {
@@ -511,7 +511,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEth) {
         std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
         for (std::size_t logical_x = 0; logical_x < mesh_device_->num_cols(); logical_x++) {
             for (std::size_t logical_y = 0; logical_y < mesh_device_->num_rows(); logical_y++) {
-                Device* device = mesh_device_->get_device(logical_y, logical_x);
+                IDevice* device = mesh_device_->get_device(logical_y, logical_x);
                 auto programs = create_random_programs(
                     1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
                 LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x + 1, logical_y + 1}};
@@ -551,15 +551,17 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadMixedTensixEth) {
         std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
         for (std::size_t logical_x = 0; logical_x < mesh_device_->num_cols(); logical_x++) {
             for (std::size_t logical_y = 0; logical_y < mesh_device_->num_rows(); logical_y++) {
-                Device* device = mesh_device_->get_device(logical_y, logical_x);
+                IDevice* device = mesh_device_->get_device(logical_y, logical_x);
                 LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x + 1, logical_y + 1}};
                 if (run_on_eth) {
                     auto programs = create_random_programs(
-                        1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
+                        1,
+                        mesh_device_->compute_with_storage_grid_size(),
+                        seed,
+                        device->get_active_ethernet_cores(true));
                     AddProgramToMeshWorkload(*workload, *programs[0], devices);
                 } else {
-                    auto programs = create_random_programs(
-                        1, mesh_device_->compute_with_storage_grid_size(), seed);
+                    auto programs = create_random_programs(1, mesh_device_->compute_with_storage_grid_size(), seed);
                     AddProgramToMeshWorkload(*workload, *programs[0], devices);
                 }
                 run_on_eth = !run_on_eth;
@@ -596,7 +598,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEthRandomGridSize) {
         uint32_t y_end = gen_y(rng);
         for (std::size_t logical_x = 0; logical_x < x_end; logical_x++) {
             for (std::size_t logical_y = 0; logical_y < y_end; logical_y++) {
-                Device* device = mesh_device_->get_device(logical_y, logical_x);
+                IDevice* device = mesh_device_->get_device(logical_y, logical_x);
                 auto programs = create_random_programs(
                     1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
                 LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x + 1, logical_y + 1}};

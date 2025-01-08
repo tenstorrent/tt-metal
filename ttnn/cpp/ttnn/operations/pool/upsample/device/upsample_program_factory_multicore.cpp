@@ -23,7 +23,7 @@ using namespace tt;
 operation::ProgramWithCallbacks upsample_multi_core(
     const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
     Program program = CreateProgram();
-    Device* device = input.device();
+    IDevice* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());

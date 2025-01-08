@@ -40,7 +40,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);
     uint32_t mask_w = (pad_w == 0) ? (tt::constants::TILE_WIDTH) : (pad_w);
 
-    Device* device = input.device();
+    IDevice* device = input.device();
 
     const uint32_t in0_t = 2;
     const uint32_t in1_t = 2;

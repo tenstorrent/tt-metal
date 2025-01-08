@@ -26,7 +26,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     uint32_t NC = N * C;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     auto shard_spec = a.shard_spec().value();
     auto all_cores = shard_spec.grid;

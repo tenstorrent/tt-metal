@@ -105,7 +105,7 @@ Tensor convert_float_vector_to_tt_tensor(
     const std::array<uint32_t, 4>& shape,
     DataType data_type,
     Layout layout,
-    Device* device,
+    IDevice* device,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tile>& tile) {
     if (data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B) {
@@ -144,7 +144,7 @@ Tensor convert_float_vector_to_tt_tensor(
 Tensor create_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
     const TensorSpec& tensor_spec,
-    Device* device,
+    IDevice* device,
     const bool force_disable_borrow,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback) {
@@ -250,7 +250,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<Layout> optional_layout,
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
-    Device* device,
+    IDevice* device,
     const bool force_disable_borrow = false) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
@@ -855,7 +855,7 @@ void pytensor_module(py::module& m_tensor) {
                           const std::array<uint32_t, 4>& shape,
                           DataType data_type,
                           Layout layout,
-                          Device* device,
+                          IDevice* device,
                           const std::optional<Tile>& tile) {
                 return detail::convert_float_vector_to_tt_tensor(
                     std::move(data), shape, data_type, layout, device, std::nullopt, tile);
@@ -907,7 +907,7 @@ void pytensor_module(py::module& m_tensor) {
                           const std::array<uint32_t, 4>& shape,
                           DataType data_type,
                           Layout layout,
-                          Device* device,
+                          IDevice* device,
                           const MemoryConfig& memory_config,
                           const std::optional<Tile>& tile) {
                 return detail::convert_float_vector_to_tt_tensor(
@@ -997,7 +997,7 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             py::init<>([](const py::object& python_tensor,
                           std::optional<DataType> data_type,
-                          Device* device,
+                          IDevice* device,
                           Layout layout,
                           const MemoryConfig& mem_config,
                           const std::optional<Tile>& tile) {
@@ -1050,7 +1050,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<Device*, const MemoryConfig&, uint8_t, const std::vector<SubDeviceId>&>(
+            py::overload_cast<IDevice*, const MemoryConfig&, uint8_t, const std::vector<SubDeviceId>&>(
                 &Tensor::to, py::const_),
             py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
@@ -1194,7 +1194,7 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to",
-            py::overload_cast<Layout, Device*>(&Tensor::to, py::const_),
+            py::overload_cast<Layout, IDevice*>(&Tensor::to, py::const_),
             py::arg("target_layout").noconvert(),
             py::arg("worker") = nullptr,
             R"doc(

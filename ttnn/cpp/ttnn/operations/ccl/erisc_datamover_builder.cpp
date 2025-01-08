@@ -14,7 +14,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/program/program.hpp"
 
 #include "tt_metal/detail/tt_metal.hpp"
@@ -249,7 +249,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 }
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
-    Device* device,
+    IDevice* device,
     Program& program,
     CoreCoord const& ethernet_core,
     chip_id_t local_chip_id,
@@ -381,7 +381,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
 }
 
 EdmLineFabricOpInterface::EdmLineFabricOpInterface(
-    std::vector<Device*> const& device_sequence,
+    std::vector<IDevice*> const& device_sequence,
     std::vector<Program*> const& program_sequence,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
@@ -474,9 +474,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 // Invocable per chip if we want to collectively build the fabric by building this separately per chip
 // (and implicitly building the fabric that way)
 EdmLineFabricOpInterface::EdmLineFabricOpInterface(
-    Device* local_device,
-    std::optional<Device*> forward_device,
-    std::optional<Device*> backward_device,
+    IDevice* local_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     Program* program,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
@@ -495,9 +495,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     }
 
     // Construct the builders
-    std::array<std::pair<Device*, std::optional<Device*>>, 2> device_pairs = {
-        std::pair<Device*, std::optional<Device*>>{local_device, forward_device},
-        std::pair<Device*, std::optional<Device*>>{local_device, backward_device}
+    std::array<std::pair<IDevice*, std::optional<IDevice*>>, 2> device_pairs = {
+        std::pair<IDevice*, std::optional<IDevice*>>{local_device, forward_device},
+        std::pair<IDevice*, std::optional<IDevice*>>{local_device, backward_device}
     };
 
     static_assert(EdmLineFabricOpInterface::Direction::FORWARD < 2);
@@ -516,7 +516,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         log_trace(tt::LogOp, "Device {} is connected to {} at index {}", local_device->id(), device_pairs[i].second.value()->id(), i);
         auto &edm_builders = *edm_builders_maps[i];
 
-        Device *remote_device = device_pairs[i].second.value();
+        IDevice*remote_device = device_pairs[i].second.value();
         auto const connected_sockets = local_device->get_ethernet_sockets(remote_device->id());
 
         TT_FATAL(edm_builders.size() == 0, "EDM builders already exist for this device");
@@ -564,7 +564,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     }
 }
 
-SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(Device* device, Direction direction) {
+SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(IDevice* device, Direction direction) {
     TT_FATAL((direction == FORWARD) ? edm_builders_forward_direction.find(device->id()) != edm_builders_forward_direction.end()
                                      : edm_builders_backward_direction.find(device->id()) != edm_builders_backward_direction.end(), "Device {} not found in edm builders", device->id());
     auto& edm_builders = (direction == FORWARD) ? edm_builders_forward_direction.at(device->id())
@@ -580,7 +580,7 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(Device
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-    std::vector<Device*> const& device_sequence,
+    std::vector<IDevice*> const& device_sequence,
     std::vector<Program*> const& program_sequence,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links) {
@@ -588,9 +588,9 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-    Device* local_device,
-    std::optional<Device*> forward_device,
-    std::optional<Device*> backward_device,
+    IDevice* local_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     Program* program,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links) {
@@ -598,7 +598,7 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
 }
 
 void EdmLineFabricOpInterface::build_kernels() const {
-    auto generate_kernels_in_direction = [this](Device *device, Program *program, Direction direction) {
+    auto generate_kernels_in_direction = [this](IDevice*device, Program *program, Direction direction) {
         auto &edm_builders = direction == FORWARD ? edm_builders_forward_direction : edm_builders_backward_direction;
         if (edm_builders.find(device->id()) != edm_builders.end()) {
             for (auto& edm_builder : edm_builders.at(device->id())) {
@@ -623,13 +623,13 @@ void EdmLineFabricOpInterface::build_kernels() const {
     TT_ASSERT(device_sequence.size() == programs.size());
     for (size_t i = 0; i < device_sequence.size(); i++) {
         Program* program = programs[i];
-        Device* device = device_sequence[i];
+        IDevice* device = device_sequence[i];
         generate_kernels_in_direction(device, program, Direction::FORWARD);
         generate_kernels_in_direction(device, program, Direction::BACKWARD);
     }
 }
 
-std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_local_chip_fabric_termination_infos(Device *device) const {
+std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_local_chip_fabric_termination_infos(IDevice*device) const {
     auto generate_termination_info = [](FabricEriscDatamoverBuilder const& edm_builder) -> edm_termination_info_t {
         return edm_termination_info_t{
             0,
@@ -695,7 +695,7 @@ std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_ordered_t
 }
 
 
-void FabricEriscDatamoverBuilder::teardown_from_host(Device *d, tt::fabric::TerminationSignal termination_signal) const {
+void FabricEriscDatamoverBuilder::teardown_from_host(IDevice*d, tt::fabric::TerminationSignal termination_signal) const {
     std::vector<uint32_t> val(1, termination_signal);
     d->push_work([&](){tt::tt_metal::detail::WriteToDeviceL1(
         d,
@@ -706,7 +706,7 @@ void FabricEriscDatamoverBuilder::teardown_from_host(Device *d, tt::fabric::Term
 }
 
 void EdmLineFabricOpInterface::teardown_from_host(tt::fabric::TerminationSignal termination_signal) const {
-    for (Device *d : this->device_sequence) {
+    for (IDevice*d : this->device_sequence) {
         if (edm_builders_forward_direction.find(d->id()) != edm_builders_forward_direction.end()) {
             for (auto& edm_builder : edm_builders_forward_direction.at(d->id())) {
                 edm_builder.teardown_from_host(d, termination_signal);
@@ -756,7 +756,7 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
     for (size_t r = 0; r < num_rows; r++) {
         for (size_t c = 0; c < num_cols; c++) {
             log_info(tt::LogAlways, "Compile EDM program");
-            Device *device = mesh_device->get_device(r, c);
+            IDevice*device = mesh_device->get_device(r, c);
             auto& program = programs.at(r).at(c);
             device->push_work([&](){tt::tt_metal::detail::CompileProgram(device, program);}, false);
             device->push_work([&](){tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);}, true);
@@ -765,7 +765,7 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
 }
 
 void teardown_edm_fabric(distributed::MeshDevice* mesh_device) {
-    auto teardown = [](std::vector<Device*> const& line_view) {
+    auto teardown = [](std::vector<IDevice*> const& line_view) {
         std::vector<Program> programs(line_view.size());
         std::vector<Program*> program_ptrs;
         program_ptrs.reserve(programs.size());

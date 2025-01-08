@@ -14,7 +14,7 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "tt_metal/tt_stl/span.hpp"
@@ -716,7 +716,7 @@ struct MultiDeviceStorage {
     // preinitialize empty tensor handles and use/populate them in the worker threads.
     std::vector<DeviceBuffer> get_buffers() const;
 
-    inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const ttnn::Shape shape) {
+    inline void insert_buffer_and_shape_for_device(IDevice*device, const DeviceBuffer buffer, const ttnn::Shape shape) {
         std::scoped_lock lock(buffer_mtx, shape_mtx);
         TT_ASSERT(
             device == buffer->device(),
@@ -725,7 +725,7 @@ struct MultiDeviceStorage {
         shapes.insert({device->id(), shape});
     }
 
-    inline DeviceBuffer get_buffer_for_device(Device *device) const {
+    inline DeviceBuffer get_buffer_for_device(IDevice*device) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         TT_ASSERT(
             buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}",device->id());
@@ -735,7 +735,7 @@ struct MultiDeviceStorage {
         return buffers.at(device->id());
     }
 
-    inline DeviceBuffer &get_buffer_for_device(Device *device) {
+    inline DeviceBuffer &get_buffer_for_device(IDevice*device) {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         TT_ASSERT(
             buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
@@ -750,7 +750,7 @@ struct MultiDeviceStorage {
         return buffers.at(device_id);
     }
 
-    inline ttnn::Shape get_tensor_shape_for_device(Device *device) const {
+    inline ttnn::Shape get_tensor_shape_for_device(IDevice*device) const {
         std::lock_guard<std::mutex> lock(shape_mtx);
         TT_ASSERT(
             shapes.find(device->id()) != shapes.end(), "Shape not found for device {}", device->id());
@@ -762,7 +762,7 @@ struct MultiDeviceStorage {
         return buffers.size();
     }
 
-    inline bool has_buffer_for_device(Device *device) const {
+    inline bool has_buffer_for_device(IDevice*device) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         return buffers.find(device->id()) != buffers.end();
     }

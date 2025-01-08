@@ -6,13 +6,13 @@
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-void RunTest(Device* device) {
+void RunTest(IDevice* device) {
     // Set up program
     Program program = Program();
     CoreRange core_range({0, 0}, {5, 5});
@@ -38,10 +38,10 @@ void RunTest(Device* device) {
             .compile_args = {l1_unreserved_base + 4}});
 
     // Write runtime args
-    auto get_first_arg = [](Device* device, CoreCoord& core, uint32_t multiplier) {
+    auto get_first_arg = [](IDevice* device, CoreCoord& core, uint32_t multiplier) {
         return (uint32_t)device->id() + (uint32_t)core.x * 10 * multiplier;
     };
-    auto get_second_arg = [](Device* device, CoreCoord& core, uint32_t multiplier) {
+    auto get_second_arg = [](IDevice* device, CoreCoord& core, uint32_t multiplier) {
         return (uint32_t)core.y * 100 * multiplier;
     };
 
@@ -109,14 +109,14 @@ TEST(DispatchStress, TensixRunManyTimes) {
         for (unsigned int id = 0; id < num_devices; id++) {
             chip_ids.push_back(id);
         }
-        vector<Device*> devices_;
+        vector<IDevice*> devices_;
         auto reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
         for (const auto& [id, device] : reserved_devices_) {
             devices_.push_back(device);
         }
 
         // Run the test on each device
-        for (Device* device : devices_) {
+        for (IDevice* device : devices_) {
             log_info(LogTest, "Running on device {}", device->id());
             RunTest(device);
         }

@@ -33,17 +33,17 @@ ttnn::Tensor permute_impl(
     using ttnn::operations::experimental::auto_format::AutoFormat;
 
     // Get the device
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     if (a.get_shape().rank() > 4) {
         auto input = a.get_layout() == Layout::TILE
-                         ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr)
+                         ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr)
                          : a;
         TT_FATAL(
             !(pad_value.has_value() && pad_value.value() != 0.0f),
             "Non-zero padding is not supported for permute on tensors with rank > 4.");
         input = ttnn::prim::permute(input, dims, output_mem_config, std::nullopt);
-        return ttnn::to_layout(input, a.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
+        return ttnn::to_layout(input, a.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
     }
 
     TT_FATAL(dims.size() == 4, "Only 4D tensor are supported for permute.");
@@ -199,7 +199,7 @@ ttnn::Tensor ExecutePermute::invoke(
     const auto input_layout = input_tensor.get_layout();
     auto output_tensor =
         detail::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()), pad_value);
-    output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (Device*)nullptr);
+    output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
 
     if (input_rank < 4) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_rank);
