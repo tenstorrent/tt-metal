@@ -84,9 +84,13 @@ PermuteDeviceOperation::invoke(
     const Tensor& input_tensor,
     const SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<float>& pad_value) {
     return {
-        operation_attributes_t{.dims = dims, .output_mem_config = memory_config.value_or(input_tensor.memory_config())},
+        operation_attributes_t{
+            .dims = dims,
+            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+            .pad_value = pad_value},
         tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)}};
 }
 
