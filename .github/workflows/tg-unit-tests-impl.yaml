@@ -43,7 +43,7 @@ jobs:
           { name: "TG unit tests", arch: wormhole_b0, model: unit, timeout: 30, owner_id: XXXXX},  # Add owner
           { name: "TG Llama3-small unit tests", arch: wormhole_b0, model: llama3-small, timeout: 45, owner_id: U06F3ER8X9A}, # Stuti Raizada
           { name: "TG Llama3-70b unit tests", arch: wormhole_b0, model: llama3-70b, timeout: 45, owner_id: U06F3ER8X9A}, # Stuti Raizada
-          { name: "TG DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: XXXXX}, # Add owner
+          { name: "TG DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: XXXXX}, # Yu Gao, Ammar Vora
         ]
     name: ${{ matrix.test-group.name }}
     env:

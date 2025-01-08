@@ -374,6 +374,12 @@ typename std::enable_if_t<std::is_enum<T>::value, std::ostream>& operator<<(std:
     return os;
 }
 
+template <typename T1, typename T2>
+std::ostream& operator<<(std::ostream& os, const std::pair<T1, T2>& pair) {
+    os << "{" << pair.first << ", " << pair.second << "}";
+    return os;
+}
+
 static std::ostream& operator<<(std::ostream& os, const std::filesystem::path& path) {
     os << path.c_str();
     return os;
@@ -447,19 +453,6 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
             os << ", ";
         }
         index++;
-    }
-    os << "}";
-    return os;
-}
-
-template <typename K, typename V>
-std::ostream& operator<<(std::ostream& os, const std::vector<std::pair<K, V>>& vec) {
-    os << "{";
-    for (auto it = vec.begin(); it != vec.end(); ++it) {
-        os << it->first << ": " << it->second;
-        if (it != vec.end()) {
-            os << ", ";
-        }
     }
     os << "}";
     return os;
