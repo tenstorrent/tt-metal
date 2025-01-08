@@ -18,7 +18,11 @@ const uint32_t l1_scratchpad_CB_size = 64;
 struct Conv2dConfig {
     DataType dtype = DataType::BFLOAT16;
     DataType weights_dtype = DataType::BFLOAT16;
+
+    // Either "relu" or ""
     string activation = "";
+
+    // Used in the beginning of a network, when in_channels is small, set to 16.
     uint32_t input_channels_alignment = 32;
 
     // If user tensor will be deallocated if it's on device.
@@ -27,14 +31,19 @@ struct Conv2dConfig {
     // If true && dellocate_activation is true, then after halo device op is done, the output tensor of halo will be reallocated.
     bool reallocate_halo_output = true;
     
+
+    // Has to be a multiple of 32.
+    //  Smaller -> Smaller CBs, Lower L1 Usage, Lower perf.
     uint32_t act_block_h_override = 0;
 
     // Amount by which the maximum possible act_block_width is divided.
     // Max act_block_w = in_channels / (total_num_cores * TILE_WIDTH);
     // Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
+    // Only useful when in_channels > 2048.
     uint32_t act_block_w_div = 1;
 
-    // if reshard_if_not_optimal is true, override_sharding_config should not be set to true
+    // Only considered when input is already sharded in L1.
+    //  if reshard_if_not_optimal is true, override_sharding_config should not be set to true
     bool reshard_if_not_optimal = false;
 
     // if override_sharding_config is true, reshard_if_not_optimal should not be set to true
@@ -47,12 +56,22 @@ struct Conv2dConfig {
 
     // used only if override_sharding_config is true and shard_layout is set to BLOCK_SHARDED
     bool transpose_shards = true;
+
+    // Useful when output is BFLOAT16.
+    // BFLOAT8 is always Tile layout.
     Layout output_layout = Layout::TILE;
+
+    // Doubles the size of the CBs for activation.
+    // Increased perf, but increased L1 usage.
     bool enable_act_double_buffer = false;
 
     // Used on for block sharded convolutions
     bool enable_weights_double_buffer = false;
+
+    // Only for height sharding.
+    // Increases perf. Act_block_h should be a multiple of 64, if true
     bool enable_split_reader = false;
+
     bool enable_subblock_padding = false;
     static constexpr auto attribute_names = std::make_tuple(
         "dtype",
