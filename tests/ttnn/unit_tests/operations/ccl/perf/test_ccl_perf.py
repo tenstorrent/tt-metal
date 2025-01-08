@@ -47,7 +47,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import 
 )
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1824800}], indirect=True)
 def test_all_gather_on_n300(
     n300_mesh_device,
     num_devices,
