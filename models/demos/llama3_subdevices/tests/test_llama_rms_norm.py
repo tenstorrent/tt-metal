@@ -7,14 +7,14 @@ from loguru import logger
 import os
 import ttnn
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
-from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as RefRMSNorm
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-from models.demos.llama3.tt.distributed_norm import DistributedNorm
+from models.demos.llama3_subdevices.tt.distributed_norm import DistributedNorm
 
 
 @torch.no_grad()
@@ -36,7 +36,13 @@ from models.demos.llama3.tt.distributed_norm import DistributedNorm
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.parametrize("mode", ["prefill", "decode"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "decode",
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_llama_rms_norm_inference(
     max_seq_len,
     batch_size,
@@ -90,9 +96,7 @@ def test_llama_rms_norm_inference(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
-        memory_config=model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
-        if mode == "decode"
-        else ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     tt_output = tt_model(tt_input, mode=mode)

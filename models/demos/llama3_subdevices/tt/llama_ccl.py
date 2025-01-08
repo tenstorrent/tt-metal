@@ -190,15 +190,36 @@ def tt_sharded_distributed_rmsnorm(
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
 
     # All gather stats
-    tt_stats = ttnn.all_gather(
-        tt_stats,
-        3,
-        num_links=1,
-        cluster_axis=1,
-        mesh_device=mesh_device,
-        memory_config=ln_sharded_stats_memcfg,
-        topology=ttnn.Topology.Linear,
+    # tt_stats = ttnn.all_gather(
+    #     tt_stats,
+    #     3,
+    #     num_links=1,
+    #     cluster_axis=1,
+    #     mesh_device=mesh_device,
+    #     memory_config=ln_sharded_stats_memcfg,
+    #     topology=ttnn.Topology.Linear,
+    # )
+
+    grid_offset = ttnn.CoreCoord(1, 0)
+    tt_stats_torch = ttnn.to_torch(
+        tt_stats, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(8, 4))
     )
+
+    tt_global_stats = ttnn.from_torch(
+        tt_stats_torch,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(8, 4)),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_stats_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(32, tt_global_stats.shape.with_tile_padding()[-1]),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_stats = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
 
     # Run distributed rmsnorm part 2
     tt_out = ttnn.rms_norm_post_all_gather(

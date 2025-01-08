@@ -4,7 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3.tt.llama_ccl import tt_sharded_distributed_rmsnorm, tt_distributed_rmsnorm
+from models.demos.llama3_subdevices.tt.llama_ccl import tt_sharded_distributed_rmsnorm, tt_distributed_rmsnorm
 
 
 class DistributedNorm(LightweightModule):
@@ -13,16 +13,21 @@ class DistributedNorm(LightweightModule):
         self.args = args
 
         if TG:
-            core_grid_ln = (
-                min(4, args.dim // 4 // 32 // 8),
-                8,
-            )  # dividing by 4 and 8 for num_cols and num_rows of mesh, and 32 for tile size
+            core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
+            core_range = ttnn.CoreRange(
+                grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
+            )
             num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
             hidden_size_per_device_distributed_ln = args.dim // 4
             self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(1, 1, 32, hidden_size_per_device_distributed_ln),
-                core_grid=ttnn.CoreGrid(y=core_grid_ln[0], x=core_grid_ln[1]),
+                shape=(1, 1, 32, hidden_size_per_device_distributed_ln // num_cores_ln),
+                core_grid=ttnn.CoreRangeSet(
+                    {
+                        core_range,
+                    }
+                ),
                 strategy=ttnn.ShardStrategy.WIDTH,
+                use_height_and_width_as_shard_shape=True,
             )
             self.ln_prg_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
@@ -31,17 +36,18 @@ class DistributedNorm(LightweightModule):
                 block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
                 inplace=False,
             )
-            self.ln_sharded_stats_memcfg = ttnn.create_sharded_memory_config(
-                shape=[1, 1, 32, 32 * 4],
-                core_grid=ttnn.CoreGrid(y=1, x=1),
-                strategy=ttnn.ShardStrategy.WIDTH,
-            )
-            self.ln_cfg = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
+            self.ln_sharded_stats_memcfg = None
+            # ttnn.create_sharded_memory_config(
+            #     shape=[1, 1, 32, 32 * 4],
+            #     core_grid=ttnn.CoreGrid(y=1, x=1),
+            #     strategy=ttnn.ShardStrategy.WIDTH,
+            # )
+            # self.ln_cfg = ttnn.WormholeComputeKernelConfig(
+            #     math_fidelity=ttnn.MathFidelity.HiFi2,
+            #     math_approx_mode=False,
+            #     fp32_dest_acc_en=False,
+            #     packer_l1_acc=False,
+            # )
         self.TG = TG
 
     def forward(self, x, mode):
