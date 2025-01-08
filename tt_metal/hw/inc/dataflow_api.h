@@ -201,31 +201,6 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  */
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
 
-FORCE_INLINE
-constexpr static std::int32_t GET_TILE_SIZE(uint format) {
-    switch (format & 0x1F) {
-        case ((uint8_t)DataFormat::Float16_b): return ((2048));
-        case ((uint8_t)DataFormat::Float16): return ((2048));
-
-        case ((uint8_t)DataFormat::UInt8): return ((1024));
-        case ((uint8_t)DataFormat::UInt16): return ((2048));
-
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b): return ((1024) + (64));
-
-        case ((uint8_t)DataFormat::Int32):
-        case ((uint8_t)DataFormat::UInt32):
-        case ((uint8_t)DataFormat::Float32): return ((4096));
-
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return ((512) + (64));
-
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return ((256) + (64));
-        default: return ((1024) + (64));
-    };
-}
-
 template <uint32_t tile_hw = 1024>
 FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
     constexpr uint8_t datum_shift = (tile_hw == 1024)  ? 10

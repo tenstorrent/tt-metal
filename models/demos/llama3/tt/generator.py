@@ -145,6 +145,8 @@ class LlamaGenerator:
                 if chunk_start == last_chunk_start:
                     logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
                     return logits
+                else:
+                    del tt_logits
         else:
             prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
                 tokens,
