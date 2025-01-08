@@ -15,6 +15,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include "ttnn/cpp/ttnn/global_semaphore.hpp"
 
 #include "ttnn/run_operation.hpp"
 
@@ -26,27 +27,27 @@ namespace ttnn {
 using ccl::EriscDatamoverBuilder;
 
 struct AllGatherAsync {
-    std::optional<Device*> forward_device;
-    std::optional<Device*> backward_device;
+    std::optional<IDevice*> forward_device;
+    std::optional<IDevice*> backward_device;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
     const uint32_t ring_index;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
-    std::optional<std::shared_ptr<const GlobalSemaphore>> semaphore_handle;
+    const GlobalSemaphore semaphore;
     bool enable_persistent_fabric_mode;
 
     AllGatherAsync(
-        std::optional<Device*> forward_device,
-        std::optional<Device*> backward_device,
+        std::optional<IDevice*> forward_device,
+        std::optional<IDevice*> backward_device,
         uint32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
         uint32_t ring_index,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        std::optional<std::shared_ptr<const GlobalSemaphore>> semaphore_handle,
+        GlobalSemaphore semaphore,
         bool enable_persistent_fabric_mode) :
         forward_device(forward_device),
         backward_device(backward_device),
@@ -56,7 +57,7 @@ struct AllGatherAsync {
         ring_index(ring_index),
         output_mem_config(output_mem_config),
         topology(topology),
-        semaphore_handle(semaphore_handle),
+        semaphore(semaphore),
         enable_persistent_fabric_mode(enable_persistent_fabric_mode) {}
 
     // Add attributes method for reflection
@@ -70,7 +71,7 @@ struct AllGatherAsync {
         attrs.emplace_back("ring_index", ring_index);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore_handle", semaphore_handle.has_value() ? semaphore_handle.value().get() : nullptr);
+        attrs.emplace_back("semaphore", semaphore);
 
         return attrs;
     }
@@ -90,9 +91,9 @@ AllGatherAsync create_all_gather_async_struct(
     const uint32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ccl::Topology topology,
-    const std::optional<std::vector<GlobalSemaphore>>& semaphore_handles,
+    const std::vector<GlobalSemaphore>& semaphores,
     bool enable_persistent_fabric_mode);
 }  // namespace all_gather_async_detail
 }  // namespace ccl
@@ -100,15 +101,15 @@ AllGatherAsync create_all_gather_async_struct(
 // All Gather Variants
 operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
-    std::optional<Device*> forward_device,
-    std::optional<Device*> backward_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::optional<std::shared_ptr<const GlobalSemaphore>>& semaphore_handle_opt,
+    const GlobalSemaphore semaphore,
     bool enable_persistent_fabric_mode);
 
 namespace operations {
@@ -118,12 +119,12 @@ namespace ccl {
 Tensor all_gather_async(
     const Tensor& input_tensor,
     const uint32_t dim,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<SubDeviceId> subdevice_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false,
-    bool create_semaphore_handles = true);  // TODO make reference
+    bool enable_persistent_fabric_mode = false);  // TODO make reference
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -131,11 +132,11 @@ Tensor all_gather_async(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<SubDeviceId> subdevice_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false,
-    bool create_semaphore_handles = true);
+    bool enable_persistent_fabric_mode = false);
 
 }  // namespace ccl
 }  // namespace experimental

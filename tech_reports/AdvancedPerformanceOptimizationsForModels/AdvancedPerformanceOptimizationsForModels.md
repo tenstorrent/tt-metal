@@ -2,7 +2,7 @@
 
 ## Contents
 
--[Introduction](#introduction)
+- [Introduction](#introduction)
 - [1. Metal Trace](#1-metal-trace)
   - [1.1 Overview](#11-overview)
   - [1.2 APIs](#12-apis)

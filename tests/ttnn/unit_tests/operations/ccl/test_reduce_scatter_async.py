@@ -8,26 +8,14 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.utility_functions import skip_for_grayskull
-
-
-def create_and_load_sub_device_manager_with_fabric_interface(
-    mesh_device, worker_sub_devices, ccl_worker_sub_device_id, local_allocator_size, enable_persistent_fabric=True
-):
-    assert ccl_worker_sub_device_id < len(worker_sub_devices)
-    mesh_sub_device_manager_id, fabric_subdevice_id = mesh_device.create_sub_device_manager_with_fabric(
-        worker_sub_devices, local_allocator_size
-    )
-    # fabric sub-device id can also be queried from device, no need to explicitly pass it in
-    mesh_device.load_sub_device_manager(mesh_sub_device_manager_id)
-    if enable_persistent_fabric:
-        ttnn.initialize_edm_fabric(mesh_device)
-    return mesh_sub_device_manager_id
-
-
-def teardown_fabric_interface(mesh_device):
-    ttnn.teardown_edm_fabric(mesh_device)
-    for device_id in mesh_device.get_device_ids():
-        ttnn.synchronize_device(mesh_device.get_device(device_id))
+from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import (
+    run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
+)
+from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
+    create_and_load_sub_device_manager_with_fabric_interface,
+    teardown_fabric_interface,
+    create_global_semaphore_with_same_address,
+)
 
 
 def is_unsupported_case(input_shape, dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
@@ -111,8 +99,8 @@ def run_reduce_scatter_test(
     mem_config,
     use_program_cache,
     function_level_defaults,
+    num_iters,
     enable_async=True,
-    num_iters=1,
     topology=ttnn.Topology.Ring,
     trace_mode=False,
 ):
@@ -170,16 +158,21 @@ def run_reduce_scatter_test(
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-            )
-        ]
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
     worker_sub_device_id = ttnn.SubDeviceId(0)
     mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
         mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+    )
+
+    # create global semaphore handles
+    from_remote_semaphore_handles = create_global_semaphore_with_same_address(
+        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
+    )
+    to_remote_semaphore_handles = create_global_semaphore_with_same_address(
+        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
     )
 
     # Run the op
@@ -196,10 +189,13 @@ def run_reduce_scatter_test(
             subdevice_id=ttnn.SubDeviceId(0),
         )
     else:
+        logger.info(f"Running {num_iters} iterations of reduce scatter")
         for i in range(num_iters):
-            output_tensor_mesh = ttnn.reduce_scatter_async(
+            output_tensor_mesh = ttnn.experimental.reduce_scatter_async(
                 input_tensor_mesh,
                 dim=dim,
+                from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+                to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
                 math_op=math_op,
                 num_links=num_links,
                 memory_config=mem_config,
@@ -207,10 +203,10 @@ def run_reduce_scatter_test(
                 subdevice_id=worker_sub_device_id,
             )
 
-            logger.info(f"Waiting for op {i}")
-            for device_id in mesh_device.get_device_ids():
-                ttnn.synchronize_device(mesh_device.get_device(device_id), sub_device_ids=[worker_sub_device_id])
-            logger.info(f"Done iteration {i}")
+        logger.info(f"Waiting for op to finish all iterations")
+        for device_id in mesh_device.get_device_ids():
+            ttnn.synchronize_device(mesh_device.get_device(device_id), sub_device_ids=[worker_sub_device_id])
+        logger.info(f"Done iterations")
 
     teardown_fabric_interface(mesh_device)
     # Compute golden
@@ -271,24 +267,24 @@ def run_reduce_scatter_test(
 @pytest.mark.parametrize(
     "per_chip_output_shape, dim, layout",
     [
-        # ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 32, 32 * 2], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 64, 32], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 64, 64], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 128, 128], 0, ttnn.TILE_LAYOUT),
-        # ([1, 1, 128, 128], 1, ttnn.TILE_LAYOUT),
-        # ([1, 1, 128, 128], 2, ttnn.TILE_LAYOUT),
-        # ([1, 1, 128, 128], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 32, 32], 2, ttnn.TILE_LAYOUT),
-        # ([1, 1, 32, 64], 2, ttnn.TILE_LAYOUT),
-        # ([1, 1, 32, 32 * 4], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 128, 4096], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 32 * 2], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 64, 32], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 64, 64], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 128], 0, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 128], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 128], 2, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 128], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 32], 2, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 64], 2, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 32 * 4], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 4096], 3, ttnn.TILE_LAYOUT),
         ([1, 4, 32, 2304], 2, ttnn.TILE_LAYOUT),
-        # ([1, 2, 224, 32 * 8], 3, ttnn.TILE_LAYOUT),
-        # ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
-        # ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
+        ([1, 2, 224, 32 * 8], 3, ttnn.TILE_LAYOUT),
+        ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -321,7 +317,7 @@ def test_line_reduce_scatter_async_post_commit(
     function_level_defaults,
     enable_async,
     trace_mode,
-    num_iters=1,
+    num_iters=16,
 ):
     run_reduce_scatter_test(
         t3k_mesh_device,
@@ -339,4 +335,136 @@ def test_line_reduce_scatter_async_post_commit(
         enable_async=enable_async,
         topology=ttnn.Topology.Linear,
         trace_mode=trace_mode,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, per_chip_output_shape, dim, layout",
+    [
+        (2, 1, [1, 2, 32, 1280], 1, ttnn.TILE_LAYOUT),
+        (2, 1, [2, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.DRAM,
+    ],
+)
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("replication_factor", [4])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    dim,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    replication_factor,
+    num_iters=1,
+):
+    if len(t3k_mesh_device.get_devices()) < 8:
+        pytest.skip("Not T3K!")
+
+    run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        dim,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        use_program_cache,
+        function_level_defaults,
+        enable_async=enable_async,
+        num_iters=num_iters,
+        num_reduce_scatter_instances=replication_factor,
+        cluster_axis=0,
+        use_reduce_scatter_async=True,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, per_chip_output_shape, dim, layout",
+    [
+        (4, 1, [1, 4, 32, 1280], 1, ttnn.TILE_LAYOUT),
+        (4, 1, [4, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.DRAM,
+    ],
+)
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("replication_factor", [2])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    dim,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    replication_factor,
+    num_iters=1,
+):
+    if len(t3k_mesh_device.get_devices()) < 8:
+        pytest.skip("Not T3K!")
+
+    run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        dim,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        use_program_cache,
+        function_level_defaults,
+        enable_async=enable_async,
+        num_iters=num_iters,
+        num_reduce_scatter_instances=replication_factor,
+        cluster_axis=1,
+        use_reduce_scatter_async=True,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
     )

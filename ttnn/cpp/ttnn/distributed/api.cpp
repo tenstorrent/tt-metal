@@ -106,7 +106,7 @@ Tensor aggregate_as_tensor(
         std::unordered_map<int, ttnn::Shape> shapes;
         std::unordered_map<int, DeviceBuffer> device_buffers;
         for (const auto& shard : tensor_shards) {
-            Device* device = std::get<DeviceStorage>(shard.get_storage()).buffer->device();
+            IDevice* device = std::get<DeviceStorage>(shard.get_storage()).buffer->device();
             auto device_id = device->id();
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device->id(), std::get<DeviceStorage>(shard.get_storage()).buffer});
@@ -145,14 +145,14 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     return physical_device_ids;
 }
 
-std::vector<Device*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device) {
+std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device) {
     // For multi-device tensors, returns the number of workers capped by the number of buffers
     // Otherwise, returns all available workes from mesh_device.
     auto get_workers_for_tensor = [&tensor, &mesh_device]() {
         const auto& workers = mesh_device.get_devices();
         if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage()) or
             std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
-            return std::vector<Device*>(workers.begin(), workers.begin() + num_buffers_in_tensor(tensor));
+            return std::vector<IDevice*>(workers.begin(), workers.begin() + num_buffers_in_tensor(tensor));
         }
         return workers;
     };
@@ -207,7 +207,7 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id)
     TT_THROW("User is trying to access a device tensor that is not on device.");
 }
 
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device) {
+Tensor get_device_tensor(const Tensor& multi_device_tensor, const IDevice* device) {
     return get_device_tensor(multi_device_tensor, device->id());
 }
 
@@ -268,7 +268,7 @@ Tensor create_multi_device_tensor(
                 std::holds_alternative<DeviceStorage>(tensor.get_storage()),
                 "Unexpected type {}",
                 tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
-            Device* device = std::get<DeviceStorage>(tensor.get_storage()).buffer->device();
+            IDevice* device = std::get<DeviceStorage>(tensor.get_storage()).buffer->device();
             auto device_id = device->id();
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device_id, std::get<DeviceStorage>(tensor.get_storage()).buffer});

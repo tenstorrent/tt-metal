@@ -25,7 +25,7 @@ MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeArgs {
             *original_shape = input_tensor.get_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_to_le_4D(input_tensor);
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
@@ -40,7 +40,8 @@ ttnn::Tensor ExecuteUntilize::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    bool use_pack_untilize) {
+    bool use_pack_untilize,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     bool fp32_dest_acc_en =
         input_tensor.get_dtype() ==
         DataType::UINT32;  // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
@@ -51,7 +52,8 @@ ttnn::Tensor ExecuteUntilize::invoke(
                 memory_config.value_or(input_tensor.memory_config()),
                 use_multicore,
                 use_pack_untilize,
-                fp32_dest_acc_en},
+                fp32_dest_acc_en,
+                sub_core_grids},
             {input_tensor},
             {},
             {},
@@ -65,8 +67,9 @@ ttnn::Tensor ExecuteUntilize::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    bool use_pack_untilize) {
-    return invoke(DefaultQueueId, input_tensor, memory_config, use_multicore, use_pack_untilize);
+    bool use_pack_untilize,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return invoke(DefaultQueueId, input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
 }
 
 }  // namespace ttnn::operations::data_movement

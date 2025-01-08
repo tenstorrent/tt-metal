@@ -9,7 +9,7 @@
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/kernels/data_types.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"
@@ -23,7 +23,7 @@ namespace tt::tt_metal {
 namespace detail {
 
 SubDeviceManager::SubDeviceManager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, Device* device) :
+    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     local_l1_size_(align(local_l1_size, hal.get_alignment(HalMemType::L1))),
     device_(device) {
@@ -36,7 +36,7 @@ SubDeviceManager::SubDeviceManager(
     this->populate_worker_launch_message_buffer_state();
 }
 
-SubDeviceManager::SubDeviceManager(Device* device, std::unique_ptr<Allocator>&& global_allocator) : device_(device) {
+SubDeviceManager::SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&& global_allocator) : device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     local_l1_size_ = 0;
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
