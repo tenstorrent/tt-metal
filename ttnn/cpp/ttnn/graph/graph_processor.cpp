@@ -144,7 +144,7 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
 
 }
 
-void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated, const tt::tt_metal::Device* device) {
+void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated, const tt::tt_metal::IDevice* device) {
     TT_ASSERT(device);
     const std::lock_guard<std::mutex> lock(mutex);
     std::unordered_map<std::string, std::string> params = {
@@ -167,7 +167,7 @@ void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint6
 
 }
 
-void GraphProcessor::track_deallocate_cb(const tt::tt_metal::Device* device) {
+void GraphProcessor::track_deallocate_cb(const tt::tt_metal::IDevice* device) {
     TT_ASSERT(device);
     const std::lock_guard<std::mutex> lock(mutex);
     auto counter = graph.size();
@@ -184,7 +184,7 @@ void GraphProcessor::track_deallocate_cb(const tt::tt_metal::Device* device) {
     }
 }
 
-void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_metal::Device* device) {
+void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_metal::IDevice* device) {
     TT_ASSERT(device);
 
     // All previous CBs are deallocated before a new program run
