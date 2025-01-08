@@ -384,29 +384,23 @@ Tensor create_device_tensor(
 // void *get_host_buffer(const Tensor &tensor);
 void* get_raw_host_data_ptr(const Tensor& tensor);
 
-void memcpy(CommandQueue& queue, void* dst, const Tensor& src, const bool blocking = true);
-void memcpy(
-    CommandQueue& queue,
-    void* dst,
-    const Tensor& src,
-    const size_t offset,
-    const size_t size,
-    const bool blocking = true);
+void memcpy(CommandQueue& queue, void* dst, const Tensor& src, bool blocking = true);
+void memcpy(CommandQueue& queue, void* dst, const Tensor& src, size_t offset, size_t size, bool blocking = true);
 
 void memcpy(CommandQueue& queue, Tensor& dst, const void* src);
-void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const size_t offset, const size_t size);
+void memcpy(CommandQueue& queue, Tensor& dst, const void* src, size_t offset, size_t size);
 
 void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src);
-void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const size_t offset, const size_t size);
+void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, size_t offset, size_t size);
 
-void memcpy(void* dst, const Tensor& src, const bool blocking = true);
-void memcpy(void* dst, const Tensor& src, const size_t offset, const size_t size, const bool blocking = true);
+void memcpy(void* dst, const Tensor& src, bool blocking = true);
+void memcpy(void* dst, const Tensor& src, size_t offset, size_t size, bool blocking = true);
 
 void memcpy(Tensor& dst, const void* src);
-void memcpy(Tensor& dst, const void* src, const size_t offset, const size_t size);
+void memcpy(Tensor& dst, const void* src, size_t offset, size_t size);
 
 void memcpy(Tensor& dst, const Tensor& src);
-void memcpy(Tensor& dst, const Tensor& src, const size_t offset, const size_t size);
+void memcpy(Tensor& dst, const Tensor& src, size_t offset, size_t size);
 
 Tensor allocate_tensor_on_devices(
     const ttnn::Shape& shape,

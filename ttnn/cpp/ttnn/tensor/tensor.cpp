@@ -926,10 +926,8 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
     }
 }
 
-void memcpy(CommandQueue& queue, void* dst, const Tensor& src, const bool blocking) {
-    if (not is_device_tensor(src)) {
-        TT_THROW("memcpy: src tensor must be on device");
-    }
+void memcpy(CommandQueue& queue, void* dst, const Tensor& src, bool blocking) {
+    TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
@@ -938,11 +936,8 @@ void memcpy(CommandQueue& queue, void* dst, const Tensor& src, const bool blocki
     EnqueueReadBuffer(queue, src.device_buffer(), dst, blocking);
 }
 
-void memcpy(
-    CommandQueue& queue, void* dst, const Tensor& src, const size_t offset, const size_t size, const bool blocking) {
-    if (not is_device_tensor(src)) {
-        TT_THROW("memcpy: src tensor must be on device");
-    }
+void memcpy(CommandQueue& queue, void* dst, const Tensor& src, size_t offset, size_t size, bool blocking) {
+    TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
@@ -952,18 +947,15 @@ void memcpy(
     EnqueueReadSubBuffer(queue, src.device_buffer(), dst, region, blocking);
 }
 
-void memcpy(void* dst, const Tensor& src, const bool blocking) {
-    memcpy(src.device()->command_queue(), dst, src, blocking);
-}
+void memcpy(void* dst, const Tensor& src, bool blocking) { memcpy(src.device()->command_queue(), dst, src, blocking); }
 
-void memcpy(void* dst, const Tensor& src, const size_t offset, const size_t size, const bool blocking) {
+void memcpy(void* dst, const Tensor& src, size_t offset, size_t size, bool blocking) {
     memcpy(src.device()->command_queue(), dst, src, offset, size, blocking);
 }
 
 void memcpy(CommandQueue& queue, Tensor& dst, const void* src) {
-    if (not is_device_tensor(dst)) {
-        TT_THROW("memcpy: memcpy to non-device tensor is not supported!");
-    }
+    TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
+
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
@@ -971,10 +963,9 @@ void memcpy(CommandQueue& queue, Tensor& dst, const void* src) {
     EnqueueWriteBuffer(queue, dst.device_buffer(), src, false);
 }
 
-void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const size_t offset, const size_t size) {
-    if (not is_device_tensor(dst)) {
-        TT_THROW("memcpy: memcpy to non-device tensor is not supported!");
-    }
+void memcpy(CommandQueue& queue, Tensor& dst, const void* src, size_t offset, size_t size) {
+    TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
+
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
@@ -985,7 +976,7 @@ void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const size_t offs
 
 void memcpy(Tensor& dst, const void* src) { memcpy(dst.device()->command_queue(), dst, src); }
 
-void memcpy(Tensor& dst, const void* src, const size_t offset, const size_t size) {
+void memcpy(Tensor& dst, const void* src, size_t offset, size_t size) {
     memcpy(dst.device()->command_queue(), dst, src, offset, size);
 }
 
@@ -1007,7 +998,7 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src) {
     }
 }
 
-void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const size_t offset, const size_t size) {
+void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, size_t offset, size_t size) {
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
@@ -1035,7 +1026,7 @@ void memcpy(Tensor& dst, const Tensor& src) {
     }
 }
 
-void memcpy(Tensor& dst, const Tensor& src, const size_t offset, const size_t size) {
+void memcpy(Tensor& dst, const Tensor& src, size_t offset, size_t size) {
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
         memcpy(src.device()->command_queue(), dst, src, offset, size);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {

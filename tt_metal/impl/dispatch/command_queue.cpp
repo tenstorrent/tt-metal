@@ -2015,12 +2015,8 @@ void EnqueueReadBuffer(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst,
     bool blocking) {
-    const DeviceAddr offset = 0;
-
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
-    const DeviceAddr size = buffer_obj.size();
-
-    BufferRegion region(offset, size);
+    BufferRegion region(0, buffer_obj.size());
     EnqueueReadSubBuffer(cq, buffer, dst, region, blocking);
 }
 
@@ -2048,12 +2044,8 @@ void EnqueueWriteBuffer(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     bool blocking) {
-    const DeviceAddr offset = 0;
-
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
-    const DeviceAddr size = buffer_obj.size();
-
-    BufferRegion region(offset, size);
+    BufferRegion region(0, buffer_obj.size());
     EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
 }
 

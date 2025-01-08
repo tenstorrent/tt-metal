@@ -159,8 +159,8 @@ struct BufferPageMapping {
 inline namespace v0 {
 
 struct BufferRegion {
-    DeviceAddr offset;
-    DeviceAddr size;
+    DeviceAddr offset = 0;
+    DeviceAddr size = 0;
 
     BufferRegion() = delete;
     BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
