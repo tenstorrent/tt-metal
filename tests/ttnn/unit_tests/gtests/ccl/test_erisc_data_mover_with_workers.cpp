@@ -16,6 +16,7 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/experimental/hal.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
@@ -31,6 +32,7 @@
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
+using namespace tt::tt_metal::experimental;
 
 // Taken from ccl_common... some dependency annoyance to deal with so just copying it here for now... resolve before
 // merging
@@ -378,7 +380,7 @@ bool RunWriteBWTest(
         tt_metal::detail::WriteToBuffer(buffer_id, all_zeros);
     }
 
-    uint32_t erisc_handshake_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    uint32_t erisc_handshake_address = hal::get_erisc_l1_unreserved_base();
 
     uint32_t chip0_next_buffer_address = erisc_handshake_address + 16;
     std::vector<uint32_t> chip0_edm_args = {erisc_handshake_address};

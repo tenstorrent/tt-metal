@@ -432,17 +432,18 @@ bool RunLoopbackTest(
     auto const& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
-    std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos =
+    const auto& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const std::vector<ttnn::ccl::edm_termination_info_t>& edm_termination_infos =
         enable_persistent_fabric ? std::vector<ttnn::ccl::edm_termination_info_t>{}
                                  : std::vector<ttnn::ccl::edm_termination_info_t>{
                                        {1,
                                         sender_device->ethernet_core_from_logical_core(eth_receiver_core).x,
                                         sender_device->ethernet_core_from_logical_core(eth_receiver_core).y,
-                                        ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address},
+                                        chip_0_edm_builder.config.termination_signal_address},
                                        {0,
                                         sender_device->ethernet_core_from_logical_core(eth_sender_core).x,
                                         sender_device->ethernet_core_from_logical_core(eth_sender_core).y,
-                                        ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address}};
+                                        chip_0_edm_builder.config.termination_signal_address}};
 
     TT_ASSERT(
         (enable_persistent_fabric && edm_termination_infos.size() == 0) ||

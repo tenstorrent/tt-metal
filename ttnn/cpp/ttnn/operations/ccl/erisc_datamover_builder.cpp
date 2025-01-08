@@ -6,7 +6,6 @@
 
 #include "common/math.hpp"
 #include "erisc_datamover_builder.hpp"
-#include "eth_l1_address_map.h"
 #include "sub_device/sub_device_types.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -19,11 +18,15 @@
 
 #include "tt_metal/detail/tt_metal.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/experimental/hal.hpp"
 
 #include <iterator>
 #include <vector>
 #include <algorithm>
 #include <ranges>
+
+using namespace tt::tt_metal::experimental;
+
 namespace ttnn::ccl {
 
 
@@ -41,6 +44,7 @@ namespace ttnn::ccl {
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size) {
+    TT_FATAL(sender_channel_1_buffer_index_address != sender_channel_0_buffer_index_address, "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
     const size_t min_buffer_size = sizeof(tt::fabric::PacketHeader) + 2 * FabricEriscDatamoverConfig::eth_channel_sync_size;
     TT_FATAL(channel_buffer_size_bytes >= min_buffer_size, "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than minimum size of {}", min_buffer_size);
     const std::size_t channel_buffer_size_with_channel_sync =
@@ -81,7 +85,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->available_channel_buffering_space, "Internal error when computing channel sizes. Total channel size exceeds available space");
     TT_FATAL(
         this->receiver_channel_base_address + this->receiver_channel_size_bytes <
-        eth_l1_mem::address_map::MAX_L1_LOADING_SIZE, "Internal error - channel buffers spilled past the end of usable L1 region.");
+        this->max_l1_loading_size, "Internal error - channel buffers spilled past the end of usable L1 region.");
 }
 
 void get_runtime_args_for_edm_termination_infos(std::vector<edm_termination_info_t> const& edm_termination_infos, std::vector<uint32_t>& args_out) {
@@ -164,7 +168,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     config(config),
     my_chip_id(my_chip_id),
     peer_chip_id(peer_chip_id),
-    handshake_address(tt::round_up(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, FabricEriscDatamoverConfig::eth_channel_sync_size)),
+    handshake_address(tt::round_up(hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
     channel_buffer_size(config.channel_buffer_size_bytes),
     sender_0_num_buffers(config.sender_0_num_buffers),
     sender_1_num_buffers(config.sender_1_num_buffers),
@@ -179,17 +183,17 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     sender_channel_0_buffer_index_semaphore_id(sender_channel_0_buffer_index_semaphore_id),
     sender_channel_1_buffer_index_semaphore_id(sender_channel_1_buffer_index_semaphore_id),
 
-    receiver_channel_local_buffer_index_address(FabricEriscDatamoverConfig::receiver_channel_local_buffer_index_address),
+    receiver_channel_local_buffer_index_address(config.receiver_channel_local_buffer_index_address),
 
     local_sender_channel_0_buffer_address(config.sender_0_channel_base_address),
     local_sender_channel_0_connection_info_addr(
-        FabricEriscDatamoverConfig::sender_channel_0_worker_connection_info_address),
+        config.sender_channel_0_worker_connection_info_address),
     local_sender_channel_1_buffer_address(config.sender_1_channel_base_address),
     local_sender_channel_1_connection_info_addr(
-        FabricEriscDatamoverConfig::sender_channel_1_worker_connection_info_address),
+        config.sender_channel_1_worker_connection_info_address),
     local_receiver_channel_buffer_address(config.receiver_channel_base_address),
 
-    termination_signal_ptr(FabricEriscDatamoverConfig::termination_signal_address),
+    termination_signal_ptr(config.termination_signal_address),
     enable_persistent_mode(enable_persistent_mode),
     build_in_worker_connection_mode(build_in_worker_connection_mode) {}
 
@@ -214,9 +218,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         this->receiver_num_buffers,
 
         config.sender_0_channel_base_address,
-        FabricEriscDatamoverConfig::sender_channel_0_worker_connection_info_address,
+        config.sender_channel_0_worker_connection_info_address,
         config.sender_1_channel_base_address,
-        FabricEriscDatamoverConfig::sender_channel_1_worker_connection_info_address,
+        config.sender_channel_1_worker_connection_info_address,
         config.receiver_channel_base_address,
         config.receiver_channel_base_address,
 
@@ -259,11 +263,11 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     bool build_in_worker_connection_mode) {
     if (enable_persistent_mode) {
         auto sender_channel_0_buffer_index_semaphore_address =
-            FabricEriscDatamoverConfig::sender_channel_0_buffer_index_semaphore_address;
+            config.sender_channel_0_buffer_index_semaphore_address;
         auto sender_channel_0_flow_control_semaphore_address =
-            FabricEriscDatamoverConfig::sender_channel_0_local_flow_control_semaphore_address;
+            config.sender_channel_0_local_flow_control_semaphore_address;
         auto sender_channel_0_connection_semaphore_address =
-            FabricEriscDatamoverConfig::sender_channel_0_connection_semaphore_address;
+            config.sender_channel_0_connection_semaphore_address;
 
         std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_address =
             build_in_worker_connection_mode ? 0: tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
@@ -342,7 +346,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
         this->sender_0_num_buffers,
         this->sender_channel_0_flow_control_semaphore_id,
         this->sender_channel_0_connection_semaphore_id,
-        FabricEriscDatamoverConfig::sender_channel_0_worker_connection_info_address,
+        this->config.sender_channel_0_worker_connection_info_address,
         this->config.channel_buffer_size_bytes,
         this->sender_channel_0_buffer_index_semaphore_id,
         this->enable_persistent_mode
@@ -358,7 +362,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         this->sender_1_num_buffers,
         this->sender_channel_1_flow_control_semaphore_id,
         this->sender_channel_1_connection_semaphore_id,
-        FabricEriscDatamoverConfig::sender_channel_1_worker_connection_info_address,
+        this->config.sender_channel_1_worker_connection_info_address,
         this->config.channel_buffer_size_bytes,
         this->sender_channel_1_buffer_index_semaphore_id,
         false
@@ -635,7 +639,7 @@ std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_local_chi
             0,
             edm_builder.my_noc_x,
             edm_builder.my_noc_y,
-            ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address};
+            edm_builder.config.termination_signal_address};
     };
     std::vector<edm_termination_info_t> edm_termination_infos;
     edm_termination_infos.reserve(this->num_links * 2);
@@ -655,6 +659,8 @@ std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_local_chi
 }
 
 std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest() const {
+    static constexpr std::size_t edm_buffer_size = 4096 + sizeof(tt::fabric::PacketHeader);
+    static const auto config = FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
     TT_ASSERT(device_sequence.size() > 0);
     const size_t num_hops = device_sequence.size() - 1;
     TT_ASSERT(num_hops > 0);
@@ -678,7 +684,7 @@ std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_ordered_t
                 {distance_receiver,
                 farther_edm.my_noc_x,
                 farther_edm.my_noc_y,
-             ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address});
+                config.termination_signal_address});
         }
         for (size_t l = 0; l < this->num_links; l++) {
             auto &nearer_edm = nearer_edms.at(l);
@@ -687,7 +693,7 @@ std::vector<edm_termination_info_t> EdmLineFabricOpInterface::generate_ordered_t
                 {distance_sender,
                 nearer_edm.my_noc_x,
                 nearer_edm.my_noc_y,
-                ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address});
+                config.termination_signal_address});
         }
     }
     log_trace(tt::LogOp, "Done Generating termination infos");
@@ -700,7 +706,7 @@ void FabricEriscDatamoverBuilder::teardown_from_host(IDevice*d, tt::fabric::Term
     d->push_work([&](){tt::tt_metal::detail::WriteToDeviceL1(
         d,
         d->logical_core_from_ethernet_core(CoreCoord(this->my_noc_x, this->my_noc_y)),
-        ttnn::ccl::FabricEriscDatamoverConfig::termination_signal_address,
+        config.termination_signal_address,
         val,
         CoreType::ETH);}, true);
 }

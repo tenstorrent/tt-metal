@@ -326,16 +326,17 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_buffers_per_channel,
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     ccl::EriscDataMoverTerminationMode termination_mode) {
+    ccl::EriscDatamoverConfig config;
     TT_ASSERT(num_channels > 0);
     std::vector<uint32_t> edm_sem_addresses(num_channels, 0);
     std::vector<uint32_t> edm_buffer_addresses(num_channels, 0);
 
-    uint32_t edm_sem_addr = ccl::EriscDatamoverConfig::get_semaphores_base_address(num_channels);
-    uint32_t edm_buffer_addr = ccl::EriscDatamoverConfig::get_buffers_base_address(num_channels);
+    uint32_t edm_sem_addr = config.get_semaphores_base_address(num_channels);
+    uint32_t edm_buffer_addr = config.get_buffers_base_address(num_channels);
     TT_ASSERT(edm_sem_addr > 0);
     TT_ASSERT(edm_buffer_addr > 0);
     const uint32_t channel_buffer_size =
-        ccl::EriscDatamoverConfig::compute_buffer_size(num_channels, num_buffers_per_channel, page_size);
+        config.compute_buffer_size(num_channels, num_buffers_per_channel, page_size);
     for (std::size_t c = 0; c < num_channels; ++c) {
         edm_sem_addresses.at(c) = edm_sem_addr;
         edm_sem_addr += ccl::EriscDatamoverConfig::semaphore_size;
@@ -352,7 +353,7 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
 
     return ccl::EriscDatamoverBuilder(
         channel_buffer_size,
-        ccl::EriscDatamoverConfig::get_edm_handshake_address(),
+        config.get_edm_handshake_address(),
         edm_sem_addresses,
         edm_buffer_addresses,
         buffer_sharing_mode,
