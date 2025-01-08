@@ -9,7 +9,9 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
 #include "eth_l1_address_map.h"
+#include "ttnn/cpp/ttnn/operations/copy.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -187,7 +189,7 @@ void AllGather::validate(const std::vector<Tensor>& input_tensors) const {
 }
 
 std::vector<ttnn::TensorSpec> AllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    auto output_shape = input_tensors[0].get_padded_shape();  // TODO: Replace with get_logical_shape()
+    auto output_shape = input_tensors[0].get_logical_shape();
     output_shape[this->dim] *= this->ring_size;
 
     const auto& input_tensor = input_tensors[0];
@@ -259,6 +261,8 @@ Tensor all_gather(
     operation::launch_op(
         [gather_dim,
          num_links,
+         dim,
+         num_devices,
          memory_config,
          user_defined_num_workers,
          user_defined_num_buffers_per_channel,
@@ -267,9 +271,29 @@ Tensor all_gather(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor = input_tensors.at(0);
+            auto input_tensor = input_tensors.at(0);
 
-            return operation::run(
+            ttnn::SmallVector<uint32_t> unpad_elements = {
+                input_tensor.get_logical_shape()[-4],
+                input_tensor.get_logical_shape()[-3],
+                input_tensor.get_logical_shape()[-2],
+                input_tensor.get_logical_shape()[-1]};
+            bool needs_padding = input_tensor.get_layout() == Layout::TILE &&
+                                 (input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+                                  input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
+            if (needs_padding) {
+                ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+                DataType original_dtype = input_tensor.get_dtype();
+                if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
+                    input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
+                }
+                input_tensor = ttnn::pad(0, input_tensor, padding, 0, false, std::nullopt);
+                if (original_dtype != input_tensor.get_dtype()) {
+                    input_tensor = ttnn::typecast(input_tensor, original_dtype);
+                }
+            }
+
+            auto output_tensor = operation::run(
                 ttnn::ccl::all_gather_detail::create_all_gather_struct(
                     input_tensor,
                     gather_dim,
@@ -280,9 +304,16 @@ Tensor all_gather(
                     devices,
                     ccl_topology),
                 {input_tensor});
+
+            if (needs_padding) {
+                return ttnn::ccl::unpad_output_tensor(output_tensor, num_devices, unpad_elements, dim);
+            } else {
+                return output_tensor;
+            }
         },
         {input_tensor},
         output_tensors);
+
     return output_tensors.at(0);
 }
 
