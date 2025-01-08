@@ -64,7 +64,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     Program program{};
 
     // In validate we make sure that all tensors are on the same device
-    tt::tt_metal::Device* device = tensors[0].device();
+    tt::tt_metal::IDevice* device = tensors[0].device();
     uint32_t num_tensors = tensors.size();
     uint32_t num_receivers_per_reader = global_cb->receiver_cores().num_cores() / global_cb->sender_cores().num_cores();
 
