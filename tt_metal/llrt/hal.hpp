@@ -51,6 +51,8 @@ enum class HalL1MemAddrType : uint8_t {
     LAUNCH_MSG_BUFFER_RD_PTR,
     LOCAL,
     BANK_TO_NOC_SCRATCH,
+    APP_SYNC_INFO,
+    TILE_HEADER_BUFFER,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
