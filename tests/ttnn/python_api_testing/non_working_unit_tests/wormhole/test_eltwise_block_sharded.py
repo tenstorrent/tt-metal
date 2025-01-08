@@ -26,13 +26,15 @@ def run_tests(
     ttnn_op,
     gen_infs,
     device,
+    low=-100,
+    high=100,
 ):
     random.seed(0)
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
     if gen_infs:
-        torch_input_tensor_a = gen_rand_inf(input_shape, low=-100, high=100)
+        torch_input_tensor_a = gen_rand_inf(input_shape, low=low, high=high)
     else:
         torch_input_tensor_a = torch.Tensor(size=input_shape).uniform_(-50, 50).to(torch.bfloat16)
 
@@ -286,6 +288,27 @@ def test_eltwise_abs(input_shape, dtype, dlayout, sharding_strategy, shard_orien
         ttnn.abs,
         False,
         device,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    (test_sweep_args),
+)
+def test_eltwise_exp(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+    run_tests(
+        input_shape,
+        dtype,
+        dlayout,
+        sharding_strategy,
+        shard_orientation,
+        hw_as_shard_shape,
+        torch.exp,
+        ttnn.exp,
+        False,
+        device,
+        low=-10,
+        high=10,
     )
 
 
