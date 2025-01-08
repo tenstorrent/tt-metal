@@ -240,6 +240,7 @@ public:
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
     LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) override;
+    CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
     const std::vector<SubDeviceId> &get_sub_device_ids() const override;
     uint32_t num_sub_devices() const override;
 

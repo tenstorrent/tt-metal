@@ -89,7 +89,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
         auto remote_cb =
             tt::tt_metal::v1::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         tt::tt_metal::detail::CompileProgram(device, program);
-        program.finalize(device);
+        program_dispatch::finalize_program_offsets(program, device);
         tt::tt_metal::v1::experimental::UpdateDynamicCircularBufferAddress(program, remote_cb, global_cb);
         EXPECT_THROW(UpdateDynamicCircularBufferAddress(program, remote_cb, dummy_global_cb), std::exception);
     }
@@ -109,6 +109,6 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
         auto remote_cb =
             tt::tt_metal::v1::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         tt::tt_metal::detail::CompileProgram(device, program);
-        EXPECT_THROW(program.finalize(device), std::exception);
+        EXPECT_THROW(program_dispatch::finalize_program_offsets(program, device), std::exception);
     }
 }
