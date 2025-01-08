@@ -1730,6 +1730,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     tt::DataFormat output_data_format,
     bool untilize_out,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>& multi_global_cb,
     uint32_t num_global_cb_receivers) {
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -1737,6 +1738,22 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     bool use_global_cb = global_cb.has_value();
+    bool use_multi_global_cb = multi_global_cb.has_value();
+    uint32_t multi_global_cb_id = 0;
+    if (use_multi_global_cb) {
+        TT_FATAL(!global_cb.has_value(), "multi_global_cb and global_cb cannot both be used!");
+
+        auto device_id = device->id();
+        for (uint32_t idx = 0; idx < multi_global_cb->global_circular_buffers.size(); idx++) {
+            const auto& global_cb_ = multi_global_cb->global_circular_buffers[idx];
+            tt::tt_metal::Device* global_cb_device = global_cb_.get_device();
+            auto global_device_id = global_cb_device->id();
+            if (device_id == global_device_id) {
+                multi_global_cb_id = idx;
+                break;
+            }
+        }
+    }
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -1842,7 +1859,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     std::map<string, string> mm_in1_kernel_defines;
     std::map<string, string> mm_kernel_defines;
 
-    if (use_global_cb) {
+    if (use_global_cb || use_multi_global_cb) {
         mm_in1_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
         mm_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
     }
@@ -1923,6 +1940,18 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             .set_data_format(in1_data_format);
         remote_cb_config.index(src1_cb_index).set_page_size(in1_single_tile_size).set_data_format(in1_data_format);
         cb_src1 = tt_metal::v1::experimental::CreateCircularBuffer(program, all_cores, remote_cb_config, *global_cb);
+    } else if (use_multi_global_cb) {
+        auto& global_cb_ = multi_global_cb->global_circular_buffers[multi_global_cb_id];
+
+        uint32_t in1_block_size_bytes = in1_single_tile_size * in1_block_num_tiles;
+        uint32_t remote_cb_index = tt::CBIndex::c_31;
+        tt_metal::CircularBufferConfig remote_cb_config =
+            tt_metal::CircularBufferConfig((global_cb_.size() / in1_block_size_bytes) * in1_block_size_bytes);
+        remote_cb_config.remote_index(remote_cb_index)
+            .set_page_size(in1_block_size_bytes)
+            .set_data_format(in1_data_format);
+        remote_cb_config.index(src1_cb_index).set_page_size(in1_single_tile_size).set_data_format(in1_data_format);
+        cb_src1 = tt_metal::v1::experimental::CreateCircularBuffer(program, all_cores, remote_cb_config, global_cb_);
     } else {
         tt_metal::CircularBufferConfig src1_cb_config =
             tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
@@ -2053,7 +2082,15 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     }
 
     auto override_runtime_arguments_callback =
-        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores, global_cb](
+        [mm_kernel_in0_id,
+         mm_kernel_in1_sender_writer_id,
+         cb_src0,
+         cb_src1,
+         cb_output,
+         num_cores,
+         cores,
+         global_cb,
+         multi_global_cb](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -2075,7 +2112,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
                 UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
             }
             if (src1_sharded) {
-                if (!global_cb.has_value()) {
+                if (!global_cb.has_value() and !multi_global_cb.has_value()) {
                     UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
                 }
             }
@@ -2119,6 +2156,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>& multi_global_cb,
     uint32_t num_global_cb_receivers) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
     auto in0_tile = a.get_tensor_spec().tile();
@@ -2257,6 +2295,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             output_data_format,
             untilize_out,
             global_cb,
+            multi_global_cb,
             num_global_cb_receivers);
     }
 
@@ -2362,6 +2401,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const CoreRangeSet& hop_cores,
     bool untilize_out,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>& multi_global_cb,
     uint32_t num_global_cb_receivers) {
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
@@ -2390,6 +2430,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
         untilize_out,
         empty_fused_op_signaler,
         global_cb,
+        multi_global_cb,
         num_global_cb_receivers);
 }
 
@@ -2404,7 +2445,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
     const MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>& multi_global_cb) {
     MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
@@ -2432,6 +2474,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
         untilize_out,
         fused_op_signaler,
         global_cb,
+        multi_global_cb,
         config.num_global_cb_receivers);
 }
 

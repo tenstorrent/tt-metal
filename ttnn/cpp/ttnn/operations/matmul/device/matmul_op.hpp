@@ -13,6 +13,7 @@
 #include "ttnn/types.hpp"
 
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/cpp/ttnn/global_circular_buffer.hpp"
 
 namespace ttnn {
 
@@ -54,6 +55,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     const CoreRangeSet& hop_cores,
     bool untilize_out,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>& multi_global_cb,
     uint32_t num_global_cb_receivers);
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor& input_tensor_a,
@@ -180,6 +182,7 @@ struct Matmul {
     const bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
+    std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer> multi_global_cb;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -218,7 +221,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     const MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb);
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>& multi_global_cb);
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,

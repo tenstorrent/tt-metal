@@ -13,6 +13,9 @@ namespace ttnn::global_circular_buffer {
 struct MultiDeviceGlobalCircularBuffer {
     MultiDeviceGlobalCircularBuffer(MeshDevice* mesh_device);
     std::vector<GlobalCircularBuffer> global_circular_buffers;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("global_circular_buffers");
+    const auto attribute_values() const { return std::make_tuple(this->global_circular_buffers); }
 };
 
 // Single Device APIs

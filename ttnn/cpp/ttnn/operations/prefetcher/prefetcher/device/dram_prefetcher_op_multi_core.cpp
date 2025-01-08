@@ -34,11 +34,30 @@ void get_max_page_size_and_num_pages(
     num_pages = total_size / page_size;
 }
 
+operation::ProgramWithCallbacks dram_prefetcher_multi_core_multi_device(
+    const std::vector<Tensor>& input_tensors,
+    const uint32_t num_layers,
+    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>& multi_global_cb) {
+    tt::tt_metal::Device* device = input_tensors[0].device();
+    auto device_id = device->id();
+    for (const auto& global_cb_ : multi_global_cb->global_circular_buffers) {
+        tt::tt_metal::Device* global_cb_device = global_cb_.get_device();
+        auto global_device_id = global_cb_device->id();
+        if (device_id == global_device_id) {
+            return dram_prefetcher_multi_core(input_tensors, num_layers, global_cb_);
+        }
+    }
+
+    TT_FATAL(false, "Error finding a device for a GlobalCB in MultiDeviceGlobalCircularBuffer");
+}
+
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
-    const std::vector<Tensor>& tensors,
-    const Tensor& tensor_addrs,
+    const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
+    std::vector<Tensor> tensors(input_tensors.begin(), input_tensors.end() - 1);
+    Tensor tensor_addrs = input_tensors.back();
+
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb->cb_buffer();
     Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
