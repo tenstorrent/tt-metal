@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-// #include "debug/dprint.h"  // required in all kernels using DPRINT
-
 void kernel_main() {
     uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(0);
     uint32_t q_start_addr = get_arg_val<uint32_t>(1);
@@ -44,15 +42,12 @@ void kernel_main() {
             // Read first phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
                 noc_async_read(qkv_read_addr, q_write_addr, SUBTILE_LINE_BYTES);
-                // noc_async_read_barrier();
             }
             // Read second phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
                 noc_async_read(
                     qkv_read_addr + 256 * ELEMENT_SIZE, q_write_addr + 256 * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
-                // noc_async_read_barrier();
             }
-            // noc_async_read_barrier();
 
             qkv_read_addr += tile_size;
             q_write_addr += tile_size;
