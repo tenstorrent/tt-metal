@@ -5,7 +5,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/tile_move_copy.h"  // #include "compile_time_args.h"
 #include <cstdint>
 
 namespace NAMESPACE {
@@ -14,10 +14,10 @@ void MAIN {
     uint32_t core_id = get_arg_val<uint32_t>(1);  // Add core ID argument
 
     // We are going to read from these two circular buffers
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_in0 = get_compile_time_arg_val(0);
+    constexpr auto cb_in1 = get_compile_time_arg_val(1);
     // and write to the output circular buffer
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto cb_out0 = get_compile_time_arg_val(2);
     // The destination register.
     // Quote the doc: "This register is an array of 16 tiles of 32x32 elements
     // each." If you are familiar with the concept of rotating register file

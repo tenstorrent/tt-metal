@@ -14,8 +14,8 @@ void kernel_main() {
     uint32_t core_id = get_arg_val<uint32_t>(3);  // Add core ID argument
 
     // The circular buffers to read the tiles into
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_in1 = get_compile_time_arg_val(1);
 
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM

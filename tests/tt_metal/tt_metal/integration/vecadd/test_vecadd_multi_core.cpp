@@ -17,9 +17,6 @@ using namespace tt::tt_metal;
 
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
-constexpr uint32_t TILE_WIDTH = 32;
-constexpr uint32_t TILE_HEIGHT = 32;
-
 std::shared_ptr<Buffer> MakeBuffer(Device* device, uint32_t size, uint32_t page_size, bool sram) {
     InterleavedBufferConfig config{
         .device = device,
@@ -30,7 +27,7 @@ std::shared_ptr<Buffer> MakeBuffer(Device* device, uint32_t size, uint32_t page_
 }
 
 std::shared_ptr<Buffer> MakeBufferBFP16(Device* device, uint32_t n_tiles, bool sram) {
-    constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
+    constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;
     return MakeBuffer(device, tile_size * n_tiles, page_tiles * tile_size, sram);
@@ -43,7 +40,7 @@ CBHandle MakeCircularBuffer(
 }
 
 CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles) {
-    constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
+    constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     return MakeCircularBuffer(program, core, cb, n_tiles * tile_size, tile_size, tt::DataFormat::Float16_b);
 }
 
@@ -64,7 +61,7 @@ bool vecadd_multi_core(DispatchFixture* fixture, Device* device, uint32_t n_tile
     CoreRange cores(start_core, end_core);
 
     CommandQueue& cq = device->command_queue();
-    const uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
+    const uint32_t tile_size = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     const uint32_t tiles_per_core = n_tiles / num_core;
 
     // Create 3 buffers on DRAM. These will hold the input and output data. A
@@ -80,26 +77,36 @@ bool vecadd_multi_core(DispatchFixture* fixture, Device* device, uint32_t n_tile
     const uint32_t cir_buffer_title = 4;
     CBHandle cb_a = MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_0, cir_buffer_title);
     CBHandle cb_b = MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_1, cir_buffer_title);
-    CBHandle cb_c = MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_16, cir_buffer_title);
+    CBHandle cb_c = MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_2, cir_buffer_title);
 
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_2};
+    std::vector<uint32_t> compute_compile_time_args = {
+        (std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1, (std::uint32_t)tt::CBIndex::c_2};
     auto reader = CreateKernel(
         program,
         "tt_metal/programming_examples/vecadd_multi_core/kernels/"
         "interleaved_tile_read_multi_core.cpp",
         cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_compile_time_args});
     auto writer = CreateKernel(
         program,
         "tt_metal/programming_examples/vecadd_multi_core/kernels/"
         "tile_write_multi_core.cpp",
         cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = writer_compile_time_args});
     auto compute = CreateKernel(
         program,
-        "tt_metal/programming_examples/"
-        "vecadd_multi_core/kernels/add_multi_core.cpp",
+        "tt_metal/programming_examples/vecadd_multi_core/"
+        "kernels/add_multi_core.cpp",
         cores,
-        ComputeConfig{.math_approx_mode = false, .compile_args = {}, .defines = {}});
+        ComputeConfig{.math_approx_mode = false, .compile_args = compute_compile_time_args, .defines = {}});
 
     for (int i = 0; i < num_core; ++i) {
         // Set runtime arguments for each core.
