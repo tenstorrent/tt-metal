@@ -34,6 +34,13 @@ def input_processor_for_mllama(ctx: InputContext, inputs: Union[DecoderOnlyInput
     if inputs.get("prompt") is None:
         inputs["prompt"] = inputs["encoder_prompt"]
         inputs["prompt_token_ids"] = inputs["encoder_prompt_token_ids"]
+        if os.environ.get("MESH_DEVICE") == "N300":
+            prompt_len = len(inputs.get("prompt_token_ids"))
+            MAX_PROMPT_LEN = 8192
+            if prompt_len > MAX_PROMPT_LEN:
+                raise ValueError(
+                    f"TT-LLama11B-Vision does not support prompts longer than {MAX_PROMPT_LEN} tokens on N300 (received prompt with {prompt_len} tokens)"
+                )
 
     multi_modal_data = inputs.get("encoder_multi_modal_data")
     if multi_modal_data is None or "image" not in multi_modal_data or multi_modal_data["image"] is None:
@@ -62,9 +69,10 @@ def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyI
     hf_model_name = ctx.model_config.hf_config._name_or_path
     if ("3.1-8B" in hf_model_name or "3.2-11B" in hf_model_name) and os.environ.get("MESH_DEVICE") == "N150":
         prompt_len = len(inputs.get("prompt_token_ids"))
-        if prompt_len > 65536:
+        MAX_PROMPT_LEN = 65536
+        if prompt_len > MAX_PROMPT_LEN:
             raise ValueError(
-                f"TT-LLama8B and TT-Llama11B do not support prompts longer than 65536 tokens on N150 (received prompt with {prompt_len} tokens)"
+                f"TT-LLama8B and TT-Llama11B do not support prompts longer than {MAX_PROMPT_LEN} tokens on N150 (received prompt with {prompt_len} tokens)"
             )
     return inputs
 
@@ -80,7 +88,7 @@ class TtMllamaForConditionalGeneration(LlamaGenerator, SupportsMultiModal):
 
     @classmethod
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size):
-        max_seq_len = 512  # TODO: Increase to 131072 once it's verified to work
+        max_seq_len = 131072
         model_args, model = create_multimodal_model(mesh_device, max_batch_size, max_seq_len, use_paged_kv_cache=True)
         return cls(model, model_args, mesh_device)
 
