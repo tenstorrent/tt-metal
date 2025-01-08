@@ -1839,6 +1839,7 @@ static void log_worker_command_streams(WorkerCommandStreams const& command_strea
                     [](ttnn::ccl::cmd::CclCommandCoreDescriptorTypeLocal const& core) { return fmt::format("local"); },
                     [](ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY const& core) { return fmt::format("(x={},y={})", core.x, core.y); },
                     [](ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast const& core) { return fmt::format("mcast"); },
+                    [](ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNone const& core) { return fmt::format("NONE"); },
                 },
                 core);
         };
@@ -1878,10 +1879,14 @@ static void log_worker_command_streams(WorkerCommandStreams const& command_strea
             case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
                 return "RAW_INL_WR";
 
-            case ttnn::ccl::cmd::CclCommandCode::RAW_READ_BYTES:
-                return "RAW_RD";
-            case ttnn::ccl::cmd::CclCommandCode::RAW_WRITE_BYTES:
-                return "RAW_WR";
+            case ttnn::ccl::cmd::CclCommandCode::NOC_READ_BURST:
+                return "NOC_RD_BURST";
+            case ttnn::ccl::cmd::CclCommandCode::NOC_WRITE_BURST:
+                return "NOC_WR_BURST";
+            case ttnn::ccl::cmd::CclCommandCode::FLOW_CONTROLLED_NOC_READ_BURST:
+                return "NOC_RD_BURST_FC";
+            case ttnn::ccl::cmd::CclCommandCode::NOC_WRITE_AND_ATOMIC_INC:
+                return "NOC_WR_AND_AT_INC";
 
             case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
                 TT_THROW("Got an unsupported command in a command stream (STREAM_EDM_TO_TENSOR). This command is deprecated and unsupported by this infrastructure. This will lead to undefined and invalid behaviour");
