@@ -28,10 +28,9 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/types.hpp"
-#include "noc/noc_parameters.h"
 
 // FIXME: ARCH_NAME specific
-#include "eth_l1_address_map.h"
+#include "noc/noc_parameters.h"
 #include "impl/dispatch/topology.hpp"
 
 namespace tt {
@@ -759,12 +758,14 @@ void Device::initialize_and_launch_firmware() {
     }
 
     // Clear erisc sync info
-    std::vector<uint32_t> zero_vec_erisc_init(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE / sizeof(uint32_t), 0);
+    std::uint32_t erisc_app_sync_info_base = (hal.get_arch() != tt::ARCH::GRAYSKULL) ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) : 0;
+    std::uint32_t erisc_app_sync_info_size = (hal.get_arch() != tt::ARCH::GRAYSKULL) ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) : 0;
+    std::vector<uint32_t> zero_vec_erisc_init(erisc_app_sync_info_size / sizeof(uint32_t), 0);
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
-            this->id(), virtual_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+            this->id(), virtual_core, zero_vec_erisc_init, erisc_app_sync_info_base);
     }
 
     // Load erisc app base FW to eth cores
@@ -818,8 +819,14 @@ void Device::clear_l1_state() {
 
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
+    std::uint32_t max_l1_loading_size = 0;
+    std::uint32_t tile_header_buffer_base = 0;
+    if (hal.get_arch() != tt::ARCH::GRAYSKULL) {
+        max_l1_loading_size = hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) + hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        tile_header_buffer_base = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER);
+    }
     std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-        (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
+        (max_l1_loading_size - tile_header_buffer_base)/ sizeof(uint32_t),
         0);
 
     // Clear erisc sync info
@@ -830,7 +837,7 @@ void Device::clear_l1_state() {
             this->id(),
             virtual_core,
             zero_vec_above_tile_header_buffer,
-            eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
+            tile_header_buffer_base);
 
     }
     // TODO: clear idle eriscs as well
