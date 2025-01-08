@@ -70,6 +70,7 @@ void kernel_main() {
 
     constexpr bool weight_has_value = get_compile_time_arg_val(5) == 1;
     constexpr bool bias_has_value = get_compile_time_arg_val(6) == 1;
+    constexpr bool is_training_mode = get_compile_time_arg_val(7) == 1;
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
@@ -116,6 +117,10 @@ void kernel_main() {
                 noc_async_read_barrier();
                 fill_tile_with_first_element_bfloat16(cb_id_bias);
                 cb_push_back(cb_id_bias, onetile);
+            }
+
+            // to read running stats value for updation
+            if constexpr (is_training_mode) {
             }
 
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
