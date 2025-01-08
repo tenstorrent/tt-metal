@@ -11,6 +11,7 @@
 
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
 #include "eth_l1_address_map.h"
+#include "ttnn/cpp/ttnn/operations/copy.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -282,7 +283,14 @@ Tensor all_gather(
                                   input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
             if (needs_padding) {
                 ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+                DataType original_dtype = input_tensor.get_dtype();
+                if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
+                    input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
+                }
                 input_tensor = ttnn::pad(0, input_tensor, padding, 0, false, std::nullopt);
+                if (original_dtype != input_tensor.get_dtype()) {
+                    input_tensor = ttnn::typecast(input_tensor, original_dtype);
+                }
             }
 
             auto output_tensor = operation::run(
