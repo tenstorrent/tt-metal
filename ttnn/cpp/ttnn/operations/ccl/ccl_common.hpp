@@ -34,7 +34,7 @@ class EriscDatamoverBuilder;
 
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
     const Tensor& input_tensor,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology& topology);
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
@@ -71,7 +71,7 @@ class LineTopology {
 // Eventual home: ccl_topology_descriptors
 struct RingTopology {
     RingTopology(
-        tt::tt_metal::Device const* device,
+        tt::tt_metal::IDevice const* device,
         Topology topology,
         std::optional<uint32_t> sender_device_id,
         std::optional<uint32_t> receiver_device_id,
@@ -82,7 +82,7 @@ struct RingTopology {
     bool is_first_device_in_line(bool in_clockwise_direction) const;
     bool is_last_device_in_line(bool in_clockwise_direction) const;
 
-    const tt::tt_metal::Device *device;
+    const tt::tt_metal::IDevice*device;
 
     std::vector<CoreCoord> eth_sender_cores;
     std::vector<CoreCoord> eth_receiver_cores;
@@ -540,21 +540,21 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
-    tt::tt_metal::Device const* device,
+    tt::tt_metal::IDevice const* device,
     FabricEriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id);
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id);
 
 void generate_edm_kernels_for_ring_or_linear_topology(
    tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     RingTopology const& topology_config,
     std::vector<ccl::EriscDatamoverBuilder> const& clockwise_edm_builders,
     std::vector<ccl::EriscDatamoverBuilder> const& counter_clockwise_edm_builders,

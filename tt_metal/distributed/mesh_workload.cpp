@@ -81,7 +81,7 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                  logical_x++) {
                 for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y;
                      logical_y++) {
-                    Device* device = mesh_device->get_device(logical_y, logical_x);
+                    IDevice* device = mesh_device->get_device(logical_y, logical_x);
                     // Get a view of the allocated buffer that matches the size of the kernel binary
                     // for the sub grid
                     std::shared_ptr<Buffer> buffer_view = Buffer::create(
@@ -231,7 +231,7 @@ std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevic
     std::unordered_set<SubDeviceId> sub_devices_;
     for (auto& program_on_grid : this->programs_) {
         auto grid_start = program_on_grid.first.start_coord;
-        Device* device = mesh_device->get_device(grid_start.y, grid_start.x);
+        IDevice* device = mesh_device->get_device(grid_start.y, grid_start.x);
         auto sub_devs_for_program = program_on_grid.second.determine_sub_device_ids(device);
         for (auto& sub_dev : sub_devs_for_program) {
             sub_devices_.insert(sub_dev);
@@ -246,7 +246,9 @@ ProgramCommandSequence& MeshWorkload::get_dispatch_cmds_for_program(Program& pro
 }
 
 // The functions below are for testing purposes only
-void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) { last_used_command_queue_ = mesh_cq; }
+void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
+    last_used_command_queue_ = mesh_cq;
+}
 
 MeshCommandQueue* MeshWorkload::get_last_used_command_queue() const { return last_used_command_queue_; }
 
@@ -269,7 +271,7 @@ uint32_t MeshWorkload::get_sem_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t sem_size = 0;
     uint32_t program_idx = 0;
-    Device* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->get_device(0);
     for (auto& program_on_grid : this->programs_) {
         if (program_idx) {
             TT_ASSERT(sem_size == program_on_grid.second.get_sem_size(device, logical_core, core_type));
@@ -293,7 +295,7 @@ uint32_t MeshWorkload::get_cb_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t cb_size = 0;
     uint32_t program_idx = 0;
-    Device* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->get_device(0);
     for (auto& program_on_grid : this->programs_) {
         if (program_idx) {
             TT_ASSERT(cb_size == program_on_grid.second.get_cb_size(device, logical_core, core_type));

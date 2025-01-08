@@ -74,8 +74,8 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) 
 
 // Helper function to get string rep of noc target.
 static string get_noc_target_str(
-    Device* device, CoreDescriptor& core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
-    auto get_core_and_mem_type = [](Device* device, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
+    IDevice* device, CoreDescriptor& core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
+    auto get_core_and_mem_type = [](IDevice* device, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
         CoreCoord virtual_core = device->virtual_noc_coordinate(noc, noc_coord);
         CoreType core_type;
@@ -136,7 +136,7 @@ const launch_msg_t* get_valid_launch_message(const mailboxes_t* mbox_data) {
 namespace tt::watcher {
 
 WatcherDeviceReader::WatcherDeviceReader(
-    FILE* f, Device* device, std::vector<string>& kernel_names, void (*set_watcher_exception_message)(const string&)) :
+    FILE* f, IDevice* device, std::vector<string>& kernel_names, void (*set_watcher_exception_message)(const string&)) :
     f(f), device(device), kernel_names(kernel_names), set_watcher_exception_message(set_watcher_exception_message) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {

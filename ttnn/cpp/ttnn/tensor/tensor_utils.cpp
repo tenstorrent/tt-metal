@@ -83,8 +83,8 @@ void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& calla
     }
 }
 
-std::vector<Device*> get_devices(const Tensor& tensor) {
-    std::vector<Device*> devices;
+std::vector<IDevice*> get_devices(const Tensor& tensor) {
+    std::vector<IDevice*> devices;
     if (tensor.storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
         TT_ASSERT(
             std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage()),
@@ -118,7 +118,7 @@ uint32_t num_buffers_in_tensor(const Tensor& tensor) {
     }
 }
 
-Tensor get_shard_for_device(const Tensor& tensor, Device* target_device, std::optional<int> buffer_index) {
+Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::optional<int> buffer_index) {
     ZoneScopedN("GetShardForDevice");
     Tensor shard = Tensor();
     auto& storage = tensor.tensor_attributes->storage;
@@ -156,7 +156,7 @@ Tensor get_shard_for_device(const Tensor& tensor, Device* target_device, std::op
 }
 
 void insert_buffer_and_shape_for_device(
-    Device* target_device, const Tensor& shard, Tensor& tensor_to_modify, std::optional<int> buffer_index) {
+    IDevice* target_device, const Tensor& shard, Tensor& tensor_to_modify, std::optional<int> buffer_index) {
     ZoneScopedN("InsertBufferAndShapeForDevice");
     std::visit(
         [target_device, &shard, buffer_index](auto&& s) {
@@ -182,7 +182,7 @@ void insert_buffer_and_shape_for_device(
         tensor_to_modify.tensor_attributes->storage);
 }
 
-Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) {
+Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor) {
     // When using async mode, tensors with borrowed storage cannot be passed to workers.
     // They need to be copied to owned storage before being passed to the worker.
     ZoneScopedN("ConvertBorrowedToOwned");

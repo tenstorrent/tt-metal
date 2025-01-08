@@ -205,9 +205,9 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
         module,
         operation,
         doc,
-        create_pybind_full_overload<creation_operation_t, Device, float>(),
+        create_pybind_full_overload<creation_operation_t, IDevice, float>(),
         create_pybind_full_overload<creation_operation_t, MeshDevice, float>(),
-        create_pybind_full_overload<creation_operation_t, Device, int>(),
+        create_pybind_full_overload<creation_operation_t, IDevice, int>(),
         create_pybind_full_overload<creation_operation_t, MeshDevice, int>());
 }
 
@@ -254,7 +254,7 @@ void bind_full_operation_with_hard_coded_value(
         module,
         operation,
         doc,
-        create_pybind_full_with_hard_coded_value_overload<creation_operation_t, Device>(),
+        create_pybind_full_with_hard_coded_value_overload<creation_operation_t, IDevice>(),
         create_pybind_full_with_hard_coded_value_overload<creation_operation_t, MeshDevice>());
 }
 
@@ -290,9 +290,9 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
         module,
         operation,
         doc,
-        create_pybind_full_like_overload<creation_operation_t, Device, float>(),
+        create_pybind_full_like_overload<creation_operation_t, IDevice, float>(),
         create_pybind_full_like_overload<creation_operation_t, MeshDevice, float>(),
-        create_pybind_full_like_overload<creation_operation_t, Device, int>(),
+        create_pybind_full_like_overload<creation_operation_t, IDevice, int>(),
         create_pybind_full_like_overload<creation_operation_t, MeshDevice, int>());
 }
 
@@ -338,7 +338,7 @@ void bind_full_like_operation_with_hard_coded_value(
         module,
         operation,
         doc,
-        create_pybind_full_like_with_hard_coded_value_overload<creation_operation_t, Device>(),
+        create_pybind_full_like_with_hard_coded_value_overload<creation_operation_t, IDevice>(),
         create_pybind_full_like_with_hard_coded_value_overload<creation_operation_t, MeshDevice>());
 }
 
@@ -370,7 +370,7 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
         module,
         operation,
         doc,
-        create_pybind_arange_overload<creation_operation_t, Device>(),
+        create_pybind_arange_overload<creation_operation_t, IDevice>(),
         create_pybind_arange_overload<creation_operation_t, MeshDevice>());
 }
 
@@ -405,7 +405,7 @@ void bind_empty_operation(py::module& module, const creation_operation_t& operat
         module,
         operation,
         doc,
-        create_pybind_empty_overload<creation_operation_t, Device>(),
+        create_pybind_empty_overload<creation_operation_t, IDevice>(),
         create_pybind_empty_overload<creation_operation_t, MeshDevice>());
 }
 
@@ -439,7 +439,7 @@ void bind_empty_like_operation(py::module& module, const creation_operation_t& o
         module,
         operation,
         doc,
-        create_pybind_empty_like_overload<creation_operation_t, Device>(),
+        create_pybind_empty_like_overload<creation_operation_t, IDevice>(),
         create_pybind_empty_like_overload<creation_operation_t, MeshDevice>());
 }
 

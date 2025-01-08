@@ -192,7 +192,7 @@ uint32_t finalize_cbs(
 }
 
 uint32_t finalize_kernel_bins(
-    Device* device,
+    IDevice* device,
     uint32_t programmable_core_type_index,
     const std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
@@ -270,7 +270,7 @@ uint32_t finalize_kernel_bins(
 }
 
 template <typename T>
-void finalize_program_offsets(T& workload, Device* device) {
+void finalize_program_offsets(T& workload, IDevice* device) {
     if (workload.is_finalized()) {
         return;
     }
@@ -383,7 +383,7 @@ void finalize_program_offsets(T& workload, Device* device) {
     workload.set_finalized();
 }
 
-uint32_t get_packed_write_max_unicast_sub_cmds(Device* device) {
+uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
     return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 }
 
@@ -395,7 +395,7 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
     program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(0, 0, 0);
 }
 
-void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, Device* device) {
+void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device) {
     // Initialize stall command sequences for this program.
     auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     uint32_t dispatch_message_addr =
@@ -530,7 +530,7 @@ void generate_runtime_args_cmds(
 }
 
 void assemble_runtime_args_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, Device* device) {
+    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device) {
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     NOC noc_index = dispatch_downstream_noc;
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
@@ -795,7 +795,7 @@ uint32_t insert_write_packed_payloads(
 }
 
 void assemble_device_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, Device* device, SubDeviceId sub_device_id) {
+    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
     uint32_t cmd_sequence_sizeB = 0;
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     NOC noc_index = dispatch_downstream_noc;
@@ -1582,7 +1582,9 @@ void update_program_dispatch_commands(
     // Update the number of unicast txns to eth cores to match the minimum number of cores
     // across devices (specified by user)
     if (unicast_go_signal_update.first) {
-        TT_FATAL(unicast_go_signal_update.second > 0, "Must specify a valid number of cores to unicast the go signal to when updating dispatch commands");
+        TT_FATAL(
+            unicast_go_signal_update.second > 0,
+            "Must specify a valid number of cores to unicast the go signal to when updating dispatch commands");
         cached_program_command_sequence.mcast_go_signal_cmd_ptr->num_unicast_txns = unicast_go_signal_update.second;
     }
 }
@@ -1764,9 +1766,9 @@ uint32_t program_base_addr_on_core(
               : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
-template void finalize_program_offsets<Program>(Program&, Device*);
-template void finalize_program_offsets<distributed::MeshWorkload>(distributed::MeshWorkload&, Device*);
-template uint32_t program_base_addr_on_core<Program, Device*>(Program&, Device*, HalProgrammableCoreType);
+template void finalize_program_offsets<Program>(Program&, IDevice*);
+template void finalize_program_offsets<distributed::MeshWorkload>(distributed::MeshWorkload&, IDevice*);
+template uint32_t program_base_addr_on_core<Program, IDevice*>(Program&, IDevice*, HalProgrammableCoreType);
 template uint32_t program_base_addr_on_core<distributed::MeshWorkload, distributed::MeshDevice*>(
     distributed::MeshWorkload&, distributed::MeshDevice*, HalProgrammableCoreType);
 }  // namespace program_dispatch

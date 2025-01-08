@@ -2,7 +2,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/device/device_handle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp

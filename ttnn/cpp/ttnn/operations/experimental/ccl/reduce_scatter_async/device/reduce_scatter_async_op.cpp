@@ -21,7 +21,7 @@ ReduceScatterAsync create_reduce_scatter_struct(
     const ttnn::operations::binary::BinaryOpType binary_op_type,
     const uint32_t scatter_dim,
     const MemoryConfig& output_mem_config,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
     std::optional<std::vector<Tensor>> forward_output_tensors,
     std::optional<std::vector<Tensor>> backward_output_tensors,
@@ -41,12 +41,12 @@ ReduceScatterAsync create_reduce_scatter_struct(
         "identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments may be "
         "incorrect");
 
-    auto find_device = [](const std::vector<Device*>& devices, std::optional<chip_id_t> id) -> std::optional<Device*> {
+    auto find_device = [](const std::vector<IDevice*>& devices, std::optional<chip_id_t> id) -> std::optional<IDevice*> {
         if (id == std::nullopt) {
             return std::nullopt;
         }
         auto device = std::find_if(
-            devices.begin(), devices.end(), [id_ = id.value()](Device const* d) { return d->id() == id_; });
+            devices.begin(), devices.end(), [id_ = id.value()](IDevice const* d) { return d->id() == id_; });
         TT_FATAL(
             device != devices.end(),
             "Device with ID {} not found in the list of devices, but it should be here since it was provided "
@@ -221,10 +221,10 @@ ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(
 }  // namespace
 
 std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> create_global_semaphores(
-    const std::vector<Device*>& devices, std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt) {
+    const std::vector<IDevice*>& devices, std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt) {
     std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> semaphores;
     auto worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(6, 6)));
-    for (Device* d : devices) {
+    for (IDevice* d : devices) {
         CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
         auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
         auto worker_subdevice_id = worker_subdevice_id_opt.has_value()
@@ -427,7 +427,7 @@ Tensor reduce_scatter(
             const auto& input_device_tensor = input_tensors.at(0);
 
             const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            std::vector<Device*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate.col)
+            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate.col)
                                                                : mesh_view.get_devices_on_row(coordinate.row);
 
             const auto& input_tensor = input_tensors.at(0);

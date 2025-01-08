@@ -49,7 +49,7 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
     return golden;
 }
 
-void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_config) {
+void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_config) {
     Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
