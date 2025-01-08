@@ -389,9 +389,9 @@ struct WorkerCommandStreams {
 
 struct ReduceScatterBuilderConfig {
     std::reference_wrapper<Program> program;
-    Device* device;
-    Device* forward_device;
-    Device* backward_device;
+    IDevice* device;
+    IDevice* forward_device;
+    IDevice* backward_device;
     std::reference_wrapper<ttnn::ccl::EdmLineFabricOpInterface> fabric;
     std::reference_wrapper<ProgramTensorsBundle> all_tensors;
     std::reference_wrapper<ReduceScatterKernelHandles> kernel_ids;
@@ -404,7 +404,7 @@ struct ReduceScatterBuilderConfig {
 };
 
 
-static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links, Device *device) {
+static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links, IDevice*device) {
 
     auto build_all_workers_list = [](CoreRangeSet const& available_cores, size_t total_cores_needed, std::vector<CoreCoord> &all_cores_out) {
 
@@ -521,7 +521,7 @@ static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links) 
  * reduce scatter worker kernels. BORROWED FROM REDUCE SCATTER
  * TODO: COMMONIZE
  */
-static WorkerCoreBundle select_worker_cores(ttnn::ccl::Topology const topology, size_t num_links, Device *device) {
+static WorkerCoreBundle select_worker_cores(ttnn::ccl::Topology const topology, size_t num_links, IDevice*device) {
     switch (topology) {
         case ttnn::ccl::Topology::Linear: return select_worker_cores_for_line_topology(num_links, device);
 
@@ -1195,7 +1195,7 @@ static void populate_partial_reduce_rt_args(
                 worker_command_streams_out.writer_cmds1.at(w_logical),
                 fwd_fabric_connection,
                 bwd_fabric_connection,
-                std::unordered_map<const Tensor*, Device*>{
+                std::unordered_map<const Tensor*, IDevice*>{
                     {output_tensor_ptrs[0],
                      line_direction == LineDirection::FORWARD ? builder_config.forward_device
                                                               : builder_config.backward_device}});
@@ -1432,7 +1432,7 @@ static void create_end_of_line_worker_runtime_args(
     using namespace ttnn::ccl::cmd;
     using Direction = ttnn::ccl::EdmLineFabricOpInterface::Direction;
     Program& program = builder_config.program.get();
-    Device* device = builder_config.device;
+    IDevice* device = builder_config.device;
     ttnn::ccl::EdmLineFabricOpInterface& fabric = builder_config.fabric.get();
     ProgramTensorsBundle const& all_tensors = builder_config.all_tensors.get();
     ReduceScatterKernelHandles const& kernel_ids = builder_config.kernel_ids.get();
@@ -1678,8 +1678,8 @@ static void validate_tensors(ProgramTensorsBundle const& all_tensors, LineTopolo
 
 static void initialize_op_internal_tensor_syncs(
     Program& program,
-    Device* device,
-    std::array<Device*, 2> const& neighbour_devices,
+    IDevice* device,
+    std::array<IDevice*, 2> const& neighbour_devices,
     ProgramTensorsBundle& all_tensors,
     WorkerCoreBundle const& worker_cores,
     std::shared_ptr<const GlobalSemaphore> const& from_remote_sem,
@@ -1824,7 +1824,7 @@ static void populate_worker_runtime_args(
 }
 
 
-static void log_worker_command_streams(WorkerCommandStreams const& command_streams, Device *device) {
+static void log_worker_command_streams(WorkerCommandStreams const& command_streams, IDevice*device) {
     std::set<CoreCoord> cores;
     for (auto const&[core, cmd_stream] : command_streams.reader_cmds0) { cores.insert(core); }
     for (auto const&[core, cmd_stream] : command_streams.reader_cmds1) { cores.insert(core); }
@@ -1839,6 +1839,7 @@ static void log_worker_command_streams(WorkerCommandStreams const& command_strea
                     [](ttnn::ccl::cmd::CclCommandCoreDescriptorTypeLocal const& core) { return fmt::format("local"); },
                     [](ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNocXY const& core) { return fmt::format("(x={},y={})", core.x, core.y); },
                     [](ttnn::ccl::cmd::CclCommandCoreDescriptorTypeMcast const& core) { return fmt::format("mcast"); },
+                    [](ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNone const& core) { return fmt::format("NONE"); },
                 },
                 core);
         };
@@ -1878,10 +1879,14 @@ static void log_worker_command_streams(WorkerCommandStreams const& command_strea
             case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES:
                 return "RAW_INL_WR";
 
-            case ttnn::ccl::cmd::CclCommandCode::RAW_READ_BYTES:
-                return "RAW_RD";
-            case ttnn::ccl::cmd::CclCommandCode::RAW_WRITE_BYTES:
-                return "RAW_WR";
+            case ttnn::ccl::cmd::CclCommandCode::NOC_READ_BURST:
+                return "NOC_RD_BURST";
+            case ttnn::ccl::cmd::CclCommandCode::NOC_WRITE_BURST:
+                return "NOC_WR_BURST";
+            case ttnn::ccl::cmd::CclCommandCode::FLOW_CONTROLLED_NOC_READ_BURST:
+                return "NOC_RD_BURST_FC";
+            case ttnn::ccl::cmd::CclCommandCode::NOC_WRITE_AND_ATOMIC_INC:
+                return "NOC_WR_AND_AT_INC";
 
             case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
                 TT_THROW("Got an unsupported command in a command stream (STREAM_EDM_TO_TENSOR). This command is deprecated and unsupported by this infrastructure. This will lead to undefined and invalid behaviour");
@@ -1935,8 +1940,8 @@ static void log_worker_command_streams(WorkerCommandStreams const& command_strea
 operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     Program& program,
     ttnn::ccl::EdmLineFabricOpInterface& fabric,
-    std::optional<Device*> forward_device,
-    std::optional<Device*> backward_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     Tensor const& input_tensor,
     Tensor& local_output_tensor,
     Tensor& input_tensor_from_remote_forward_direction,
@@ -1974,8 +1979,8 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
         {math_out_cb}};
 
     const size_t page_size = get_page_size(input_tensor);
-    Device* device = input_tensor.device();
-    std::array<Device*, 2> neighbour_devices = {forward_device.value_or(nullptr), backward_device.value_or(nullptr)};
+    IDevice* device = input_tensor.device();
+    std::array<IDevice*, 2> neighbour_devices = {forward_device.value_or(nullptr), backward_device.value_or(nullptr)};
     size_t fabric_buffer_size_pages = fabric.get_edm_buffer_size_bytes() / get_page_size(input_tensor);
     auto const& topology_config = LineTopology(line_size, line_index);
 
@@ -2174,27 +2179,21 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     Tensor& local_partial_output_tensor_from_backward_direction,
     std::optional<Tensor>& foreward_direction_remote_output_tensor,
     std::optional<Tensor>& backward_direction_remote_output_tensor,
-    std::optional<Device*> forward_device,
-    std::optional<Device*> backward_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     ttnn::operations::binary::BinaryOpType reduce_op,
     const uint32_t dim,
     const uint32_t line_size,
     const uint32_t line_index,
     ttnn::ccl::Topology topology,
     std::optional<size_t> num_links_preferred,
-    std::optional<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> const& from_remote_sem_opt,
-    std::optional<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> const& to_remote_sem_opt,
+    std::shared_ptr<const tt::tt_metal::GlobalSemaphore> const& from_remote_sem,
+    std::shared_ptr<const tt::tt_metal::GlobalSemaphore> const& to_remote_sem,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle_) {
     auto program = tt::tt_metal::Program();
 
-    TT_FATAL(from_remote_sem_opt.has_value(), "Semaphore handle is required for compile time");
-    TT_FATAL(to_remote_sem_opt.has_value(), "Semaphore handle is required for compile time");
-
-    auto from_remote_sem = from_remote_sem_opt.value();
-    auto to_remote_sem = to_remote_sem_opt.value();
-
     bool persistent_fabric = true;
-    Device* device = input_tensor.device();
+    IDevice* device = input_tensor.device();
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = fabric_handle_;
     fabric_lifetime_mode fabric_mode = fabric_lifetime_mode::PERSISTENT;

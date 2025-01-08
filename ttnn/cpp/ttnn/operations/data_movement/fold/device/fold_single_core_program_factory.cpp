@@ -35,7 +35,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
     uint32_t cb_pages_per_dst_row = stride_h * width;
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = output.device();
+    tt::tt_metal::IDevice* device = output.device();
 
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();

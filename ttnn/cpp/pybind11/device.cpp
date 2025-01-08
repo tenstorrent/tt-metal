@@ -11,6 +11,7 @@
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
@@ -21,7 +22,7 @@ using namespace tt::tt_metal;
 namespace py = pybind11;
 
 namespace {
-inline void DumpDeviceProfiler(Device* device, bool last_dump) {
+inline void DumpDeviceProfiler(IDevice* device, bool last_dump) {
     tt::tt_metal::detail::DumpDeviceProfileResults(device, last_dump);
 }
 }  // namespace
@@ -96,7 +97,10 @@ void py_device_module_types(py::module& m_device) {
             py::arg("type"),
             py::arg("axis"));
 
-    py::class_<Device, std::unique_ptr<Device, py::nodelete>>(
+    py::class_<IDevice, std::unique_ptr<IDevice, py::nodelete>>(
+        m_device, "IDevice", "Base class describing a Tenstorrent accelerator device.");
+
+    py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<Device, py::nodelete>>(
         m_device, "Device", "Class describing a Tenstorrent accelerator device.");
 
     py::class_<SubDevice>(m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
@@ -128,43 +132,34 @@ void device_module(py::module& m_device) {
         .def(py::self == py::self)
         .def(py::self != py::self);
 
-    auto pyDevice = static_cast<py::class_<Device, std::unique_ptr<Device, py::nodelete>>>(m_device.attr("Device"));
-    pyDevice
-        .def(
-            py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size) {
-                return Device(device_id, 1, l1_small_size, trace_region_size);
-            }),
-            "Create device.",
-            py::arg("device_id"),
-            py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
-            py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE)
-        .def("id", &Device::id, "Device's ID")
-        .def("arch", &Device::arch, "Device's arch")
+    auto pyIDevice = static_cast<py::class_<IDevice, std::unique_ptr<IDevice, py::nodelete>>>(m_device.attr("IDevice"))
+        .def("id", &IDevice::id, "Device's ID")
+        .def("arch", &IDevice::arch, "Device's arch")
         .def(
             "compute_with_storage_grid_size",
-            &Device::compute_with_storage_grid_size,
+            &IDevice::compute_with_storage_grid_size,
             "Grid size (x, y) denoting region that can be targeted by ops")
-        .def("dram_grid_size", &Device::dram_grid_size, "Grid size (x, y) denoting dram cores that can be targeted")
+        .def("dram_grid_size", &IDevice::dram_grid_size, "Grid size (x, y) denoting dram cores that can be targeted")
         .def(
             "worker_core_from_logical_core",
-            &Device::worker_core_from_logical_core,
+            &IDevice::worker_core_from_logical_core,
             "Convert a logical core coordinate into a physical worker core coordinate")
         .def(
             "enable_program_cache",
-            &Device::enable_program_cache,
+            &IDevice::enable_program_cache,
             "Enable caching for all programs sent to this device")
         .def(
             "disable_and_clear_program_cache",
-            &Device::disable_and_clear_program_cache,
+            &IDevice::disable_and_clear_program_cache,
             "Disable and clear program cache for this device")
         .def(
             "num_program_cache_entries",
-            &Device::num_program_cache_entries,
+            &IDevice::num_program_cache_entries,
             "Number of entries in the program cache for this device")
-        .def("enable_async", &Device::enable_async)
+        .def("enable_async", &IDevice::enable_async)
         .def(
             "create_sub_device_manager",
-            [](Device* device,
+            [](IDevice* device,
                const std::vector<SubDevice>& sub_devices,
                DeviceAddr local_l1_size) -> SubDeviceManagerId {
                 SubDeviceManagerId sub_device_manager_id;
@@ -189,7 +184,7 @@ void device_module(py::module& m_device) {
             )doc")
         .def(
             "create_sub_device_manager_with_fabric",
-            [](Device* device, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
+            [](IDevice* device, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
                 std::tuple<SubDeviceManagerId, SubDeviceId> manager_and_sub_device_ids;
                 device->push_work(
                     [device, sub_devices, local_l1_size, &manager_and_sub_device_ids] {
@@ -215,7 +210,7 @@ void device_module(py::module& m_device) {
             )doc")
         .def(
             "load_sub_device_manager",
-            [](Device* device, SubDeviceManagerId sub_device_manager_id) {
+            [](IDevice* device, SubDeviceManagerId sub_device_manager_id) {
                 device->push_work(
                     [device, sub_device_manager_id] { device->load_sub_device_manager(sub_device_manager_id); });
             },
@@ -228,13 +223,13 @@ void device_module(py::module& m_device) {
             )doc")
         .def(
             "clear_loaded_sub_device_manager",
-            [](Device* device) { device->push_work([device] { device->clear_loaded_sub_device_manager(); }); },
+            [](IDevice* device) { device->push_work([device] { device->clear_loaded_sub_device_manager(); }); },
             R"doc(
                 Clears the loaded sub-device manager for the given device.
             )doc")
         .def(
             "remove_sub_device_manager",
-            [](Device* device, SubDeviceManagerId sub_device_manager_id) {
+            [](IDevice* device, SubDeviceManagerId sub_device_manager_id) {
                 device->push_work(
                     [device, sub_device_manager_id] { device->remove_sub_device_manager(sub_device_manager_id); });
             },
@@ -244,7 +239,22 @@ void device_module(py::module& m_device) {
 
                 Args:
                     sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to remove.
-            )doc");
+            )doc")
+        .def("sfpu_eps", &IDevice::sfpu_eps, R"doc(Returns machine epsilon value for current device.)doc")
+        .def("sfpu_nan", &IDevice::sfpu_nan, R"doc(Returns NaN value for current device.)doc")
+        .def("sfpu_inf", &IDevice::sfpu_inf, R"doc(Returns Infinity value for current device.)doc");
+
+    auto pyDevice = static_cast<py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<tt::tt_metal::Device, py::nodelete>>>(m_device.attr("Device"));
+    pyDevice
+        .def(
+            py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size) {
+                return tt::tt_metal::Device(device_id, 1, l1_small_size, trace_region_size);
+            }),
+            "Create device.",
+            py::arg("device_id"),
+            py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
+            py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
+
     // *** eps constant ***
     m_device.attr("EPS_GS") = EPS_GS;
     m_device.attr("EPS_WHB0") = EPS_WHB0;
@@ -257,18 +267,6 @@ void device_module(py::module& m_device) {
     m_device.attr("INF_GS") = INF_GS;
     m_device.attr("INF_WHB0") = INF_WHB0;
     m_device.attr("INF_BH") = INF_BH;
-
-    pyDevice.def("sfpu_eps", &Device::sfpu_eps, R"doc(
-        Returns machine epsilon value for current device.
-        )doc");
-
-    pyDevice.def("sfpu_nan", &Device::sfpu_nan, R"doc(
-        Returns NaN value for current device.
-        )doc");
-
-    pyDevice.def("sfpu_inf", &Device::sfpu_inf, R"doc(
-        Returns Infinity value for current device.
-        )doc");
 
     m_device.def(
         "CreateDevice",
@@ -520,7 +518,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "synchronize_device",
-        [](Device* device, const std::optional<uint8_t> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+        [](IDevice* device, const std::optional<uint8_t> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
             // Send finish command to issue queue through worker thread
             // Worker thread will stall until the device is flushed.
             device->push_work(

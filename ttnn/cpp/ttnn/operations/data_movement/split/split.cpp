@@ -29,7 +29,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
 
     const bool on_host =
         input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED;
-    std::optional<Device*> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
+    std::optional<IDevice*> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
 
     Tensor preprocessed = ttnn::unsqueeze_to_4D(input_tensor);  // ensure we're 4D before slicing
     dim += 4 - input_rank;                                      // convert to 4D index

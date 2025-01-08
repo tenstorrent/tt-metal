@@ -11,6 +11,7 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
+    create_global_semaphore_with_same_address,
 )
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
@@ -220,17 +221,10 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
 
     if use_reduce_scatter_async:
         compute_grid_size = mesh_device.compute_with_storage_grid_size()
-        worker_sub_device = ttnn.SubDevice(
-            [
-                ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
-                        )
-                    }
-                )
-            ]
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
+        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
         worker_sub_device_id = ttnn.SubDeviceId(0)
         if create_persistent_fabric:
             logger.info("Create persistent fabric interface")
@@ -238,6 +232,15 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                 mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
             )
             logger.info("Done Create persistent fabric interface")
+
+        # create global semaphore handles
+        from_remote_semaphore_handles = create_global_semaphore_with_same_address(
+            mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
+        )
+        to_remote_semaphore_handles = create_global_semaphore_with_same_address(
+            mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
+        )
+
     else:
         worker_sub_device_id = None
 
@@ -261,12 +264,13 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     dim=dim,
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
+                    from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+                    to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
                     math_op=math_op,
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                     num_links=num_links,
                     subdevice_id=worker_sub_device_id,
-                    create_semaphore_handles=True,
                 )
             else:
                 ttnn_tensor_out = ttnn.reduce_scatter(
