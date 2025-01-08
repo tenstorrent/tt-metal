@@ -168,19 +168,20 @@ class TtLlamaMLP(LightweightModule):
                     w1_out,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=(8, 4)),
                 )  # [4, 1, 32, 12288]
+
                 # print(w1_out_torch.shape)
                 w1_out_torch_reduced = torch.sum(w1_out_torch, dim=0, keepdim=True)  # [1, 1, 32, 12288]
                 # inner -> replicate, outer -> fractured
                 # print(w1_out_torch_reduced.shape)
                 w1_out = ttnn.as_tensor(
                     w1_out_torch_reduced,
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     device=self.mesh_device,
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
                     ),
                     layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 )
                 # print(w1_out.shape)
 
@@ -190,16 +191,17 @@ class TtLlamaMLP(LightweightModule):
                     w3_out,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=(8, 4)),
                 )
+
                 w3_out_torch_reduced = torch.sum(w3_out_torch, dim=0, keepdim=True)
                 w3_out = ttnn.as_tensor(
                     w3_out_torch_reduced,
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     device=self.mesh_device,
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
                     ),
                     layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 )
 
                 # w3_out = ttnn.to_memory_config(w3_out, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
@@ -304,15 +306,15 @@ class TtLlamaMLP(LightweightModule):
         # )
         w2_out_torch = ttnn.to_torch(
             w2_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=(8, 4)),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=(8, 4)),
         )
         w2_out_torch_reduced = torch.sum(w2_out_torch, dim=0, keepdim=True)
         w2_out_reduced = ttnn.as_tensor(
             w2_out_torch_reduced,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
+                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=list(self.mesh_device.shape)
             ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
