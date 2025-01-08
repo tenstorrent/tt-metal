@@ -144,15 +144,11 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::optional<GlobalSemaphore>& semaphore_opt,
+    const GlobalSemaphore semaphore,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
     const bool lower_command_stream_to_noc_commands = can_command_stream_be_lowered_to_noc_commands(input_tensor);
-
-    TT_FATAL(semaphore_opt.has_value(), "Semaphore is required for compile time");
-
-    const auto& semaphore = semaphore_opt.value();
 
     IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;

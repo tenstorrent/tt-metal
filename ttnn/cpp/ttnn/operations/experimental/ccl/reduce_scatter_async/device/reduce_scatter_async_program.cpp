@@ -2187,16 +2187,10 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     const uint32_t line_index,
     ttnn::ccl::Topology topology,
     std::optional<size_t> num_links_preferred,
-    std::optional<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> const& from_remote_sem_opt,
-    std::optional<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> const& to_remote_sem_opt,
+    std::shared_ptr<const tt::tt_metal::GlobalSemaphore> const& from_remote_sem,
+    std::shared_ptr<const tt::tt_metal::GlobalSemaphore> const& to_remote_sem,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle_) {
     auto program = tt::tt_metal::Program();
-
-    TT_FATAL(from_remote_sem_opt.has_value(), "Semaphore handle is required for compile time");
-    TT_FATAL(to_remote_sem_opt.has_value(), "Semaphore handle is required for compile time");
-
-    auto from_remote_sem = from_remote_sem_opt.value();
-    auto to_remote_sem = to_remote_sem_opt.value();
 
     bool persistent_fabric = true;
     IDevice* device = input_tensor.device();

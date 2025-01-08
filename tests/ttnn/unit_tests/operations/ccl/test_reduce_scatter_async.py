@@ -14,6 +14,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import 
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
+    create_global_semaphore_with_same_address,
 )
 
 
@@ -157,16 +158,21 @@ def run_reduce_scatter_test(
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-            )
-        ]
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
     worker_sub_device_id = ttnn.SubDeviceId(0)
     mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
         mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+    )
+
+    # create global semaphore handles
+    from_remote_semaphore_handles = create_global_semaphore_with_same_address(
+        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
+    )
+    to_remote_semaphore_handles = create_global_semaphore_with_same_address(
+        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
     )
 
     # Run the op
@@ -188,6 +194,8 @@ def run_reduce_scatter_test(
             output_tensor_mesh = ttnn.experimental.reduce_scatter_async(
                 input_tensor_mesh,
                 dim=dim,
+                from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+                to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
                 math_op=math_op,
                 num_links=num_links,
                 memory_config=mem_config,
