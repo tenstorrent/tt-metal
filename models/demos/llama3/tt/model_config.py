@@ -98,7 +98,6 @@ class TtModelArgs:
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
-        self.max_prefill_chunk_size = max_seq_len
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
@@ -156,10 +155,23 @@ class TtModelArgs:
             self.model_name = "3.1-70B"
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 64 * 1024  # 70B on T3K maxes out at 64k tokens prefill
         else:
             # NOTE: 3.2-90B and 3.3-70B also use scaling factor of 8
             raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
+
+        # Set the max number of tokens for each prefill chunk based on the model and device
+        MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
+            "3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
+            "3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128},
+            "3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
+            "3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
+            "3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
+        }
+        max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.model_name][self.device_name]
+        assert (
+            max_prefill_chunk_size_div1024 is not None
+        ), f"Unsupported model {self.model_name} on device {self.device_name}"
+        self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
         if callable(optimizations):
             self.optimizations = optimizations(self.model_name)
