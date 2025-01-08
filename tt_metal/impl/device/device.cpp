@@ -759,7 +759,7 @@ void Device::initialize_and_launch_firmware() {
 
     // Clear erisc sync info
     std::uint32_t erisc_app_sync_info_base = (hal.get_arch() != tt::ARCH::GRAYSKULL) ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) : 0;
-    std::uint32_t erisc_app_sync_info_size = (hal.get_arch() != tt::ARCH::GRAYSKULL) ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) : 0;
+    std::uint32_t erisc_app_sync_info_size = (hal.get_arch() != tt::ARCH::GRAYSKULL) ? hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) : 0;
     std::vector<uint32_t> zero_vec_erisc_init(erisc_app_sync_info_size / sizeof(uint32_t), 0);
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
