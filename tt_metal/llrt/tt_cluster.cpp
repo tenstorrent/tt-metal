@@ -42,7 +42,7 @@
 
 #include "llrt/hal.hpp"
 
-#include "third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 #include "umd/device/tt_simulation_device.h"
 
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"
@@ -973,18 +973,22 @@ std::tuple<tt_cxy_pair, tt_cxy_pair> Cluster::get_eth_tunnel_core(
 }
 
 // TODO: ALLAN Can change to write one bit
-void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const {
+void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing, const std::vector<chip_id_t> &target_mmio_devices) const {
     log_debug(tt::LogDevice, "Set internal routing bit {}", enable_internal_routing);
     const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     // TODO: initialize devices if user does not
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
     // we do not always context switch to base FW
-    std::vector<chip_id_t> mmio_devices;
-    mmio_devices.reserve(this->devices_grouped_by_assoc_mmio_device_.size());
     std::vector<chip_id_t> non_mmio_devices;
-    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
-        mmio_devices.emplace_back(assoc_mmio_device);
-        for (const auto &chip_id : devices) {
+    std::vector<chip_id_t> mmio_devices = target_mmio_devices;
+    if (mmio_devices.size() == 0) {
+        mmio_devices.reserve(tt::Cluster::instance().number_of_pci_devices());
+        for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+            mmio_devices.emplace_back(assoc_mmio_device);
+        }
+    }
+    for (const auto &mmio_chip_id : mmio_devices) {
+        for (const auto &chip_id : this->devices_grouped_by_assoc_mmio_device_.at(mmio_chip_id)) {
             non_mmio_devices.emplace_back(chip_id);
         }
     }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/untilize_with_halo_v2/device/untilize_with_halo_v2_program_factory.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
 
 namespace ttnn::operations::sliding_window::halo {
@@ -33,7 +34,7 @@ void HaloDeviceOperation::validate(const std::vector<Tensor>& input_tensors) con
 std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_legacy_shape();
-    tt::tt_metal::LegacyShape output_shape = input_shape;
+    ttnn::SimpleShape output_shape = ttnn::SimpleShape(input_shape.to_array_4D());
 
     uint32_t nbatch = input_shape[0];
     uint32_t total_nsticks = config_.num_cores_nhw * max_out_nsticks_per_core_;
@@ -72,7 +73,7 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     out_mem_config.shard_spec->shape[1] = input_tensor.memory_config().shard_spec->shape[1];
     out_mem_config.shard_spec->halo = true;
     return {TensorSpec(
-        output_shape.logical_shape(),
+        output_shape,
         TensorLayout::fromLegacyPaddedShape(
             output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, ttnn::Shape(output_shape)))};
 }

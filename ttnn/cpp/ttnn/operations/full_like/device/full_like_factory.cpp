@@ -18,6 +18,28 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 using namespace tt::tt_metal::detail;
 
+// After the full modification and if there are no issues in the overall tests, it will be added to `bfloat16.hpp` and
+// applied globally.
+uint32_t get_bfloat16_rounded(const float val) {
+    uint32_t float_bits = *reinterpret_cast<const uint32_t*>(&val);
+
+    // upper 16 bits
+    uint16_t bfloat16_bits = float_bits >> 16;
+
+    // check Guard, Round, Sticky bits from lower 16 bits
+    uint32_t lower_bits = float_bits & 0xFFFF;
+    uint32_t guard_bit = (lower_bits >> 15) & 1;
+    uint32_t round_bit = (lower_bits >> 14) & 1;
+    uint32_t sticky_bit = (lower_bits & 0x3FFF) != 0;
+
+    // Tie-to-even rounding rule
+    if (guard_bit && (round_bit || sticky_bit || (bfloat16_bits & 1))) {
+        bfloat16_bits += 1;
+    }
+
+    return static_cast<uint32_t>(bfloat16_bits) << 16;
+}
+
 union datatype {
     uint32_t u32;
     float f32;
@@ -29,11 +51,6 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     tensor_return_value_t& output) {
     auto input = tensor_args.input;
     auto fill_value = operation_attributes.fill_value;
-    if (std::holds_alternative<int>(fill_value)) {
-        u.u32 = std::get<int>(fill_value);
-    } else if (std::holds_alternative<float>(fill_value)) {
-        u.f32 = std::get<float>(fill_value);
-    }
     DataType dtype{operation_attributes.dtype};
     Layout layout{operation_attributes.layout};
     Device* device = input.device();
@@ -67,6 +84,17 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         default: break;
     }
 
+    if (std::holds_alternative<int>(fill_value)) {
+        u.u32 = std::get<int>(fill_value);
+    } else if (std::holds_alternative<float>(fill_value)) {
+        auto float_fill_value = std::get<float>(fill_value);
+        if (dtype == DataType::BFLOAT16) {
+            u.u32 = get_bfloat16_rounded(float_fill_value);
+        } else {
+            u.f32 = float_fill_value;
+        }
+    }
+
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id};
 
     auto writer_id = CreateKernel(
@@ -87,7 +115,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
-        SetRuntimeArgs(program, writer_id, core, {u.u32, output.buffer()->address(), num_tiles_per_core, tiles_offset});
+        SetRuntimeArgs(program, writer_id, core, {output.buffer()->address(), u.u32, num_tiles_per_core, tiles_offset});
 
         tiles_offset += num_tiles_per_core;
     }
@@ -110,7 +138,7 @@ void FullLikeOperation::ProgramFactory::override_runtime_arguments(
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[1] = output_buffer_address;
+            runtime_args[0] = output_buffer_address;
         }
     }
 }

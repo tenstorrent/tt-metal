@@ -24,6 +24,7 @@ def run_max_pool(
     dtype,
     memory_config=None,
     shard_scheme=None,
+    ceil_mode=False,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -35,17 +36,18 @@ def run_max_pool(
         if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
             pytest.skip("Invalid case")
 
-    if (
-        (kernel_h == 13 and pad_h != 6)
-        or (kernel_h == 9 and pad_h != 4)
-        or (kernel_h == 5 and pad_h != 2)
-        or (kernel_h == 3 and pad_h != 1)
-        or (kernel_h == 2 and pad_h != 0)
-    ):
+    if pad_h > (kernel_h / 2):
         pytest.skip("kernel size and padding combination not supported")
 
-    out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-    out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+    if (in_h + pad_h) < kernel_h or (in_w + pad_w) < kernel_w:
+        pytest.skip("kernel is too large for the padded tensor")
+
+    if ceil_mode:
+        out_h = math.ceil((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.ceil((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+    else:
+        out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
     cores_x = device.core_grid.x
     cores_y = device.core_grid.y
     max_cores = cores_x * cores_y
@@ -62,6 +64,8 @@ def run_max_pool(
             and (act_shape == [16, 64, 112, 112] or act_shape == [4, 16, 1056, 160] or act_shape == [16, 16, 528, 80])
             and is_wormhole_b0()
         ):
+            pytest.skip("This case runs out of memory on Wormhole b0")
+        if ceil_mode and act_shape == [16, 64, 112, 112] and kernel_size == (13, 13):
             pytest.skip("This case runs out of memory on Wormhole b0")
         if stride == (1, 1) and act_shape == [8, 16, 528, 80] and is_grayskull():
             pytest.skip("This case runs out of memory on Grayskull")
@@ -118,13 +122,11 @@ def run_max_pool(
     ## construct the tensor in NCHW shape
     act = torch.randn(act_shape, dtype=torch.bfloat16)
     # act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    # act = torch.ones(act_shape, dtype=torch.bfloat16)
-    # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape)
     # for n in range(act_shape[0]):
     #     for c in range(act_shape[1]):
     #         for h in range(act_shape[2]):
     #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = 1 + n + h + w + c # + torch.rand(1) * 0.15
+    #                 act[n, c, h, w] = h * in_w + w
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
 
@@ -179,6 +181,7 @@ def run_max_pool(
         dilation=[dilation_h, dilation_w],
         memory_config=memory_config,
         applied_shard_scheme=shard_scheme,
+        ceil_mode=ceil_mode,
     )
 
     output_host = output.cpu()
@@ -192,7 +195,7 @@ def run_max_pool(
         padding=padding,
         dilation=dilation,
         return_indices=False,
-        ceil_mode=False,
+        ceil_mode=ceil_mode,
     )(act)
 
     ## test for equivalance
@@ -310,17 +313,25 @@ def run_max_pool(
         ttnn.bfloat8_b,
     ],
 )
-def test_run_max_pool(
-    act_shape,
-    kernel_size,
-    padding,
-    stride,
-    dilation,
-    device,
-    dtype,
-    use_program_cache,
-):
-    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
+@pytest.mark.parametrize(
+    "ceil_mode",
+    [
+        False,
+        True,
+    ],
+)
+def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype, use_program_cache, ceil_mode):
+    run_max_pool(
+        act_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -377,6 +388,13 @@ def test_run_max_pool(
         ttnn.bfloat8_b,
     ],
 )
+@pytest.mark.parametrize(
+    "ceil_mode",
+    [
+        False,
+        True,
+    ],
+)
 def test_run_max_pool_width_shard(
     act_shape,
     kernel_size,
@@ -386,6 +404,7 @@ def test_run_max_pool_width_shard(
     device,
     dtype,
     use_program_cache,
+    ceil_mode,
 ):
     run_max_pool(
         act_shape,
@@ -396,6 +415,7 @@ def test_run_max_pool_width_shard(
         device,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ceil_mode=ceil_mode,
     )
 
 
@@ -473,6 +493,13 @@ def test_run_max_pool_width_shard(
         ttnn.bfloat8_b,
     ],
 )
+@pytest.mark.parametrize(
+    "ceil_mode",
+    [
+        False,
+        True,
+    ],
+)
 def test_run_max_pool_block_shard(
     act_shape,
     kernel_size,
@@ -482,6 +509,7 @@ def test_run_max_pool_block_shard(
     device,
     dtype,
     use_program_cache,
+    ceil_mode,
 ):
     run_max_pool(
         act_shape,
@@ -492,6 +520,7 @@ def test_run_max_pool_block_shard(
         device,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ceil_mode=ceil_mode,
     )
 
 
@@ -805,3 +834,43 @@ def test_pool_core_nondivis(
     assert isclose
     if dtype == ttnn.bfloat16:
         assert isequal
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",
+    (([1, 256, 54, 54],)),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ((3, 3),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((0, 0),),
+)
+@pytest.mark.parametrize("stride", ((2, 2),))
+@pytest.mark.parametrize("dilation", ((1, 1),))
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("ceil_mode", [False, True])
+def test_run_max_pool_squeeze_net_model(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    dtype,
+    use_program_cache,
+    ceil_mode,
+):
+    run_max_pool(
+        act_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        dtype,
+        ceil_mode=ceil_mode,
+    )

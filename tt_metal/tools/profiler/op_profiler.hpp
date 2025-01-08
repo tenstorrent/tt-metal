@@ -16,8 +16,9 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/TracyC.h"
+#include "tt_metal/impl/device/device_pool.hpp"
+#include "tracy/Tracy.hpp"
+#include "tracy/TracyC.h"
 
 using json = nlohmann::json;
 
@@ -144,9 +145,22 @@ static void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) 
 static void tracy_frame() { FrameMark; }
 
 #if defined(TRACY_ENABLE)
-static inline json get_kernels_json(const Program& program) {
+static inline json get_kernels_json(chip_id_t device_id, const Program& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
+
+    Device* device = nullptr;
+    if (tt::DevicePool::instance().is_device_active(device_id)) {
+        device = tt::DevicePool::instance().get_active_device(device_id);
+    }
+    json kernelSizes;
+    kernelSizes["brisc_max_kernel_size"] = 0;
+    kernelSizes["ncrisc_max_kernel_size"] = 0;
+    kernelSizes["erisc_max_kernel_size"] = 0;
+    kernelSizes["trisc_0_max_kernel_size"] = 0;
+    kernelSizes["trisc_1_max_kernel_size"] = 0;
+    kernelSizes["trisc_2_max_kernel_size"] = 0;
+
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id).get();
         if (kernel->processor() == RISCV::COMPUTE) {
@@ -157,16 +171,43 @@ static inline json get_kernels_json(const Program& program) {
             computeKernelObj["source"] = computeKernel->kernel_source().source_;
             computeKernelObj["name"] = computeKernel->get_full_kernel_name();
             computeKernels.push_back(computeKernelObj);
+            if (device != nullptr) {
+                if (kernelSizes["trisc_0_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
+                    kernelSizes["trisc_0_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
+                }
+                if (kernelSizes["trisc_1_max_kernel_size"] < kernel->get_binary_packed_size(device, 1)) {
+                    kernelSizes["trisc_1_max_kernel_size"] = kernel->get_binary_packed_size(device, 1);
+                }
+                if (kernelSizes["trisc_2_max_kernel_size"] < kernel->get_binary_packed_size(device, 2)) {
+                    kernelSizes["trisc_2_max_kernel_size"] = kernel->get_binary_packed_size(device, 2);
+                }
+            }
         } else {
             json datamovementKernelObj;
             datamovementKernelObj["source"] = kernel->kernel_source().source_;
             datamovementKernelObj["name"] = kernel->get_full_kernel_name();
             datamovementKernels.push_back(datamovementKernelObj);
+            if (device != nullptr) {
+                if (kernel->processor() == RISCV::BRISC) {
+                    if (kernelSizes["brisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
+                        kernelSizes["brisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
+                    }
+                } else if (kernel->processor() == RISCV::NCRISC) {
+                    if (kernelSizes["ncrisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
+                        kernelSizes["ncrisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
+                    }
+                } else if (kernel->processor() == RISCV::ERISC) {
+                    if (kernelSizes["erisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
+                        kernelSizes["erisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
+                    }
+                }
+            }
         }
     }
     json ret;
     ret["compute_kernels"] = computeKernels;
     ret["datamovement_kernels"] = datamovementKernels;
+    ret["kernel_sizes"] = kernelSizes;
     return ret;
 }
 
@@ -339,7 +380,7 @@ inline std::string op_meta_data_serialized_json(
         j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
         j["device_id"] = device_id;
         j["op_hash"] = program_hash;
-        j["kernel_info"] = get_kernels_json(program);
+        j["kernel_info"] = get_kernels_json(device_id, program);
 
         j["optional_input_tensors"] = std::vector<json>{};
 

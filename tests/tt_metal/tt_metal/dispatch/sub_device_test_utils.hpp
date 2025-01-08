@@ -9,7 +9,7 @@
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
 
-inline std::tuple<Program, CoreCoord, std::shared_ptr<GlobalSemaphore>> create_single_sync_program(
+inline std::tuple<Program, CoreCoord, GlobalSemaphore> create_single_sync_program(
     Device* device, SubDevice sub_device) {
     auto syncer_coord = sub_device.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
@@ -21,12 +21,12 @@ inline std::tuple<Program, CoreCoord, std::shared_ptr<GlobalSemaphore>> create_s
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
         syncer_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    std::array<uint32_t, 1> syncer_rt_args = {global_sem->address()};
+    std::array<uint32_t, 1> syncer_rt_args = {global_sem.address()};
     SetRuntimeArgs(syncer_program, syncer_kernel, syncer_core, syncer_rt_args);
     return {std::move(syncer_program), std::move(syncer_coord), std::move(global_sem)};
 }
 
-inline std::tuple<Program, Program, Program, std::shared_ptr<GlobalSemaphore>> create_basic_sync_program(
+inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_program(
     Device* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
@@ -45,7 +45,7 @@ inline std::tuple<Program, Program, Program, std::shared_ptr<GlobalSemaphore>> c
         waiter_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     std::array<uint32_t, 4> waiter_rt_args = {
-        global_sem->address(), incrementer_cores.num_cores(), syncer_core_physical.x, syncer_core_physical.y};
+        global_sem.address(), incrementer_cores.num_cores(), syncer_core_physical.x, syncer_core_physical.y};
     SetRuntimeArgs(waiter_program, waiter_kernel, waiter_core, waiter_rt_args);
 
     Program syncer_program = CreateProgram();
@@ -54,7 +54,7 @@ inline std::tuple<Program, Program, Program, std::shared_ptr<GlobalSemaphore>> c
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
         syncer_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    std::array<uint32_t, 1> syncer_rt_args = {global_sem->address()};
+    std::array<uint32_t, 1> syncer_rt_args = {global_sem.address()};
     SetRuntimeArgs(syncer_program, syncer_kernel, syncer_core, syncer_rt_args);
 
     Program incrementer_program = CreateProgram();
@@ -64,13 +64,13 @@ inline std::tuple<Program, Program, Program, std::shared_ptr<GlobalSemaphore>> c
         incrementer_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     std::array<uint32_t, 3> incrementer_rt_args = {
-        global_sem->address(), waiter_core_physical.x, waiter_core_physical.y};
+        global_sem.address(), waiter_core_physical.x, waiter_core_physical.y};
     SetRuntimeArgs(incrementer_program, incrementer_kernel, incrementer_cores, incrementer_rt_args);
     return {
         std::move(waiter_program), std::move(syncer_program), std::move(incrementer_program), std::move(global_sem)};
 }
 
-inline std::tuple<Program, Program, Program, std::shared_ptr<GlobalSemaphore>> create_basic_eth_sync_program(
+inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_sync_program(
     Device* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::ACTIVE_ETH).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
@@ -92,7 +92,7 @@ inline std::tuple<Program, Program, Program, std::shared_ptr<GlobalSemaphore>> c
         waiter_core,
         EthernetConfig{.noc = NOC::RISCV_0_default, .processor = DataMovementProcessor::RISCV_0});
     std::array<uint32_t, 7> waiter_rt_args = {
-        global_sem->address(),
+        global_sem.address(),
         incrementer_cores.num_cores(),
         syncer_core_physical.x,
         syncer_core_physical.y,
@@ -107,7 +107,7 @@ inline std::tuple<Program, Program, Program, std::shared_ptr<GlobalSemaphore>> c
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
         syncer_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    std::array<uint32_t, 1> syncer_rt_args = {global_sem->address()};
+    std::array<uint32_t, 1> syncer_rt_args = {global_sem.address()};
     SetRuntimeArgs(syncer_program, syncer_kernel, syncer_core, syncer_rt_args);
 
     Program incrementer_program = CreateProgram();
@@ -117,7 +117,7 @@ inline std::tuple<Program, Program, Program, std::shared_ptr<GlobalSemaphore>> c
         incrementer_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     std::array<uint32_t, 3> incrementer_rt_args = {
-        global_sem->address(), tensix_waiter_core_physical.x, tensix_waiter_core_physical.y};
+        global_sem.address(), tensix_waiter_core_physical.x, tensix_waiter_core_physical.y};
     SetRuntimeArgs(incrementer_program, incrementer_kernel, incrementer_cores, incrementer_rt_args);
     return {
         std::move(waiter_program), std::move(syncer_program), std::move(incrementer_program), std::move(global_sem)};

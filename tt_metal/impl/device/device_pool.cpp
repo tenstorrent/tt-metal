@@ -10,6 +10,7 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 
 using namespace tt::tt_metal;
 
@@ -205,6 +206,7 @@ void DevicePool::initialize(
 
     // Never skip for TG Cluster
     bool skip = not tt::Cluster::instance().is_galaxy_cluster();
+    std::vector<chip_id_t> target_mmio_ids;
     for (const auto& device_id : device_ids) {
         TT_FATAL(
             device_id < tt::Cluster::instance().number_of_devices(),
@@ -212,13 +214,23 @@ void DevicePool::initialize(
             device_id,
             tt::Cluster::instance().number_of_devices());
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        if (std::find(target_mmio_ids.begin(), target_mmio_ids.end(), mmio_device_id) == target_mmio_ids.end()) {
+            target_mmio_ids.push_back(mmio_device_id);
+        }
         skip &= (device_id == mmio_device_id);
     }
+    if (target_mmio_ids.size() != tt::Cluster::instance().number_of_pci_devices()) {
+        log_warning(
+            tt::LogMetal,
+            "Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, "
+            "consider using CreateDevices API.");
+    }
+
     _inst->skip_remote_devices = skip;
 
     _inst->add_devices_to_pool(device_ids);
     _inst->init_firmware_on_active_devices();
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
     _inst->init_profiler_devices();
 }
 
@@ -228,8 +240,7 @@ void DevicePool::initialize_device(v1::DeviceHandle handle) const {
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
     // hugepage). Need to do this before FW init so we know what dispatch cores to reset.
-    bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
-    if (using_fast_dispatch) {
+    if (this->using_fast_dispatch) {
         detail::DispatchStateCheck(true);
         dev->init_command_queue_host();
     } else {
@@ -251,7 +262,7 @@ void DevicePool::initialize_device(v1::DeviceHandle handle) const {
     watcher_attach(dev);
 
     // Set up HW command queues on device for FD
-    if (using_fast_dispatch) {
+    if (this->using_fast_dispatch) {
         dev->init_command_queue_device();
     }
 }
@@ -314,13 +325,12 @@ bool DevicePool::is_device_active(chip_id_t id) const {
 }
 
 void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
+    std::set<chip_id_t> devices_to_activate;
     if (this->skip_remote_devices) {
         for (const auto& device_id : device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
             TT_ASSERT(device_id == mmio_device_id, "Skipping remote devices is only available for mmio devices");
-            if (not this->is_device_active(device_id)) {
-                this->activate_device(device_id);
-            }
+            devices_to_activate.insert(device_id);
         }
     } else {
         std::vector<chip_id_t> all_device_ids = {};
@@ -329,11 +339,19 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
             for (const auto& mmio_controlled_device_id :
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                if (not this->is_device_active(mmio_controlled_device_id)) {
-                    this->activate_device(mmio_controlled_device_id);
-                }
+                devices_to_activate.insert(mmio_controlled_device_id);
             }
         }
+    }
+
+    for (const auto& device_id : devices_to_activate) {
+        if (not this->is_device_active(device_id)) {
+            this->activate_device(device_id);
+        }
+    }
+    this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+    if (this->using_fast_dispatch) {
+        populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
 }
 
@@ -477,7 +495,7 @@ void DevicePool::close_devices(const std::vector<Device*>& devices) {
             continue;
         }
         auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
-        auto tunnels_from_mmio = mmio_dev_handle->tunnels_from_mmio_;
+        auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
         // iterate over all tunnels origination from this mmio device
         for (auto t : tunnels_from_mmio) {
             // iterate over all tunneled devices (tunnel stops) in this tunnel

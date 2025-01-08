@@ -1,5 +1,6 @@
 set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/test_free_list_allocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/test_free_list_opt_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/test_l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_allocation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_creation.cpp
@@ -45,9 +46,7 @@ target_link_libraries(
 target_include_directories(
     unit_tests_api
     PRIVATE
-        ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_metal/common
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}

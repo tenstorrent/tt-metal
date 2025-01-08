@@ -15,6 +15,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
+#include "tt_metal/distributed/mesh_command_queue.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -103,7 +104,7 @@ MeshShape SystemMesh::Impl::get_system_mesh_shape(size_t system_num_devices) {
         {1, MeshShape{1, 1}},   // single-device
         {2, MeshShape{1, 2}},   // N300
         {8, MeshShape{2, 4}},   // T3000; as ring to match existing tests
-        {32, MeshShape{8, 4}},  // TG
+        {32, MeshShape{8, 4}},  // TG, QG
         {64, MeshShape{8, 8}},  // TGG
     };
     TT_FATAL(
@@ -115,11 +116,18 @@ MeshShape SystemMesh::Impl::get_system_mesh_shape(size_t system_num_devices) {
 
 std::unordered_map<LogicalCoordinate, PhysicalCoordinate> SystemMesh::Impl::get_system_mesh_translation_map(
     size_t system_num_devices) {
+    // TG has 32 non-mmio user devices and 4 mmio devices not exposed to the user
+    // QG has 32 mmio user devices
+    // Once TG is fully deprecated, can remove TG code path
+    std::string galaxy_mesh_descriptor = "TG.json";
+    if (tt::Cluster::instance().number_of_pci_devices() == system_num_devices) {
+        galaxy_mesh_descriptor = "QG.json";
+    }
     const std::unordered_map<size_t, std::string> system_mesh_translation_map = {
         {1, "device.json"},
         {2, "N300.json"},
         {8, "T3000.json"},
-        {32, "TG.json"},
+        {32, galaxy_mesh_descriptor},
         {64, "TGG.json"},
     };
     TT_FATAL(
@@ -366,7 +374,6 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config) {
     auto mesh_device = std::make_shared<MeshDevice>(config.mesh_shape, config.mesh_type);
     mesh_device->initialize(l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config);
-
     return mesh_device;
 }
 
@@ -443,6 +450,9 @@ void MeshDevice::initialize(
     }
     this->view = std::make_unique<MeshDeviceView>(*this);
     system_mesh.register_mesh_device(shared_from_this(), this->devices);
+    if (this->using_fast_dispatch()) {
+        this->mesh_command_queue_ = std::make_unique<MeshCommandQueue>(this, 0);
+    }
 }
 
 MeshDevice::~MeshDevice() { close_devices(); }
@@ -468,6 +478,11 @@ std::vector<Device*> MeshDevice::get_devices(const std::optional<MeshType>& requ
 // TODO: Remove this function once we have a proper view interface
 Device* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
     return this->get_device_index(row_idx * num_cols() + col_idx);
+}
+
+MeshCommandQueue& MeshDevice::command_queue() {
+    TT_FATAL(this->using_fast_dispatch(), "Can only acess the MeshCommandQueue when using Fast Dispatch.");
+    return *(this->mesh_command_queue_);
 }
 
 const DeviceIds MeshDevice::get_device_ids() const {
@@ -655,6 +670,18 @@ allocator::Statistics MeshDevice::get_memory_allocation_statistics(
     // This will be made more explicit in the future to have lock-step allocation across devices.
     // Right now, we just return the statistics of the first device.
     return this->reference_device()->get_memory_allocation_statistics(buffer_type, sub_device_id);
+}
+
+bool MeshDevice::using_fast_dispatch() {
+    bool using_fast_dispatch = true;
+    for (uint32_t i = 0; i < this->num_devices(); i++) {
+        if (i > 0) {
+            TT_FATAL(using_fast_dispatch == this->devices[i]->using_fast_dispatch(), "Expected all devices in a Mesh to use identical dispatch modes.");
+        } else {
+            using_fast_dispatch = this->devices[i]->using_fast_dispatch();
+        }
+    }
+    return using_fast_dispatch;
 }
 
 }  // namespace tt::tt_metal::distributed

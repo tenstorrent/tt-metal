@@ -511,11 +511,16 @@ def test_sharded_matmul(t3k_mesh_device):
     q_heads_1B4D = ttnn.to_device(q_heads_1B4D, t3k_mesh_device)
     keys_1BDP = ttnn.to_device(keys_1BDP, t3k_mesh_device)
 
+    core_grid = ttnn.CoreGrid(y=4, x=8)
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    if (compute_grid_size.x < core_grid.x) or (compute_grid_size.y < core_grid.y):
+        pytest.skip("Test requires larger grid size")
+
     q_heads_1B4D = ttnn.to_memory_config(
         q_heads_1B4D,
         ttnn.create_sharded_memory_config(
             shape=(32, 128),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -526,7 +531,7 @@ def test_sharded_matmul(t3k_mesh_device):
         keys_1BDP,
         ttnn.create_sharded_memory_config(
             shape=(128, 32),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -542,7 +547,7 @@ def test_sharded_matmul(t3k_mesh_device):
         q_heads_1B4D,
         keys_1BDP,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=4, x=8),
+        core_grid=core_grid,
         compute_kernel_config=compute_kernel_attn,
     )
 

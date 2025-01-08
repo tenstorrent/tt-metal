@@ -681,7 +681,7 @@ public:
             return;
         }
 
-        // All data needs to be 32B aligned
+        // All data needs to be PCIE_ALIGNMENT aligned
         uint32_t push_size_16B =
             align(push_size_B, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)) >> 4;
 

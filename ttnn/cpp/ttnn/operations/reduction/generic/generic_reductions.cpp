@@ -12,24 +12,10 @@
 namespace ttnn {
 namespace operations::reduction {
 
-template <ReduceType reduce_type>
-static Tensor reduce_impl(
-    const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg,
-    const bool keepdim,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    float scalar,
-    bool reshape) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
-    if (not keepdim) {
-        TT_THROW("keepdim=False is not supported");
-    }
-
+ttnn::SmallVector<int> generate_reduce_dim(
+    const Tensor& input_tensor_arg, const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg) {
     auto input_shape = input_tensor_arg.get_shape();
     auto rank = input_shape.size();
-    auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
-
     ttnn::SmallVector<int> dim{};
     if (dim_arg.has_value()) {
         if (not std::holds_alternative<ttnn::SmallVector<int>>(dim_arg.value())) {
@@ -38,7 +24,8 @@ static Tensor reduce_impl(
         } else {
             dim = std::get<ttnn::SmallVector<int>>(dim_arg.value());
         }
-    } else {
+    }
+    if (dim.empty()) {
         dim = ttnn::SmallVector<int>(rank);
         for (int i = 0; i < rank; i++) {
             dim[i] = i;
@@ -58,61 +45,88 @@ static Tensor reduce_impl(
             rank);
     }
 
-    if (dim.size() == 1 && rank == 4) {
-        if (dim[0] == rank - 3) {
-            auto out_shape = input_tensor_arg.get_legacy_shape();
-            out_shape[1] = 1;
-
-            Tensor output = ttnn::transpose(input_tensor_arg, 1, -2, memory_config);
-            output = reduce_impl<reduce_type>(output, 2, keepdim, memory_config, compute_kernel_config, scalar, false);
-            output = ttnn::transpose(output, 1, -2, memory_config);
-            return AutoFormat::format_output_tensor(output, out_shape, input_tensor_arg.device(), Layout::TILE);
-        } else if (dim[0] == 0) {
-            auto out_shape = input_tensor_arg.get_legacy_shape();
-            out_shape[0] = 1;
-
-            Tensor output = ttnn::transpose(input_tensor_arg, 0, -2, memory_config);
-            output = reduce_impl<reduce_type>(output, 2, keepdim, memory_config, compute_kernel_config, scalar, false);
-            output = ttnn::transpose(output, 0, -2, memory_config);
-            return AutoFormat::format_output_tensor(output, out_shape, input_tensor_arg.device(), Layout::TILE);
-        }
-    }
-
     std::sort(dim.begin(), dim.end());
+    return dim;
+}
+
+template <ReduceType reduce_type>
+static Tensor reduce_impl(
+    const Tensor& input_tensor_arg,
+    const ttnn::SmallVector<int>& dim,
+    const bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool reshape) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
+    auto input_shape = input_tensor_arg.get_shape();
+    auto rank = input_shape.size();
+    auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
     ttnn::SmallVector<uint32_t> output_shape;
-    ttnn::SmallVector<uint32_t> padded_output_shape;
     for (int axis = 0; axis < input_shape.size(); axis++) {
         if (std::find(dim.begin(), dim.end(), axis) != dim.end()) {
             if (keepdim) {
                 output_shape.push_back(1);
-                padded_output_shape.push_back(axis >= rank - 2 ? ttnn::TILE_SIZE : 1);
             }
         } else {
             // Get the shape for the output tensor
             output_shape.push_back(input_shape[axis]);
-            // Get the padded shape for the output tensor
-            padded_output_shape.push_back(input_shape.value[axis]);
         }
     }
 
     auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_arg);
 
     Tensor output_tensor;
-    if (!dim_arg.has_value()) {
-        if constexpr (
-            reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
-            output_tensor = input_tensor;
-            for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
-                output_tensor = reduce_impl<reduce_type>(
-                    output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
+    bool single_reduce_op = (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
+                            (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
+    if (!single_reduce_op) {
+        auto reduce_4d_loop = [&](const bool use_reduce_type) -> Tensor {
+            Tensor output_tensor = input_tensor;
+            int offset = 4 - rank;
+            for (int i_dim = rank - 1; i_dim >= 0; i_dim--) {
+                bool found = std::find(dim.begin(), dim.end(), i_dim) != dim.end();
+                if (found) {
+                    bool transpose = i_dim < rank - 2;
+                    int adjusted_dim = offset + i_dim;
+                    int reduce_dim = adjusted_dim;
+                    if (transpose) {
+                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, 2, memory_config);
+                        reduce_dim = 2;
+                    }
+                    if (use_reduce_type) {
+                        output_tensor = reduce_impl<reduce_type>(
+                            output_tensor,
+                            {reduce_dim},
+                            /*keepdim=*/true,
+                            memory_config,
+                            compute_kernel_config,
+                            scalar,
+                            /*reshape=*/false);
+                    } else {
+                        output_tensor = reduce_impl<ReduceType::Sum>(
+                            output_tensor,
+                            {reduce_dim},
+                            /*keepdim=*/true,
+                            memory_config,
+                            compute_kernel_config,
+                            scalar,
+                            /*reshape=*/false);
+                    }
+                    if (transpose) {
+                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -2, memory_config);
+                    }
+                }
             }
+            return output_tensor;
+        };
+        constexpr bool linear_type =
+            reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max || reduce_type == ReduceType::Min;
+        if (dim.size() == 1 || linear_type) {
+            output_tensor = reduce_4d_loop(/*use_reduce_type=*/true);
         } else if constexpr (reduce_type == ReduceType::Mean) {
-            output_tensor = input_tensor;
-            for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
-                output_tensor = reduce_impl<ReduceType::Sum>(
-                    output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
-            }
+            output_tensor = reduce_4d_loop(
+                /*use_reduce_type=*/false);
             float inv_volume = 1.0f / input_tensor.get_logical_volume();
             output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
         } else {
@@ -199,7 +213,7 @@ static Tensor reduce_impl(
     }
 
     if (reshape) {
-        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{output_shape, padded_output_shape});
+        output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape{output_shape});
     }
 
     return output_tensor;
@@ -213,8 +227,9 @@ Tensor Reduce<reduce_type>::invoke(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar) {
+    ttnn::SmallVector<int> dim = generate_reduce_dim(input_tensor_arg, dim_arg);
     return reduce_impl<reduce_type>(
-        input_tensor_arg, dim_arg, keepdim, memory_config_arg, compute_kernel_config, scalar, true);
+        input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, true);
 }
 
 template class Reduce<ReduceType::Sum>;

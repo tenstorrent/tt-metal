@@ -137,6 +137,7 @@ struct TrainingConfig {
     uint32_t max_steps = 5000;
     float learning_rate = 3e-4F;
     float weight_decay = 1e-2F;
+    bool use_moreh_adamw = false;
     // works only for AdamW
     bool use_kahan_summation = false;
     // accumulate batches for gradient update
@@ -160,6 +161,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.max_steps = training_config["max_steps"].as<uint32_t>();
     config.learning_rate = training_config["learning_rate"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
+    config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
     config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
@@ -335,12 +337,21 @@ int main(int argc, char **argv) {
     fmt::print("    Learning rate: {}\n", adamw_params.lr);
     fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
     fmt::print("    Use Kahan summation: {}\n", adamw_params.use_kahan_summation);
-    auto optimizer = ttml::optimizers::AdamW(model->parameters(), adamw_params);
-    auto scheduler = schedule_func(&optimizer, config.max_steps);
+    auto select_optimizer = [&model,
+                             &adamw_params](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
+        if (use_moreh_adamw) {
+            return std::make_unique<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
+        } else {
+            return std::make_unique<ttml::optimizers::AdamW>(model->parameters(), adamw_params);
+        }
+    };
+
+    auto optimizer = select_optimizer(config.use_moreh_adamw);
+    auto scheduler = schedule_func(optimizer.get(), config.max_steps);
     if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
         fmt::print("Loading model from {}\n", config.model_path);
         load_training_state(config.model_path, model, scheduler, "transformer", "adamw");
-        fmt::print("Model loaded after {} steps\n", optimizer.get_steps());
+        fmt::print("Model loaded after {} steps\n", optimizer->get_steps());
     }
 
     if (is_eval) {
@@ -362,7 +373,7 @@ int main(int argc, char **argv) {
         for (auto [features, target, masks] : train_dataloader) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
-                optimizer.zero_grad();
+                optimizer->zero_grad();
             }
             auto output = (*model)(features, masks);
             auto loss = ttml::ops::nll_loss(output, target);
@@ -376,9 +387,9 @@ int main(int argc, char **argv) {
             gradient_accumulator_helper.update(loss_float, samples);
 
             if (gradient_accumulator_helper.should_step()) {
-                optimizer.step();
+                optimizer->step();
                 scheduler->step();
-                auto global_step = optimizer.get_steps();
+                auto global_step = optimizer->get_steps();
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
 
@@ -387,7 +398,7 @@ int main(int argc, char **argv) {
                         {{"Step", (int)global_step},
                          {"Samples", (int)get_samples_count(global_step)},
                          {"Loss", loss_meter.average()},
-                         {"Learning rate", optimizer.get_lr()}});
+                         {"Learning rate", optimizer->get_lr()}});
                     loss_meter.reset();
                 }
                 if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
@@ -407,7 +418,7 @@ int main(int argc, char **argv) {
                 (double)duration / 1000,
                 device->num_program_cache_entries());
         }
-        if (optimizer.get_steps() >= config.max_steps) {
+        if (optimizer->get_steps() >= config.max_steps) {
             break;
         }
     }
