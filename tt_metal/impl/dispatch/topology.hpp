@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
@@ -26,38 +27,8 @@ typedef struct {
 } dispatch_kernel_node_t;
 
 // Create the graph given the nodes
-template <typename Generator = DefaultFDKernelGenerator>
-std::vector<FDKernel*> connect_fd_graph_edges(std::vector<dispatch_kernel_node_t>& nodes) {
-    std::vector<FDKernel*> node_id_to_kernel;
-
-    // Read the input table, create configs for each node
-    for (const auto& node : nodes) {
-        TT_ASSERT(node_id_to_kernel.size() == node.id);
-        node_id_to_kernel.push_back(Generator().Generate(
-            node.id,
-            node.device_id,
-            node.servicing_device_id,
-            node.cq_id,
-            {node.my_noc, node.upstream_noc, node.downstream_noc},
-            static_cast<uint32_t>(node.kernel_type)));
-    }
-
-    // Connect the graph with upstream/downstream kernels
-    for (const auto& node : nodes) {
-        for (int idx = 0; idx < DISPATCH_MAX_UPSTREAM; idx++) {
-            if (node.upstream_ids[idx] >= 0) {
-                node_id_to_kernel.at(node.id)->AddUpstreamKernel(node_id_to_kernel.at(node.upstream_ids[idx]));
-            }
-        }
-        for (int idx = 0; idx < DISPATCH_MAX_DOWNSTREAM; idx++) {
-            if (node.downstream_ids[idx] >= 0) {
-                node_id_to_kernel.at(node.id)->AddDownstreamKernel(node_id_to_kernel.at(node.downstream_ids[idx]));
-            }
-        }
-    }
-
-    return node_id_to_kernel;
-}
+std::vector<FDKernel*> connect_fd_graph_edges(
+    std::vector<dispatch_kernel_node_t>& nodes, std::unique_ptr<FDKernelGenerator> kernel_generator);
 
 // Create FD kernels for all given device ids. Creates all objects, but need to call create_and_compile_cq_program() use
 // a created Device to fill out the settings.

@@ -521,10 +521,9 @@ void DeviceData::overflow_check(Device* device) {
     }
 }
 
-template <bool is_dram_variant, bool is_host_variant>
-void configure_kernel_variant(
+void configure_kernel_variant_for_test(
     Program& program,
-    string path,
+    const string& path,
     std::vector<uint32_t> compile_args,  // yes, copy
     CoreCoord my_core,
     CoreCoord phys_my_core,
@@ -533,7 +532,9 @@ void configure_kernel_variant(
     Device* device,
     NOC my_noc_index,
     NOC upstream_noc_index,
-    NOC downstream_noc_index) {
+    NOC downstream_noc_index,
+    bool is_dram_variant,
+    bool is_host_variant) {
     auto my_virtual_noc_coords = device->virtual_noc0_coordinate(my_noc_index, phys_my_core);
     auto upstream_virtual_noc_coords = device->virtual_noc0_coordinate(upstream_noc_index, phys_upstream_core);
     auto downstream_virtual_noc_coords = device->virtual_noc0_coordinate(downstream_noc_index, phys_downstream_core);

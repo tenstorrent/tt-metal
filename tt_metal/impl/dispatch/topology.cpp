@@ -503,13 +503,47 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
     return nodes;
 }
 
+std::vector<FDKernel*> connect_fd_graph_edges(
+    std::vector<dispatch_kernel_node_t>& nodes, std::unique_ptr<FDKernelGenerator> kernel_generator) {
+    std::vector<FDKernel*> node_id_to_kernel;
+
+    // Read the input table, create configs for each node
+    for (const auto& node : nodes) {
+        TT_ASSERT(node_id_to_kernel.size() == node.id);
+        node_id_to_kernel.push_back(kernel_generator->Generate(
+            node.id,
+            node.device_id,
+            node.servicing_device_id,
+            node.cq_id,
+            {node.my_noc, node.upstream_noc, node.downstream_noc},
+            static_cast<uint32_t>(node.kernel_type)));
+    }
+
+    // Connect the graph with upstream/downstream kernels
+    for (const auto& node : nodes) {
+        for (int idx = 0; idx < DISPATCH_MAX_UPSTREAM; idx++) {
+            if (node.upstream_ids[idx] >= 0) {
+                node_id_to_kernel.at(node.id)->AddUpstreamKernel(node_id_to_kernel.at(node.upstream_ids[idx]));
+            }
+        }
+        for (int idx = 0; idx < DISPATCH_MAX_DOWNSTREAM; idx++) {
+            if (node.downstream_ids[idx] >= 0) {
+                node_id_to_kernel.at(node.id)->AddDownstreamKernel(node_id_to_kernel.at(node.downstream_ids[idx]));
+            }
+        }
+    }
+
+    return node_id_to_kernel;
+}
+
 // Populate node_id_to_kernel and set up kernel objects. Do this once at the beginning since they (1) don't need a valid
 // Device until fields are populated, (2) need to be connected to kernel objects for devices that aren't created yet,
 // and (3) the table to choose depends on total number of devices, not know at Device creation.
 std::vector<FDKernel*> populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
     // Read the input table, create configs for each node
     std::vector<dispatch_kernel_node_t> nodes = get_nodes(device_ids, num_hw_cqs);
-    auto node_id_to_kernel = connect_fd_graph_edges(nodes);
+    auto kernel_generator = std::make_unique<DefaultFDKernelGenerator>();
+    auto node_id_to_kernel = connect_fd_graph_edges(nodes, std::move(kernel_generator));
 
     // For kernels on mmio chip, need to confirm which remote device each is servicing
     std::map<chip_id_t, uint32_t> device_id_to_tunnel_stop;

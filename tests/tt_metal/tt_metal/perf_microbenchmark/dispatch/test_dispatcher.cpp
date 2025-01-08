@@ -606,7 +606,7 @@ int main(int argc, char** argv) {
         constexpr NOC my_noc_index = NOC::NOC_0;
         constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
 
-        configure_kernel_variant<true, true>(
+        configure_kernel_variant_for_test(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             dispatch_compile_args,
@@ -617,7 +617,9 @@ int main(int argc, char** argv) {
             device,
             my_noc_index,
             dispatch_upstream_noc_index,
-            my_noc_index);
+            my_noc_index,
+            true,
+            true);
 
         switch (test_type_g) {
             case 0: log_info(LogTest, "Running linear unicast test"); break;

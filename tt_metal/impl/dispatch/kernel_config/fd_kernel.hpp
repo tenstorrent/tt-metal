@@ -41,8 +41,21 @@ static std::vector<string> dispatch_kernel_file_names = {
 
 class FDKernel;  // Required by FDKernelGenerator
 
+class FDKernelGenerator {
+public:
+    virtual ~FDKernelGenerator() = default;
+
+    virtual FDKernel* Generate(
+        int node_id,
+        chip_id_t device_id,
+        chip_id_t servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        uint32_t type_id) = 0;
+};
+
 // Default FD Kernel Generator
-class DefaultFDKernelGenerator {
+class DefaultFDKernelGenerator : public FDKernelGenerator {
 public:
     FDKernel* Generate(
         int node_id,
@@ -50,7 +63,7 @@ public:
         chip_id_t servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
-        uint32_t type_id);
+        uint32_t type) override;
 };
 
 // Top-level class describing a Fast Dispatch Kernel (kernel running on a specific core). All FD kernels should inherit
