@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/impl/device/device.hpp"
+
 #include <string>
 #include <thread>
-#include "tt_metal/device.hpp"
+#include "tt_metal/deprecated/device.hpp"
 #include "common/core_assignment.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
 #include "tracy/Tracy.hpp"
@@ -877,7 +878,7 @@ void Device::compile_command_queue_programs() {
 void Device::configure_command_queue_programs() {
     chip_id_t device_id = this->id();
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-    Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
+    IDevice* mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
 
     std::vector<uint32_t> zero = {0x0}; // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers;
@@ -940,7 +941,7 @@ void Device::init_command_queue_host() {
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc);
         // Need to do this since CommandQueue constructor is private
-        sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
+        sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
     }
 }
 
@@ -982,7 +983,7 @@ void Device::initialize_synchronous_sw_cmd_queue() {
     // This queue is used for all host bound functions using the Software CQ in SD mode.
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         // Need to do this since CommandQueue constructor is private
-        sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
+        sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
         sw_command_queues_[cq_id]->set_mode(CommandQueue::CommandQueueMode::PASSTHROUGH);
     }
 }
@@ -1032,6 +1033,10 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     return true;
 }
 
+void Device::push_work(std::function<void()> work, bool blocking) {
+    this->work_executor_.push_work(std::move(work), blocking);
+}
+
 bool Device::close() {
     log_info(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
@@ -1039,7 +1044,7 @@ bool Device::close() {
     }
 
     for (const std::unique_ptr<HWCommandQueue> &hw_command_queue : hw_command_queues_) {
-        if (hw_command_queue->manager.get_bypass_mode()) {
+        if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
             hw_command_queue->record_end();
         }
         hw_command_queue->terminate();
@@ -1286,8 +1291,8 @@ void Device::reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceMana
     // Currently each one will be pushed into its own prefetch entry
     for (auto& hw_cq : this->hw_command_queues_) {
         // Only need to reset launch messages once, so reset on cq 0
-        TT_FATAL(!hw_cq->manager.get_bypass_mode(), "Cannot reset worker state during trace capture");
-        hw_cq->reset_worker_state(hw_cq->id == 0);
+        TT_FATAL(!hw_cq->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
+        hw_cq->reset_worker_state(hw_cq->get_id() == 0);
         hw_cq->set_num_worker_sems_on_dispatch(num_sub_devices);
         hw_cq->set_go_signal_noc_data_on_dispatch(sub_device_manager->noc_mcast_unicast_data());
         hw_cq->reset_config_buffer_mgr(num_sub_devices);
@@ -1589,9 +1594,9 @@ void Device::enable_async(bool enable) {
     // This is required for checking if a call is made from an application thread or a worker thread.
     // See InWorkerThread().
     if (enable) {
-        tt::DevicePool::instance().register_worker_thread_for_device(tt::DevicePool::instance().get_handle(this), this->work_executor_.get_worker_thread_id());
+        tt::DevicePool::instance().register_worker_thread_for_device(this, this->work_executor_.get_worker_thread_id());
     } else {
-        tt::DevicePool::instance().unregister_worker_thread_for_device(tt::DevicePool::instance().get_handle(this));
+        tt::DevicePool::instance().unregister_worker_thread_for_device(this);
     }
 }
 
@@ -1606,7 +1611,7 @@ bool Device::using_fast_dispatch() const {
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
     ZoneScoped;
     TracyTTMetalBeginTrace(this->id(), tid);
-    TT_FATAL(!this->hw_command_queues_[cq_id]->tid.has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
+    TT_FATAL(!this->hw_command_queues_[cq_id]->get_tid().has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
     this->mark_allocations_safe();
     // Create an empty trace buffer here. This will get initialized in end_trace
     TT_FATAL(this->active_sub_device_manager_->get_trace(tid) == nullptr, "Trace already exists for tid {} on device {}'s active sub-device manager {}", tid, this->id_, this->active_sub_device_manager_id_);
@@ -1617,7 +1622,7 @@ void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
 void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
     ZoneScoped;
     TracyTTMetalEndTrace(this->id(), tid);
-    TT_FATAL(this->hw_command_queues_[cq_id]->tid == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
+    TT_FATAL(this->hw_command_queues_[cq_id]->get_tid() == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
     auto trace_buffer = this->active_sub_device_manager_->get_trace(tid);
     TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device {}'s active sub-device manager {}", tid, this->id_, this->active_sub_device_manager_id_);
     this->hw_command_queues_[cq_id]->record_end();
@@ -1929,7 +1934,7 @@ chip_id_t v1::GetPCIeDeviceID(chip_id_t device_id) {
     return tt::Cluster::instance().get_associated_mmio_device(device_id);
 }
 
-v1::DeviceHandle v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions options) {
+IDevice* v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions options) {
     ZoneScoped;
 
     tt::DevicePool::initialize(
@@ -1943,59 +1948,59 @@ v1::DeviceHandle v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions optio
     return tt::DevicePool::instance().get_active_device(device_id);
 }
 
-bool v1::CloseDevice(DeviceHandle device) { return v0::CloseDevice(device); }
+bool v1::CloseDevice(IDevice* device) { return v0::CloseDevice(device); }
 
-void v1::DeallocateBuffers(DeviceHandle device) { device->deallocate_buffers(); }
+void v1::DeallocateBuffers(IDevice* device) { device->deallocate_buffers(); }
 
-void v1::DumpDeviceProfileResults(DeviceHandle device, const CoreRangeSet &worker_cores, bool last_dump) {
+void v1::DumpDeviceProfileResults(IDevice* device, const CoreRangeSet &worker_cores, bool last_dump) {
     auto worker_cores_vec = corerange_to_cores(worker_cores);
     detail::DumpDeviceProfileResults(device, worker_cores_vec, last_dump);
 }
 
-ARCH v1::GetArch(DeviceHandle device) { return device->arch(); }
+ARCH v1::GetArch(IDevice* device) { return device->arch(); }
 
-chip_id_t v1::GetId(DeviceHandle device) { return device->id(); }
+chip_id_t v1::GetId(IDevice* device) { return device->id(); }
 
-int v1::GetNumDramChannels(DeviceHandle device) { return device->num_dram_channels(); }
+int v1::GetNumDramChannels(IDevice* device) { return device->num_dram_channels(); }
 
-std::uint32_t v1::GetL1SizePerCore(DeviceHandle device) { return device->l1_size_per_core(); }
+std::uint32_t v1::GetL1SizePerCore(IDevice* device) { return device->l1_size_per_core(); }
 
-CoreCoord v1::GetComputeWithStorageGridSize(DeviceHandle device) { return device->compute_with_storage_grid_size(); }
+CoreCoord v1::GetComputeWithStorageGridSize(IDevice* device) { return device->compute_with_storage_grid_size(); }
 
-CoreCoord v1::GetDramGridSize(DeviceHandle device) { return device->dram_grid_size(); }
+CoreCoord v1::GetDramGridSize(IDevice* device) { return device->dram_grid_size(); }
 
-void v1::EnableProgramCache(DeviceHandle device) { device->enable_program_cache(); }
+void v1::EnableProgramCache(IDevice* device) { device->enable_program_cache(); }
 
-void v1::DisableAndClearProgramCache(DeviceHandle device) { device->disable_and_clear_program_cache(); }
+void v1::DisableAndClearProgramCache(IDevice* device) { device->disable_and_clear_program_cache(); }
 
-void v1::PushWork(DeviceHandle device, std::function<void()> work, bool blocking) {
+void v1::PushWork(IDevice* device, std::function<void()> work, bool blocking) {
     device->push_work(std::move(work), blocking);
 }
 
-void v1::Synchronize(DeviceHandle device) { device->synchronize(); }
+void v1::Synchronize(IDevice* device) { device->synchronize(); }
 
-std::vector<CoreCoord> v1::GetEthernetSockets(DeviceHandle device, chip_id_t connected_chip_id) {
+std::vector<CoreCoord> v1::GetEthernetSockets(IDevice* device, chip_id_t connected_chip_id) {
     return device->get_ethernet_sockets(connected_chip_id);
 }
 
-std::uint32_t v1::GetNumBanks(DeviceHandle device, BufferType buffer_type) { return device->num_banks(buffer_type); }
+std::uint32_t v1::GetNumBanks(IDevice* device, BufferType buffer_type) { return device->num_banks(buffer_type); }
 
-std::int32_t v1::GetBankOffset(DeviceHandle device, BufferType buffer_type, std::uint32_t bank_id) {
+std::int32_t v1::GetBankOffset(IDevice* device, BufferType buffer_type, std::uint32_t bank_id) {
     return device->bank_offset(buffer_type, bank_id);
 }
 
 tt::stl::Span<const std::uint32_t> v1::BankIdsFromLogicalCore(
-    DeviceHandle device, BufferType buffer_type, CoreCoord logical_core) {
+    IDevice* device, BufferType buffer_type, CoreCoord logical_core) {
     return device->bank_ids_from_logical_core(buffer_type, logical_core);
 }
 
-float v1::GetSfpuEps(DeviceHandle device) { return device->sfpu_eps(); }
+float v1::GetSfpuEps(IDevice* device) { return device->sfpu_eps(); }
 
-float v1::GetSfpuNan(DeviceHandle device) { return device->sfpu_nan(); }
+float v1::GetSfpuNan(IDevice* device) { return device->sfpu_nan(); }
 
-float v1::GetSfpuInf(DeviceHandle device) { return device->sfpu_inf(); }
+float v1::GetSfpuInf(IDevice* device) { return device->sfpu_inf(); }
 
-std::size_t v1::GetNumProgramCacheEntries(DeviceHandle device) { return device->num_program_cache_entries(); }
+std::size_t v1::GetNumProgramCacheEntries(IDevice* device) { return device->num_program_cache_entries(); }
 
 }  // namespace tt_metal
 

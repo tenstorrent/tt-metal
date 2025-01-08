@@ -20,7 +20,7 @@ namespace v1 {
  * @param cq_id The command queue ID.
  * @return CommandQueue handle.
  */
-CommandQueueHandle GetCommandQueue(DeviceHandle device, std::uint8_t cq_id);
+CommandQueueHandle GetCommandQueue(IDevice* device, std::uint8_t cq_id);
 
 /**
  * @brief Retrieves the default command queue for the given device.
@@ -28,7 +28,7 @@ CommandQueueHandle GetCommandQueue(DeviceHandle device, std::uint8_t cq_id);
  * @param device The device to query.
  * @return CommandQueue handle.
  */
-CommandQueueHandle GetDefaultCommandQueue(DeviceHandle device);
+CommandQueueHandle GetDefaultCommandQueue(IDevice* device);
 
 /**
  * @brief Reads a buffer from the device.
@@ -80,7 +80,7 @@ void SetLazyCommandQueueMode(bool lazy);
  * @param cq The command queue to query.
  * @return Device handle associated with the command queue.
  */
-DeviceHandle GetDevice(CommandQueueHandle cq);
+IDevice* GetDevice(CommandQueueHandle cq);
 
 /**
  * @brief Retrieves the ID of the command queue.

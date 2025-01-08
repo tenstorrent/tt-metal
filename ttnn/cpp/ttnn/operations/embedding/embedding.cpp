@@ -76,7 +76,7 @@ ttnn::Tensor EmbeddingOperation::invoke(
             embeddings, ttnn::Shape{std::array<uint32_t, 3>{batch_size, sentence_size, hidden_embedding_dim}});
     }
     embeddings = ttnn::to_layout(
-        embeddings, layout.value_or(weight_arg.get_layout()), std::nullopt, std::nullopt, (Device*)nullptr);
+        embeddings, layout.value_or(weight_arg.get_layout()), std::nullopt, std::nullopt, (IDevice*)nullptr);
     return embeddings;
 }
 ttnn::Tensor EmbeddingOperation::invoke(

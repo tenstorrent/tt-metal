@@ -6,7 +6,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -153,7 +153,7 @@ void set_runtime_args(
     }
 }
 
-void initialize_program(tt_metal::Device* device, tt_metal::Program& program, uint32_t run_cycles) {
+void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, uint32_t run_cycles) {
     program = tt_metal::CreateProgram();
 
     std::map<string, string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size_g)}};
@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
     try {
         const chip_id_t device_id = 0;
         DispatchCoreType dispatch_core_type = dispatch_from_eth_g ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-        tt_metal::Device* device = tt_metal::CreateDevice(
+        tt_metal::IDevice* device = tt_metal::CreateDevice(
             device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
         CommandQueue& cq = device->command_queue();
 

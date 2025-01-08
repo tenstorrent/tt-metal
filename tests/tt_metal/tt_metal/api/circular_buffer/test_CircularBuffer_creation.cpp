@@ -16,7 +16,7 @@ namespace basic_tests::circular_buffer {
 
 bool test_cb_config_written_to_core(
     Program& program,
-    Device* device,
+    IDevice* device,
     const CoreRangeSet& cr_set,
     const std::map<uint8_t, std::vector<uint32_t>>& cb_config_per_buffer_index) {
     bool pass = true;

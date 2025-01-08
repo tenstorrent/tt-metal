@@ -827,8 +827,8 @@ void adjust_conv_op_config_for_auto_shard_if_necessary(
     }
 }
 
-template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool> shard_or_reshard_tensor_if_required<Device>(
-    Device* device,
+template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool> shard_or_reshard_tensor_if_required<IDevice>(
+    IDevice* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
     uint32_t batch_size,

@@ -18,7 +18,7 @@
 namespace ttnn {
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::OwnedStorage;
@@ -31,7 +31,7 @@ static Tensor index_trilu(
     const int32_t diag,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     // Current implementation restrictions
@@ -71,7 +71,7 @@ static Tensor index_width(
     const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
@@ -107,7 +107,7 @@ static Tensor index_height(
     const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
@@ -143,7 +143,7 @@ static Tensor index_all(
     const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
@@ -179,7 +179,7 @@ static Tensor mask_padded_input(
     const tt::tt_metal::LegacyShape& unpadded_shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(padded_shape));
@@ -214,7 +214,7 @@ static Tensor fill_first_val_into_tensor(
     const Tensor& input_tensor,
     DataType data_type,
     const Layout layout,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     auto physical_volume = input_tensor.volume();
@@ -248,7 +248,7 @@ static Tensor prod_result_computation_GS(
     const Tensor& input_tensor,
     DataType data_type,
     const Layout layout,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
@@ -297,7 +297,7 @@ static Tensor prod_result_computation_WH_B0(
     const Tensor& input_tensor,
     DataType data_type,
     const Layout layout,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
@@ -350,7 +350,7 @@ static Tensor index_channel(
     const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
@@ -386,7 +386,7 @@ static Tensor index_batch(
     const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
@@ -422,7 +422,7 @@ static Tensor manual_insertion(
     const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
@@ -454,7 +454,7 @@ static Tensor index_tril(
     const int32_t diag,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     return index_trilu<T, false>(shape, diag, data_type, layout, device, output_mem_config);
@@ -466,7 +466,7 @@ static Tensor index_triu(
     const int32_t diag,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
-    Device* device = nullptr,
+    IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     return index_trilu<T, true>(shape, diag, data_type, layout, device, output_mem_config);

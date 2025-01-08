@@ -75,7 +75,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
             ttnn_shape,
             formatted_input_tensor.get_dtype(),
             formatted_input_tensor.get_layout(),
-            std::optional<std::reference_wrapper<tt::tt_metal::Device>>(*ttnn_device),
+            std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*ttnn_device),
             output_mem_config),
         dimension,
         output_mem_config);

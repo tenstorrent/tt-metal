@@ -123,7 +123,7 @@ void validate_sharded_buffer_allocation(
     }
 }
 
-DeviceBuffer allocate_buffer_on_device(Device* device, const TensorSpec& tensor_spec) {
+DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec) {
     auto buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     auto page_size_bytes = tensor_spec.compute_page_size_bytes();
     auto shard_spec_buffer = tensor_spec.compute_shard_spec_buffer();
@@ -139,7 +139,7 @@ DeviceBuffer allocate_buffer_on_device(Device* device, const TensorSpec& tensor_
 }
 
 void validate_on_device_dtype_and_layout(
-    Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout) {
+    IDevice* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
@@ -683,7 +683,7 @@ void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer& devic
 template <typename T, template <typename> typename BufferType>
 DeviceBuffer initialize_data_on_device(
     BufferType<T>& data_to_write,
-    Device* device,
+    IDevice* device,
     const TensorSpec& tensor_spec,
     uint8_t cq_id = ttnn::DefaultQueueId,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
@@ -704,7 +704,7 @@ DeviceBuffer initialize_data_on_device(
 template <typename T>
 DeviceBuffer to_device_buffer(
     const Storage& storage,
-    Device* device,
+    IDevice* device,
     const TensorSpec& tensor_spec,
     uint8_t cq_id,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -741,7 +741,7 @@ DeviceBuffer to_device_buffer(
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
     uint8_t cq_id,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -761,37 +761,37 @@ Tensor to_device(
 
 template Tensor to_device<bfloat16>(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
     uint8_t cq_id,
     tt::stl::Span<const SubDeviceId> sub_device_ids);
 template Tensor to_device<float>(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
     uint8_t cq_id,
     tt::stl::Span<const SubDeviceId> sub_device_ids);
 template Tensor to_device<int32_t>(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
     uint8_t cq_id,
     tt::stl::Span<const SubDeviceId> sub_device_ids);
 template Tensor to_device<uint32_t>(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
     uint8_t cq_id,
     tt::stl::Span<const SubDeviceId> sub_device_ids);
 template Tensor to_device<uint16_t>(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
     uint8_t cq_id,
     tt::stl::Span<const SubDeviceId> sub_device_ids);
 template Tensor to_device<uint8_t>(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
     uint8_t cq_id,
     tt::stl::Span<const SubDeviceId> sub_device_ids);
@@ -799,7 +799,7 @@ template Tensor to_device<uint8_t>(
 template <>
 Tensor to_device<bfloat4_b>(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
     uint8_t cq_id,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -809,7 +809,7 @@ Tensor to_device<bfloat4_b>(
 template <>
 Tensor to_device<bfloat8_b>(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
     uint8_t cq_id,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
