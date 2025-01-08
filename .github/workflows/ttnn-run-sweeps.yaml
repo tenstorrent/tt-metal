@@ -288,6 +288,7 @@ on:
           - eltwise.binary.add.add_set2_pytorch2
           - eltwise.binary.add.add_different_memory_configs
           - eltwise.binary.add.add_forge
+          - eltwise.binary.add.add_llama
           - eltwise.unary.gtz.gtz
           - eltwise.unary.ltz.ltz
           - eltwise.unary.gez.gez
@@ -314,6 +315,7 @@ on:
           - eltwise.binary.multiply.mul_tensor_pytorch2
           - eltwise.binary.multiply.multiply_scalar_pytorch2
           - eltwise.binary.multiply.multiply_forge
+          - eltwise.binary.multiply.multiply_llama
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div.div_forge
