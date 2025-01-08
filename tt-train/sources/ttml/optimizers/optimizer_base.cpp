@@ -11,34 +11,17 @@ namespace ttml::optimizers {
 
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor) {
     auto* device = &autograd::ctx().get_device();
-    auto devices = device->get_devices().size();
-
-    assert(devices >= 1U);
-
+    auto devices_count = device->get_devices().size();
+    assert(devices_count >= 1U);
     // no need to synchronize if there is only one device
-    if (devices == 1U) {
+    if (devices_count == 1U) {
         return tensor;
-    }
-
-    // debug prints, remove before merge
-    {
-        auto mesh_shape = device->shape();
-        ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-        auto xtensors_back = ttml::core::to_xtensor(tensor, identity_composer);
-
-        for (auto& xtensor : xtensors_back) {
-            fmt::print("xtensor: ");
-            for (auto& s : xtensor.shape()) {
-                fmt::print("{} ", s);
-            }
-            fmt::print("\n");
-        }
     }
 
     // all_reduce Mean is not supported, use sum and divide by #devices
     auto result = ttnn::experimental::all_reduce(
         tensor, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring);
-    result = ttnn::multiply(result, 1.0F / devices);
+    result = ttnn::multiply(result, 1.0F / static_cast<float>(devices_count));
     return result;
 }
 

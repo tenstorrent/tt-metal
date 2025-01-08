@@ -123,9 +123,6 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto xtensors_back = ttml::core::to_xtensor(sum_tensor, identity_composer);
     auto reduced_tensor = xtensor + xtensor;
 
-    std::cout << "xtensors_back[0]: " << xtensors_back[0] << std::endl;
-    std::cout << "xtensors_back[1]: " << xtensors_back[1] << std::endl;
-    std::cout << "reduced_tensor: " << reduced_tensor << std::endl;
     EXPECT_TRUE(xt::allclose(reduced_tensor, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2));
     EXPECT_TRUE(xt::allclose(reduced_tensor, xtensors_back[1], /*rtol=*/1e-3, /*atol=*/1e-2));
 }

@@ -1,13 +1,15 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/format.h>
+#include <gtest/gtest.h>
 
 #include <core/ttnn_all_includes.hpp>
+#include <core/xtensor_utils.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "datasets/dataloader.hpp"
@@ -16,6 +18,29 @@
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
+
+namespace {
+
+auto check_board_is_n300() {
+    return tt::Cluster::instance().get_board_type(0) == BoardType::N300;
+}
+
+}  // namespace
+
+class LinearRegressionDDPTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!check_board_is_n300()) {
+            GTEST_SKIP() << "Skipping N300 specific tests";
+        }
+        ttml::autograd::ctx().set_mesh_shape({1, 2});
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
 
 using ttml::autograd::TensorPtr;
 
@@ -26,13 +51,12 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample>&& samples)>,
     BatchType>;
 
-int main() {
-    const size_t training_samples_count = 100000;
+TEST_F(LinearRegressionDDPTest, Full) {
+    const size_t training_samples_count = 1000;
     const size_t num_features = 64;
     const size_t num_targets = 32;
     const float noise = 0.0F;
     const bool bias = true;
-    ttml::autograd::ctx().set_mesh_shape({1, 2});
 
     auto training_params = ttml::datasets::MakeRegressionParams{
         .n_samples = training_samples_count,
@@ -62,7 +86,7 @@ int main() {
             xt::xarray<float> targets_xtensor = xt::adapt(targets, std::vector<size_t>{batch_size, 1, 1, num_targets});
 
             auto mesh_shape = device->shape();
-            ttml::core::XTensorToMeshVariant<float> composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 0);
+            ttml::core::XTensorToMeshVariant<float> composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
             auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(data_xtensor, device, composer));
             auto targets_tensor =
                 ttml::autograd::create_tensor(ttml::core::from_xtensor(targets_xtensor, device, composer));
@@ -80,20 +104,19 @@ int main() {
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
 
     int training_step = 0;
-    const int num_epochs = 10;
+    const int num_epochs = 1;
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         for (const auto& [data, targets] : train_dataloader) {
             optimizer.zero_grad();
             auto output = (*model)(data);
             auto loss = ttml::ops::mse_loss(output, targets);
-            fmt::print("Loss shape: {}\n", loss->get_value().shape());
             auto mesh_shape = device->shape();
             ttml::core::MeshToXTensorVariant<float> identity_composer =
                 ttml::core::VectorMeshToXTensor<float>(mesh_shape);
             auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), identity_composer);
             float loss_float_0 = loss_xtensors[0](0);
             float loss_float_1 = loss_xtensors[1](0);
-            fmt::print("Step: {} Loss: {} {}\n", training_step++, loss_float_0, loss_float_1);
+            EXPECT_EQ(loss_float_0, loss_float_1);
             loss->backward();
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
