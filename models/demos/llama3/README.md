@@ -15,7 +15,9 @@ All the above llama models (with the exception of 70B due to its large size) are
 - T3000 (8-chips)
 - TG (32-chips)
 
-**Note**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 64k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below:
+**Max Context Lengths**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 64k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
+
+**Max Prefill Chunk Sizes**:
 |              |      N150     |      N300     |      T3K       |      TG     |
 |--------------|---------------|---------------|----------------|-------------|
 | Llama3.2-1B  | 128k tokens   | 128k tokens   | 128k tokens    | 128k tokens |
@@ -23,7 +25,7 @@ All the above llama models (with the exception of 70B due to its large size) are
 | Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
-
+- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 
 ## How to Run
 
