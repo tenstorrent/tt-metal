@@ -168,11 +168,9 @@ void DevicePool::init_profiler_devices() const {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
-                    log_info(
-                        tt::LogMetal,
-                        "Starting profiler on device {}",
-                        this->devices[mmio_controlled_device_id].get()->id());
-                    detail::InitDeviceProfiler(this->devices[mmio_controlled_device_id].get());
+                    auto mmio_device = get_device(mmio_controlled_device_id);
+                    log_info(tt::LogMetal, "Starting profiler on device {}", mmio_device->id());
+                    detail::InitDeviceProfiler(mmio_device);
                 }
             }
         }
@@ -274,13 +272,14 @@ void DevicePool::activate_device(chip_id_t id) {
         tt::Cluster::instance().number_of_devices());
     const std::lock_guard<std::mutex> lock(this->lock);
     if (this->devices.size() < id + 1) {
-        this->devices.resize(id + 1);
+        this->devices.reserve(id + 1);
     }
-    if (this->devices[id] == nullptr) {
+    auto device = get_device(id);
+    if (!device) {
         log_debug(tt::LogMetal, "DevicePool new device {}", id);
         int worker_core_thread_core = this->worker_thread_to_cpu_core_map.at(id);
         int completion_queue_reader_core = this->completion_queue_reader_to_cpu_core_map.at(id);
-        auto dev = new Device(
+        device = new Device(
             id,
             this->num_hw_cqs,
             this->l1_small_size,
@@ -289,25 +288,24 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core);
-        dev->update_dispatch_cores_for_multi_cq_eth_dispatch();
-        if (!this->firmware_built_keys.contains(dev->build_key())) {
-            dev->build_firmware();
-            this->firmware_built_keys.insert(dev->build_key());
+        device->update_dispatch_cores_for_multi_cq_eth_dispatch();
+        if (!this->firmware_built_keys.contains(device->build_key())) {
+            device->build_firmware();
+            this->firmware_built_keys.insert(device->build_key());
         }
-        this->devices[id] = std::unique_ptr<IDevice>(dev);
+        this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
-        const auto& dev = this->devices[id];
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
-        if (not dev->is_initialized()) {
-            if (dev->num_hw_cqs() != num_hw_cqs) {
+        if (not device->is_initialized()) {
+            if (device->num_hw_cqs() != num_hw_cqs) {
                 // The dispatch core manager was reset, since the number of CQs was toggled.
                 // Account for chip specific idle eth dispatch cores.
-                dev->update_dispatch_cores_for_multi_cq_eth_dispatch();
+                device->update_dispatch_cores_for_multi_cq_eth_dispatch();
             }
-            dev->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
-            if (!this->firmware_built_keys.contains(dev->build_key())) {
-                dev->build_firmware();
-                this->firmware_built_keys.insert(dev->build_key());
+            device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
+            if (!this->firmware_built_keys.contains(device->build_key())) {
+                device->build_firmware();
+                this->firmware_built_keys.insert(device->build_key());
             }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
@@ -316,11 +314,21 @@ void DevicePool::activate_device(chip_id_t id) {
 }
 
 bool DevicePool::is_device_active(chip_id_t id) const {
-    if (this->devices.size() < id + 1 || this->devices[id] == nullptr) {
+    auto device = get_device(id);
+    if (!device) {
         return false;
-    } else {
-        return this->devices[id]->is_initialized();
     }
+
+    return device->is_initialized();
+}
+
+IDevice* DevicePool::get_device(chip_id_t id) const {
+    auto it = std::find_if(devices.begin(), devices.end(), [&id](const auto& device) { return device->id() == id; });
+    if (it == devices.end()) {
+        return nullptr;
+    }
+
+    return it->get();
 }
 
 void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
@@ -418,7 +426,8 @@ void DevicePool::init_firmware_on_active_devices() const {
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
-                    this->initialize_device(devices[mmio_controlled_device_id].get());
+                    auto device = get_device(mmio_controlled_device_id);
+                    this->initialize_device(device);
                 }
             }
         }
@@ -447,12 +456,14 @@ DevicePool::DevicePool() {
 }
 
 IDevice* DevicePool::get_active_device(chip_id_t device_id) const {
-    TT_ASSERT(this->is_device_active(device_id), "DevicePool does not contain active device {}", device_id);
-    return this->devices[device_id].get();
+    auto device = get_device(device_id);
+    TT_ASSERT(device != nullptr, "DevicePool does not contain device {}", device_id);
+    TT_ASSERT(device->is_initialized(), "Device {} is not initialized", device_id);
+    return device;
 }
 
 std::vector<IDevice* > DevicePool::get_all_active_devices() const {
-    std::vector<IDevice* > user_devices;
+    std::vector<IDevice*> user_devices;
     for (const auto& device : this->devices) {
         if (device->is_initialized()) {
             user_devices.push_back(device.get());
@@ -470,10 +481,10 @@ bool DevicePool::close_device(chip_id_t device_id) {
     const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
     for (const auto& mmio_controlled_device_id :
          tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-        if (this->is_device_active(mmio_controlled_device_id)) {
-            auto& device = devices[mmio_controlled_device_id];
+        auto device = get_device(mmio_controlled_device_id);
+        if (device && device->is_initialized()) {
             pass &= device->close();
-            this->unregister_worker_thread_for_device(device.get());
+            this->unregister_worker_thread_for_device(device);
         }
     }
     return pass;
