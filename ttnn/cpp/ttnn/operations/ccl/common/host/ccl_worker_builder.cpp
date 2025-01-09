@@ -1643,17 +1643,17 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args
     return args;
 }
 
-bool can_command_stream_be_lowered_to_noc_commands(const Tensor& input_tensor) {
+bool can_command_stream_be_lowered_to_noc_commands(const Tensor& tensor) {
     static constexpr size_t baseline_arg_count = 12;
     // approximately... this is only very rough estimate until unlimited command stream length is enabled
     static constexpr size_t args_per_noc_command = 4;
     static constexpr size_t max_noc_commands = 256;
     size_t page_num_elements =
-        input_tensor.layout() == Layout::TILE ? tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH : input_tensor.padded_shape()[-1];
-    size_t num_tensor_pages = input_tensor.padded_shape().volume() / page_num_elements;
+        tensor.layout() == Layout::TILE ? tensor.get_tensor_spec().tile().get_tile_hw(): tensor.padded_shape()[-1];
+    size_t num_tensor_pages = tensor.padded_shape().volume() / page_num_elements;
 
     // Interleaved tensors are currently not iterable on host so we can't resolve the page locations
-    return input_tensor.is_sharded() &&
+    return tensor.is_sharded() &&
            (num_tensor_pages * args_per_noc_command + baseline_arg_count < max_noc_commands);
 }
 
