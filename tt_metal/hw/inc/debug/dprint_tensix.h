@@ -12,6 +12,7 @@
 #include "tensix_types.h"
 
 #include "cpack_common.h"
+#include "cunpack_common.h"
 
 // Given a Tensix configuration register field name, print the contents of the register.
 // Uses tt_metal/hw/inc/<family>/cfg_defines.h:
@@ -767,7 +768,32 @@ inline void dprint_tensix_pack_strides(uint reg_id = 0) {
 }
 
 inline void test_read_pack_config() {
-    ckernel::packer::pack_config_u config;
-    config.f = ckernel::packer::read_pack_config(1);
-    DPRINT << config.f.out_data_format << ENDL();
+    ckernel::packer::pack_counters_u config;
+    config.f = ckernel::packer::read_pack_counters(1);
+    DPRINT << config.f.pack_per_xy_plane << "; ";
+    DPRINT << config.f.pack_reads_per_xy_plane << "; ";
+    DPRINT << config.f.pack_xys_per_til << "; ";
+    DPRINT << config.f.pack_yz_transposed << "; ";
+    DPRINT << config.f.pack_per_xy_plane_offset << "; ";
+    DPRINT << ENDL();    
+}
+
+inline void test_read_unpack_config() {
+    ckernel::unpacker::alu_config_u config;
+    config.f = ckernel::unpacker::read_alu_config();
+    DPRINT << config.f.ALU_ROUNDING_MODE_Fpu_srnd_en << "; ";
+    DPRINT << config.f.ALU_ROUNDING_MODE_Gasket_srnd_en << "; ";
+    DPRINT << config.f.ALU_ROUNDING_MODE_Packer_srnd_en << "; ";
+    DPRINT << config.f.ALU_ROUNDING_MODE_Padding << "; ";
+    DPRINT << config.f.ALU_ROUNDING_MODE_GS_LF << "; ";
+    DPRINT << config.f.ALU_ROUNDING_MODE_Bfp8_HF << "; ";
+    DPRINT << config.f.ALU_FORMAT_SPEC_REG0_SrcAUnsigned << "; ";
+    DPRINT << config.f.ALU_FORMAT_SPEC_REG0_SrcBUnsigned << "; ";
+    DPRINT << config.f.ALU_FORMAT_SPEC_REG0_SrcA << "; ";
+    DPRINT << config.f.ALU_FORMAT_SPEC_REG1_SrcB << "; ";
+    DPRINT << config.f.ALU_FORMAT_SPEC_REG2_Dstacc << "; ";
+    DPRINT << config.f.ALU_ACC_CTRL_Fp32_enabled << "; ";
+    DPRINT << config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled << "; ";
+    DPRINT << config.f.ALU_ACC_CTRL_INT8_math_enabled << "; ";
+    DPRINT << ENDL();
 }

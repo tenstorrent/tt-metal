@@ -50,7 +50,8 @@ void MAIN {
     //dprint_tensix_pack_strides();
 
     // TESTING READ FOR CONFIG REGISTERS
-    // test_read_pack_config();
+    //test_read_pack_config();
+    //test_read_unpack_config();
 
     release_dst();
 }
