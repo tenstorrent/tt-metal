@@ -27,7 +27,7 @@ def run_global_circular_buffer(device):
             }
         ),
     ]
-    sender_receiver_mapping = dict(zip(sender_cores, receiver_cores))
+    sender_receiver_mapping = list(zip(sender_cores, receiver_cores))
 
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 3200)
 

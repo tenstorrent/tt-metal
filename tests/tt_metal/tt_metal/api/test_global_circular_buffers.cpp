@@ -21,17 +21,15 @@ TEST_F(DispatchFixture, TensixCreateGlobalCircularBuffers) {
 
     auto device = devices_[0];
     {
-        std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-        sender_receiver_core_mapping[CoreCoord(0, 0)] = cores;
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{CoreCoord(0, 0), cores}};
         auto global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
             device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
         auto buffer_address = global_cb.buffer_address();
         auto config_address = global_cb.config_address();
     }
     {
-        std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-        sender_receiver_core_mapping[CoreCoord(0, 0)] = cores;
-        sender_receiver_core_mapping[CoreCoord(1, 1)] = cores3;
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {
+            {CoreCoord(0, 0), cores}, {CoreCoord(1, 1), cores3}};
         // sender receiver cores overlap
         EXPECT_THROW(
             tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
@@ -39,9 +37,8 @@ TEST_F(DispatchFixture, TensixCreateGlobalCircularBuffers) {
             std::exception);
     }
     {
-        std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-        sender_receiver_core_mapping[CoreCoord(0, 0)] = cores;
-        sender_receiver_core_mapping[CoreCoord(0, 1)] = cores2;
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {
+            {CoreCoord(0, 0), cores}, {CoreCoord(0, 1), cores2}};
         // receiver cores overlap
         EXPECT_THROW(
             tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
@@ -60,12 +57,11 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
     tt::DataFormat tile_format = tt::DataFormat::Float16_b;
     auto all_cores = sender_cores.merge(receiver_cores).merge(dummy_receiver_cores);
     auto device = devices_[0];
-    std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-    sender_receiver_core_mapping[CoreCoord(0, 0)] = receiver_cores;
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{CoreCoord(0, 0), receiver_cores}};
     auto global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
-    std::unordered_map<CoreCoord, CoreRangeSet> dummy_sender_receiver_core_mapping;
-    dummy_sender_receiver_core_mapping[CoreCoord(0, 0)] = dummy_receiver_cores;
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> dummy_sender_receiver_core_mapping = {
+        {CoreCoord(0, 0), dummy_receiver_cores}};
     auto dummy_global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
         device, dummy_sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
     {

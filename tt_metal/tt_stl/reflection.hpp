@@ -374,6 +374,12 @@ typename std::enable_if_t<std::is_enum<T>::value, std::ostream>& operator<<(std:
     return os;
 }
 
+template <typename T1, typename T2>
+std::ostream& operator<<(std::ostream& os, const std::pair<T1, T2>& pair) {
+    os << "{" << pair.first << ", " << pair.second << "}";
+    return os;
+}
+
 static std::ostream& operator<<(std::ostream& os, const std::filesystem::path& path) {
     os << path.c_str();
     return os;
@@ -1143,6 +1149,12 @@ inline hash_t hash_object(const T& object) noexcept {
                 ...);
         }(std::make_index_sequence<num_elements>{});
         return hash;
+    } else if constexpr (is_specialization_v<T, std::pair>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::pair of type {}: {}\n", get_type_name<T>(), object);
+        }
+        hash_t hash = 0;
+        return hash_objects(hash, object.first, object.second);
     } else if constexpr (is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
