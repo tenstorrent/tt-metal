@@ -153,6 +153,8 @@ private:
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
     uint32_t num_nocs_;
+    uint32_t noc_addr_node_id_bits_;
+    uint32_t noc_coord_reg_offset_;
     bool coordinate_virtualization_enabled_;
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
@@ -174,6 +176,8 @@ public:
     tt::ARCH get_arch() const { return arch_; }
 
     uint32_t get_num_nocs() const { return num_nocs_; }
+    uint32_t get_noc_addr_node_id_bits() const { return noc_addr_node_id_bits_; }
+    uint32_t get_noc_coord_reg_offset() const { return noc_coord_reg_offset_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const
