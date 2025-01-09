@@ -5,8 +5,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "fill_rm_pybind.hpp"
-#include "fill_rm.hpp"
+#include "fill_pad_pybind.hpp"
+#include "fill_pad.hpp"
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -39,7 +39,7 @@ void bind_fill_pad_op(py::module& module) {
         )doc",
         ttnn::fill_pad.base_name());
 
-    using OperationType = decltype(ttnn::fill_rm);
+    using OperationType = decltype(ttnn::fill_pad);
     ttnn::bind_registered_operation(
         module,
         ttnn::fill_pad,
@@ -49,13 +49,15 @@ void bind_fill_pad_op(py::module& module) {
                const Tensor& input_tensor,
                const float fill_value,
                const std::optional<MemoryConfig>& memory_config,
-               uint8_t queue_id) { return self(queue_id, any, fill_value, memory_config); },
+               uint8_t queue_id) { return self(queue_id, input_tensor, fill_value, memory_config); },
             py::arg("input_tensor"),
             py::arg("fill_value"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0});
 }
+
+}  // namespace detail
 
 void bind_fill_pad(py::module& module) { detail::bind_fill_pad_op(module); }
 

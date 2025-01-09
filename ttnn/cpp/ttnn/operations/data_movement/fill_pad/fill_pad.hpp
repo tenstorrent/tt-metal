@@ -27,5 +27,5 @@ struct FillPadOperation {
 }  // namespace operations
 
 constexpr auto fill_pad =
-    ttnn::register_operation<"ttnn::fill_pad", ttnn::operations::data_movement::FillRMOperation>();
+    ttnn::register_operation<"ttnn::fill_pad", ttnn::operations::data_movement::FillPadOperation>();
 }  // namespace ttnn
