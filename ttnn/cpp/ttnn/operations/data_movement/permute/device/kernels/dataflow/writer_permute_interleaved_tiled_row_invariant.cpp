@@ -105,6 +105,7 @@ void kernel_main() {
     constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(9);
     constexpr bool needs_padding = get_compile_time_arg_val(10) == 1;
     constexpr uint32_t N = get_compile_time_arg_val(11);
+    constexpr uint32_t h_in_dest = get_compile_time_arg_val(12);
 
     // Retrieve arguments
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -192,14 +193,6 @@ void kernel_main() {
     output_tiled_shape[N - 2] = X_t;
     output_tiled_shape[N - 1] = W_t;
 
-    uint32_t h_in_dest = 0;
-    for (uint32_t i = 0; i < N; i++) {
-        if (perm[i] == N - 2) {
-            h_in_dest = i;
-            break;
-        }
-    }
-
     uint32_t dest_padded_strides[N];
     dest_padded_strides[N - 1] = 1;
     dest_padded_strides[N - 2] = 1;
@@ -275,6 +268,9 @@ void kernel_main() {
                 // Combine face_w for the overall tile column
                 uint32_t face_w_offset = face_w * face_height_width;
 
+                // Offset in bytes to where our data starts in the output tile
+                uint32_t output_tile_offset_bytes = (output_face_line_offset + face_w_offset) * element_size;
+
                 // Iterate over sub-tile lines
                 for (uint8_t sub_tile_line = 0; sub_tile_line < sub_tile_lines; ++sub_tile_line) {
                     // Calculate the input row based on sub_tile_line, face_h, and tile_start
@@ -295,11 +291,8 @@ void kernel_main() {
                     // Since we are writing in SUBTILE_LINE_BYTES chunks, we don't need an offset within the sub-tile
                     // line
 
-                    // Sub-tile/face line offset where our data starts in the output tile
-                    uint32_t offset = (output_face_line_offset + face_w_offset) * element_size;
-
                     // Compute the write address using the output tile index and the offset into the face line
-                    uint64_t write_noc_base_addr = get_noc_addr(output_tile_idx, s, offset);
+                    uint64_t write_noc_base_addr = get_noc_addr(output_tile_idx, s, output_tile_offset_bytes);
 
                     // Perform asynchronous write
                     noc_async_write(l1_read_addr, write_noc_base_addr, SUBTILE_LINE_BYTES);
@@ -358,10 +351,11 @@ void kernel_main() {
 
                 for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
                     // Offset to the start of the current face along the width of the tile
-                    uint32_t face_w_offset = face_w * face_height_width;
+                    uint32_t face_offset = face_c_offset + face_w * face_height_width;
+
                     for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
                         // offset to the start of the current sub-tile line
-                        uint32_t offset = (face_c_offset + face_w_offset + sub_tile_line * FACE_WIDTH) * element_size;
+                        uint32_t offset = (face_offset + sub_tile_line * FACE_WIDTH) * element_size;
 
                         // Compute the write address
                         uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
