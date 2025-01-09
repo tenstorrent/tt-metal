@@ -241,6 +241,20 @@ void kernel_main() {
             base_output_row_offset += dest_multi_idx[i] * dest_padded_strides[i];
         }
 
+        // This kernel doesn't run when N-2 is not moved, as a result, h_in_dest != N-2, so we can use N-2 directly
+        // without knowing the full index Position of this output_row within the tile:
+        uint32_t base_output_row_tile_start = dest_multi_idx[N - 2] % TILE_HEIGHT;
+
+        // Face index along the tile's height dimension:
+        uint32_t base_output_row_face_start = base_output_row_tile_start / FACE_HEIGHT;  // in [0..NUM_FACES_H-1]
+
+        // Row within that face:
+        uint32_t output_sub_tile_line = base_output_row_tile_start % FACE_HEIGHT;  // in [0..FACE_HEIGHT-1]
+
+        // Precompute offset for the current face_h
+        uint32_t output_face_line_offset =
+            base_output_row_face_start * face_h_stride + output_sub_tile_line * FACE_WIDTH;
+
         cb_wait_front(cb_id_out0, 1);
 
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
@@ -256,19 +270,6 @@ void kernel_main() {
             // Compute the row that the start of the face belongs to
             uint32_t base_row = tile_start + face_h * FACE_HEIGHT;
 
-            // This kernel doesn't run when N-2 is not moved, as a result, h_in_dest != N-2, so we can use N-2 directly
-            // without knowing the full index Position of this output_row within the tile:
-            uint32_t output_row_in_tile = dest_multi_idx[N - 2] % TILE_HEIGHT;
-
-            // Face index along the tile's height dimension:
-            uint32_t output_face_h = output_row_in_tile / FACE_HEIGHT;  // in [0..NUM_FACES_H-1]
-
-            // Row within that face:
-            uint32_t output_sub_tile_line = output_row_in_tile % FACE_HEIGHT;  // in [0..FACE_HEIGHT-1]
-
-            // Precompute offset for the current face_h
-            uint32_t face_h_offset = output_face_h * face_h_stride;
-
             // Iterate over faces in the width dimension
             for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
                 // Combine face_w for the overall tile column
@@ -276,7 +277,9 @@ void kernel_main() {
 
                 // Iterate over sub-tile lines
                 for (uint8_t sub_tile_line = 0; sub_tile_line < sub_tile_lines; ++sub_tile_line) {
+                    // Calculate the input row based on sub_tile_line, face_h, and tile_start
                     uint32_t row = base_row + sub_tile_line;
+
                     // Adjust source multi-dimensional index based on sub_tile_line
                     src_multi_idx[N - 2] = row % input_shape[N - 2];
 
@@ -292,9 +295,8 @@ void kernel_main() {
                     // Since we are writing in SUBTILE_LINE_BYTES chunks, we don't need an offset within the sub-tile
                     // line
 
-                    // Sub-tile/face line offset where our data starts in the tile
-                    uint32_t offset =
-                        (face_h_offset + face_w_offset + output_sub_tile_line * FACE_WIDTH) * element_size;
+                    // Sub-tile/face line offset where our data starts in the output tile
+                    uint32_t offset = (output_face_line_offset + face_w_offset) * element_size;
 
                     // Compute the write address using the output tile index and the offset into the face line
                     uint64_t write_noc_base_addr = get_noc_addr(output_tile_idx, s, offset);
@@ -319,14 +321,13 @@ void kernel_main() {
     // add padding
     if constexpr (needs_padding) {
         cb_wait_front(tt::CBIndex::c_1, 1);
-        uint32_t l1_read_addr = get_read_ptr(tt::CBIndex::c_1);
-
         uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_1);
 
         constexpr uint32_t x_t = X_t - 1;
         constexpr uint8_t X_in_tile = X % TILE_HEIGHT;
         constexpr uint8_t face_c_start = X_in_tile / FACE_HEIGHT;
         dest_multi_idx[N - 2] = x_t;
+
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Map tile_idx to it's multi dimensional tiled index in the output
             // reuse dest_multi_idx for this purpose
