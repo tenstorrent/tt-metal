@@ -74,6 +74,7 @@ private:
     void activate_device(chip_id_t id);
     void initialize_device(IDevice* dev) const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
+    IDevice* get_device(chip_id_t id) const;
     static DevicePool* _inst;
 };
 
