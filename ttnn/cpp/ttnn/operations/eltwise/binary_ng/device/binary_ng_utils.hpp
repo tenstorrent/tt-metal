@@ -41,29 +41,22 @@ struct BinaryNgKernelConfig {
 std::string get_kernel_file_path(KernelName kernel_name);
 
 struct OpConfig {
-    struct SfpuConfig {
-        SfpuConfig() = default;
-        constexpr SfpuConfig(
-            std::string_view init, std::string_view apply, std::string_view include = "compute_kernel_api.h") :
-            init{init}, apply{apply}, include{include} {}
-        std::string_view init{};
-        std::string_view apply{};
-        std::string_view include{};
-
-        std::map<std::string, std::string> as_defines(std::string_view prefix) const;
-    };
-
     enum class FpuBinaryOp { ADD, SUB, MUL };
 
     OpConfig(BinaryOpType binary_op_type);
 
     std::map<std::string, std::string> as_defines() const;
 
-    SfpuConfig preprocess_a{};
-    SfpuConfig preprocess_b{};
-    SfpuConfig postprocess{};
+    std::optional<unary::UnaryOpType> process_lhs{};
+    std::optional<unary::UnaryOpType> process_rhs{};
+    std::optional<unary::UnaryOpType> postprocess{};
     FpuBinaryOp fpu_binary_op;
 };
+
+void add_activation_defines(
+    std::map<std::string, std::string>& defines,
+    tt::stl::Span<const unary::UnaryOpType> activations,
+    std::string_view operand);
 
 struct Lowercase {
     std::string_view view;

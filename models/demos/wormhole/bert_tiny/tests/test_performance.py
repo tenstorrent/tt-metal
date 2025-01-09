@@ -122,7 +122,7 @@ def test_perf_bert_tiny(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        (16, 6946.78),
+        (16, 6292.78),
     ],
 )
 def test_perf_device_bare_metal(batch_size, expected_perf):

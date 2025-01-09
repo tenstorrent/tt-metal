@@ -421,7 +421,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool use_non_tile_height) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
@@ -884,10 +884,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
         assert(total_num_cores * per_core_out_matrix_height_ntiles >= act_matrix_height_ntiles);
     }
-    // assert(per_core_out_matrix_height_ntiles % act_block_h_ntiles == 0);
-    // uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
-    uint32_t num_blocks_act_h_per_core =
-        (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
+    assert(per_core_out_matrix_height_ntiles % act_block_h_ntiles == 0);
+    uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
     // assert(per_core_out_matrix_height_ntiles % out_block_h_ntiles == 0);
     // uint32_t num_blocks_out_h_per_core = per_core_out_matrix_height_ntiles / out_block_h_ntiles;
     uint32_t num_blocks_out_h_per_core =

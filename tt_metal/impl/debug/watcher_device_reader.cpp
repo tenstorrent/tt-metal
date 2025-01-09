@@ -12,10 +12,6 @@
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/metal_soc_descriptor.h"
-
-// FIXME: Avoid dependence on ARCH_NAME specific includes
-#include "dev_mem_map.h"         // for MEM_BRISC_STAC...
-#include "eth_l1_address_map.h"  // for address_map
 #include "hw/inc/dev_msgs.h"
 
 #include "umd/device/types/arch.h"
@@ -58,24 +54,17 @@ static const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
 
 // Helper function to get stack size by riscv core type
 static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
-    switch (type) {
-        case DebugBrisc: return MEM_BRISC_STACK_SIZE;
-        case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
-        case DebugErisc: return 0;  // Not managed/checked by us.
-        case DebugIErisc: return MEM_IERISC_STACK_SIZE;
-        case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
-        case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
-        case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
-        case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
-        default: TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
+    auto stack_size = hal.get_stack_size(type);
+    if (stack_size == 0xdeadbeef) {
+        TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
     }
-    return 0;
+    return stack_size;
 }
 
 // Helper function to get string rep of noc target.
 static string get_noc_target_str(
-    Device* device, CoreDescriptor& core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
-    auto get_core_and_mem_type = [](Device* device, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
+    IDevice* device, CoreDescriptor& core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
+    auto get_core_and_mem_type = [](IDevice* device, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
         CoreCoord virtual_core = device->virtual_noc_coordinate(noc, noc_coord);
         CoreType core_type;
@@ -136,7 +125,7 @@ const launch_msg_t* get_valid_launch_message(const mailboxes_t* mbox_data) {
 namespace tt::watcher {
 
 WatcherDeviceReader::WatcherDeviceReader(
-    FILE* f, Device* device, std::vector<string>& kernel_names, void (*set_watcher_exception_message)(const string&)) :
+    FILE* f, IDevice* device, std::vector<string>& kernel_names, void (*set_watcher_exception_message)(const string&)) :
     f(f), device(device), kernel_names(kernel_names), set_watcher_exception_message(set_watcher_exception_message) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
@@ -144,7 +133,10 @@ WatcherDeviceReader::WatcherDeviceReader(
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
-                device->id(), phys_core, eth_l1_mem::address_map::RETRAIN_COUNT_ADDR, sizeof(uint32_t));
+                device->id(),
+                phys_core,
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
+                sizeof(uint32_t));
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
@@ -157,7 +149,10 @@ WatcherDeviceReader::~WatcherDeviceReader() {
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
-                device->id(), phys_core, eth_l1_mem::address_map::RETRAIN_COUNT_ADDR, sizeof(uint32_t));
+                device->id(),
+                phys_core,
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
+                sizeof(uint32_t));
             uint32_t num_events = read_data[0] - logical_core_to_eth_link_retraining_count[eth_core];
             if (num_events > 0) {
                 log_warning(
@@ -413,7 +408,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 void WatcherDeviceReader::DumpL1Status(CoreDescriptor& core, const launch_msg_t* launch_msg) {
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, MEM_L1_BASE, sizeof(uint32_t));
+    data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, HAL_MEM_L1_BASE, sizeof(uint32_t));
     if (data[0] != llrt::generate_risc_startup_addr(false)) {
         LogRunningKernels(core, launch_msg);
         TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", core.coord.str(), data[0]);

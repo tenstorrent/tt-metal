@@ -9,7 +9,7 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/types.hpp"
 
 #include <algorithm>
@@ -206,7 +206,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     return buffer_page_mapping;
 }
 
-void validate_sub_device_id(std::optional<SubDeviceId> sub_device_id, Device *device, BufferType buffer_type, const std::optional<ShardSpecBuffer>& shard_parameters) {
+void validate_sub_device_id(std::optional<SubDeviceId> sub_device_id, IDevice *device, BufferType buffer_type, const std::optional<ShardSpecBuffer>& shard_parameters) {
     // No need to validate if we're using the global allocator or not sharding
     if (!sub_device_id.has_value()) {
         return;
@@ -219,7 +219,7 @@ void validate_sub_device_id(std::optional<SubDeviceId> sub_device_id, Device *de
 }
 
 Buffer::Buffer(
-    Device *device,
+    IDevice* device,
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
@@ -254,7 +254,7 @@ Buffer::Buffer(
 }
 
 std::shared_ptr<Buffer> Buffer::create(
-    Device *device,
+    IDevice* device,
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
@@ -294,7 +294,7 @@ std::shared_ptr<Buffer> Buffer::create(
 }
 
 std::shared_ptr<Buffer> Buffer::create(
-    Device *device,
+    IDevice* device,
     DeviceAddr address,
     DeviceAddr size,
     DeviceAddr page_size,

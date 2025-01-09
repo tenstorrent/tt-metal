@@ -666,7 +666,7 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
     }
 }
 
-std::unique_ptr<Program> create_and_compile_cq_program(Device* device) {
+std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
     TT_ASSERT(
         node_id_to_kernel.size() > 0,
         "Tried to create CQ program without nodes populated (need to run populate_fd_kernels()");
@@ -695,7 +695,7 @@ std::unique_ptr<Program> create_and_compile_cq_program(Device* device) {
     return cq_program_ptr;
 }
 
-void configure_dispatch_cores(Device* device) {
+void configure_dispatch_cores(IDevice* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
@@ -712,7 +712,7 @@ void configure_dispatch_cores(Device* device) {
             for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
                 tt_cxy_pair completion_q_writer_location =
                     dispatch_core_manager::instance().completion_queue_writer_core(serviced_device_id, channel, cq_id);
-                Device* mmio_device = tt::DevicePool::instance().get_active_device(completion_q_writer_location.chip);
+                IDevice* mmio_device = tt::DevicePool::instance().get_active_device(completion_q_writer_location.chip);
                 uint32_t completion_q_wr_ptr =
                     my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
                 uint32_t completion_q_rd_ptr =

@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -239,7 +239,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    Device* device = a.device();
+    IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_blocks = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
@@ -399,7 +399,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     auto input_shard_spec = a.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();

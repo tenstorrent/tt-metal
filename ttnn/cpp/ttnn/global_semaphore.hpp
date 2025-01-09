@@ -13,11 +13,14 @@ namespace ttnn::global_semaphore {
 struct MultiDeviceGlobalSemaphore {
     MultiDeviceGlobalSemaphore(MeshDevice* mesh_device);
     std::vector<GlobalSemaphore> global_semaphores;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("global_semaphores");
+    const auto attribute_values() const { return std::forward_as_tuple(this->global_semaphores); }
 };
 
 // Single Device APIs
 GlobalSemaphore create_global_semaphore(
-    Device* device,
+    IDevice* device,
     const CoreRangeSet& cores,
     uint32_t initial_value,
     BufferType buffer_type = BufferType::L1,
@@ -37,7 +40,14 @@ MultiDeviceGlobalSemaphore create_global_semaphore(
     uint32_t initial_value,
     BufferType buffer_type = BufferType::L1,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
+MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
+    MeshDevice* mesh_device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    uint32_t attempts,
+    bool search_max = false);
 std::vector<tt::tt_metal::DeviceAddr> get_global_semaphore_address(const MultiDeviceGlobalSemaphore& global_semaphore);
 
 void reset_global_semaphore_value(

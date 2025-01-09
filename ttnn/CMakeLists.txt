@@ -72,7 +72,8 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/permute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/permute_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/device/permute_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/device/permute_rm_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/device/permute_tiled_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat/device/repeat_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat/device/repeat_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat/repeat.cpp
@@ -372,6 +373,11 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher/device/dram_prefetcher_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher/device/dram_prefetcher_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
@@ -611,6 +617,7 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/kv_cache
     ttnn/operations/loss
     ttnn/operations/matmul
+    ttnn/operations/prefetcher
     ttnn/operations/moreh
     ttnn/operations/normalization
     ttnn/operations/pool
@@ -734,6 +741,7 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     else()
         add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
     endif()
+    TT_ENABLE_UNITY_BUILD(${SUBLIBRARY_NAME})
     if(WITH_PYTHON_BINDINGS)
         target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
     else()

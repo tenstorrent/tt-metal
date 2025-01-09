@@ -42,7 +42,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = output.device();
+    tt_metal::IDevice* device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -169,7 +169,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     const bool is_height_concat = dim == 2;
 
     tt_metal::Program program = tt_metal::CreateProgram();
-    tt_metal::Device* device = output.device();
+    tt_metal::IDevice* device = output.device();
 
     const uint32_t num_input_tensors = input_tensors.size();
     const uint32_t cb_dst_id = 16;
@@ -288,7 +288,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = output.device();
+    tt_metal::IDevice* device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -444,7 +444,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = output.device();
+    tt_metal::IDevice* device = output.device();
 
     const tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 

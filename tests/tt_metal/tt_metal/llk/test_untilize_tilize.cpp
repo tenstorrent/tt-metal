@@ -60,7 +60,7 @@ struct TestConfig {
     GoldenFunc golden_function;
 };
 
-void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& test_config) {
+void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig& test_config) {
     Program program = tt::tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
