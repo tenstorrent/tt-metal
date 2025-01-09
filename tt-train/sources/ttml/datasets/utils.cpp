@@ -9,14 +9,12 @@
 #include "tokenizers/char_tokenizer_trainer.hpp"
 #include "tokenizers/tokenizer_base.hpp"
 
-namespace {
-constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
-}
 namespace ttml::datasets {
 
 template <>
 std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>>
-create_in_memory_token_dataset<tokenizers::CharTokenizer>(const std::string &text, uint32_t seq_length) {
+create_in_memory_token_dataset<tokenizers::CharTokenizer>(
+    const std::string &text, uint32_t seq_length, [[maybe_unused]] const std::string &json_file_path) {
     std::unique_ptr<tokenizers::TokenizerBase> tokenizer = tokenizers::CharTokenizerTrainer::train(text);
 
     std::vector<uint32_t> tokenized_text = tokenizer->encode(text);
@@ -26,8 +24,8 @@ create_in_memory_token_dataset<tokenizers::CharTokenizer>(const std::string &tex
 
 template <>
 std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>>
-create_in_memory_token_dataset<tokenizers::BPETokenizer>(const std::string &text, uint32_t seq_length) {
-    auto json_file_path = std::string(TOKENIZERS_DATA_PATH) + gpt2_tokenizer_file_name;
+create_in_memory_token_dataset<tokenizers::BPETokenizer>(
+    const std::string &text, uint32_t seq_length, const std::string &json_file_path) {
     std::unique_ptr<tokenizers::TokenizerBase> tokenizer = std::make_unique<tokenizers::BPETokenizer>(json_file_path);
 
     const std::vector<uint32_t> tokenized_text = tokenizer->encode(text);

@@ -205,16 +205,21 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
     const size_t MAX_TILE_DIMENSION = 16384;
     // Temporary workaround for the issue with tilize for large size
     // https://github.com/tenstorrent/tt-metal/issues/15950
-    if (logical_shape[-1] >= MAX_TILE_DIMENSION && layout == Layout::TILE) {
+    const size_t MAX_TILE_DIMENSION = 16384 * 4;
+    // Temporary workaround for the issue with tilize for large size
+    // https://github.com/tenstorrent/tt-metal/issues/15950
+    auto pad_tile = [](uint32_t val) { return (val + 32 - 1) / 32 * 32; };
+    auto padded_shape = pad_tile(logical_shape[-1]) * pad_tile(logical_shape[-2]);
+    bool multicore = padded_shape <= MAX_TILE_DIMENSION;
+    // output = ttnn::to_device(output, device, output_mem_config);
+    if (layout == Layout::TILE) {
         output = ttnn::to_layout(output, Layout::TILE, std::nullopt, output_mem_config, device);
-        output = ttnn::to_device(output, device, output_mem_config);
-    } else {
-        output = ttnn::to_device(output, device, output_mem_config);
-        if (layout == Layout::TILE) {
-            output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
-        }
     }
+    output = ttnn::to_device(output, device, output_mem_config);
 
+    if (layout == Layout::TILE) {
+        output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ multicore);
+    }
     return output;
 }
 

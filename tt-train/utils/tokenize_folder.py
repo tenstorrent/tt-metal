@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+
+import os
+import argparse
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.trainers import BpeTrainer
+from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.normalizers import Sequence, NFD, Lowercase
+
+
+def gather_source_files(folder):
+    """
+    Recursively walk `folder`, yielding paths to files with
+    extensions in ('.hpp', '.cpp', '.h', '.c').
+    """
+    valid_exts = {".hpp", ".cpp", ".h", ".c"}
+    for root, _, files in os.walk(folder):
+        for fname in files:
+            _, ext = os.path.splitext(fname)
+            if ext.lower() in valid_exts:
+                yield os.path.join(root, fname)
+
+
+def merge_into_one_file(file_paths, merged_file_path="merged.txt"):
+    """
+    Merges the content of all files in `file_paths` into
+    a single text file `merged_file_path`.
+    """
+    with open(merged_file_path, "w", encoding="utf-8") as writer:
+        for path in file_paths:
+            try:
+                with open(path, "r", encoding="utf-8") as reader:
+                    # Write file content + a newline for separation
+                    writer.write(reader.read())
+                    writer.write("\n")
+            except Exception as e:
+                print(f"Warning: Could not read file {path}: {e}")
+    return merged_file_path
+
+
+def train_bpe_tokenizer(text_file, output_tokenizer="tokenizer.json", vocab_size=32000):
+    """
+    Trains a BPE tokenizer on the text file, saves it to `output_tokenizer`.
+    """
+    # 1. Create a Byte-Pair Encoding (BPE) tokenizer
+    tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
+
+    # 2. Set normalizer & pre-tokenizer (example: Unicode NFD & Lowercase + Whitespace)
+    tokenizer.normalizer = Sequence([NFD(), Lowercase()])
+    tokenizer.pre_tokenizer = Whitespace()
+
+    # 3. Setup BPE trainer with desired vocab size + special tokens
+    trainer = BpeTrainer(vocab_size=vocab_size, special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"])
+
+    # 4. Train on the merged text file
+    tokenizer.train([text_file], trainer)
+
+    # 5. Save the tokenizer as a single JSON
+    tokenizer.save(output_tokenizer)
+    print(f"Saved tokenizer to {output_tokenizer}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Recursively gather .hpp/.cpp/.h/.c files, merge them, then train a BPE tokenizer."
+    )
+    parser.add_argument("--folder", type=str, required=True, help="Root folder to recursively find source files.")
+    parser.add_argument(
+        "--merged_txt",
+        type=str,
+        default="merged.txt",
+        help="Path to the merged output text file (default: merged.txt).",
+    )
+    parser.add_argument(
+        "--tokenizer_output",
+        type=str,
+        default="tokenizer.json",
+        help="Path to save the trained tokenizer JSON (default: tokenizer.json).",
+    )
+    parser.add_argument("--vocab_size", type=int, default=32000, help="Desired vocabulary size (default: 32000).")
+    args = parser.parse_args()
+
+    # 1. Gather source files
+    file_paths = list(gather_source_files(args.folder))
+    if not file_paths:
+        print("No .hpp, .cpp, .h, or .c files found. Exiting.")
+        return
+
+    # 2. Merge into one file
+    merged_path = merge_into_one_file(file_paths, args.merged_txt)
+
+    # 3. Train tokenizer
+    train_bpe_tokenizer(merged_path, args.tokenizer_output, args.vocab_size)
+
+
+if __name__ == "__main__":
+    main()
