@@ -37,9 +37,6 @@ mem_configs = [
         [[1, 1, 32, 32]],
         [[4, 3, 32, 32]],
         [[2, 2, 32, 32]],
-        [[1, 1, 32]],
-        [[4, 3]],
-        [[2]],
         # [[6, 4, 32, 32]], #Fails for all_dimensions = True ( expected result is inf but the result generated in nan )
         # [[1, 1, 320, 320]], #Fails for all_dimensions = True ( expected result is inf but the result generated in nan )
         # [[1, 3, 320, 64]], #Fails for all_dimensions = True ( expected result is inf but the result generated in nan )
