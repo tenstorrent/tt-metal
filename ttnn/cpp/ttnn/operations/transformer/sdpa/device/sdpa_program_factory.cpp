@@ -240,8 +240,13 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
     TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity), "Error");
 
-    const uint32_t dht_granularity = std::min(DHt, dst_size);
-    const uint32_t log2_dht_granularity = std::log2(dht_granularity);
+    uint32_t dht_granularity = std::min(DHt, dst_size);
+    uint32_t log2_dht_granularity = std::log2(dht_granularity);
+    // Sometimes DHt is not a power of 2, so granularity should be 1
+    if (dht_granularity != (1 << log2_dht_granularity)) {
+        dht_granularity = 1;
+        log2_dht_granularity = 0;
+    }
     TT_FATAL(dht_granularity == (1 << log2_dht_granularity), "Error");
 
     // Log these
