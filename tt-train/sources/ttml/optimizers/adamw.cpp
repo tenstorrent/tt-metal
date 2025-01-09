@@ -68,7 +68,10 @@ void MorehAdamW::step() {
         const auto& first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
         const auto& second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
 
-        const auto& gradients = tensor_ptr->get_grad();
+        auto gradients = tensor_ptr->get_grad();
+        // synchronize gradients for multi-device case, no-op if single device
+        gradients = distributed::synchronize_tensor(gradients);
+
         auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
         ttnn::moreh_adamw(
             tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
@@ -174,7 +177,10 @@ void AdamW::step() {
         auto first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
         auto second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
 
-        const auto& gradients = tensor_ptr->get_grad();
+        auto gradients = tensor_ptr->get_grad();
+        // synchronize gradients for multi-device case, no-op if single device
+        gradients = distributed::synchronize_tensor(gradients);
+
         if (m_config.weight_decay != 0.0F) {
             auto weight_decay_update = ttnn::multiply(
                 tensor_ptr->get_value(autograd::PreferredPrecision::FULL), m_config.weight_decay * m_config.lr);
