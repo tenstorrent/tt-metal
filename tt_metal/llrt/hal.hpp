@@ -144,6 +144,7 @@ public:
     using ValidRegAddrFunc = std::function<bool(uint32_t)>;
     using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
     using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
+    using StackSizeFunc = std::function<uint32_t(uint32_t)>;
 
 private:
     tt::ARCH arch_;
@@ -165,6 +166,7 @@ private:
     ValidRegAddrFunc valid_reg_addr_func_;
     NOCXYEncodingFunc noc_xy_encoding_func_;
     NOCMulticastEncodingFunc noc_multicast_encoding_func_;
+    StackSizeFunc stack_size_func_;
 
 public:
     Hal();
@@ -225,6 +227,8 @@ public:
     }
 
     uint32_t valid_reg_addr(uint32_t addr) { return valid_reg_addr_func_(addr); }
+
+    uint32_t get_stack_size(uint32_t type) { return stack_size_func_(type); }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
