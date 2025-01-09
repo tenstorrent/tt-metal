@@ -24,7 +24,7 @@ namespace ttnn::operations::upsample {
 using namespace tt;
 
 static Tensor create_config_tensor(
-    Device* device,
+    IDevice* device,
     ShardSpec shard_spec,
     const uint32_t batch_size,
     const uint32_t in_h,
