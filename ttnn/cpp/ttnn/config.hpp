@@ -31,6 +31,7 @@ struct Config {
         bool enable_detailed_buffer_report = false;
         bool enable_detailed_tensor_report = false;
         bool enable_comparison_mode = false;
+        bool comparison_mode_should_raise_exception = false;
         float comparison_mode_pcc = 0.9999;
         std::filesystem::path root_report_path = "generated/ttnn/reports";
         std::optional<std::filesystem::path> report_name = std::nullopt;
@@ -86,6 +87,15 @@ public:
                         "Logging cannot be enabled in fast runtime mode. Please disable fast runtime mode if you want "
                         "to enable logging.");
                 }
+            }
+        }
+
+        if (name == "enable_comparison_mode") {
+            if (this->attributes.enable_fast_runtime_mode && this->attributes.enable_comparison_mode) {
+                tt::log_warning(
+                    tt::LogAlways,
+                    "Comparison mode is currently not supported with fast runtime mode enabled. Please disable fast "
+                    "runtime mode ('enable_fast_runtime_mode = false') to use tensor comparison mode.");
             }
         }
 
