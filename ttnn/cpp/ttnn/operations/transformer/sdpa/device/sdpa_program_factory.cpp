@@ -242,6 +242,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     const uint32_t dht_granularity = std::min(DHt, dst_size);
     const uint32_t log2_dht_granularity = std::log2(dht_granularity);
+    TT_FATAL(dht_granularity == (1 << log2_dht_granularity), "Error");
 
     // Log these
     tt::log_debug("stats_granularity: {}", stats_granularity);
