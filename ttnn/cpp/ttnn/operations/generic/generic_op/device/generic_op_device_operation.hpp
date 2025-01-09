@@ -9,8 +9,7 @@
 #include <unordered_map>
 #include <variant>
 
-// #include "core_coord.h"
-#include "common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -20,7 +19,7 @@
 namespace ttnn::operations::generic {
 
 struct circular_buffer_attributes_t {
-    CoreRangeSet core_spec = {{}};
+    CoreRangeSet core_spec;
     uint32_t total_size;
     uint32_t page_size;
     // uint8_t buffer_index;
@@ -31,7 +30,7 @@ struct circular_buffer_attributes_t {
 };
 
 struct data_movement_attributes_t {
-    CoreRangeSet core_spec= {{}};
+    CoreRangeSet core_spec;
     std::string kernel_path;
     tt::tt_metal::DataMovementConfig config;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> runtime_args_per_core = {};
@@ -43,7 +42,7 @@ struct data_movement_attributes_t {
 };
 
 struct compute_attributes_t {
-    CoreRangeSet core_spec = {{}};
+    CoreRangeSet core_spec;
     std::string  kernel_path;
     tt::tt_metal::ComputeConfig config;
     // std::vector<uint32_t> runtime_args = {};
