@@ -20,7 +20,7 @@ void MAIN {
 #ifndef REDUCE_ROW_SUM_VIA_MM
     reduce_init<true>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #else
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #endif
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
