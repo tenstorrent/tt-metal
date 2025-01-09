@@ -1260,7 +1260,7 @@ Matmul create_matmul_struct(
             output_dtype = input_tensor_a.get_dtype();
         }
     }
-    bool is_float_32 = output_dtype==DataType::FLOAT32; 
+    bool is_float_32 = output_dtype==DataType::FLOAT32;
     auto kernel_config_val = init_device_compute_kernel_config(
         arch,
         parameters.compute_kernel_config,
