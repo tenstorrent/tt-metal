@@ -386,17 +386,13 @@ void MAIN {
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
-    constexpr uint32_t cb_out_im = tt::CBIndex::c_25;
-    constexpr uint32_t cb_out_accumulate_im = tt::CBIndex::c_26;
+    constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
+    constexpr uint32_t cb_out_im_B = tt::CBIndex::c_26;
     constexpr uint32_t cb_cur_max = tt::CBIndex::c_27;
     constexpr uint32_t cb_prev_max = tt::CBIndex::c_28;
     constexpr uint32_t cb_sum_A = tt::CBIndex::c_29;
     constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
-
-    // Set up ping pong buffers for sum
-    uint32_t alias_prev_sum = cb_sum_A;
-    uint32_t alias_cur_sum = cb_sum_B;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
@@ -430,12 +426,14 @@ void MAIN {
                 } else {
                     q_high_idx = Skt;
                 }
+
+                // Set up ping pong buffers
+                uint32_t alias_prev_sum = cb_sum_A;
+                uint32_t alias_cur_sum = cb_sum_B;
+                uint32_t alias_mm2_prev_out = cb_out_im_A;
+                uint32_t alias_mm2_cur_out = cb_out_im_B;
+
                 cb_wait_front(cb_q_in, q_chunk_tiles);
-
-                // On (k_chunk == 0), mm2 should store directly in cb_out_accumulate_im
-                uint32_t alias_mm2_out = cb_out_accumulate_im;
-                // TODO: alias cur_sum to prev_sum in first iteration
-
                 // loop while k_low < q_high
                 for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                     const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
@@ -510,7 +508,7 @@ void MAIN {
                     matmul_blocks(
                         cb_qk_im,
                         cb_v_in,
-                        alias_mm2_out,
+                        alias_mm2_cur_out,
                         Sq_chunk_t,
                         DHt,
                         Sk_chunk_t,
@@ -522,9 +520,7 @@ void MAIN {
                         out_subblock_w,
                         false /*transpose*/);
 
-                    reconfig_data_format_srca(cb_out_im);
-                    // After first iteration, mm2 should store in cb_out_im
-                    alias_mm2_out = cb_out_im;
+                    reconfig_data_format_srca(alias_mm2_cur_out);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
                     /* OUT_ACC += OUT_IM */
@@ -539,13 +535,13 @@ void MAIN {
                         add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
                         /* cb_out_accumulate_im *= cb_exp_max_diff */
-                        mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(cb_out_accumulate_im, cb_exp_max_diff);
-
-                        add_block_inplace(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
+                        mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, cb_exp_max_diff);
+                        add_block_inplace(alias_mm2_cur_out, alias_mm2_prev_out, out_chunk_tiles);
                     }
 
                     // Swap alias_prev_sum and alias_cur_sum
                     std::swap(alias_prev_sum, alias_cur_sum);
+                    std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
                     // Set cb_prev_sum and cb_prev_max
                     copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
                 }
@@ -554,9 +550,9 @@ void MAIN {
                 recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
-                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(cb_out_accumulate_im, alias_prev_sum);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum);
                 pack_reconfig_data_format(cb_out);
-                copy_block(cb_out_accumulate_im, cb_out, out_chunk_tiles);
+                copy_block(alias_mm2_prev_out, cb_out, out_chunk_tiles);
 
                 cb_pop_front(cb_q_in, q_chunk_tiles);
                 // free up cb_prev_max after K chunks
