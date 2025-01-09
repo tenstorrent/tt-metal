@@ -202,9 +202,6 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
     auto output = tt::tt_metal::Tensor(OwnedStorage{owned_buffer}, logical_shape, data_type, Layout::ROW_MAJOR);
 
-    const size_t MAX_TILE_DIMENSION = 16384;
-    // Temporary workaround for the issue with tilize for large size
-    // https://github.com/tenstorrent/tt-metal/issues/15950
     const size_t MAX_TILE_DIMENSION = 16384 * 4;
     // Temporary workaround for the issue with tilize for large size
     // https://github.com/tenstorrent/tt-metal/issues/15950
