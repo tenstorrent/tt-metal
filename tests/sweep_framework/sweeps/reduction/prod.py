@@ -71,8 +71,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
     ):
         return True, "Row major is only supported for fp32 & fp16"
-    if not test_vector["keepdim"]:
-        return True, "keepdim = false is not supported"
 
     device = ttnn.open_device(device_id=0)
     if test_vector["input_a_dtype"] == ttnn.float32 and ttnn.device.is_grayskull(device):
@@ -118,7 +116,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.prod(input_tensor_a, dim=dim, memory_config=output_memory_config)
+    result = ttnn.prod(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

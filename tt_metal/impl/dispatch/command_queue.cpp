@@ -55,6 +55,19 @@ void SetLazyCommandQueueMode(bool lazy) {
     DispatchStateCheck(true);
     LAZY_COMMAND_QUEUE_MODE = lazy;
 }
+
+// Selects all sub-devices in the sub device stall group if none are specified
+tt::stl::Span<const SubDeviceId> select_sub_device_ids(IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (sub_device_ids.empty()) {
+        return device->get_sub_device_stall_group();
+    } else {
+        for (const auto& sub_device_id : sub_device_ids) {
+            TT_FATAL(sub_device_id.to_index() < device->num_sub_devices(), "Invalid sub-device id specified {}", sub_device_id.to_index());
+        }
+        return sub_device_ids;
+    }
+}
+
 }  // namespace detail
 
 enum DispatchWriteOffsets {
@@ -127,7 +140,7 @@ void EnqueueReadBufferCommand::process() {
         auto offset_index = this->sub_device_ids[i].to_index();
         uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
         command_sequence.add_dispatch_wait(
-            false, dispatch_message_addr, this->expected_num_workers_completed[offset_index ]);
+            false, dispatch_message_addr, this->expected_num_workers_completed[offset_index]);
 
     }
     auto offset_index = this->sub_device_ids[last_index].to_index();
@@ -914,9 +927,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     uint32_t unpadded_dst_offset = 0;
     uint32_t src_page_index = 0;
 
-    if (sub_device_ids.empty()) {
-        sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
-    }
+    sub_device_ids = detail::select_sub_device_ids(this->device, sub_device_ids);
 
     if (is_sharded(buffer.buffer_layout())) {
         const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
@@ -1062,9 +1073,7 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
 
     uint32_t dst_page_index = 0;
 
-    if (sub_device_ids.empty()) {
-        sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
-    }
+    sub_device_ids = detail::select_sub_device_ids(this->device, sub_device_ids);
 
     if (is_sharded(buffer.buffer_layout())) {
         const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
@@ -1359,9 +1368,7 @@ void HWCommandQueue::enqueue_record_event(const std::shared_ptr<Event>& event, b
     event->device = this->device;
     event->ready = true;  // what does this mean???
 
-    if (sub_device_ids.empty()) {
-        sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
-    }
+    sub_device_ids = detail::select_sub_device_ids(this->device, sub_device_ids);
 
     auto command = EnqueueRecordEventCommand(
         this->id,

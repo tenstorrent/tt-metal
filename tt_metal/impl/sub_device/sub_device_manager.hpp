@@ -68,7 +68,11 @@ public:
     bool has_allocations() const;
     DeviceAddr local_l1_size() const;
 
-    // #TODO #15944: Temporary until migration to actual fabric is complete
+    const std::vector<SubDeviceId>& get_sub_device_stall_group() const;
+    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void reset_sub_device_stall_group();
+
+    // TODO #15944: Temporary until migration to actual fabric is complete
     void set_fabric_sub_device_id(SubDeviceId sub_device_id);
     std::optional<SubDeviceId> fabric_sub_device_id() const;
 
@@ -84,6 +88,7 @@ private:
     // TODO: We have a max number of sub-devices, so we can use a fixed size array
     std::vector<SubDevice> sub_devices_;
     std::vector<SubDeviceId> sub_device_ids_;
+    std::vector<SubDeviceId> sub_device_stall_group_;
     IDevice* device_;
 
     DeviceAddr local_l1_size_;
