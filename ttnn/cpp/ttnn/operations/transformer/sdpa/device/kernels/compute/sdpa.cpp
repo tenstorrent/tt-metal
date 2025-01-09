@@ -294,12 +294,12 @@ void matmul_blocks(
     mm_block_init_short(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
-    reconfig_data_format(in1_cb, in0_cb);
-    cb_wait_front(in1_cb, K * N);
-
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
+
+    reconfig_data_format(in1_cb, in0_cb);
+    cb_wait_front(in1_cb, K * N);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
