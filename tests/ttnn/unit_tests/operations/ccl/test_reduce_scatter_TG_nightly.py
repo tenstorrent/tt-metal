@@ -199,9 +199,9 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     if input_shard_spec is not None:
         output_shard_shape = list(input_shard_spec.shape)
         if dim == 3:
-            output_shard_shape[1] *= num_devices_per_line
+            output_shard_shape[1] //= num_devices_per_line
         else:
-            output_shard_shape[0] *= num_devices_per_line
+            output_shard_shape[0] //= num_devices_per_line
         output_shard_spec = ttnn.ShardSpec(
             input_shard_spec.grid,
             output_shard_shape,
@@ -257,6 +257,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
             num_iter=num_iters,
         )
     else:
+        logger.info(f"Running {num_iters} iterations of reduce scatter")
         for _ in range(num_iters):
             if use_reduce_scatter_async:
                 ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(

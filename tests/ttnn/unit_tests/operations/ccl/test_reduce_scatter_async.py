@@ -100,10 +100,14 @@ def run_reduce_scatter_test(
     use_program_cache,
     function_level_defaults,
     num_iters,
+    input_shard_shape=None,
+    shard_grid=None,
+    tensor_mem_layout=None,
     enable_async=True,
     topology=ttnn.Topology.Ring,
     trace_mode=False,
 ):
+    assert num_iters > 0
     enable_persistent_fabric = True
     if len(mesh_device.get_device_ids()) < num_devices:
         pytest.skip(
@@ -112,8 +116,37 @@ def run_reduce_scatter_test(
 
     debug = False
 
+    if input_shard_shape and shard_grid:
+        input_shard_spec = ttnn.ShardSpec(
+            shard_grid,
+            input_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        input_mem_config = ttnn.MemoryConfig(
+            tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
+        )
+        output_shard_shape = list(input_shard_shape)
+        if dim == 3:
+            output_shard_shape[1] *= num_devices
+        else:
+            output_shard_shape[0] *= num_devices
+        output_shard_spec = ttnn.ShardSpec(
+            shard_grid,
+            output_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        output_mem_config = ttnn.MemoryConfig(
+            tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+        )
+    else:
+        assert mem_config is not None
+        input_mem_config = mem_config
+        output_mem_config = mem_config
+
     (is_known_failure, message) = is_unsupported_case(
-        per_chip_output_shape, dim, math_op, mem_config, num_devices, num_links, input_dtype, layout
+        per_chip_output_shape, dim, math_op, input_mem_config, num_devices, num_links, input_dtype, layout
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
@@ -127,6 +160,7 @@ def run_reduce_scatter_test(
     # Generate input tensors
     canonical_input_shape = per_chip_output_shape.copy()
     canonical_input_shape[dim] *= num_devices
+
     tt_input_tensors = []
 
     numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
@@ -143,20 +177,18 @@ def run_reduce_scatter_test(
                         for yy in range(32):
                             for xx in range(32):
                                 input_tensors[-1][w, z, y + yy, x + xx] = tile_id
-                        # input_tensors[-1][w,z,y:y+32,x:x+32] = tile_id
                         tile_id += 1
     for i, canonical_input_tensor in enumerate(input_tensors):
         logger.info(f"Creating input tensor on device {mesh_device.get_device_ids()[i]}")
         tt_input_tensors.append(
             ttnn.Tensor(canonical_input_tensor, input_dtype)
             .to(layout)
-            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
+            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), input_mem_config)
         )
 
     assert len(tt_input_tensors) == num_devices
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -169,10 +201,10 @@ def run_reduce_scatter_test(
 
     # create global semaphore handles
     from_remote_semaphore_handles = create_global_semaphore_with_same_address(
-        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
+        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]  # , search_max=True
     )
     to_remote_semaphore_handles = create_global_semaphore_with_same_address(
-        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
+        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]  # , search_max=True
     )
 
     # Run the op
@@ -183,7 +215,7 @@ def run_reduce_scatter_test(
             dim,
             num_links,
             math_op,
-            mem_config,
+            output_mem_config,
             num_iters=num_iters,
             topology=topology,
             subdevice_id=ttnn.SubDeviceId(0),
@@ -198,7 +230,7 @@ def run_reduce_scatter_test(
                 to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
                 math_op=math_op,
                 num_links=num_links,
-                memory_config=mem_config,
+                memory_config=output_mem_config,
                 topology=topology,
                 subdevice_id=worker_sub_device_id,
             )
@@ -268,7 +300,6 @@ def run_reduce_scatter_test(
     "per_chip_output_shape, dim, layout",
     [
         ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 32 * 2], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 64, 32], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 64, 64], 3, ttnn.TILE_LAYOUT),
@@ -291,12 +322,14 @@ def run_reduce_scatter_test(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
@@ -319,6 +352,19 @@ def test_line_reduce_scatter_async_post_commit(
     trace_mode,
     num_iters=16,
 ):
+    known_l1_failure_shapes = (
+        (1, 1, 128, 4096),
+        (1, 4, 32, 2304),
+        (1, 8, 1024, 1024),
+        (1, 4, 2048, 1024),
+        (1, 1, 128, 8192),
+    )
+
+    if mem_config.buffer_type == ttnn.BufferType.L1 and any(
+        tuple(per_chip_output_shape) == s for s in known_l1_failure_shapes
+    ):
+        pytest.skip("Skipping known failure")
+
     run_reduce_scatter_test(
         t3k_mesh_device,
         num_devices,
@@ -340,7 +386,7 @@ def test_line_reduce_scatter_async_post_commit(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, num_links, per_chip_output_shape, dim, layout",
+    "num_devices, num_links, per_chip_input_shape, dim, layout",
     [
         (2, 1, [1, 2, 32, 1280], 1, ttnn.TILE_LAYOUT),
         (2, 1, [2, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
@@ -350,12 +396,14 @@ def test_line_reduce_scatter_async_post_commit(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "buffer_type",
     [
         ttnn.BufferType.DRAM,
+        ttnn.BufferType.L1,
     ],
 )
 @pytest.mark.parametrize("enable_async", [True])
@@ -364,7 +412,7 @@ def test_line_reduce_scatter_async_post_commit(
 def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     t3k_mesh_device,
     num_devices,
-    per_chip_output_shape,
+    per_chip_input_shape,
     dim,
     num_links,
     math_op,
@@ -383,7 +431,7 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         t3k_mesh_device,
         num_devices,
-        per_chip_output_shape,
+        per_chip_input_shape,
         ttnn.TensorMemoryLayout.INTERLEAVED,
         dim,
         num_links,
@@ -406,7 +454,7 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, num_links, per_chip_output_shape, dim, layout",
+    "num_devices, num_links, per_chip_input_shape, dim, layout",
     [
         (4, 1, [1, 4, 32, 1280], 1, ttnn.TILE_LAYOUT),
         (4, 1, [4, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
@@ -416,12 +464,14 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "buffer_type",
     [
         ttnn.BufferType.DRAM,
+        ttnn.BufferType.L1,
     ],
 )
 @pytest.mark.parametrize("enable_async", [True])
@@ -430,7 +480,7 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
 def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     t3k_mesh_device,
     num_devices,
-    per_chip_output_shape,
+    per_chip_input_shape,
     dim,
     num_links,
     math_op,
@@ -449,7 +499,7 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         t3k_mesh_device,
         num_devices,
-        per_chip_output_shape,
+        per_chip_input_shape,
         ttnn.TensorMemoryLayout.INTERLEAVED,
         dim,
         num_links,
@@ -463,6 +513,127 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=1,
+        use_reduce_scatter_async=True,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
+    )
+
+
+@pytest.mark.skip(reason="Sharded reduce scatter sometimes hangs")
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (4, 1),
+    ],
+)
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("buffer_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.L1,
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape,input_shard_shape,shard_grid",
+    (
+        # LLama
+        (
+            (1, 1, 32, 1024),
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 4096),
+            (32, 512),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 2048),
+            (32, 256),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 1792),
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+        ),
+    ),
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("replication_factor", [2])
+def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_post_commit(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    input_shard_shape,
+    dim,
+    num_links,
+    buffer_type,
+    math_op,
+    shard_grid,
+    orientation,
+    input_dtype,
+    buffer_layout,
+    tensor_mem_layout,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    replication_factor,
+    num_iters=1,
+    trace_mode=False,
+):
+    if len(t3k_mesh_device.get_devices()) < 8:
+        pytest.skip("Not T3K!")
+
+    per_chip_input_shape = list(per_chip_output_shape)
+    per_chip_input_shape[dim] *= num_devices
+    per_chip_input_shape = tuple(per_chip_input_shape)
+
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        tuple(input_shard_shape),
+        orientation,
+        False,
+    )
+
+    run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_input_shape,
+        tensor_mem_layout,
+        dim,
+        num_links,
+        math_op,
+        input_dtype,
+        buffer_layout,
+        buffer_type,
+        use_program_cache,
+        function_level_defaults,
+        enable_async=enable_async,
+        num_iters=num_iters,
+        input_shard_spec=input_shard_spec,
+        num_reduce_scatter_instances=replication_factor,
+        cluster_axis=1,
+        trace_mode=trace_mode,
         use_reduce_scatter_async=True,
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
