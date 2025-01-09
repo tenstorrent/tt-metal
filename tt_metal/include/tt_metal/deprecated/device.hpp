@@ -213,30 +213,6 @@ stl::Span<const std::uint32_t> BankIdsFromLogicalCore(
     IDevice* device, BufferType buffer_type, CoreCoord logical_core);
 
 /**
- * @brief Retrieves the machine epsilon for the SFPU on the device.
- *
- * @param device The device to query.
- * @return SFPU machine epsilon.
- */
-float GetSfpuEps(IDevice* device);
-
-/**
- * @brief Retrieves the representation of NaN for the SFPU on the device.
- *
- * @param device The device to query.
- * @return SFPU NaN value.
- */
-float GetSfpuNan(IDevice* device);
-
-/**
- * @brief Retrieves the representation of infinity for the SFPU on the device.
- *
- * @param device The device to query.
- * @return SFPU infinity value.
- */
-float GetSfpuInf(IDevice* device);
-
-/**
  * @brief Retrieves the current worker mode of the device.
  *
  * @param device The device to query.

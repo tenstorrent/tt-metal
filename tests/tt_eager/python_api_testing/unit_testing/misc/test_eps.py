@@ -11,18 +11,12 @@ from models.utility_functions import is_wormhole_b0
 from ttnn.device import Arch
 
 
-def test_run_sfpu_attr(device):
-    assert ttnn.device.EPS_GS == 0.001953125
-    assert ttnn.device.EPS_WHB0 == 1.1920899822825959e-07
-    assert ttnn.device.EPS_BH == 1.1920899822825959e-07
-
-
 def test_run_sfpu_eps(device):
     shape = [1, 1, 32, 32]
     eps_mapping = {
-        Arch.GRAYSKULL: ttnn.device.EPS_GS,
-        Arch.WORMHOLE_B0: ttnn.device.EPS_WHB0,
-        Arch.BLACKHOLE: ttnn.device.EPS_BH,
+        Arch.GRAYSKULL: 0.001953125,
+        Arch.WORMHOLE_B0: 1.1920899822825959e-07,
+        Arch.BLACKHOLE: 1.1920899822825959e-07,
     }
     value = eps_mapping[device.arch()]
     assert np.isclose(value, device.sfpu_eps())
