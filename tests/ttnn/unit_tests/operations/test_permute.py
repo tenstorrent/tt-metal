@@ -399,3 +399,17 @@ def test_permutations_5d_fixed_w(shape, perm, device):
     torch_output = torch.permute(torch_tensor, perm)
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+@pytest.mark.skip("#16575 to_layout from tiled to RM fails on reshape")
+@pytest.mark.parametrize("shape", [[1, 9, 91, 7, 9]])
+@pytest.mark.parametrize("perm", [[0, 3, 4, 1, 2]])
+def test_permute_adversarial(shape, perm, device):
+    torch.manual_seed(2005)
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.permute(input_tensor, perm)
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, perm)
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
