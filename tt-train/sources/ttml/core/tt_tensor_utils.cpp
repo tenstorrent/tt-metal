@@ -208,10 +208,6 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
     auto pad_tile = [](uint32_t val) { return (val + 32 - 1) / 32 * 32; };
     auto padded_shape = pad_tile(logical_shape[-1]) * pad_tile(logical_shape[-2]);
     bool multicore = padded_shape <= MAX_TILE_DIMENSION;
-    // output = ttnn::to_device(output, device, output_mem_config);
-    if (layout == Layout::TILE) {
-        output = ttnn::to_layout(output, Layout::TILE, std::nullopt, output_mem_config, device);
-    }
     output = ttnn::to_device(output, device, output_mem_config);
 
     if (layout == Layout::TILE) {
