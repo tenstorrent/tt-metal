@@ -593,24 +593,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     }
 
     auto override_runtime_arguments_callback =
-        [num_cores,
-         grid_size,
-         reader_kernels_id,
-         writer_kernels_id,
-         compute_kernels_id,
-         batch_per_core,
-         nh_per_core,
-         q_per_core,
-         nh_parallel_factor,
-         q_parallel_factor,
-         B,
-         NQH,
-         q_num_chunks,
-         is_causal,
-         cb_in0_id,
-         cb_out0_id,
-         is_chunked,
-         q_chunk_size](
+        [num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id, is_chunked, q_chunk_size](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -643,31 +626,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             // Set reader rt args
             for (uint32_t i = 0; i < num_cores; ++i) {
                 CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-                // log_debug("core: {} getting runtime args for idx {i}", core, i);
-                uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-                uint32_t local_batch_end = local_batch_start + batch_per_core;
-                uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-                uint32_t local_nh_end = local_nh_start + nh_per_core;
-                uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
-                uint32_t local_q_end = local_q_start + q_per_core;
-
-                // clamp all to max values for non-even partitioning
-                local_batch_start = std::min(local_batch_start, B);
-                local_batch_end = std::min(local_batch_end, B);
-                local_nh_start = std::min(local_nh_start, NQH);
-                local_nh_end = std::min(local_nh_end, NQH);
-                local_q_start = std::min(local_q_start, q_num_chunks);
-                local_q_end = std::min(local_q_end, q_num_chunks);
-
-                // log the above
-                tt::log_debug("core: {}", i);
-                tt::log_debug("local_batch_start: {}", local_batch_start);
-                tt::log_debug("local_batch_end: {}", local_batch_end);
-                tt::log_debug("local_nh_start: {}", local_nh_start);
-                tt::log_debug("local_nh_end: {}", local_nh_end);
-                tt::log_debug("local_q_start: {}", local_q_start);
-                tt::log_debug("local_q_end: {}", local_q_end);
 
                 auto& reader_args = reader_args_by_core[core.x][core.y];
                 auto& writer_args = writer_args_by_core[core.x][core.y];

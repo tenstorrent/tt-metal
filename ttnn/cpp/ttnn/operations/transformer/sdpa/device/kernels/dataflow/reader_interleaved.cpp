@@ -4,26 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-
-template <uint32_t tile_bytes, uint32_t num_readers>
-constexpr uint32_t get_barrier_read_threshold() {
-    return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
-}
-
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
-uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, volatile tt_l1_ptr const uint32_t* const page_table_ptr) {
-    // Given some index in the sequence tiles in range [0, max_seq_len_t]
-    // Return the physical tile id for that tile row
-    constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
-    const uint32_t head_offset = cur_head * block_size_t * Wt;
-
-    const uint32_t virtual_block = seq_tile_idx / block_size_t;
-    const uint32_t physical_block = page_table_ptr[virtual_block];
-    const uint32_t block_row_offset = seq_tile_idx % block_size_t;
-    const uint32_t block_offset = block_row_offset * Wt;
-    return physical_block * block_stride + head_offset + block_offset;
-}
+#include "dataflow_common.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -99,10 +80,13 @@ void kernel_main() {
     const InterleavedAddrGenFast<is_dram> mask_reader = {
         .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
 
+    const auto q_tile_shape = TensorTileShape(B, NQH, Sqt, DHt);
+    const auto k_tile_shape = TensorTileShape(B, NKH, Skt, DHt);
+    const auto v_tile_shape = TensorTileShape(B, NKH, Skt, DHt);
+    const auto mask_tile_shape = TensorTileShape(B, 1, Sqt, Skt);
+
     volatile tt_l1_ptr uint32_t* page_table_ptr;
 
-    uint32_t q_tile_id = 0;
-    uint32_t k_tile_id = 0;
     uint32_t v_tile_id = 0;
     uint32_t mask_tile_id = 0;
     uint32_t barrier_count = 0;
@@ -120,8 +104,8 @@ void kernel_main() {
             cb_push_back(cb_id_page_table, 1);
             page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
         }
-        const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
-        const uint32_t kv_batch_offset = nb * NKH * Skt * DHt;
+        // const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
+        // const uint32_t kv_batch_offset = nb * NKH * Skt * DHt;
         const uint32_t mask_batch_offset = nb * Sqt * Skt;
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
@@ -138,28 +122,12 @@ void kernel_main() {
                 q_chunk = local_q_start + q_iter;
 #endif
 
-                uint32_t q_head_offset = nq * Sqt * DHt;
-                uint32_t q_chunk_offset = q_chunk * Sq_chunk_t * DHt;
-                q_tile_id = q_batch_offset + q_head_offset + q_chunk_offset;
+                // uint32_t q_head_offset = nq * Sqt * DHt;
+                // uint32_t q_chunk_offset = q_chunk * Sq_chunk_t * DHt;
+                // q_tile_id = q_batch_offset + q_head_offset + q_chunk_offset;
 
-                // Read Q chunk
-                cb_reserve_back(cb_q_in, q_chunk_tiles);
-                uint32_t q_write_ptr = get_write_ptr(cb_q_in);
-
-                barrier_count = 0;
-                for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
-                    noc_async_read_tile(q_tile_id, q_reader, q_write_ptr);
-                    q_tile_id += 1;
-                    q_write_ptr += q_tile_bytes;
-
-                    if (++barrier_count == barrier_threshold) {
-                        noc_async_read_barrier();
-                        barrier_count = 0;
-                    }
-                }
-                noc_async_read_barrier();
-
-                cb_push_back(cb_q_in, q_chunk_tiles);
+                const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, q_chunk * Sq_chunk_t, 0);
+                read_chunk(q_reader, cb_q_in, q_tile_id, Sq_chunk_t, DHt, q_tile_bytes, barrier_threshold);
 
                 if constexpr (is_chunked) {
                     q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -174,13 +142,14 @@ void kernel_main() {
                 }
 
                 const uint32_t kv_head = nq / q_heads_per_kv;
-                const uint32_t kv_head_offset = kv_head * Skt * DHt;
+                // const uint32_t kv_head_offset = kv_head * Skt * DHt;
 
                 // loop while k_low < q_high
                 for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                     const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                     const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
-                    const uint32_t k_start_tile_id = kv_batch_offset + kv_head_offset + k_chunk * Sk_chunk_t * DHt;
+                    // const uint32_t k_start_tile_id = kv_batch_offset + kv_head_offset + k_chunk * Sk_chunk_t * DHt;
+                    const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_chunk * Sk_chunk_t, 0);
 
                     if constexpr (is_chunked) {
                         // Use page table to read K chunk
@@ -209,25 +178,8 @@ void kernel_main() {
                         cb_push_back(cb_k_in, k_chunk_tiles);
 
                     } else {
-                        // Read K chunk transposed
-                        cb_reserve_back(cb_k_in, k_chunk_tiles);
-                        uint32_t k_write_ptr = get_write_ptr(cb_k_in);
-                        barrier_count = 0;
-                        for (uint32_t col = 0; col < DHt; ++col) {
-                            k_tile_id = k_start_tile_id + col;
-                            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                                noc_async_read_tile(k_tile_id, k_reader, k_write_ptr);
-                                k_tile_id += DHt;
-                                k_write_ptr += k_tile_bytes;
-
-                                if (++barrier_count == barrier_threshold) {
-                                    noc_async_read_barrier();
-                                    barrier_count = 0;
-                                }
-                            }
-                        }
-                        noc_async_read_barrier();
-                        cb_push_back(cb_k_in, k_chunk_tiles);
+                        read_chunk(
+                            k_reader, cb_k_in, k_start_tile_id, Sk_chunk_t, DHt, k_tile_bytes, barrier_threshold, true);
                     }
 
                     if constexpr (use_provided_mask) {

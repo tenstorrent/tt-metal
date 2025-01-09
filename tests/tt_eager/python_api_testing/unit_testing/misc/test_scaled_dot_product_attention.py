@@ -67,9 +67,9 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
     logger.debug(f"K: {K.shape}")
     logger.debug(f"V: {V.shape}")
 
-    tt_Q = ttnn.Tensor(Q, dtype).to(ttnn.TILE_LAYOUT).to(device)
-    tt_K = ttnn.Tensor(K, dtype).to(ttnn.TILE_LAYOUT).to(device)
-    tt_V = ttnn.Tensor(V, dtype).to(ttnn.TILE_LAYOUT).to(device)
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q, tt_K, tt_V, is_causal=True, program_config=program_config, compute_kernel_config=compute_kernel_config
     )
@@ -82,6 +82,33 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
     logger.debug(f"python vs pytorch: {out_pcc}")
     assert out_pass
+
+
+# @pytest.mark.skip(reason="ND PCC issues")
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+# @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
+@pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    (
+        [1, 1, 1, 2011, 128],  # Llama2-70B
+        [1, 1, 1, 2049, 128],  # Llama2-70B
+        [1, 1, 1, 1, 128],  # Llama2-70B
+        [1, 1, 1, 160, 128],  # Llama2-70B
+    ),
+)
+def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+    """
+    This case tests padding in multiple ways.
+    SDPA should correctly handle tile-padded tensors. In addition,
+    it should allow arbitrary chunk sizes even if they don't divide the sequence length.
+    """
+    ttnn.device.DisablePersistentKernelCache()
+    run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
 
 
 # @pytest.mark.skip(reason="ND PCC issues")
