@@ -331,6 +331,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         for (const auto& el : assignment) {
             nblocks_per_core += el.block_count();
             row_start_id += el.data_row_count();
+            if (writer_rt_args.size() == 9) {
+                writer_rt_args.resize(writer_rt_args.size() - 4);
+            }
             writer_rt_args.push_back(el.n_data);
             writer_rt_args.push_back(el.n_mixed);
             writer_rt_args.push_back(el.n_pads);

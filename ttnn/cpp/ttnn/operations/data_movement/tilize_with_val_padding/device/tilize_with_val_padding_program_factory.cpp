@@ -379,6 +379,9 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         for (const auto& el : assignment) {
             nblocks_per_core += el.block_count();
             row_start_id += el.data_row_count();
+            if (reader_rt_args.size() == 10) {
+                reader_rt_args.resize(reader_rt_args.size() - 4);
+            }
             reader_rt_args.push_back(el.n_data);
             reader_rt_args.push_back(el.n_mixed);
             reader_rt_args.push_back(el.n_pads);
