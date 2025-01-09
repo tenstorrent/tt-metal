@@ -181,6 +181,7 @@ FORCE_INLINE auto build_source_address_generator(
 
     using addrgen_type = typename source_tensor_addrgen<tensor_layout, buffer_type, page_layout>::type;
 
+    bool addrgen_enabled = get_arg_val<uint32_t>(arg_idx++) != 0;
     if constexpr (tensor_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         if constexpr (is_row_major_layout) {
             return addrgen_type{.bank_base_address = tensor_address, .page_size = page_size};
@@ -194,12 +195,18 @@ FORCE_INLINE auto build_source_address_generator(
         tensor_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
         // We don't use these args at the moment but we keep them here for now to avoid a rewrite in the very
         // near future where we'll want to support custom shard grid.
-        uint8_t input_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
-        const auto* const input_shard_grid_row_map = reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
-        arg_idx += input_shard_grid_nrows;
-        uint8_t input_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
-        const auto* const input_shard_grid_col_map = reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
-        arg_idx += input_shard_grid_ncols;
+        uint8_t input_shard_grid_nrows = 0;
+        uint8_t input_shard_grid_ncols = 0;
+        uint32_t* input_shard_grid_row_map = nullptr;
+        uint32_t* input_shard_grid_col_map = nullptr;
+        if (addrgen_enabled) {
+            input_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
+            input_shard_grid_row_map = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
+            arg_idx += input_shard_grid_nrows;
+            input_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
+            input_shard_grid_col_map = reinterpret_cast<uint32_t*>(get_arg_addr(arg_idx));
+            arg_idx += input_shard_grid_ncols;
+        }
 
         return tt::tt_metal::address_generators::build_sharded_addr_gen<tensor_layout>(
             tt::tt_metal::address_generators::VirtualCoordWormholeWorkerToNocLookup(),
@@ -340,6 +347,8 @@ struct command_context_t final {
             } break;
             case ttnn::ccl::cmd::CclCommandCode::WAIT_VALUE:
             case ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC:
+            case ttnn::ccl::cmd::CclCommandCode::NOC_READ_BURST:
+            case ttnn::ccl::cmd::CclCommandCode::NOC_WRITE_BURST:
             case ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES: break;
             default: ASSERT(false);
         }

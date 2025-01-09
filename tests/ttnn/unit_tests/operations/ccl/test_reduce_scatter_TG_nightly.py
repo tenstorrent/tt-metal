@@ -158,6 +158,31 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         f"full_mesh_input_shape: {full_mesh_input_shape}, dim: {dim}, reduce_scatter_instances_concat_dim: {reduce_scatter_instances_concat_dim}, num_devices_per_line: {num_devices_per_line}"
     )
 
+    if use_reduce_scatter_async:
+        compute_grid_size = mesh_device.compute_with_storage_grid_size()
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+        )
+        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        if create_persistent_fabric:
+            logger.info("Create persistent fabric interface")
+            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+                mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+            )
+            logger.info("Done Create persistent fabric interface")
+
+        # create global semaphore handles
+        from_remote_semaphore_handles = create_global_semaphore_with_same_address(
+            mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
+        )
+        to_remote_semaphore_handles = create_global_semaphore_with_same_address(
+            mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
+        )
+        mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+
+    else:
+        worker_sub_device_id = None
     ##
     ## Compute golden
     ##
@@ -218,31 +243,6 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-
-    if use_reduce_scatter_async:
-        compute_grid_size = mesh_device.compute_with_storage_grid_size()
-        ccl_sub_device_crs = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-        )
-        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-        worker_sub_device_id = ttnn.SubDeviceId(0)
-        if create_persistent_fabric:
-            logger.info("Create persistent fabric interface")
-            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-                mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
-            )
-            logger.info("Done Create persistent fabric interface")
-
-        # create global semaphore handles
-        from_remote_semaphore_handles = create_global_semaphore_with_same_address(
-            mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
-        )
-        to_remote_semaphore_handles = create_global_semaphore_with_same_address(
-            mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
-        )
-
-    else:
-        worker_sub_device_id = None
 
     if trace_mode:
         ttnn_tensor_out = run_with_trace(
