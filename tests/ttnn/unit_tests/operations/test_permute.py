@@ -365,9 +365,6 @@ def test_permute_5d_tiled_row_invariant(shape, perm, device):
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    # print(torch_tensor)
-    # print(torch_output)
-    # print(output_tensor)
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.9999)
 
@@ -379,11 +376,7 @@ def test_permute_5d_xc_pad(shape, perm, device):
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, perm)
-    print(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
-    # print(torch_tensor)
-    # print(torch_output)
-    # print(output_tensor)
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.9999)
