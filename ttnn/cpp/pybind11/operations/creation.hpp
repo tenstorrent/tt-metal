@@ -138,7 +138,7 @@ auto create_pybind_empty_like_overload() {
            const ttnn::Tensor& reference,
            const std::optional<DataType>& dtype,
            const std::optional<Layout>& layout,
-           const std::optional<std::reference_wrapper<Device>> device,
+           const std::optional<std::reference_wrapper<device_t>> device,
            const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
             return self(reference, dtype, layout, device, memory_config);
         },
@@ -146,6 +146,26 @@ auto create_pybind_empty_like_overload() {
         py::kw_only(),
         py::arg("dtype") = DataType::BFLOAT16,
         py::arg("layout") = Layout::ROW_MAJOR,
+        py::arg("device") = std::nullopt,
+        py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG};
+}
+
+template <typename creation_operation_t, typename device_t>
+auto create_pybind_arange_overload() {
+    return ttnn::pybind_overload_t{
+        [](const creation_operation_t& self,
+           const int64_t start,
+           const int64_t end,
+           const int64_t step,
+           const DataType dtype,
+           const std::optional<std::reference_wrapper<device_t>> device,
+           const MemoryConfig& memory_config) -> ttnn::Tensor {
+            return self(start, end, step, dtype, device, memory_config);
+        },
+        py::arg("start") = 0,
+        py::arg("end"),
+        py::arg("step") = 1,
+        py::arg("dtype") = DataType::BFLOAT16,
         py::arg("device") = std::nullopt,
         py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG};
 }
@@ -185,9 +205,9 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
         module,
         operation,
         doc,
-        create_pybind_full_overload<creation_operation_t, Device, float>(),
+        create_pybind_full_overload<creation_operation_t, IDevice, float>(),
         create_pybind_full_overload<creation_operation_t, MeshDevice, float>(),
-        create_pybind_full_overload<creation_operation_t, Device, int>(),
+        create_pybind_full_overload<creation_operation_t, IDevice, int>(),
         create_pybind_full_overload<creation_operation_t, MeshDevice, int>());
 }
 
@@ -234,7 +254,7 @@ void bind_full_operation_with_hard_coded_value(
         module,
         operation,
         doc,
-        create_pybind_full_with_hard_coded_value_overload<creation_operation_t, Device>(),
+        create_pybind_full_with_hard_coded_value_overload<creation_operation_t, IDevice>(),
         create_pybind_full_with_hard_coded_value_overload<creation_operation_t, MeshDevice>());
 }
 
@@ -270,9 +290,9 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
         module,
         operation,
         doc,
-        create_pybind_full_like_overload<creation_operation_t, Device, float>(),
+        create_pybind_full_like_overload<creation_operation_t, IDevice, float>(),
         create_pybind_full_like_overload<creation_operation_t, MeshDevice, float>(),
-        create_pybind_full_like_overload<creation_operation_t, Device, int>(),
+        create_pybind_full_like_overload<creation_operation_t, IDevice, int>(),
         create_pybind_full_like_overload<creation_operation_t, MeshDevice, int>());
 }
 
@@ -318,7 +338,7 @@ void bind_full_like_operation_with_hard_coded_value(
         module,
         operation,
         doc,
-        create_pybind_full_like_with_hard_coded_value_overload<creation_operation_t, Device>(),
+        create_pybind_full_like_with_hard_coded_value_overload<creation_operation_t, IDevice>(),
         create_pybind_full_like_with_hard_coded_value_overload<creation_operation_t, MeshDevice>());
 }
 
@@ -350,22 +370,8 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const creation_operation_t& self,
-               const int64_t start,
-               const int64_t end,
-               const int64_t step,
-               const DataType dtype,
-               const std::optional<std::reference_wrapper<Device>>& device,
-               const MemoryConfig& memory_config) -> ttnn::Tensor {
-                return self(start, end, step, dtype, device, memory_config);
-            },
-            py::arg("start") = 0,
-            py::arg("end"),
-            py::arg("step") = 1,
-            py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("device") = std::nullopt,
-            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
+        create_pybind_arange_overload<creation_operation_t, IDevice>(),
+        create_pybind_arange_overload<creation_operation_t, MeshDevice>());
 }
 
 template <typename creation_operation_t>
@@ -399,7 +405,7 @@ void bind_empty_operation(py::module& module, const creation_operation_t& operat
         module,
         operation,
         doc,
-        create_pybind_empty_overload<creation_operation_t, Device>(),
+        create_pybind_empty_overload<creation_operation_t, IDevice>(),
         create_pybind_empty_overload<creation_operation_t, MeshDevice>());
 }
 
@@ -433,7 +439,7 @@ void bind_empty_like_operation(py::module& module, const creation_operation_t& o
         module,
         operation,
         doc,
-        create_pybind_empty_like_overload<creation_operation_t, Device>(),
+        create_pybind_empty_like_overload<creation_operation_t, IDevice>(),
         create_pybind_empty_like_overload<creation_operation_t, MeshDevice>());
 }
 

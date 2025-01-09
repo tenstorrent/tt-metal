@@ -9,6 +9,7 @@
 
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_metal {
@@ -16,7 +17,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class Buffer;
-class Device;
+class IDevice;
 
 }  // namespace v0
 
@@ -27,22 +28,17 @@ namespace experimental {
 class GlobalCircularBuffer {
 public:
     GlobalCircularBuffer(
-        Device* device,
+        IDevice* device,
         const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type);
+        BufferType buffer_type = BufferType::L1,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     GlobalCircularBuffer(const GlobalCircularBuffer&) = default;
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = default;
 
     GlobalCircularBuffer(GlobalCircularBuffer&&) noexcept = default;
     GlobalCircularBuffer& operator=(GlobalCircularBuffer&&) noexcept = default;
-
-    static std::shared_ptr<GlobalCircularBuffer> create(
-        Device* device,
-        const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
-        uint32_t size,
-        BufferType buffer_type = BufferType::L1);
 
     const Buffer& cb_buffer() const;
 
@@ -57,13 +53,14 @@ public:
     const auto attribute_values() const { return std::make_tuple(this->sender_receiver_core_mapping_, this->size_); }
 
 private:
-    void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
+    void setup_cb_buffers(
+        BufferType buffer_type, uint32_t max_num_receivers_per_sender, tt::stl::Span<const SubDeviceId> sub_device_ids);
 
     // GlobalCircularBuffer is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
     std::shared_ptr<Buffer> cb_buffer_;
     std::shared_ptr<Buffer> cb_config_buffer_;
-    Device* device_;
+    IDevice* device_;
     std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
@@ -76,3 +73,12 @@ private:
 }  // namespace v1
 
 }  // namespace tt::tt_metal
+
+namespace std {
+
+template <>
+struct hash<tt::tt_metal::v1::experimental::GlobalCircularBuffer> {
+    std::size_t operator()(const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_circular_buffer) const;
+};
+
+}  // namespace std

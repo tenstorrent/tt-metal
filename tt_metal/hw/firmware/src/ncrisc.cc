@@ -11,7 +11,6 @@
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "risc_attribs.h"
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "circular_buffer_init.h"
 
@@ -40,6 +39,13 @@ uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
+// These arrays are stored in local memory of FW, but primarily used by the kernel which shares
+// FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
@@ -62,7 +68,9 @@ inline __attribute__((always_inline)) void notify_brisc_and_wait() {
 #ifdef NCRISC_HAS_IRAM
     notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
 #else
-    while (*ncrisc_run != RUN_SYNC_MSG_GO);
+    while (*ncrisc_run != RUN_SYNC_MSG_GO) {
+        invalidate_l1_cache();
+    }
 #endif
 }
 
@@ -73,11 +81,13 @@ inline __attribute__((always_inline)) void signal_ncrisc_completion() {
 }
 
 int main(int argc, char *argv[]) {
-    conditionally_disable_l1_cache();
+    configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
     do_crt1((uint32_t tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH);
+
+    noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
     risc_init();
 

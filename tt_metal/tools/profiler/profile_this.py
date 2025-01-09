@@ -26,7 +26,7 @@ def profile_command(test_command, output_folder, name_append):
         options += f"-o {output_folder}"
     if name_append:
         options += f" -n {name_append}"
-    opProfilerTestCommand = f"python -m tracy -v -r -p {options} -m {test_command}"
+    opProfilerTestCommand = f"python3 -m tracy -v -r -p {options} -m {test_command}"
     subprocess.run([opProfilerTestCommand], shell=True, check=False, env=currentEnvs)
 
 

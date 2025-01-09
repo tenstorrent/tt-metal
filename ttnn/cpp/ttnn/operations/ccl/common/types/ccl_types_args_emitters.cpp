@@ -6,7 +6,7 @@
 #include "impl/buffers/buffer_constants.hpp"
 #include "ttnn/cpp/ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 using namespace tt::tt_metal;
 
@@ -24,7 +24,7 @@ args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) 
 
 args_list_t emit_compile_time(WorkerEdmInterfaceArgs const& edm_interface_args) { return {}; }
 
-args_list_t emit_address_generator_runtime_args(tt::tt_metal::Device const* const d, tt::tt_metal::Tensor const& t) {
+args_list_t emit_address_generator_runtime_args(tt::tt_metal::IDevice const* const d, tt::tt_metal::Tensor const& t) {
     args_list_t args;
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
@@ -72,7 +72,7 @@ args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const&
     TT_ASSERT(false);
 }
 
-static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
+std::pair<CoreCoord, CoreCoord> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
     auto const& core_range = shard_spec.grid.bounding_box();
     log_trace(
         tt::LogOp,
@@ -89,24 +89,24 @@ static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardS
 // non-transposed - always row-major layout
 // vec<logical row -> noc row>, vec<logicacal col -> noc col>
 static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_from_shard_spec(
-    Device const* d, const ShardSpec& shard_spec) {
+    IDevice const* d, const ShardSpec& shard_spec) {
     TT_ASSERT(d != nullptr);
     auto const& core_range = shard_spec.grid.bounding_box();
     std::vector<uint32_t> logical_to_noc_row_map;
     std::vector<uint32_t> logical_to_noc_col_map;
     for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(0, y), CoreType::WORKER);
+        CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(0, y), CoreType::WORKER);
         logical_to_noc_row_map.push_back(noc_core.y);
     }
     for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(x, 0), CoreType::WORKER);
+        CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(x, 0), CoreType::WORKER);
         logical_to_noc_col_map.push_back(noc_core.x);
     }
 
     return {logical_to_noc_row_map, logical_to_noc_col_map};
 }
 
-std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(Device const* d, Tensor const& t) {
+std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(IDevice const* d, Tensor const& t) {
     std::vector<uint32_t> args;
     auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, t.shard_spec().value());
     args.push_back(row_map.size());
@@ -136,16 +136,20 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
         t.memory_config().memory_layout);
     // shard_grid_height (cores)
     args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
+    TT_FATAL(args.back() > 0, "Passed shard_grid height == 0 to sharded addrgen, which is invalid");
     // shard_grid_width (cores)
     args.push_back(shard_grid_end.x - shard_grid_start.x + 1);
+    TT_FATAL(args.back() > 0, "Passed shard_grid width == 0 to sharded addrgen, which is invalid");
     // shard_grid_start_y
     args.push_back(shard_grid_start.y);
     // shard_grid_start_x
     args.push_back(shard_grid_start.x);
     // pages_per_shard_y
     args.push_back(pages_per_shard_y);
+    TT_FATAL(args.back() > 0, "Passed pages per shard y == 0 to sharded addrgen, which is invalid");
     // pages_per_shard_x
     args.push_back(pages_per_shard_x);
+    TT_FATAL(args.back() > 0, "Passed pages per shard x == 0 to sharded addrgen, which is invalid");
     // transposed grid
     args.push_back(static_cast<uint32_t>(shard_grid_transposed));
 

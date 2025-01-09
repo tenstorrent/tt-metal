@@ -11,7 +11,6 @@
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "risc_attribs.h"
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 
 #include "debug/waypoint.h"
@@ -52,7 +51,7 @@ inline __attribute__((always_inline)) void signal_slave_idle_erisc_completion() 
 }
 
 int main(int argc, char *argv[]) {
-    conditionally_disable_l1_cache();
+    configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
     do_crt1((uint32_t *)MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -62,7 +61,9 @@ int main(int argc, char *argv[]) {
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
-        while (*slave_idle_erisc_run != RUN_SYNC_MSG_GO);
+        while (*slave_idle_erisc_run != RUN_SYNC_MSG_GO) {
+            invalidate_l1_cache();
+        }
         DeviceZoneScopedMainN("SLAVE-IDLE-ERISC-FW");
 
         flush_erisc_icache();

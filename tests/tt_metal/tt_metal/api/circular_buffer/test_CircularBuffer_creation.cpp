@@ -16,7 +16,7 @@ namespace basic_tests::circular_buffer {
 
 bool test_cb_config_written_to_core(
     Program& program,
-    Device* device,
+    IDevice* device,
     const CoreRangeSet& cr_set,
     const std::map<uint8_t, std::vector<uint32_t>>& cb_config_per_buffer_index) {
     bool pass = true;
@@ -65,22 +65,10 @@ TEST_F(DeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
 
     uint32_t l1_unreserved_base = devices_.at(0)->get_base_allocator_addr(HalMemType::L1);
     std::map<uint8_t, std::vector<uint32_t>> golden_cb_config = {
-        {0,
-         {l1_unreserved_base >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES,
-          cb_config.page_size >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES,
-          cb_config.num_pages}},
-        {2,
-         {l1_unreserved_base >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES,
-          cb_config.page_size >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES,
-          cb_config.num_pages}},
-        {16,
-         {l1_unreserved_base >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES,
-          cb_config.page_size >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES,
-          cb_config.num_pages}},
-        {24,
-         {l1_unreserved_base >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES,
-          cb_config.page_size >> CIRCULAR_BUFFER_LOG2_WORD_SIZE_BYTES,
-          cb_config.num_pages}}};
+        {0, {l1_unreserved_base, cb_config.page_size, cb_config.num_pages}},
+        {2, {l1_unreserved_base, cb_config.page_size, cb_config.num_pages}},
+        {16, {l1_unreserved_base, cb_config.page_size, cb_config.num_pages}},
+        {24, {l1_unreserved_base, cb_config.page_size, cb_config.num_pages}}};
     std::map<uint8_t, tt::DataFormat> data_format_spec = {
         {0, cb_config.data_format},
         {2, cb_config.data_format},
@@ -104,7 +92,7 @@ TEST_F(DeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
 
     for (unsigned int id = 0; id < num_devices_; id++) {
         detail::CompileProgram(devices_.at(id), program);
-        program.finalize(devices_.at(id));
+        program_dispatch::finalize_program_offsets(program, devices_.at(id));
         EXPECT_TRUE(test_cb_config_written_to_core(program, this->devices_.at(id), cr_set, golden_cb_config));
     }
 }

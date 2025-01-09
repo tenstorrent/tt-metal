@@ -10,9 +10,10 @@
 #include <immintrin.h>
 
 #include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/blockfloat_common.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "blockfloat_common.hpp"
+#include "tt_metal/tt_stl/span.hpp"
+#include "tracy/Tracy.hpp"
 
 // TODO: empty struct to facilitate Tensor template logic. Reconsider how/why templating is supported in Tensor
 struct bfloat8_b {};
@@ -99,7 +100,7 @@ inline uint32_t create_packed_bfp8_packed_as_u32(
 }
 
 inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
-    const std::vector<float>& fp32_vec,
+    tt::stl::Span<const float> fp32_vec,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
@@ -113,6 +114,8 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     ZoneScoped;
 
+    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+
     auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
     auto face_H = tile.has_value() ? tile->get_face_shape()[0] : tt::constants::FACE_HEIGHT;
@@ -124,9 +127,12 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(
     auto subtiles_in_tile_col = tile_W / face_W;
     auto subtile_rows = face_H;
     auto subtile_cols = face_W;
-    uint32_t num_exp_words = num_faces * face_H / 4;
+    uint32_t num_exp_words = tt::round_up(num_faces * face_H, l1_alignment) / 4;
     uint32_t num_tile_words = tile_HW / 4;
     uint32_t num_bfp8_in_tile = num_tile_words + num_exp_words;
+
+    // the exponent index will always be 0 when tile_HW == 16, between 0-1 when tile_HW == 32, and between 0-3 otherwise
+    uint32_t exp_bit_mask = (tile_HW == 16) ? 0x0 : (tile_HW == 32) ? 0x1 : 0x3;
 
     int num_elements_in_dword = 4;
     uint32_t size_bytes = bfp8_tiles.size() * num_elements_in_dword;  // each uint32_t contains 4 BFP8 values
@@ -172,8 +178,8 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(
 
                         int num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> 2) &
-                                         0x3;  // Extract the byte in which the shared exponent is stored. Each byte is
-                                               // shared amongst 16 datums.
+                                         exp_bit_mask;  // Extract the byte in which the shared exponent is stored. Each
+                                                        // byte is shared amongst 16 datums.
                         __m256i exp_vector =
                             _mm256_set1_epi32(get_byte(exp_word, sub_word_index));  // Replicate exp scalar in a vector
                         // Take 2 uint32_t values. These are 8 BFP8 values

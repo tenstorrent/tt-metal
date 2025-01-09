@@ -18,7 +18,7 @@
 #include "wormhole/wh_hal.hpp"
 
 // FIXME: Eventually this file will be gone
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_BASE
+#include "hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_BASE
 
 #include "umd/device/tt_soc_descriptor.h"  // CoreType
 
@@ -47,6 +47,7 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LOCAL)] = MEM_LOCAL_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_BANK_TO_NOC_SCRATCH;
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -63,13 +64,14 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LOCAL)] = MEM_TRISC_LOCAL_SIZE; // TRISC, BRISC, or NCRISC?
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_BANK_TO_NOC_SIZE;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumTensixDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types;
     for (std::uint8_t processor_class_idx = 0; processor_class_idx < NumTensixDispatchClasses; processor_class_idx++) {
         std::uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
         processor_types.resize(num_processors);
-        for (std::uint8_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
+        for (std::size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
             DeviceAddr fw_base, local_init;
             switch (processor_class_idx) {
                 case 0: {

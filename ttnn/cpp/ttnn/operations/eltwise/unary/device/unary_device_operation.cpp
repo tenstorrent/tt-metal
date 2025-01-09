@@ -4,7 +4,7 @@
 
 #include "unary_device_operation.hpp"
 
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
@@ -69,6 +69,13 @@ void validate_supported_arch_dtype(
                 output_datatype == DataType::BFLOAT16,
                 "Unsupported output data type '{}' for UnaryOpType '{}' (FMOD operation).",
                 static_cast<int>(output_datatype),
+                static_cast<int>(op_type));
+            break;
+        case UnaryOpType::ABS:
+        case UnaryOpType::ABS_INT32:
+            TT_FATAL(
+                !(arch == tt::ARCH::GRAYSKULL && input_datatype == DataType::INT32),
+                "UnaryOpType '{}' (ABS int32 operation) is not supported on Grayskull architecture.",
                 static_cast<int>(op_type));
             break;
         default: return;

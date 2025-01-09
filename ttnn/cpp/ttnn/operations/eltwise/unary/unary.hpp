@@ -21,11 +21,6 @@ struct ExecuteUnaryInvokeResult {
     using type = ComplexTensor;
 };
 
-template <>
-struct ExecuteUnaryInvokeResult<UnaryOpType::ABS> {
-    using type = Tensor;
-};
-
 template <UnaryOpType... unary_op_types>
 struct ExecuteUnary {
     static Tensor invoke(
@@ -148,6 +143,46 @@ struct Identity {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Abs {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
+};
+
+struct Floor {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Ceil {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
 struct Dropout {
     static Tensor invoke(
         const Tensor& input,
@@ -272,7 +307,6 @@ struct AsymmetricBinop {
         ttnn::operations::unary::                                                                  \
             ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::operation_type, data_type>>();
 
-REGISTER_UNARY_OPERATION_OVERLOAD(abs, ABS);
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
 REGISTER_UNARY_OPERATION(atan, ATAN);
@@ -281,8 +315,6 @@ REGISTER_UNARY_OPERATION(erfinv, ERFINV);
 REGISTER_UNARY_OPERATION(exp2, EXP2);
 REGISTER_UNARY_OPERATION(expm1, EXPM1);
 REGISTER_UNARY_OPERATION(eqz, EQZ);
-REGISTER_UNARY_OPERATION(floor, FLOOR);
-REGISTER_UNARY_OPERATION(ceil, CEIL);
 REGISTER_UNARY_OPERATION(gez, GEZ);
 REGISTER_UNARY_OPERATION(gtz, GTZ);
 REGISTER_UNARY_OPERATION(i0, I0);
@@ -329,7 +361,6 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
 
 // Unaries with float parameter
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(elu, ELU);
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rsub, RSUB);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_max, RELU_MAX);
@@ -343,17 +374,14 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ne_unary, UNARY_NE);
 
 // Unaries with integer parameter
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_left_shift, LEFT_SHIFT, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_right_shift, RIGHT_SHIFT, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_and, BITWISE_AND, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_or, BITWISE_OR, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_xor, BITWISE_XOR, int32_t);
 
 // Other unaries
-constexpr auto dropout =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::dropout", ttnn::operations::unary::Dropout>();
 constexpr auto identity =
     ttnn::register_operation_with_auto_launch_op<"ttnn::identity", ttnn::operations::unary::Identity>();
+constexpr auto abs = ttnn::register_operation_with_auto_launch_op<"ttnn::abs", ttnn::operations::unary::Abs>();
+constexpr auto floor =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::floor", ttnn::operations::unary::Floor>();
+constexpr auto ceil = ttnn::register_operation_with_auto_launch_op<"ttnn::ceil", ttnn::operations::unary::Ceil>();
 constexpr auto softplus =
     ttnn::register_operation_with_auto_launch_op<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto prelu_sfpu =

@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/program/program.hpp"
-
 #include <range/v3/view/filter.hpp>
 #include <range/v3/view/transform.hpp>
 
@@ -21,20 +19,21 @@
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/program.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tracy/Tracy.hpp"
 
 namespace tt::tt_metal {
 
 namespace {
 std::atomic<bool> enable_persistent_kernel_cache = false;
 
-void GenerateBinaries(Device *device, JitBuildOptions &build_options, const std::shared_ptr<Kernel>& kernel) {
+void GenerateBinaries(IDevice* device, JitBuildOptions &build_options, const std::shared_ptr<Kernel>& kernel) {
     //ZoneScoped;
     //const std::string tracyPrefix = "GenerateBinaries_";
     //ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
@@ -51,9 +50,8 @@ void GenerateBinaries(Device *device, JitBuildOptions &build_options, const std:
 #endif
 
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions &build_options, uint32_t build_key, size_t device_kernel_defines_hash) {
-    // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per
-    // device This can be removed with https://github.com/tenstorrent/tt-metal/issues/3381
-
+    // Store the build key into the KernelCompile hash. This will be unique per command queue
+    // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
     string compile_hash_str = fmt::format(
@@ -62,11 +60,11 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions 
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
         device_kernel_defines_hash,
-        tt::llrt::OptionsG.get_watcher_enabled());
+        tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled());
 
     for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
         compile_hash_str += "_";
-        compile_hash_str += tt::llrt::OptionsG.get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
+        compile_hash_str += tt::llrt::RunTimeOptions::get_instance().get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
     }
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
@@ -108,7 +106,8 @@ class Program_ {
     const std::vector< Semaphore > & semaphores() const;
 
     KernelGroup * kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index);
-    std::vector<KernelGroup>& get_kernel_groups(uint32_t programmable_core_type_index);
+    std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
+    std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
     void add_buffer(std::shared_ptr<Buffer> buf);
     void release_buffers();
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
@@ -117,46 +116,54 @@ class Program_ {
 
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
 
-    std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core) const;
+    std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(const CoreCoord &core, CoreType core_type) const;
 
     size_t num_semaphores () const;
-    void init_semaphores ( const Device & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
+    void init_semaphores ( const IDevice & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
-    void compile(Device * device, bool fd_bootloader_mode = false);
+    void compile(IDevice* device, bool fd_bootloader_mode = false);
 
     void invalidate_circular_buffer_allocation();
 
-    void allocate_circular_buffers(const Device *device);
+    void allocate_circular_buffers(const IDevice* device);
 
     bool is_finalized() const;
-    void finalize(Device *device);
+    void set_finalized();
+    void allocate_kernel_bin_buf_on_device(IDevice* device);
     bool is_cached() const { return this->cached_; }
+    ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const {
+        if (auto it = this->binaries_on_device_.find(device_id); it != this->binaries_on_device_.end()) {
+            return it->second;
+        }
+        return ProgramBinaryStatus::NotSent;
+    }
     void set_cached() { this->cached_ = true; }
+    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
+        this->binaries_on_device_[device_id] = status;
+    }
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
 
-    const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
+    const std::vector<SubDeviceId> &determine_sub_device_ids(const IDevice* device);
 
     // debug/test
-    uint32_t get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type);
-    uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type);
-    uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
-    uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
+    HWCommandQueue* get_last_used_command_queue() const;
+    void populate_dispatch_data(IDevice* device);
 
    private:
-    void populate_dispatch_data(Device *device);
-
     HWCommandQueue *last_used_command_queue_for_testing = nullptr;
 
     // Buffers temporarily owned by the program
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
 
     // The buffer that holds the kernel/binaries/etc for this program
-    std::shared_ptr<Buffer> kernels_buffer = nullptr;
+    std::unordered_map<chip_id_t, std::shared_ptr<Buffer>> kernels_buffer_;
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_;
@@ -202,18 +209,18 @@ class Program_ {
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
+    std::unordered_map<std::size_t, ProgramBinaryStatus> binaries_on_device_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
     std::vector<CircularBufferAllocator> cb_allocators_;
 
     std::vector<Semaphore> semaphores_;
 
-    std::unordered_set<chip_id_t> compiled_;
+    std::unordered_set<uint32_t> compiled_;
     bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
-    std::vector<std::vector<KernelGroup>> kernel_groups_;
+    std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<std::vector<uint8_t>> core_to_kernel_group_index_table_;
-    uint32_t tensix_go_signal_count_;
 
     std::vector<std::shared_ptr<Buffer>> config_buffers_;
 
@@ -224,7 +231,7 @@ class Program_ {
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
 
     friend std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
-    friend void ValidateCircularBufferRegion(const Program &program, const Device *device);
+    friend void ValidateCircularBufferRegion(const Program &program, const IDevice* device);
 
     friend KernelHandle AddKernel(Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
 
@@ -245,22 +252,18 @@ class Program_ {
     void add_config_buffer(const std::shared_ptr<Buffer>& config_buffer);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
-    void validate_circular_buffer_region(const Device *device);
+    void validate_circular_buffer_region(const IDevice* device);
 
-    void set_remote_circular_buffer_init(Device* device, const std::shared_ptr<Kernel>& kernel) const;
+    void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 
-    void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
+    void set_cb_data_fmt(const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
-    void set_cb_tile_dims( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
+    void set_cb_tile_dims(const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 
     uint32_t& get_program_config_size(uint32_t programmable_core_type_index);
 
-    uint32_t finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset);
-    uint32_t finalize_sems(uint32_t programmable_core_type_index, uint32_t base_offset);
-    uint32_t finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset);
-    uint32_t finalize_kernel_bins(Device *device, uint32_t programmable_core_type_index, uint32_t base_offset);
     void set_launch_msg_sem_offsets();
 
     bool runs_on_noc_unicast_only_cores();
@@ -286,7 +289,7 @@ std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHand
 }
 
 // Checks that circular buffers do not grow into L1 buffer space
-void ValidateCircularBufferRegion(const Program &program, const Device *device) {
+void ValidateCircularBufferRegion(const Program &program, const IDevice* device) {
     program.pimpl_->validate_circular_buffer_region(device);
 }
 
@@ -327,9 +330,7 @@ detail::Program_::Program_() :
     }
 
     program_configs_.resize(programmable_core_count);
-    program_config_sizes_.resize(programmable_core_count + 1);
-    // Always need one launch buffer msg for a program.
-    program_config_sizes_[programmable_core_count] = 1;
+    program_config_sizes_.resize(programmable_core_count + 2);
 }
 
 Program::Program() : pimpl_(std::make_unique<detail::Program_>()) {}
@@ -434,13 +435,21 @@ CoreType KernelGroup::get_core_type() const {
     return hal.get_core_type(this->programmable_core_type_index);
 };
 
-std::vector<KernelGroup> &detail::Program_::get_kernel_groups(uint32_t programmable_core_type_index) {
+std::vector<std::shared_ptr<KernelGroup>> &detail::Program_::get_kernel_groups(uint32_t programmable_core_type_index) {
     update_kernel_groups(programmable_core_type_index);
     return kernel_groups_[programmable_core_type_index];
 }
 
-std::vector<KernelGroup> &Program::get_kernel_groups(uint32_t programmable_core_type_index) {
+std::vector<std::shared_ptr<KernelGroup>> &Program::get_kernel_groups(uint32_t programmable_core_type_index) {
     return pimpl_->get_kernel_groups(programmable_core_type_index);
+}
+
+std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& detail::Program_::get_kernels(uint32_t programmable_core_type_index) {
+    return this->kernels_.at(programmable_core_type_index);
+}
+
+std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& Program::get_kernels(uint32_t programmable_core_type_index) {
+    return pimpl_->get_kernels(programmable_core_type_index);
 }
 
 KernelGroup *detail::Program_::kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index) {
@@ -448,7 +457,7 @@ KernelGroup *detail::Program_::kernels_on_core(const CoreCoord &core, uint32_t p
     if (core.x >= grid_extent_[programmable_core_type_index].x || core.y >= grid_extent_[programmable_core_type_index].y)
         return nullptr;
     uint8_t index = core_to_kernel_group_index_table_[programmable_core_type_index].at(core.y * grid_extent_[programmable_core_type_index].x + core.x);
-    return (index == core_to_kernel_group_invalid_index) ? nullptr : &kernel_groups_[programmable_core_type_index].at(index);
+    return (index == core_to_kernel_group_invalid_index) ? nullptr : kernel_groups_[programmable_core_type_index].at(index).get();
 }
 
 KernelGroup *Program::kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index) {
@@ -573,17 +582,20 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
                 programmable_core_type_index,
                 max_local_cb_end_index,
                 min_remote_cb_start_index);
-            kernel_groups_[programmable_core_type_index].push_back(KernelGroup(
-                *this,
-                programmable_core_type_index,
-                kg_to_cores.first.kernel_ids,
-                erisc_is_idle,
-                max_local_cb_end_index,
-                min_remote_cb_start_index,
-                kg_to_cores.second));
+            kernel_groups_[programmable_core_type_index].push_back(
+                std::make_shared<KernelGroup>(
+                    *this,
+                    programmable_core_type_index,
+                    kg_to_cores.first.kernel_ids,
+                    erisc_is_idle,
+                    max_local_cb_end_index,
+                    min_remote_cb_start_index,
+                    kg_to_cores.second)
+                );
             index++;
         }
     }
+
 }
 
 void detail::Program_::CircularBufferAllocator::mark_address(uint64_t address, uint64_t size, uint64_t base_address) {
@@ -754,7 +766,7 @@ void detail::Program_::invalidate_circular_buffer_allocation() {
 
 void Program::invalidate_circular_buffer_allocation() { pimpl_->invalidate_circular_buffer_allocation(); }
 
-void detail::Program_::allocate_circular_buffers(const Device *device) {
+void detail::Program_::allocate_circular_buffers(const IDevice* device) {
     //ZoneScoped;
     if (not this->local_circular_buffer_allocation_needed_) {
         return;
@@ -776,7 +788,7 @@ void detail::Program_::allocate_circular_buffers(const Device *device) {
                 }
             }
         }
-
+        computed_addr = align(computed_addr, device->get_allocator_alignment());
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {
@@ -790,15 +802,15 @@ void detail::Program_::allocate_circular_buffers(const Device *device) {
                 }
             }
         }
-        tt::tt_metal::GraphTracker::instance().track_allocate_cb(circular_buffer->core_ranges(), computed_addr, circular_buffer->size(), circular_buffer->globally_allocated());
+        tt::tt_metal::GraphTracker::instance().track_allocate_cb(circular_buffer->core_ranges(), computed_addr, circular_buffer->size(), circular_buffer->globally_allocated(), device);
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
     this->local_circular_buffer_allocation_needed_ = false;
 }
 
-void Program::allocate_circular_buffers(const Device *device) { pimpl_->allocate_circular_buffers(device); }
+void Program::allocate_circular_buffers(const IDevice* device) { pimpl_->allocate_circular_buffers(device); }
 
-void detail::Program_::validate_circular_buffer_region(const Device *device) {
+void detail::Program_::validate_circular_buffer_region(const IDevice* device) {
     //ZoneScoped;
 
     // TODO: Circular buffer allocation and validation could be better optimized by determining usage per sub-device
@@ -830,28 +842,28 @@ void detail::Program_::validate_circular_buffer_region(const Device *device) {
     }
 }
 
-size_t Program::num_semaphores(const CoreCoord &core) const { return semaphores_on_core(core).size(); }
+size_t Program::num_semaphores(const CoreCoord &core, CoreType core_type) const { return semaphores_on_core(core, core_type).size(); }
 
 size_t detail::Program_::num_semaphores() const { return semaphores_.size(); }
 
 size_t Program::num_semaphores() const { return pimpl_->num_semaphores(); }
 
-void detail::Program_::init_semaphores(const Device &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
-    auto semaphores_on_core = this->semaphores_on_core(logical_core);
+void detail::Program_::init_semaphores(const IDevice &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
 
     uint64_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
     CoreType core_type = hal.get_core_type(programmable_core_type_index);
+    auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
     for (auto semaphore : semaphores_on_core) {
         llrt::write_hex_vec_to_core(
             device.id(),
-            device.physical_core_from_logical_core(logical_core, core_type),
+            device.virtual_core_from_logical_core(logical_core, core_type),
             std::vector{semaphore.get().initial_value()},
             addr + semaphore.get().offset());
     }
 }
 
-void Program::init_semaphores(const Device &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
+void Program::init_semaphores(const IDevice &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
     pimpl_->init_semaphores(device, logical_core, programmable_core_type_index);
 }
 
@@ -888,9 +900,9 @@ std::vector<std::vector<CoreCoord>> detail::Program_::logical_cores() const {
 
 std::vector<std::vector<CoreCoord>> Program::logical_cores() const { return pimpl_->logical_cores(); }
 
-void detail::Program_::set_remote_circular_buffer_init(Device* device, const std::shared_ptr<Kernel>& kernel) const {
+void detail::Program_::set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const {
     const auto& kernel_defines = kernel->defines();
-    const std::string reserved_defines[] = {"ALIGN_LOCAL_CBS_TO_REMOTE_CBS", "UPDATE_REMOTE_CB_CONFIGS_IN_L1"};
+    const std::string reserved_defines[] = {"ALIGN_LOCAL_CBS_TO_REMOTE_CBS"};
     for (const auto& str : reserved_defines) {
         TT_FATAL(
             kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
@@ -924,14 +936,6 @@ void detail::Program_::set_remote_circular_buffer_init(Device* device, const std
     }
     if (!remote_cb_indices.empty()) {
         std::map<std::string, std::string> defines;
-        std::string update_code = fmt::format("experimental::update_remote_cb_configs_in_l1<{}>({{", remote_cb_indices.size());
-        for (auto buffer_index : remote_cb_indices) {
-            update_code += fmt::format("{},", buffer_index);
-        }
-        update_code.back() = '}';
-        update_code.append(");");
-        defines["UPDATE_REMOTE_CB_CONFIGS_IN_L1"] = update_code;
-
         if (!align_code.empty()) {
             defines["ALIGN_LOCAL_CBS_TO_REMOTE_CBS"] = align_code;
         }
@@ -939,7 +943,7 @@ void detail::Program_::set_remote_circular_buffer_init(Device* device, const std
     }
 }
 
-void detail::Program_::set_cb_data_fmt(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+void detail::Program_::set_cb_data_fmt(const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
     //ZoneScoped;
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
@@ -952,7 +956,7 @@ void detail::Program_::set_cb_data_fmt(Device *device, const std::vector<CoreRan
     }
 }
 
-void detail::Program_::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+void detail::Program_::set_cb_tile_dims(const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
     //ZoneScoped;
     for (const auto &logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
@@ -983,7 +987,7 @@ void detail::Program_::set_cb_tile_dims(Device *device, const std::vector<CoreRa
     }
 }
 
-void detail::Program_::populate_dispatch_data(Device *device) {
+void detail::Program_::populate_dispatch_data(IDevice* device) {
     auto extract_dst_noc_unicast_info =
         [&device](const auto &ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
@@ -991,8 +995,8 @@ void detail::Program_::populate_dispatch_data(Device *device) {
         for (const CoreRange &core_range : ranges) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                    CoreCoord physical_coord = device->physical_core_from_logical_core(CoreCoord({x, y}), core_type);
-                    dst_noc_unicast_info.push_back(std::make_pair(physical_coord, /*num_mcast_dests=*/0));
+                    CoreCoord virtual_coord = device->virtual_core_from_logical_core(CoreCoord({x, y}), core_type);
+                    dst_noc_unicast_info.push_back(std::make_pair(virtual_coord, /*num_mcast_dests=*/0));
                 }
             }
         }
@@ -1008,7 +1012,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
         if (semaphore.core_type() == CoreType::WORKER) {
             uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
             std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                device->extract_dst_noc_multicast_info(
                     semaphore.core_range_set().ranges(), CoreType::WORKER);
             transfer_info transfer_info = {
                 .dst_base_addr = semaphore.offset(),
@@ -1059,17 +1063,14 @@ void detail::Program_::populate_dispatch_data(Device *device) {
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
                 const ll_api::memory& kernel_bin = *binaries[sub_kernel_index];
 
-                // Spans are now packed into one
-                // TODO: code below can be simplified w/ a single span
+                // TODO: Pack erisc spans too, and then everthing is
+                // one span
                 uint32_t num_spans = kernel_bin.num_spans();
                 dst_base_addrs.resize(dst_base_addrs.size() + num_spans);
                 page_offsets.resize(page_offsets.size() + num_spans);
                 lengths.resize(lengths.size() + num_spans);
                 riscvs.resize(riscvs.size() + num_spans);
 
-                TT_ASSERT(kernel_bin.num_spans() == 1);
-
-                // TODO: spans are packed into 1 now, just grab it and go
                 kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
 
                     // Set dst for eth kernels until they move to ring buffer
@@ -1093,32 +1094,28 @@ void detail::Program_::populate_dispatch_data(Device *device) {
     }
 
     if (binaries_data.size() > 0) {
-        // We allocate program binaries top down to minimize fragmentation with other buffers in DRAM, which are typically allocated bottom up
-        this->kernels_buffer = Buffer::create(
-            device, binaries_data.size() * sizeof(uint32_t), HostMemDeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM, TensorMemoryLayout::INTERLEAVED, std::nullopt, false);
-
         this->program_transfer_info.binary_data = binaries_data;
     }
 
     std::uint32_t num_active_cores = 0;
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
-        for (KernelGroup &kernel_group : this->get_kernel_groups(index)) {
+        for (const auto& kernel_group : this->get_kernel_groups(index)) {
             // TODO: add a bit in the hal that says if this core type is unicast/multicast
             if (core_type == CoreType::WORKER) {
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                    device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
-                        kernel_group.core_ranges.ranges(), core_type);
-
+                    device->extract_dst_noc_multicast_info(
+                       kernel_group->core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
-                for (int dispatch_class = 0; dispatch_class < kernel_group.kernel_ids.size(); dispatch_class++) {
-                    auto &optional_id = kernel_group.kernel_ids[dispatch_class];
+                for (int dispatch_class = 0; dispatch_class < kernel_group->kernel_ids.size(); dispatch_class++) {
+                    auto &optional_id = kernel_group->kernel_ids[dispatch_class];
                     if (optional_id) {
-                        kernel_ids.push_back(optional_id.value());
+                        KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(optional_id.value());
+                        kernel_ids.push_back(device_local_kernel_id);
                         int proc_sub_class = 0;
-                        for (uint32_t& dst_addr : kernel_transfer_info.at(optional_id.value()).dst_base_addrs) {
+                        for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
                             // TODO: ditch this w/ linear writes based on program config kernel_text_offset and size
-                            dst_addr = kernel_group.kernel_text_offsets[dispatch_class + proc_sub_class];
+                            dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
                             proc_sub_class++;
                         }
                     }
@@ -1133,11 +1130,12 @@ void detail::Program_::populate_dispatch_data(Device *device) {
             } else {
                 TT_ASSERT(core_type == CoreType::ETH);
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
-                    extract_dst_noc_unicast_info(kernel_group.core_ranges.ranges(), core_type);
+                    extract_dst_noc_unicast_info(kernel_group->core_ranges.ranges(), core_type);
 
                 std::vector<KernelHandle> kernel_ids;
-                if (kernel_group.kernel_ids[DISPATCH_CLASS_ETH_DM0]) {
-                    kernel_ids.push_back(kernel_group.kernel_ids[DISPATCH_CLASS_ETH_DM0].value());
+                if (kernel_group->kernel_ids[DISPATCH_CLASS_ETH_DM0]) {
+                    KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_group->kernel_ids[DISPATCH_CLASS_ETH_DM0].value());
+                    kernel_ids.push_back(device_local_kernel_id);
                 }
 
                 for (const auto &[cores, num_mcast_dsts] : dst_noc_unicast_info) {
@@ -1156,113 +1154,6 @@ void detail::Program_::populate_dispatch_data(Device *device) {
     return;
 }
 
-uint32_t detail::Program_::finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset) {
-
-    // Iterate over kernels in the program and "level" the number of RTAs based on the max
-    // Unique RTAs are packed across dispatch classes
-    // Common RTAs come after unique RTAs
-    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
-
-    std::vector<uint32_t> max_rtas(processor_classes);
-    std::vector<uint32_t> max_crtas(processor_classes);
-    uint32_t max_unique_rta_size = 0;
-    uint32_t total_crta_size = 0;
-
-    CoreType core_type = hal.get_core_type(programmable_core_type_index);
-    HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
-
-    this->get_program_config(programmable_core_type_index).rta_offset = base_offset;
-
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
-        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            max_rtas[dispatch_class] = 0;
-            auto& optional_id = kg.kernel_ids[dispatch_class];
-            if (optional_id) {
-                auto kernel = get_kernel(optional_id.value());
-                for (const CoreRange &core_range : kg.core_ranges.ranges()) {
-                    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                            CoreCoord core_coord(x, y);
-                            max_rtas[dispatch_class] =
-                                std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
-                        }
-                    }
-                }
-            }
-        }
-
-        uint32_t offset = 0;
-        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            auto& optional_id = kg.kernel_ids[dispatch_class];
-            kg.rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
-            if (optional_id) {
-                auto kernel = get_kernel(optional_id.value());
-                kernel->set_runtime_args_count(kg.core_ranges, max_rtas[dispatch_class]);
-                kg.launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
-                offset += max_rtas[dispatch_class] * sizeof(uint32_t);
-            } else {
-                kg.launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = 0;
-            }
-        }
-
-        kg.total_rta_size = offset;
-        offset = align(offset, l1_alignment);
-        max_unique_rta_size = std::max(offset, max_unique_rta_size);
-    }
-
-    for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-        max_crtas[dispatch_class] = 0;
-    }
-    // Find the max # common RTAs across all kernels for each dispatch class
-    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-        auto kernel = get_kernel(kernel_id);
-        // TODO: kernels should be stored by programmable core type
-        if (core_type == kernel->get_kernel_core_type() &&
-            (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) == kernel->is_idle_eth()) {
-            uint32_t dispatch_class = kernel->dispatch_class();
-            max_crtas[dispatch_class] =
-                std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
-        }
-    }
-
-    // Calculate the address offset and size for common RTAs for each dispatch class
-    uint32_t offset = 0;
-    for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-        uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
-        this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class] = base_offset + max_unique_rta_size + offset;
-        this->get_program_config(programmable_core_type_index).crta_sizes[dispatch_class] = size;
-        offset += size;
-        offset = align(offset, l1_alignment);
-    }
-    total_crta_size = offset;
-
-    // Set the runtime_args_data sizing info based on the shared max
-    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-        auto kernel = get_kernel(kernel_id);
-        // TODO: as above, fix when kernels are stored by programmable core type
-        if (core_type == kernel->get_kernel_core_type() &&
-            (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) == kernel->is_idle_eth()) {
-            uint32_t dispatch_class = kernel->dispatch_class();
-            kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
-        }
-    }
-
-    // Set the kernel group common runtime arg offsets use in the launch message
-    for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
-        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            kg.launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset = this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class];
-        }
-    }
-
-    // TODO: this is asserted here as the leveling above can break the limits enforced by the API
-    // Once we use a ring buffer, memory space will be dynamic and this assert won't matter
-    std::uint32_t l1_kernel_config_size = tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
-    TT_FATAL(offset <= l1_kernel_config_size, "offset {} cannot exceed config size {}", offset, l1_kernel_config_size);
-
-    return max_unique_rta_size + total_crta_size;
-}
-
 ProgramConfig& detail::Program_::get_program_config(uint32_t programmable_core_type_index) {
     return this->program_configs_[programmable_core_type_index];
 }
@@ -1271,142 +1162,23 @@ ProgramConfig& Program::get_program_config(uint32_t programmable_core_type_index
     return pimpl_->get_program_config(programmable_core_type_index);
 }
 
-uint32_t detail::Program_::finalize_sems(uint32_t programmable_core_type_index, uint32_t base_offset) {
-
-    int max_id = -1;
-    CoreType core_type = hal.get_core_type(programmable_core_type_index);
-    for (const auto & sem : this->semaphores_) {
-        if (sem.core_type() == core_type && (int)sem.id() > max_id) {
-            max_id = sem.id();
-        }
-    }
-
-    uint32_t sem_size = (max_id + 1) * hal.get_alignment(HalMemType::L1);
-
-    this->program_configs_[programmable_core_type_index].sem_offset = base_offset;
-    this->program_configs_[programmable_core_type_index].sem_size = sem_size;
-
-    return base_offset + sem_size;
-}
-
 void detail::Program_::set_launch_msg_sem_offsets() {
 
     for (uint32_t kg_type_index = 0; kg_type_index < hal.get_programmable_core_type_count(); kg_type_index++) {
         for (auto& kg : this->get_kernel_groups(kg_type_index)) {
             for (uint32_t sem_type_index = 0; sem_type_index < hal.get_programmable_core_type_count(); sem_type_index++) {
-                kg.launch_msg.kernel_config.sem_offset[sem_type_index] =
+                kg->launch_msg.kernel_config.sem_offset[sem_type_index] =
                     this->program_configs_[sem_type_index].sem_offset;
             }
         }
     }
 }
 
-uint32_t detail::Program_::finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset) {
-    uint32_t max_local_end_index = 0;
-    uint32_t min_remote_start_index = NUM_CIRCULAR_BUFFERS;
-    // TODO: has to be better way to do this and don't read from volatile
-    auto& kernel_groups = this->get_kernel_groups(programmable_core_type_index);
-    for (auto& kg : kernel_groups) {
-        max_local_end_index =
-            std::max(max_local_end_index, (uint32_t)kg.launch_msg.kernel_config.max_local_cb_end_index);
-        min_remote_start_index =
-            std::min(min_remote_start_index, (uint32_t)kg.launch_msg.kernel_config.min_remote_cb_start_index);
-    }
-
-    uint32_t local_cb_size = max_local_end_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-    uint32_t remote_cb_offset = base_offset + local_cb_size;
-    for (auto& kg : kernel_groups) {
-        kg.launch_msg.kernel_config.local_cb_offset = base_offset;
-        kg.launch_msg.kernel_config.remote_cb_offset = remote_cb_offset;
-    }
-
-    uint32_t remote_cb_size = (NUM_CIRCULAR_BUFFERS - min_remote_start_index) *
-                              UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-    uint32_t total_cb_size = local_cb_size + remote_cb_size;
-    this->program_configs_[programmable_core_type_index].cb_offset = base_offset;
-    this->program_configs_[programmable_core_type_index].cb_size = total_cb_size;
-    this->program_configs_[programmable_core_type_index].local_cb_size = local_cb_size;
-
-    return align(base_offset + total_cb_size, hal.get_alignment(HalMemType::L1));
-}
-
-uint32_t detail::Program_::finalize_kernel_bins(Device *device, uint32_t programmable_core_type_index, uint32_t base_offset) {
-
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-
-    uint32_t max_offset = 0;
-    for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
-        uint32_t offset = base_offset;
-
-        for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
-            auto& optional_id = kg.kernel_ids[class_id];
-            if (optional_id) {
-                const auto kernel = this->get_kernel(optional_id.value());
-                std::vector<ll_api::memory const*> const& binaries = kernel->binaries(device->build_key());
-                // TODO: this is really ugly, save me future-HAL!
-                if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
-                    uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
-
-                    if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
-                        kg.kernel_bin_sizes[0] = binary_packed_size;
-                        kg.kernel_text_offsets[0] = offset;
-                        kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
-                        offset += binary_packed_size;
-                        offset = align(offset, l1_alignment);
-                    } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
-                        kg.kernel_bin_sizes[1] = binary_packed_size;
-                        kg.kernel_text_offsets[1] = offset;
-                        kg.launch_msg.kernel_config.kernel_text_offset[1] = offset;
-                        offset += binary_packed_size;
-                        offset = align(offset, l1_alignment);
-
-                        uint32_t binary_text_size = kernel->get_binary_text_size(device, 0);
-                        TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
-                        kg.launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
-                    } else {
-                        constexpr uint32_t max_math_processors_count = 3;
-                        for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count; proc_type_index++) {
-                            uint32_t binary_packed_size = kernel->get_binary_packed_size(device, proc_type_index);
-                            kg.kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
-                            kg.kernel_text_offsets[2 + proc_type_index] = offset;
-                            kg.launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
-                            offset += binary_packed_size;
-                            offset = align(offset, l1_alignment);
-                        }
-                    }
-                } else {
-                    uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
-                    kg.kernel_bin_sizes[class_id] = binary_packed_size;
-
-                    // No kernel config buffer on active eth yet
-                    if (hal.get_programmable_core_type(kg.programmable_core_type_index) ==
-                        HalProgrammableCoreType::IDLE_ETH) {
-                        kg.kernel_text_offsets[class_id] = offset;
-                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
-                        offset += binary_packed_size;
-                        offset = align(offset, l1_alignment);
-                    } else {
-                        kg.kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
-                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0]->get_text_addr();
-                    }
-                }
-            }
-        }
-
-        max_offset = std::max(offset, max_offset);
-    }
-
-    this->program_configs_[programmable_core_type_index].kernel_text_offset = base_offset;
-    this->program_configs_[programmable_core_type_index].kernel_text_size = max_offset - base_offset;
-
-    return max_offset;
-}
-
 uint32_t& detail::Program_::get_program_config_size(uint32_t programmable_core_type_index) {
     return this->program_config_sizes_[programmable_core_type_index];
 }
 
-const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const Device *device) {
+const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const IDevice* device) {
     // We need to calculate the sub_device_id when we haven't compiled the program yet, or this is the first time we
     // are getting the sub_device_ids after compilation
     auto sub_device_manager_id = device->get_active_sub_device_manager_id();
@@ -1430,15 +1202,15 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
                 uint32_t num_intersections = 0;
                 uint32_t num_cores = 0;
                 for (const auto& kg : program_kgs) {
-                    for (uint8_t i = 0; i < device->num_sub_devices(); ++i) {
+                    for (size_t i = 0; i < device->num_sub_devices(); ++i) {
                         const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
-                        auto intersection = sub_device_cores.intersection(kg.core_ranges);
+                        auto intersection = sub_device_cores.intersection(kg->core_ranges);
                         if (intersection.size() > 0) {
                             used_sub_device_ids.insert(SubDeviceId{i});
                             num_intersections += intersection.num_cores();
                         }
                     }
-                    num_cores += kg.core_ranges.num_cores();
+                    num_cores += kg->core_ranges.num_cores();
                 }
                 TT_FATAL(num_intersections == num_cores,
                          "Kernel group cores do not match sub device cores for programmable core type {}",
@@ -1453,60 +1225,48 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
     return sub_device_ids->second;
 }
 
-void detail::Program_::finalize(Device *device) {
-    // Store the number of tensix "go signals" for use by CQ
-    // CQ iterates over these to update runtime addresses, needs to know when eth begins (after tensix)
-    // TODO: should store all the counts
-    this->tensix_go_signal_count_ = 0;
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        CoreType core_type = hal.get_core_type(index);
-        if (core_type == CoreType::WORKER) {
-            for (auto& kg : this->get_kernel_groups(index)) {
-                this->tensix_go_signal_count_ += kg.core_ranges.size();
-            }
-        }
+void detail::Program_::allocate_kernel_bin_buf_on_device(IDevice* device) {
+    // Allocate the DRAM kernel binary buffer for this program on the specified device, if not previously allocated.
+    // We allocate program binaries top down to minimize fragmentation with other buffers in DRAM, which are typically allocated bottom up
+    std::size_t binary_data_size_bytes = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
+    if (this->kernels_buffer_.find(device->id()) == this->kernels_buffer_.end() and binary_data_size_bytes) {
+        std::shared_ptr<Buffer> kernel_bin_buf = Buffer::create(device, binary_data_size_bytes, HostMemDeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM, TensorMemoryLayout::INTERLEAVED, std::nullopt, false);
+        this->kernels_buffer_[device->id()] = kernel_bin_buf;
     }
-
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        HalProgrammableCoreType programmable_core_type = static_cast<HalProgrammableCoreType>(index);
-        uint32_t offset = 0;
-
-        offset = finalize_rt_args(index, offset);
-        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
-
-        offset = finalize_sems(index, offset);
-        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
-
-        offset = finalize_cbs(index, offset);
-        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
-
-        offset = finalize_kernel_bins(device, index, offset);
-        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
-
-        this->get_program_config_size(index) = offset;
-
-        auto max_size = hal.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
-        TT_FATAL(offset < max_size,
-                 "Program size ({}) too large for kernel config buffer ({}) on {}",
-                 offset, max_size, magic_enum::enum_name(programmable_core_type));
-    }
-
-    // The sem offsets cross programmable_core_types so must be set after the loop above
-    this->set_launch_msg_sem_offsets();
-
-    // TODO: This check is wrong - it populates dispatch data for dispatch kernels
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        this->populate_dispatch_data(device);  // TODO: maybe rename
-    }
-
-    finalized_ = true;
 }
 
-void Program::finalize(Device *device) { pimpl_->finalize(device); }
+void Program::set_launch_msg_sem_offsets() { pimpl_->set_launch_msg_sem_offsets(); }
+void Program::populate_dispatch_data(IDevice* device) { pimpl_->populate_dispatch_data(device); }
 
-void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
+void Program::generate_dispatch_commands(IDevice* device) {
+    bool is_cached = this->is_cached();
+    uint64_t command_hash = device->build_key();
+    if (not hal.is_coordinate_virtualization_enabled()) {
+        // When coordinate virtualization is not enabled, explicitly encode the device
+        // id into the command hash, to always assert on programs being reused across devices.
+        command_hash = (command_hash << 32) | (device->id());
+    }
+    auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
+    if (!is_cached) {
+        auto sub_device_id = this->determine_sub_device_ids(device)[0];
+        ProgramCommandSequence program_command_sequence;
+        program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::assemble_runtime_args_commands(program_command_sequence, *this, device);
+        program_dispatch::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
+        cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
+        this->set_cached();
+    } else {
+        auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
+        TT_FATAL(cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
+    }
+}
+
+void Program::allocate_kernel_bin_buf_on_device(IDevice* device) { pimpl_->allocate_kernel_bin_buf_on_device(device); }
+
+void detail::Program_::compile(IDevice*device, bool fd_bootloader_mode) {
     //ZoneScoped;
-    if (compiled_.contains(device->id())) {
+    if (compiled_.contains(device->build_key())) {
         return;
     }
     // Clear the determined sub_device_ids when we compile the program for the first time
@@ -1559,7 +1319,6 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
             TT_FATAL(not on_dispatch_core, "Illegal kernel placement for {}, Kernels cannot be placed on dispatch cores!", kernel->name());
         }
     };
-
     for (auto & kernels : kernels_) {
         for (auto &[id, kernel] : kernels) {
             validate_kernel_placement(kernel);
@@ -1568,10 +1327,10 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
                     JitBuildOptions build_options(device->build_env());
                     kernel->set_build_options(build_options);
                     if (this->compiled_.empty()) {
-                        this->set_remote_circular_buffer_init(device, kernel);
+                        this->set_remote_circular_buffer_init(kernel);
                     }
-                    this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
-                    this->set_cb_tile_dims(device, kernel->logical_coreranges(), build_options);
+                    this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
+                    this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
 
                     auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key(), device->get_device_kernel_defines_hash());
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
@@ -1618,90 +1377,65 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
-    compiled_.insert(device->id());
+    compiled_.insert(device->build_key());
 }
 
-void Program::compile(Device *device, bool fd_bootloader_mode) { pimpl_->compile(device, fd_bootloader_mode); }
+void Program::compile(IDevice* device, bool fd_bootloader_mode) { pimpl_->compile(device, fd_bootloader_mode); }
 
 void detail::Program_::set_runtime_id(uint64_t id) { this->runtime_id = id; }
 
 void Program::set_runtime_id(uint64_t id) { pimpl_->set_runtime_id(id); }
 
-uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
-
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
-    uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
-    const auto &sub_device_ids = this->determine_sub_device_ids(device);
-    // TODO: This restriction can be lifted once we have support for programs spanning multiple sub-devices
-    // Semaphores across sub-devices are expected to have the same address
-    TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
-    auto sub_device_index = sub_device_ids[0].to_index();
-    uint32_t base_addr = device->using_fast_dispatch
-                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(
-                                   programmable_core_type)
-                             : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
-
-    return base_addr + this->program_configs_[index].sem_offset;
+uint32_t Program::get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type) {
+    HalProgrammableCoreType programmable_core_type = ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
+    uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
+    return base_addr + get_program_config(hal.get_programmable_core_type_index(programmable_core_type)).sem_offset;
 }
 
-uint32_t Program::get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_sem_base_addr(device, logical_core, core_type);
-}
-
-uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
-
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
-    uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
-    const auto &sub_device_ids = this->determine_sub_device_ids(device);
-    // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
-    // Addresses are not the same across sub-devices
-    TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
-    auto sub_device_index = sub_device_ids[0].to_index();
-    uint32_t base_addr = device->using_fast_dispatch
-                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(
-                                   programmable_core_type)
-                             : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
-
-    return base_addr + this->program_configs_[index].cb_offset;
-}
-
-uint32_t Program::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_cb_base_addr(device, logical_core, core_type);
+uint32_t Program::get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type) {
+    HalProgrammableCoreType programmable_core_type = ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
+    uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
+    return base_addr + get_program_config(hal.get_programmable_core_type_index(programmable_core_type)).cb_offset;
 }
 
 void detail::Program_::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
     this->last_used_command_queue_for_testing = queue;
 }
 
+HWCommandQueue* detail::Program_::get_last_used_command_queue() const {
+    return this->last_used_command_queue_for_testing;
+}
+
 void Program::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
     pimpl_->set_last_used_command_queue_for_testing(queue);
 }
 
-uint32_t detail::Program_::get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
+HWCommandQueue* Program::get_last_used_command_queue() const {
+    return pimpl_->get_last_used_command_queue();
+}
 
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+uint32_t detail::Program_::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].sem_size;
 }
 
-uint32_t Program::get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
+uint32_t Program::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     return pimpl_->get_sem_size(device, logical_core, core_type);
 }
 
-uint32_t detail::Program_::get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
+uint32_t detail::Program_::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
 
-    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;
 }
 
-uint32_t Program::get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
+uint32_t Program::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     return pimpl_->get_cb_size(device, logical_core, core_type);
 }
 
@@ -1773,33 +1507,48 @@ void detail::Program_::release_buffers() { owned_buffer_pool = {}; }
 
 void Program::release_buffers() { pimpl_->release_buffers(); }
 
-std::vector<std::reference_wrapper<const Semaphore>> detail::Program_::semaphores_on_core(const CoreCoord &core) const {
+std::vector<std::reference_wrapper<const Semaphore>> detail::Program_::semaphores_on_core(const CoreCoord &core, CoreType core_type) const {
     std::vector<std::reference_wrapper<const Semaphore>> semaphores;
     for (const Semaphore &s : this->semaphores_) {
-        if (s.initialized_on_logical_core(core)) {
+        if (s.initialized_on_logical_core(core) && s.core_type() == core_type) {
             semaphores.emplace_back(std::cref(s));
         }
     }
     return semaphores;
 }
 
-std::vector<std::reference_wrapper<const Semaphore>> Program::semaphores_on_core(const CoreCoord &core) const {
-    return pimpl_->semaphores_on_core(core);
+std::vector<std::reference_wrapper<const Semaphore>> Program::semaphores_on_core(const CoreCoord &core, CoreType core_type) const {
+    return pimpl_->semaphores_on_core(core, core_type);
 }
 
 bool detail::Program_::is_finalized() const { return this->finalized_; }
+void detail::Program_::set_finalized() { this->finalized_ = true; }
 
 bool Program::is_finalized() const { return pimpl_->is_finalized(); }
+void Program::set_finalized() { pimpl_->set_finalized(); }
+
 bool Program::is_cached() const { return pimpl_->is_cached(); }
 void Program::set_cached() { pimpl_->set_cached(); }
 
-const std::vector<SubDeviceId> &Program::determine_sub_device_ids(const Device *device) { return pimpl_->determine_sub_device_ids(device); }
+ProgramBinaryStatus Program::get_program_binary_status(std::size_t device_id) const { return pimpl_->get_program_binary_status(device_id); }
+void Program::set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) { pimpl_->set_program_binary_status(device_id, status); }
+
+const std::vector<SubDeviceId> &Program::determine_sub_device_ids(const IDevice* device) { return pimpl_->determine_sub_device_ids(device); }
 
 const ProgramTransferInfo &Program::get_program_transfer_info() const noexcept { return pimpl_->program_transfer_info; }
 
-const std::shared_ptr<Buffer> &Program::get_kernels_buffer() const noexcept { return pimpl_->kernels_buffer; }
+std::shared_ptr<Buffer> Program::get_kernels_buffer(IDevice* device) const noexcept {
+    if (auto it = pimpl_->kernels_buffer_.find(device->id()); it != pimpl_->kernels_buffer_.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
 
-const std::vector<uint32_t> &Program::get_program_config_sizes() const noexcept { return pimpl_->program_config_sizes_; }
+void Program::set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer) {
+    pimpl_->kernels_buffer_.insert({buffer->device()->id(), buffer});
+}
+
+std::vector<uint32_t> &Program::get_program_config_sizes() const noexcept { return pimpl_->program_config_sizes_; }
 
 std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {
     return pimpl_->cached_program_command_sequences_;

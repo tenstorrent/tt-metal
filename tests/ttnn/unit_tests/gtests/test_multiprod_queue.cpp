@@ -9,7 +9,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "common/bfloat16.hpp"
 #include "ttnn/async_runtime.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include <cmath>
 #include <thread>
@@ -23,7 +23,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiProducerLockBasedQueue) {
     // Spawn 2 application level threads intefacing with the same device through the async engine.
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
-    Device* device = this->device_;
+    IDevice* device = this->device_;
     // Enable async engine and set queue setting to lock_based
     device->enable_async(true);
     device->set_worker_queue_mode(WorkerQueueMode::LOCKBASED);
@@ -101,7 +101,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiAppThreadSync) {
     // Reader cannot read until writer has correctly updated a memory location.
     // Writer cannot update location until reader has picked up data.
     // Use write_event to stall reader and read_event to stall writer.
-    Device* device = this->device_;
+    IDevice* device = this->device_;
     // Enable async engine and set queue setting to lock_based
     device->enable_async(true);
     device->set_worker_queue_mode(WorkerQueueMode::LOCKBASED);

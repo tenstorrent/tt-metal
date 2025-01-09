@@ -17,8 +17,8 @@
 #include "tensix_functions.h"
 #include "c_tensix_core.h"
 #include "kernel_includes.hpp"
-#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS or defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
-#include "circular_buffer_init.h"
+#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+#include "remote_circular_buffer_api.h"
 #endif
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
@@ -42,16 +42,21 @@ void kernel_launch(uint32_t kernel_base_addr) {
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(NOC_INDEX);
-    } else {
-        noc_local_state_init(NOC_0);
-        noc_local_state_init(NOC_1);
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     kernel_main();
-#ifdef UPDATE_REMOTE_CB_CONFIGS_IN_L1
-    UPDATE_REMOTE_CB_CONFIGS_IN_L1
-#endif
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        WAYPOINT("NKFW");
+        // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the NOC
+        // interface is in a known idle state for the next kernel.
+        ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX));
+        ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX));
+        ASSERT(ncrisc_noc_nonposted_writes_flushed(NOC_INDEX));
+        ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX));
+        ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX));
+        WAYPOINT("NKFD");
+    }
 #endif
 }

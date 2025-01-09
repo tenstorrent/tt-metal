@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "umd/device/tt_cluster_descriptor_types.h"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -153,7 +153,7 @@ void set_runtime_args(
     }
 }
 
-void initialize_program(tt_metal::Device* device, tt_metal::Program& program, uint32_t run_cycles) {
+void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, uint32_t run_cycles) {
     program = tt_metal::CreateProgram();
 
     std::map<string, string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size_g)}};
@@ -253,13 +253,13 @@ void initialize_program(tt_metal::Device* device, tt_metal::Program& program, ui
 int main(int argc, char** argv) {
     init(argc, argv);
 
-    tt::llrt::OptionsG.set_kernels_nullified(true);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(true);
 
     bool pass = true;
     try {
         const chip_id_t device_id = 0;
         DispatchCoreType dispatch_core_type = dispatch_from_eth_g ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-        tt_metal::Device* device = tt_metal::CreateDevice(
+        tt_metal::IDevice* device = tt_metal::CreateDevice(
             device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
         CommandQueue& cq = device->command_queue();
 
@@ -344,7 +344,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

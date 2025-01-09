@@ -10,6 +10,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
+#include "tt_metal/llrt/hal.hpp"
 
 namespace tt {
 
@@ -94,13 +95,15 @@ struct Tile {
     const bool get_transpose_of_faces() const { return transpose_of_faces; }
 
     const uint32_t get_tile_size(const DataFormat& format) const {
+        uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+        uint32_t aligned_exp_size = tt::round_up(face_shape[0] * num_faces, l1_alignment);
         switch (format) {
             case DataFormat::Bfp2:
-            case DataFormat::Bfp2_b: return (tile_hw / 4) + (face_shape[0] * num_faces);
+            case DataFormat::Bfp2_b: return (tile_hw / 4) + aligned_exp_size;
             case DataFormat::Bfp4:
-            case DataFormat::Bfp4_b: return (tile_hw / 2) + (face_shape[0] * num_faces);
+            case DataFormat::Bfp4_b: return (tile_hw / 2) + aligned_exp_size;
             case DataFormat::Bfp8:
-            case DataFormat::Bfp8_b: return tile_hw + (face_shape[0] * num_faces);
+            case DataFormat::Bfp8_b: return tile_hw + aligned_exp_size;
             case DataFormat::Float16:
             case DataFormat::Float16_b: return (tile_hw * 2);
             case DataFormat::Float32: return (tile_hw * 4);

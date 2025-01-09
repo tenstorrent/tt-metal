@@ -14,10 +14,11 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "tt_metal/tt_stl/span.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 
@@ -41,15 +42,28 @@ enum class DataType {
     INVALID = 8,
 };
 
-inline bool is_floating_point(DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16:
-        case DataType::FLOAT32:
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return true;
-        default: return false;
+template <typename T>
+consteval inline DataType convert_to_data_type() {
+    if constexpr (std::is_same_v<T, uint8_t>) {
+        return DataType::UINT8;
+    } else if constexpr (std::is_same_v<T, uint16_t>) {
+        return DataType::UINT16;
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+        return DataType::INT32;
+    } else if constexpr (std::is_same_v<T, uint32_t>) {
+        return DataType::UINT32;
+    } else if constexpr (std::is_same_v<T, float>) {
+        return DataType::FLOAT32;
+    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
+        return DataType::BFLOAT16;
+    } else {
+        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType!");
     }
 }
+
+bool is_floating_point(DataType dtype);
+
+bool is_block_float(DataType dtype);
 
 enum class StorageType {
     OWNED,
@@ -58,31 +72,6 @@ enum class StorageType {
     MULTI_DEVICE,       // on-device storage for multi-device context
     MULTI_DEVICE_HOST,  // host storage for multi-device context
 };
-
-struct AllGatherTensor {};
-bool operator==(const AllGatherTensor &, const AllGatherTensor &);
-struct ReplicateTensor {
-    int replication_factor = 1;
-    ReplicateTensor() = default;
-    ReplicateTensor(int replication_factor) : replication_factor(replication_factor) {}
-};
-bool operator==(const ReplicateTensor &, const ReplicateTensor &);
-struct ShardTensor {
-    int shard_dimension;
-    ShardTensor(int shard_dimension) : shard_dimension(shard_dimension) {}
-};
-bool operator==(const ShardTensor &lhs, const ShardTensor &rhs);
-
-using ShardMesh = std::pair<std::uint16_t, std::uint16_t>;  // (y,x)
-struct ShardTensor2D {
-    ShardMesh shard_mesh;  // logic 2D grid that defines the mapping of shards to devices
-    ShardTensor2D(ShardMesh mesh) : shard_mesh(std::move(mesh)) {}
-};
-bool operator==(const ShardTensor2D &lhs, const ShardTensor2D &rhs);
-
-// DistributedTensorConfig is a variant of different ways in which a tensor can be distributed across devices.
-using DistributedTensorConfig = std::variant<ReplicateTensor, ShardTensor, ShardTensor2D, AllGatherTensor>;
-DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<std::string, std::string> &metadata);
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 
@@ -284,12 +273,6 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
 bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
 bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
-
-void dump_memory_config(std::ostream &output_stream, const MemoryConfig &memory_config);
-void dump_memory_config(const std::string &file_name, const MemoryConfig &memory_config);
-
-MemoryConfig load_memory_config(std::ifstream &input_stream);
-MemoryConfig load_memory_config(const std::string &file_name);
 
 using OwnedBuffer = std::variant<
     owned_buffer::Buffer<uint8_t>,
@@ -733,7 +716,7 @@ struct MultiDeviceStorage {
     // preinitialize empty tensor handles and use/populate them in the worker threads.
     std::vector<DeviceBuffer> get_buffers() const;
 
-    inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const ttnn::Shape shape) {
+    inline void insert_buffer_and_shape_for_device(IDevice*device, const DeviceBuffer buffer, const ttnn::Shape shape) {
         std::scoped_lock lock(buffer_mtx, shape_mtx);
         TT_ASSERT(
             device == buffer->device(),
@@ -742,7 +725,7 @@ struct MultiDeviceStorage {
         shapes.insert({device->id(), shape});
     }
 
-    inline DeviceBuffer get_buffer_for_device(Device *device) const {
+    inline DeviceBuffer get_buffer_for_device(IDevice*device) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         TT_ASSERT(
             buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}",device->id());
@@ -752,7 +735,7 @@ struct MultiDeviceStorage {
         return buffers.at(device->id());
     }
 
-    inline DeviceBuffer &get_buffer_for_device(Device *device) {
+    inline DeviceBuffer &get_buffer_for_device(IDevice*device) {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         TT_ASSERT(
             buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
@@ -767,7 +750,7 @@ struct MultiDeviceStorage {
         return buffers.at(device_id);
     }
 
-    inline ttnn::Shape get_tensor_shape_for_device(Device *device) const {
+    inline ttnn::Shape get_tensor_shape_for_device(IDevice*device) const {
         std::lock_guard<std::mutex> lock(shape_mtx);
         TT_ASSERT(
             shapes.find(device->id()) != shapes.end(), "Shape not found for device {}", device->id());
@@ -779,7 +762,7 @@ struct MultiDeviceStorage {
         return buffers.size();
     }
 
-    inline bool has_buffer_for_device(Device *device) const {
+    inline bool has_buffer_for_device(IDevice*device) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         return buffers.find(device->id()) != buffers.end();
     }

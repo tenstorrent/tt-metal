@@ -30,7 +30,7 @@ void inc_populate(std::vector<std::uint32_t>& vec, float start_from) {
     }
 }
 
-void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord &core) {
+void RunDelayTestOnCore(WatcherDelayFixture* fixture, IDevice* device, CoreCoord &core) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
         const uint32_t SINGLE_TILE_SIZE = 2 * 1024;
@@ -51,10 +51,6 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
         uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
         auto dst_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = tt::CBIndex::c_0;
         uint32_t num_input_tiles = 2;
@@ -118,19 +114,9 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
         EnqueueWriteBuffer(cq, std::ref(src1_dram_buffer), src1_vec, false);
 
         vector<uint32_t> reader_args = {
-            dram_buffer_src0_addr,
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
-            NUM_TILES,
-            dram_buffer_src1_addr,
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
-            NUM_TILES,
-            0};
+            dram_buffer_src0_addr, (std::uint32_t)0, NUM_TILES, dram_buffer_src1_addr, (std::uint32_t)0, NUM_TILES, 0};
 
-        vector<uint32_t> writer_args = {
-            dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, NUM_TILES
-        };
+        vector<uint32_t> writer_args = {dram_buffer_dst_addr, (std::uint32_t)0, NUM_TILES};
 
         SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
         SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
@@ -143,7 +129,7 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
         std::vector<uint32_t> read_vec;
 
         CoreCoord worker_core = fixture->delayed_cores[CoreType::WORKER][0]; // Just check that the first delayed core has the feedback set
-        CoreCoord phys_core = device->physical_core_from_logical_core({0,0}, CoreType::WORKER);
+        CoreCoord phys_core = device->virtual_core_from_logical_core({0, 0}, CoreType::WORKER);
         read_vec = tt::llrt::read_hex_vec_from_core (
             device->id(),
             phys_core,
@@ -159,7 +145,7 @@ TEST_F(WatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
         GTEST_SKIP();
 
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunDelayTestOnCore(dynamic_cast<WatcherDelayFixture*>(fixture), device, core);
         },

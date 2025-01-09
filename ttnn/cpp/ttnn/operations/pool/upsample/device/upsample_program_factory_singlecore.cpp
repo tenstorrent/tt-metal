@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks upsample_single_core(
 
     auto output_shape = output.get_legacy_shape();
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device* device = output.device();
+    tt_metal::IDevice* device = output.device();
 
     // circulat buffer for input
     uint32_t src0_cb_index = CBIndex::c_0;

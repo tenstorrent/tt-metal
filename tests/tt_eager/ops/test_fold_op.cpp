@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-#include <ttnn/operations/numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/fold/fold.hpp"
@@ -15,8 +15,8 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace constants;
 
-void run_fold(Device* device, tt::tt_metal::LegacyShape shape) {
-    Tensor input_tensor = ttnn::numpy::random::random(shape).to(Layout::ROW_MAJOR).to(device);
+void run_fold(IDevice* device, tt::tt_metal::LegacyShape shape) {
+    Tensor input_tensor = ttnn::random::random(shape).to(Layout::ROW_MAJOR).to(device);
     uint32_t stride_h = 2;
     uint32_t stride_w = 2;
     uint8_t queue_id = 0;
@@ -26,7 +26,7 @@ void run_fold(Device* device, tt::tt_metal::LegacyShape shape) {
 
 int main(int argc, char** argv) {
     int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
     run_fold(device, {1, 2, 2, 2});
     bool pass = CloseDevice(device);

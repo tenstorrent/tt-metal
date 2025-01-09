@@ -23,7 +23,7 @@ struct DRAMtoL1MulticastConfig {
     CoreCoord exclude_direction;
 };
 
-bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::Device* device, const DRAMtoL1MulticastConfig& cfg) {
+bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::IDevice* device, const DRAMtoL1MulticastConfig& cfg) {
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -48,7 +48,6 @@ bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::Device* device, co
     auto dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_addr = dram_buffer->address();
 
-    auto dram_noc_xy = dram_buffer->noc_coordinates();
 
     CoreCoord core_start = {0, 0};
     CoreCoord grid_size = device->logical_grid_size();
@@ -65,8 +64,7 @@ bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::Device* device, co
     }
     std::vector<uint32_t> mcast_reader_args = {
         (std::uint32_t)dram_buffer_addr,
-        (std::uint32_t)dram_noc_xy.x,
-        (std::uint32_t)dram_noc_xy.y,
+        0,
         (std::uint32_t)dram_buffer_size,
         (std::uint32_t)local_buffer_addr,
         (std::uint32_t)dest_buffer_addr,

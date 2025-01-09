@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 #include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 #include "llrt/hal.hpp"
 
@@ -42,7 +42,7 @@ class WatcherDeviceReader {
 public:
     WatcherDeviceReader(
         FILE* f,
-        tt_metal::Device* device,
+        tt_metal::IDevice* device,
         std::vector<std::string>& kernel_names,
         void (*set_watcher_exception_message)(const std::string&));
     ~WatcherDeviceReader();
@@ -69,7 +69,7 @@ private:
     std::string GetKernelName(CoreDescriptor& core, const launch_msg_t* launch_msg, uint32_t type);
 
     FILE* f;
-    tt_metal::Device* device;
+    tt_metal::IDevice* device;
     std::vector<std::string>& kernel_names;
     void (*set_watcher_exception_message)(const std::string&);
 

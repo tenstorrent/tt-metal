@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/all_reduce/device/all_reduce_op.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
@@ -66,18 +67,28 @@ namespace experimental {
 namespace ccl {
 
 static AllReduceStrategy choose_all_reduce_strategy(
-    const Tensor& input_tensor, uint32_t num_devices, uint32_t num_links) {
+    const Tensor& input_tensor, uint32_t num_devices, uint32_t num_links, ttnn::ccl::Topology topology) {
     auto shape = input_tensor.get_logical_shape();
     auto rank = shape.rank();
 
     uint32_t all_reduce_dim = -1;
     bool optimized_version = false;
 
+    if (num_devices == 2) {
+        // 2 devices == n300 == linear topology
+        topology = ttnn::ccl::Topology::Linear;
+    }
+
     for (uint32_t i = 0; i < rank; ++i) {
         if (shape[i] % num_devices == 0) {
             all_reduce_dim = i;
             optimized_version = true;
         }
+    }
+
+    if (topology == ttnn::ccl::Topology::Linear) {
+        // reduce scatter doesn't reliably support line topology yet
+        optimized_version = false;
     }
 
     if (optimized_version) {
@@ -109,8 +120,8 @@ static Tensor all_gather_local_reduce(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
-    const ttnn::ccl::Topology& topology) {
+    const std::vector<IDevice*>& devices,
+    ttnn::ccl::Topology topology) {
     auto shape = input_tensor.get_logical_shape();
     auto rank = shape.rank();
     log_warning(
@@ -118,6 +129,11 @@ static Tensor all_gather_local_reduce(
         "Falling back to unoptimized version (all_gather + local reduce) as the input tensor shape {} is not handled "
         "by optimized version",
         shape);
+
+    if (num_devices == 2) {
+        // 2 devices == n300 == linear topology
+        topology = ttnn::ccl::Topology::Linear;
+    }
 
     TT_FATAL(rank == 4, "Tensor rank must be 4, but has {} ", rank);
     uint32_t merged_dim_size = 1;
@@ -152,7 +168,7 @@ static Tensor reduce_scatter_all_gather(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology& topology) {
     auto shape = input_tensor.get_logical_shape();
     auto rank = shape.rank();
@@ -201,7 +217,7 @@ Tensor run_all_reduce(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology& topology) {
     switch (strategy) {
         case AllReduceStrategy::AllGatherLocalReduce:
@@ -247,7 +263,6 @@ Tensor all_reduce(
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "All Reduce op is only supported for Fast Dispatch");
-    TT_FATAL(topology == ttnn::ccl::Topology::Ring, "All Reduce op is currently supported only on Ring topology");
 
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
@@ -272,7 +287,7 @@ Tensor all_reduce(
             const auto& input_tensor = input_tensors.at(0);
 
             // Choose the appropriate strategy
-            AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensor, num_devices, num_links);
+            AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensor, num_devices, num_links, topology);
 
             // Run the selected all-reduce operation
             Tensor result = run_all_reduce(

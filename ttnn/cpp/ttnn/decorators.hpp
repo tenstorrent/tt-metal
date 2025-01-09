@@ -79,8 +79,8 @@ inline auto create_async_output_tensors(
         Tensors output_tensors;
         output_tensors.reserve(std::tuple_size_v<execute_on_worker_thread_return_t>);
         for (auto index = 0; index < std::tuple_size_v<execute_on_worker_thread_return_t>; index++) {
-            output_tensors.emplace_back(
-                Tensor(operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
+            output_tensors.emplace_back(Tensor(
+                tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
         }
         return output_tensors;
     } else {
@@ -97,7 +97,7 @@ auto map_launch_op_args_to_execute_on_worker_thread_args(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    args_t&&... args) {
+    const args_t&... args) {
     auto input_tensor_index = 0;
     auto optional_input_tensor_index = 0;
     auto optional_output_tensor_index = 0;
@@ -117,7 +117,7 @@ auto map_launch_op_args_to_execute_on_worker_thread_args(
         } else {
             return arg;
         }
-    }(std::forward<args_t>(args))...};
+    }(args)...};
 }
 
 template <typename operation_t, typename T>
@@ -252,26 +252,26 @@ struct registered_operation_t {
         // #8479: Fix and re-enable logging in cpp operation decorator
         // detail::log("Arguments: ", std::forward<args_t>(args)...);
 
-        using execute_on_worker_thread_return_t = decltype(operation_t::invoke(std::forward<decltype(args)>(args)...));
+        using execute_on_worker_thread_return_t = decltype(operation_t::invoke(args...));
 
-        const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(std::forward<args_t>(args)...);
+        const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(args...);
         const OptionalConstTensors optional_input_tensors =
-            detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(std::forward<args_t>(args)...);
+            detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(args...);
 
         auto output_tensors = detail::create_async_output_tensors<operation_t, execute_on_worker_thread_return_t>(
-            input_tensors, optional_input_tensors, std::forward<decltype(args)>(args)...);
+            input_tensors, optional_input_tensors, args...);
 
         const OptionalTensors optional_output_tensors =
-            detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(std::forward<args_t>(args)...);
+            detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(args...);
 
         bool enable_autoformat = false;
-        operation::launch_op(
+        tt::tt_metal::operation::launch_op(
             [args...](
                 const Tensors& input_tensors,
                 const OptionalConstTensors& optional_input_tensors,
-                const OptionalTensors& optional_output_tensors) mutable {
+                const OptionalTensors& optional_output_tensors) {
                 auto execute_on_worker_thread_args = detail::map_launch_op_args_to_execute_on_worker_thread_args(
-                    input_tensors, optional_input_tensors, optional_output_tensors, std::forward<args_t>(args)...);
+                    input_tensors, optional_input_tensors, optional_output_tensors, args...);
                 return std::apply(
                     [](auto&&... args) {
                         return detail::map_execute_on_worker_thread_return_to_launch_op_return<operation_t>(
@@ -311,7 +311,7 @@ struct registered_operation_t {
     template <typename... args_t>
     auto operator()(args_t&&... args) const {
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
+        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
         auto output = invoke(std::forward<args_t>(args)...);
 
         // Should every output tensor be tracked?
@@ -321,7 +321,7 @@ struct registered_operation_t {
         }
         */
 
-        GraphTracker::instance().track_function_end(output);
+        tt::tt_metal::GraphTracker::instance().track_function_end(output);
         tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }

@@ -50,7 +50,7 @@ public:
         uint32_t alignment_bytes,
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false);
-    BankManager&& operator=(BankManager&& that);
+    BankManager&& operator=(BankManager&& that) noexcept;
     ~BankManager();
     uint32_t num_banks() const;
 
@@ -136,7 +136,7 @@ void shrink_allocator_size(
     Allocator& allocator, const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
 void reset_allocator_size(Allocator& allocator, const BufferType& buffer_type);
 
-DeviceAddr allocate_buffer(Allocator& allocator, DeviceAddr size, Buffer* buffer);
+DeviceAddr allocate_buffer(Allocator& allocator, Buffer* buffer);
 
 void mark_allocations_unsafe(Allocator& allocator);
 

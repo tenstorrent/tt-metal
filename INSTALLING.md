@@ -20,9 +20,9 @@ Note the current compatability matrix:
 
 | Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |---------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-| Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.9.0.0 (v80.9.0.0)               | v2.2.0 or above       | N/A                            |
-| Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.10.0.0 (v80.10.0.0)             | v2.2.0 or above       | N/A                            |
-| T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.27.1            | fw_pack-80.10.0.0 (v80.10.0.0)             | v2.2.0 or above       | v1.1.3 or above, `mesh` config |
+| Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.9.0.0 (v80.9.0.0)               | v2.2.0 or above       | N/A                            |
+| Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | N/A                            |
+| T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | v1.1.3 or above, `mesh` config |
 
 ---
 
@@ -35,45 +35,18 @@ sudo ./install_dependencies.sh
   - To install `CMake 3.20` see: https://github.com/tenstorrent/tt-metal/blob/4d7730d3e2d22c51d62baa1bfed861b557d9a3c0/dockerfile/ubuntu-20.04-amd64.Dockerfile#L9-L14
 ---
 
-### Step 3. Hugepages
-
-1. Download latest [setup_hugepages.py](https://github.com/tenstorrent/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
-
-```sh
-wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
-```
-
-2. Run first setup script.
-
-```sh
-sudo -E python3 setup_hugepages.py first_pass
-```
-
-3. Reboot
-
-```sh
-sudo reboot now
-```
-
-4. Run second setup script & check setup.
-
-```sh
-sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
-```
----
-
-### Step 4. Install and start using TT-NN and TT-Metalium!
+### Step 3. Install and start using TT-NN and TT-Metalium!
 
 > [!NOTE]
 >
-> You may choose to install from either source or a Python wheel.
+> You may choose to install from either source, a Python wheel, or Docker release image.
 >
 > However, no matter your method, in order to use our pre-built models or to
 > follow along with the documentation and tutorials to get started, you will
 > still need the source code.
 >
 > If you do not want to use the models or follow the tutorials and want to
-> immediately start using the API, you may install just the wheel.
+> immediately start using the API, you may install just the wheel or get the release Docker container.
 
 1. Install git and git-lfs.
 
@@ -155,6 +128,24 @@ export PYTHONPATH=$(pwd)
 pip install -r tt_metal/python_env/requirements-dev.txt
 sudo apt-get install cpufrequtils
 sudo cpupower frequency-set -g performance
+```
+
+#### Option 3: From Docker Release Image
+
+Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page for
+the particular Tenstorrent card architecture that you have installed on your
+system. (ie. Grayskull, Wormhole, etc)
+
+```sh
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/<arch_name>:latest-rc
+docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/<arch_name>:latest-rc bash
+```
+where `arch_name` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
+depending on your Tenstorrent card type.
+
+When inside of the container,
+```sh
+python3 -c "import ttnn"
 ```
 
 2. Start coding

@@ -45,7 +45,7 @@ SLICE:
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
 Test Debug Print: Unpack
 Basic Types:
-101-1.61800337@0.122558594
+101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
 SETPRECISION/FIXED/DEFAULTFLOAT:
@@ -70,7 +70,7 @@ SLICE:
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
 Test Debug Print: Math
 Basic Types:
-101-1.61800337@0.122558594
+101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
 SETPRECISION/FIXED/DEFAULTFLOAT:
@@ -88,7 +88,7 @@ Warning: MATH core does not support TileSlice printing, omitting print...
 Warning: MATH core does not support TileSlice printing, omitting print...
 Test Debug Print: Pack
 Basic Types:
-101-1.61800337@0.122558594
+101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
 SETPRECISION/FIXED/DEFAULTFLOAT:
@@ -113,7 +113,7 @@ SLICE:
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
 Test Debug Print: Data1
 Basic Types:
-101-1.61800337@0.122558594
+101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
 SETPRECISION/FIXED/DEFAULTFLOAT:
@@ -137,7 +137,7 @@ SLICE:
 <TileSlice data truncated due to exceeding max count (32)>
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b))";
 
-static void RunTest(DPrintFixture* fixture, Device* device) {
+static void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
     Program program = Program();
@@ -161,22 +161,22 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     // failing test cases, although all three kernels simply print.
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
-        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
+        llrt::RunTimeOptions::get_instance().get_root_dir() +
+            "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program,
-        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
+        llrt::RunTimeOptions::get_instance().get_root_dir() +
+            "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program,
-        llrt::OptionsG.get_root_dir() + "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",
+        llrt::RunTimeOptions::get_instance().get_root_dir() +
+            "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",
         core,
-        ComputeConfig{}
-    );
+        ComputeConfig{});
 
     // Run the program
     fixture->RunProgram(device, program);
@@ -193,7 +193,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 }
 
 TEST_F(DPrintFixture, TensixTestPrintFromAllHarts) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

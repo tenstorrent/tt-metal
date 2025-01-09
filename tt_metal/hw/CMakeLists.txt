@@ -19,15 +19,26 @@ set(TYPES
 )
 
 include(FetchContent)
-FetchContent_Declare(
-    sfpi
-    URL
-        https://github.com/tenstorrent/sfpi/releases/download/v6.0.0/sfpi-release.tgz
-    URL_HASH MD5=d837d26a2312d27815179995fdea83bd
-    SOURCE_DIR
-    ${PROJECT_SOURCE_DIR}/runtime/sfpi
+set(SFPI_x86_64_Linux_RELEASE
+    "v6.0.0/sfpi-release.tgz"
+    "d837d26a2312d27815179995fdea83bd"
 )
-FetchContent_MakeAvailable(sfpi)
+if(DEFINED SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE)
+    set(SFPI_RELEASE "${SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE}")
+    list(GET SFPI_RELEASE 0 SFPI_FILE)
+    list(GET SFPI_RELEASE 1 SFPI_MD5)
+    FetchContent_Declare(
+        sfpi
+        URL
+            "https://github.com/tenstorrent/sfpi/releases/download/${SFPI_FILE}"
+        URL_HASH "MD5=${SFPI_MD5}"
+        SOURCE_DIR
+        "${PROJECT_SOURCE_DIR}/runtime/sfpi"
+    )
+    FetchContent_MakeAvailable(sfpi)
+else()
+    message(FATAL_ERROR "SFPI binaries for ${CMAKE_HOST_SYSTEM_PROCESSOR}-${CMAKE_HOST_SYSTEM_NAME} not available")
+endif()
 
 foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
@@ -199,3 +210,5 @@ target_include_directories(
         inc/${currentArch}
         $<$<STREQUAL:${currentArch},wormhole>:${CMAKE_CURRENT_SOURCE_DIR}/inc/wormhole/wormhole_b0_defines>
 )
+
+target_link_libraries(hw INTERFACE TT::Metalium::HostDevCommon)

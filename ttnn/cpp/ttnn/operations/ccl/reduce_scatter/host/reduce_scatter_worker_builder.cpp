@@ -11,14 +11,14 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-using namespace tt::tt_metal;
+#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 
 namespace ttnn {
 namespace ccl {
 namespace reduce_scatter_detail {
 
 ReduceScatterWorkerArgBuilder::ReduceScatterWorkerArgBuilder (
-    Device const* device,
+    IDevice const* device,
     ttnn::ccl::CCLOpConfig const& op_config,
     ttnn::ccl::RingTopology const& topology_config,
     ttnn::ccl::InterleavedTensorWorkerSlice const& worker_input_slice,
@@ -414,6 +414,8 @@ static void convert_slices_to_ccl_commands() {
 
 }
 
+// Moved to (and updated in) ccl_worker_builder.cpp
+/*
 void emit_ccl_send_slice_sequence_commands(std::vector<TensorSlice> const& slices, std::vector<uint32_t>& args_out) {
     for (std::size_t i = 0; i < slices.size(); i++) {
         auto const& slice = slices[i];
@@ -555,6 +557,7 @@ void emit_ccl_send_slice_sequence_commands(std::vector<TensorSlice> const& slice
         }
     }
 }
+*/
 
 std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_kernel_rt_args(
     WorkerEdmInterfaceArgs const& edm_interface,
@@ -618,7 +621,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
     log_trace(tt::LogOp, "ccl_send arg[{}]: semaphore_id {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
 
     log_trace(tt::LogOp, "Generating {} ccl send commands", slices.size());
-    emit_ccl_send_slice_sequence_commands(slices, args);
+    ttnn::ccl::worker_detail::emit_ccl_send_slice_sequence_commands(slices, args);
 
     log_trace(tt::LogOp, "Reduce Scatter Sender Worker has {} RT Args: {}", args.size(), args);
 

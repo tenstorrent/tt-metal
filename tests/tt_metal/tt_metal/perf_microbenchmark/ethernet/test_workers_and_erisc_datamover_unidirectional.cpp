@@ -8,13 +8,13 @@
 #include <limits>
 #include <random>
 
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
@@ -67,7 +67,7 @@ public:
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -97,8 +97,8 @@ bool RunWriteBWTest(
     std::string const& receiver_side_reader_worker_kernel_path,
     std::string const& receiver_side_writer_worker_kernel_path,
 
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
@@ -253,7 +253,7 @@ bool RunWriteBWTest(
         for (uint32_t w = 0; w < chip0_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
             auto worker_noc_coord =
-                sender_device->physical_core_from_logical_core(chip0_sender_worker_core, CoreType::WORKER);
+                sender_device->virtual_core_from_logical_core(chip0_sender_worker_core, CoreType::WORKER);
             chip0_edm_args.push_back(
                 KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                     .to_uint32());
@@ -400,7 +400,7 @@ bool RunWriteBWTest(
         for (uint32_t w = 0; w < chip1_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
             auto worker_noc_coord =
-                receiver_device->physical_core_from_logical_core(chip1_sender_noc_xy, CoreType::WORKER);
+                receiver_device->virtual_core_from_logical_core(chip1_sender_noc_xy, CoreType::WORKER);
             chip1_edm_args.push_back(
                 KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                     .to_uint32());
@@ -448,7 +448,7 @@ bool RunWriteBWTest(
         for (uint32_t w = 0; w < chip1_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
             auto worker_noc_coord =
-                receiver_device->physical_core_from_logical_core(chip1_receiver_worker_core, CoreType::WORKER);
+                receiver_device->virtual_core_from_logical_core(chip1_receiver_worker_core, CoreType::WORKER);
             chip1_edm_args.push_back(
                 KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                     .to_uint32());

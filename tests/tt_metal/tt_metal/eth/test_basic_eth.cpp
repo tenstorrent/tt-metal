@@ -41,7 +41,7 @@ namespace unit_tests::erisc::kernels {
 
 bool reader_kernel_no_send(
     DispatchFixture* fixture,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
     const CoreCoord& eth_reader_core,
@@ -57,14 +57,12 @@ bool reader_kernel_no_send(
 
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = input_dram_buffer->address();
-    auto dram_noc_xy = input_dram_buffer->noc_coordinates();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_reader_core);
     log_debug(
         tt::LogTest,
-        "Device {}: reading {} bytes from dram {} addr {} to ethernet core {} addr {}",
+        "Device {}: reading {} bytes from dram bank 0 addr {} to ethernet core {} addr {}",
         device->id(),
         byte_size,
-        dram_noc_xy.str(),
         dram_byte_address,
         eth_reader_core.str(),
         eth_l1_byte_address);
@@ -92,8 +90,7 @@ bool reader_kernel_no_send(
         eth_reader_core,
         {
             (uint32_t)dram_byte_address,
-            (uint32_t)dram_noc_xy.x,
-            (uint32_t)dram_noc_xy.y,
+            0,
             (uint32_t)byte_size,
             (uint32_t)eth_l1_byte_address,
         });
@@ -110,7 +107,7 @@ bool reader_kernel_no_send(
 
 bool writer_kernel_no_receive(
     DispatchFixture* fixture,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
     const CoreCoord& eth_writer_core,
@@ -126,16 +123,14 @@ bool writer_kernel_no_receive(
 
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = output_dram_buffer->address();
-    auto dram_noc_xy = output_dram_buffer->noc_coordinates();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_writer_core);
     log_debug(
         tt::LogTest,
-        "Device {}: writing {} bytes from ethernet core {} addr {} to dram {} addr {}",
+        "Device {}: writing {} bytes from ethernet core {} addr {} to dram bank 0 addr {}",
         device->id(),
         byte_size,
         eth_writer_core.str(),
         eth_l1_byte_address,
-        dram_noc_xy.str(),
         dram_byte_address);
 
     auto eth_writer_kernel = tt_metal::CreateKernel(
@@ -161,24 +156,24 @@ bool writer_kernel_no_receive(
         eth_writer_core,
         {
             (uint32_t)dram_byte_address,
-            (uint32_t)dram_noc_xy.x,
-            (uint32_t)dram_noc_xy.y,
+            0,
             (uint32_t)byte_size,
             (uint32_t)eth_l1_byte_address,
         });
 
     fixture->RunProgram(device, program);
 
-    auto readback_vec = llrt::read_hex_vec_from_core(device->id(), dram_noc_xy, dram_byte_address, byte_size);
+    std::vector<uint32_t> readback_vec;
+    fixture->ReadBuffer(device, output_dram_buffer, readback_vec);
     pass &= (readback_vec == inputs);
     if (not pass) {
-        std::cout << "Mismatch at Core: " << dram_noc_xy.str() << std::endl;
+        std::cout << "Mismatch" << std::endl;
     }
     return pass;
 }
 
 bool noc_reader_and_writer_kernels(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const uint32_t byte_size,
     const uint32_t eth_dst_l1_address,
     const uint32_t eth_src_l1_address,
@@ -195,26 +190,21 @@ bool noc_reader_and_writer_kernels(
     auto reader_dram_buffer = CreateBuffer(dram_config);
     auto writer_dram_buffer = CreateBuffer(dram_config);
 
-    auto reader_dram_noc_xy = reader_dram_buffer->noc_coordinates();
-    auto writer_dram_noc_xy = writer_dram_buffer->noc_coordinates();
-
     log_debug(
         tt::LogTest,
-        "Device {}: reading {} bytes from dram {} addr {} to ethernet core {} addr {}",
+        "Device {}: reading {} bytes from dram bank 0 addr {} to ethernet core {} addr {}",
         device->id(),
         byte_size,
-        reader_dram_noc_xy.str(),
         reader_dram_buffer->address(),
         logical_eth_core.str(),
         eth_dst_l1_address);
     log_debug(
         tt::LogTest,
-        "Device {}: writing {} bytes from ethernet core {} addr {} to dram {} addr {}",
+        "Device {}: writing {} bytes from ethernet core {} addr {} to dram bank 0 addr {}",
         device->id(),
         byte_size,
         logical_eth_core.str(),
         eth_src_l1_address,
-        writer_dram_noc_xy.str(),
         writer_dram_buffer->address());
 
     auto eth_noc_xy = device->ethernet_core_from_logical_core(logical_eth_core);
@@ -231,8 +221,7 @@ bool noc_reader_and_writer_kernels(
         logical_eth_core,
         {
             (uint32_t)reader_dram_buffer->address(),
-            (uint32_t)reader_dram_noc_xy.x,
-            (uint32_t)reader_dram_noc_xy.y,
+            0,
             (uint32_t)byte_size,
             (uint32_t)eth_dst_l1_address,
         });
@@ -249,8 +238,7 @@ bool noc_reader_and_writer_kernels(
         logical_eth_core,
         {
             (uint32_t)writer_dram_buffer->address(),
-            (uint32_t)writer_dram_noc_xy.x,
-            (uint32_t)writer_dram_noc_xy.y,
+            0,
             (uint32_t)byte_size,
             (uint32_t)eth_src_l1_address,
         });

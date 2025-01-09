@@ -45,9 +45,7 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
     target_include_directories(
         ${TEST}
         PRIVATE
-            ${PROJECT_SOURCE_DIR}
-            ${PROJECT_SOURCE_DIR}/tt_metal
-            ${PROJECT_SOURCE_DIR}/tt_metal/common
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
@@ -69,6 +67,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/integration)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/stl)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
 
 add_custom_target(
     metal_tests
@@ -83,4 +82,5 @@ add_custom_target(
         unit_tests_integration
         unit_tests_llk
         unit_tests_stl
+        unit_tests_noc
 )

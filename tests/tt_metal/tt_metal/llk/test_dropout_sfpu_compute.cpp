@@ -63,7 +63,7 @@ bool check_dropout(
 }
 
 bool test_dropout_standalone(
-    tt_metal::Device* device, float probability, uint32_t seed, float const_bias, std::vector<bfloat16>& res_vec) {
+    tt_metal::IDevice* device, float probability, uint32_t seed, float const_bias, std::vector<bfloat16>& res_vec) {
     bool pass = true;
     uint32_t int_probability = probability * (double)INT_MAX;
     float scale_factor_f = 1.0f / (1.0f - probability);
@@ -162,8 +162,7 @@ bool test_dropout_standalone(
             core,
             {
                 src0_dram_buffer->address(),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
-                static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+                0,  // dram bank id
                 num_tiles,
             });
 
@@ -172,8 +171,7 @@ bool test_dropout_standalone(
             unary_writer_kernel_id,
             core,
             {dst_dram_buffer->address(),
-             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
+             0,  // dram bank id
              num_tiles});
 
         tt_metal::detail::LaunchProgram(device, program);
@@ -201,7 +199,7 @@ bool test_dropout_standalone(
     return pass;
 }
 
-void test_dropout(tt_metal::Device* device, const DropoutConfig& test_config) {
+void test_dropout(tt_metal::IDevice* device, const DropoutConfig& test_config) {
     bool pass = true;
     float probability = test_config.probability;
     float fill_constant = test_config.fill_constant;

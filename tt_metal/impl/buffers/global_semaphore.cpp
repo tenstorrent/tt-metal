@@ -14,23 +14,33 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
 GlobalSemaphore::GlobalSemaphore(
-    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
-    device_(device), cores_(cores), initial_value_(initial_value) {
-    this->setup_buffer(buffer_type);
+    IDevice* device,
+    const CoreRangeSet& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) :
+    device_(device), cores_(cores) {
+    this->setup_buffer(initial_value, buffer_type, sub_device_ids);
 }
 
-GlobalSemaphore::GlobalSemaphore(Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
-    device_(device), cores_(std::move(cores)), initial_value_(initial_value) {
-    this->setup_buffer(buffer_type);
+GlobalSemaphore::GlobalSemaphore(
+    IDevice* device,
+    CoreRangeSet&& cores,
+    uint32_t initial_value,
+    BufferType buffer_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) :
+    device_(device), cores_(std::move(cores)) {
+    this->setup_buffer(initial_value, buffer_type, sub_device_ids);
 }
 
-void GlobalSemaphore::setup_buffer(BufferType buffer_type) {
+void GlobalSemaphore::setup_buffer(
+    uint32_t initial_value, BufferType buffer_type, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global semaphore can only be created for L1 buffer types");
@@ -49,29 +59,40 @@ void GlobalSemaphore::setup_buffer(BufferType buffer_type) {
         shard_parameters,
         std::nullopt);
 
-    this->host_buffer_ = std::vector<uint32_t>(num_cores, this->initial_value_);
-    this->reset_semaphore_value();
+    this->reset_semaphore_value(initial_value, sub_device_ids);
 }
 
-std::unique_ptr<GlobalSemaphore> GlobalSemaphore::create(
-    Device* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return std::make_unique<GlobalSemaphore>(device, cores, initial_value, buffer_type);
-}
-std::unique_ptr<GlobalSemaphore> GlobalSemaphore::create(
-    Device* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return std::make_unique<GlobalSemaphore>(device, std::move(cores), initial_value, buffer_type);
-}
+IDevice* GlobalSemaphore::device() const { return device_; }
 
 DeviceAddr GlobalSemaphore::address() const { return buffer_->address(); }
 
-void GlobalSemaphore::reset_semaphore_value() {
-    // Blocking write of semaphore value to buffer
-    if (this->device_->using_slow_dispatch()) {
-        detail::WriteToBuffer(*this->buffer_, this->host_buffer_);
-        tt::Cluster::instance().l1_barrier(this->device_->id());
-    } else {
-        EnqueueWriteBuffer(this->device_->command_queue(), this->buffer_, this->host_buffer_.data(), true);
-    }
+void GlobalSemaphore::reset_semaphore_value(
+    uint32_t reset_value, tt::stl::Span<const SubDeviceId> sub_device_ids) const {
+    // Write the initial value to the semaphore to the device
+    // Only block for the slow dispatch case
+    auto* device = this->device_;
+    device->push_work([device,
+                       reset_value,
+                       sub_device_ids = std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end()),
+                       num_cores = this->cores_.num_cores(),
+                       buffer = this->buffer_] {
+        std::vector<uint32_t> host_buffer(num_cores, reset_value);
+        if (device->using_slow_dispatch()) {
+            detail::WriteToBuffer(*buffer, host_buffer);
+            tt::Cluster::instance().l1_barrier(device->id());
+        } else {
+            EnqueueWriteBuffer(device->command_queue(), buffer, host_buffer, false, sub_device_ids);
+        }
+    });
 }
 
 }  // namespace tt::tt_metal
+
+namespace std {
+
+std::size_t hash<tt::tt_metal::GlobalSemaphore>::operator()(
+    const tt::tt_metal::GlobalSemaphore& global_semaphore) const {
+    return tt::stl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
+}
+
+}  // namespace std

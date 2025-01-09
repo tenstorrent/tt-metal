@@ -6,7 +6,7 @@
 #include "ttnn/run_operation.hpp"
 #include "reshape.hpp"
 #include "tt_metal/common/constants.hpp"
-#include <ttnn/operations/numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"
@@ -16,7 +16,7 @@ namespace ttnn::operations::data_movement {
 namespace detail {
 
 static Tensor manual_insertion(
-    const Tensor& input_tensor, const ttnn::Shape& shape, Device* device, const MemoryConfig& output_mem_config) {
+    const Tensor& input_tensor, const ttnn::Shape& shape, IDevice* device, const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
         shape.logical_shape().volume() == input_tensor.get_logical_volume(),
@@ -74,7 +74,7 @@ ttnn::Tensor ReshapeOperation::invoke(
         return detail::manual_insertion(
             (tt::tt_metal::Tensor)input_tensor, output_shape, input_tensor.device(), output_mem_config);
     }
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     return operation::run(ReshapeDeviceOperation{output_shape, output_mem_config}, {input_tensor}).at(0);
 }
 

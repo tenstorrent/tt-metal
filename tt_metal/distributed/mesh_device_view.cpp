@@ -12,7 +12,7 @@
 namespace tt::tt_metal::distributed {
 
 static std::vector<MeshDeviceView::device_pointer> get_devices_from_coordinates(
-    MeshDeviceView& mesh, const std::vector<Coordinate>& coords) {
+    const MeshDeviceView& mesh, const std::vector<Coordinate>& coords) {
     std::vector<MeshDeviceView::device_pointer> devices;
     for (const auto& coord : coords) {
         if (auto device = mesh.get_device(coord.row, coord.col)) {
@@ -52,11 +52,7 @@ MeshDeviceView::MeshDeviceView(std::vector<device_pointer> devices, const Coordi
     initialize_from_devices(devices_, std::move(mapper));
 }
 
-MeshDeviceView::device_pointer MeshDeviceView::get_device(size_t row, size_t col) {
-    return const_cast<device_pointer>(std::as_const(*this).get_device(row, col));
-}
-
-MeshDeviceView::const_device_pointer MeshDeviceView::get_device(size_t row, size_t col) const {
+MeshDeviceView::device_pointer MeshDeviceView::get_device(size_t row, size_t col) const {
     for (const auto& device : devices_) {
         auto it = device_coordinates_.find(device->id());
         if (it != device_coordinates_.end() && it->second.row == row && it->second.col == col) {
@@ -66,7 +62,7 @@ MeshDeviceView::const_device_pointer MeshDeviceView::get_device(size_t row, size
     return nullptr;
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices(const Coordinate& start, const Coordinate& end) {
+MeshDeviceView::DeviceView MeshDeviceView::get_devices(const Coordinate& start, const Coordinate& end) const {
     if (start.row > end.row || start.col > end.col) {
         log_fatal("Invalid coordinates: start {} must be less than or equal to end {}", start, end);
     }
@@ -82,8 +78,8 @@ MeshDeviceView::DeviceView MeshDeviceView::get_devices(const Coordinate& start, 
     return devices_in_region;
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshShape& shape) {
-    return get_devices({0, 0}, {shape.first - 1, shape.second - 1});
+MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshShape& submesh_shape) const {
+    return get_devices({0, 0}, {submesh_shape.num_rows - 1, submesh_shape.num_cols - 1});
 }
 
 std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_devices_on_row(size_t row) const {
@@ -128,7 +124,7 @@ bool MeshDeviceView::empty() const noexcept { return devices_.empty(); }
 
 size_t MeshDeviceView::size() const noexcept { return devices_.size(); }
 
-std::pair<size_t, size_t> MeshDeviceView::shape() const noexcept { return {num_rows(), num_cols()}; }
+MeshShape MeshDeviceView::shape() const noexcept { return {num_rows(), num_cols()}; }
 
 bool MeshDeviceView::contains(const Coordinate& coord) const noexcept {
     return coord.row >= top_left_.row && coord.row <= bottom_right_.row && coord.col >= top_left_.col &&
@@ -214,7 +210,7 @@ std::vector<Coordinate> MeshDeviceView::get_line_coordinates(
 }
 
 std::vector<Coordinate> MeshDeviceView::get_ring_coordinates(
-    const MeshShape& ring_shape, const Coordinate& offset, size_t num_rows, size_t num_cols) {
+    const MeshShape& ring_shape, const Coordinate& offset, size_t num_rows, size_t num_cols) const {
     auto [start_row, start_col] = offset;
     auto [ring_rows, ring_cols] = ring_shape;
     auto end_row = start_row + ring_rows - 1;
@@ -258,18 +254,18 @@ void MeshDeviceView::validate_coordinates() const {
     }
 }
 
-std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_line_devices() {
+std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_line_devices() const {
     auto boundary_coords =
         get_line_coordinates(this->num_rows() * this->num_cols(), this->top_left_, this->num_rows(), this->num_cols());
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 
-std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_ring_devices() {
+std::vector<MeshDeviceView::device_pointer> MeshDeviceView::get_ring_devices() const {
     auto boundary_coords = get_ring_coordinates(shape(), this->top_left_, this->num_rows(), this->num_cols());
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices(MeshType type) {
+MeshDeviceView::DeviceView MeshDeviceView::get_devices(MeshType type) const {
     switch (type) {
         case MeshType::RowMajor: return this->devices_;
         case MeshType::Ring: return this->get_ring_devices();

@@ -13,6 +13,7 @@ void kernel_main() {
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t W_size_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(5);
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
@@ -38,7 +39,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_read_per_barrier; ++i) {
             uint64_t write_noc_addr = get_noc_addr(i_stick, s);
             noc_async_write(l1_read_addr, write_noc_addr, stick_size_bytes);
-            l1_read_addr += stick_size_bytes;
+            l1_read_addr += stick_size_padded_aligned;
             i_stick += 1;
         }
         noc_async_write_barrier();

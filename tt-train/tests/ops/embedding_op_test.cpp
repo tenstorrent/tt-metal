@@ -13,7 +13,18 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 
-TEST(EmbeddingOpTest, EmbeddingForwardBackward) {
+class EmbeddingOpTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
@@ -55,7 +66,7 @@ TEST(EmbeddingOpTest, EmbeddingForwardBackward) {
     }
 }
 
-TEST(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
+TEST_F(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
@@ -75,7 +86,7 @@ TEST(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
     EXPECT_NO_THROW(ops::embedding_op(input, weight));
 }
 
-TEST(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
+TEST_F(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
@@ -98,7 +109,7 @@ TEST(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
 // This test was previously throwing an exception, but now it just freezes
 // The main reason that we are passing input_tensor as tiled, but it should be row major
 // We will uncomment it once the issue is fixed at ttnn side
-// TEST(EmbeddingOpTest, EmbeddingBadLayout_BROKEN) {
+// TEST_F(EmbeddingOpTest, EmbeddingBadLayout_BROKEN) {
 //     using namespace ttml;
 
 //     auto* device = &autograd::ctx().get_device();

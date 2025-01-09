@@ -12,7 +12,18 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 
-TEST(UnaryOpsTest, GlobalMean) {
+class UnaryOpsTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(UnaryOpsTest, GlobalMean) {
     std::vector<float> test_data = {1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F};
 
     auto shape = ttml::core::create_shape({2, 1, 1, 4});
@@ -34,12 +45,12 @@ TEST(UnaryOpsTest, GlobalMean) {
     }
 }
 
-TEST(UnaryOpsTest, LogSoftmax) {
+TEST_F(UnaryOpsTest, LogSoftmax) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data = {-0.1F, -0.2F, -0.3F, -0.4F, 0.F, -0.2F, -0.3F, -0.4F};
     auto tensor = ttml::core::from_vector(test_data, ttml::core::create_shape({2, 1, 1, 4}), device);
     auto tensor_ptr = ttml::autograd::create_tensor(tensor);
-    auto result = ttml::ops::log_softmax(tensor_ptr, 3);
+    auto result = ttml::ops::log_softmax_moreh(tensor_ptr, 3);
     auto result_data = ttml::core::to_vector(result->get_value());
     std::vector<float> expected_data = {
         -1.24253553F, -1.34253553F, -1.44253553F, -1.54253553F, -1.17244159F, -1.37244159F, -1.47244159F, -1.57244159F};

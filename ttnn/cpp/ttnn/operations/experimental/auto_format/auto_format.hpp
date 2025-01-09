@@ -23,13 +23,13 @@ struct FormatParams {
 
 class AutoFormat {
 private:
-    inline static tt::tt_metal::Device* device = nullptr;
+    inline static tt::tt_metal::IDevice* device = nullptr;
 
     AutoFormat() {}
 
 public:
-    static void SetDefaultDevice(tt::tt_metal::Device* dev) { device = dev; }
-    static tt::tt_metal::Device* GetDefaultDevice() { return device; }
+    static void SetDefaultDevice(tt::tt_metal::IDevice* dev) { device = dev; }
+    static tt::tt_metal::IDevice* GetDefaultDevice() { return device; }
 
     static tt::tt_metal::LegacyShape pad_to_tile_shape(
         const tt::tt_metal::LegacyShape& unpadded_shape,
@@ -73,8 +73,8 @@ public:
         const tt::tt_metal::LegacyShape& unpadded_shape, tt::tt_metal::Layout layout) {
         tt::tt_metal::LegacyShape padded_shape = unpadded_shape;
         switch (layout) {
-            case Layout::ROW_MAJOR: padded_shape = pad_to_rm_shape(unpadded_shape); break;
-            case Layout::TILE: padded_shape = pad_to_tile_shape(unpadded_shape);
+            case tt::tt_metal::Layout::ROW_MAJOR: padded_shape = pad_to_rm_shape(unpadded_shape); break;
+            case tt::tt_metal::Layout::TILE: padded_shape = pad_to_tile_shape(unpadded_shape);
             default: break;
         }
         return padded_shape;
@@ -90,16 +90,18 @@ public:
 
     static bool legal_device_shape(const tt::tt_metal::LegacyShape& shape, tt::tt_metal::Layout layout) {
         switch (layout) {
-            case Layout::ROW_MAJOR: return legal_rm_shape(shape);
-            case Layout::TILE: return legal_tile_shape(shape);
+            case tt::tt_metal::Layout::ROW_MAJOR: return legal_rm_shape(shape);
+            case tt::tt_metal::Layout::TILE: return legal_tile_shape(shape);
             default: return true;
         }
     }
 
     static bool check_input_tensor_format(
-        const Tensor& a, const tt::tt_metal::LegacyShape& shape, tt::tt_metal::Layout target_layout = Layout::TILE) {
+        const Tensor& a,
+        const tt::tt_metal::LegacyShape& shape,
+        tt::tt_metal::Layout target_layout = tt::tt_metal::Layout::TILE) {
         if (a.get_layout() == target_layout && a.get_legacy_shape() == shape &&
-            a.storage_type() == StorageType::DEVICE) {
+            a.storage_type() == tt::tt_metal::StorageType::DEVICE) {
             return true;
         }
         return false;
@@ -111,20 +113,20 @@ public:
     // See: Remove auto format within permute_op.cpp #9404
     static Tensor move_tensor_to_device_and_pad(
         const Tensor& input,
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config);
 
     static Tensor move_tensor_to_device(
         const Tensor& input,
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         const tt::tt_metal::MemoryConfig& mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
     static Tensor move_tensor_to_mem_config(const Tensor& input, const tt::tt_metal::MemoryConfig& mem_config);
 
     static Tensor format_input_tensor(
         const Tensor& input,
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         const tt::tt_metal::LegacyShape& padded_shape,
         float pad_value,
         tt::tt_metal::Layout target_layout,
@@ -133,9 +135,9 @@ public:
     static Tensor format_output_tensor(
         const Tensor& output,
         const tt::tt_metal::LegacyShape& shape,
-        tt::tt_metal::Device* device,
-        Layout target_layout,
-        std::optional<MemoryConfig> target_mem_config = std::nullopt);
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Layout target_layout,
+        std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::auto_format

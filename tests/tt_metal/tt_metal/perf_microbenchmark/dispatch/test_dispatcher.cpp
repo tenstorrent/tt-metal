@@ -203,7 +203,7 @@ bool is_paged_test() {
 // Unicast or Multicast Linear Write Test.
 void gen_linear_or_packed_write_test(
     uint32_t& cmd_count,
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& dispatch_cmds,
     CoreRange worker_cores,
     DeviceData& device_data,
@@ -280,7 +280,7 @@ void gen_linear_or_packed_write_test(
 void gen_paged_write_test(
     uint32_t& cmd_count,
     bool is_dram,
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& dispatch_cmds,
     CoreRange worker_cores,
     DeviceData& device_data,
@@ -349,7 +349,7 @@ void gen_paged_write_test(
 
 // Generate Dispatcher Commands based on the type of test.
 void gen_cmds(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& dispatch_cmds,
     CoreRange worker_cores,
     DeviceData& device_data,
@@ -384,27 +384,18 @@ void gen_cmds(
 }
 
 // Clear DRAM (helpful for paged write to DRAM debug to have a fresh slate)
-void initialize_dram_banks(Device* device) {
+void initialize_dram_banks(IDevice* device) {
     auto num_banks = device->num_banks(BufferType::DRAM);
     auto bank_size = device->bank_size(BufferType::DRAM);  // Or can hardcode to subset like 16MB.
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        auto offset = device->bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->dram_core_from_dram_channel(dram_channel);
         log_info(
             tt::LogTest,
-            "Initializing DRAM {} bytes for bank_id: {} core: {} at addr: 0x{:x}",
+            "Initializing DRAM {} bytes for bank_id: {}",
             bank_size,
-            bank_id,
-            bank_core,
-            offset);
-        tt::Cluster::instance().write_core(
-            static_cast<const void*>(fill.data()),
-            fill.size() * sizeof(uint32_t),
-            tt_cxy_pair(device->id(), bank_core),
-            offset);
+            bank_id);
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, 0, fill);
     }
 }
 
@@ -427,7 +418,7 @@ int main(int argc, char** argv) {
     bool pass = true;
     try {
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CommandQueue& cq = device->command_queue();
 
@@ -697,7 +688,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "test_dispatcher.cpp - Test Passed");

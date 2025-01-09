@@ -10,7 +10,7 @@
 #include <tuple>
 #include <map>
 
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "impl/device/device.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "tt_backend_api_types.hpp"
@@ -64,7 +64,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, Device*> devices_;
+    std::map<chip_id_t, IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -78,8 +78,8 @@ struct ChipSenderReceiverEthCore {
 };
 
 std::tuple<Program, Program> build(
-    Device* device0,
-    Device* device1,
+    IDevice* device0,
+    IDevice* device1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,
@@ -128,8 +128,8 @@ std::tuple<Program, Program> build(
 }
 
 void run(
-    Device* device0,
-    Device* device1,
+    IDevice* device0,
+    IDevice* device1,
     Program& program0,
     Program& program1,
     KernelHandle local_kernel,
@@ -287,7 +287,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-    } catch (std::exception e) {
+    } catch (std::exception& e) {
         test_fixture.TearDown();
         return -1;
     }

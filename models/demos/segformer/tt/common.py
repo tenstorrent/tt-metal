@@ -19,6 +19,7 @@ class Conv:
         activation="",
         groups=1,
         dtype=ttnn.bfloat8_b,
+        output_layout=ttnn.TILE_LAYOUT,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
@@ -35,17 +36,14 @@ class Conv:
         self.shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
+        self.output_layout = output_layout
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
             dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
-            math_fidelity=ttnn.MathFidelity.LoFi,
             activation=self.activation,
             shard_layout=self.shard_layout,
-            math_approx_mode_enabled=True,
-            fp32_dest_acc_enabled=False,
-            packer_l1_accum_enabled=False,
             input_channels_alignment=16 if input_tensor.shape[3] < 16 else 32,
             transpose_shards=False,
             reshard_if_not_optimal=self.reshard,
@@ -53,11 +51,19 @@ class Conv:
             reallocate_halo_output=True,
             enable_act_double_buffer=True,
             enable_split_reader=False,
+            output_layout=self.output_layout,
+        )
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
-        [output_tensor, _out_height, _out_width, self.weights, self.bias] = ttnn.conv2d(
+        [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
@@ -71,7 +77,10 @@ class Conv:
             input_height=input_tensor.shape[1],
             input_width=input_tensor.shape[2],
             conv_config=conv_config,
+            compute_config=compute_config,
             groups=self.groups,
+            return_output_dim=True,
+            return_weights_and_bias=False,
         )
 
         return output_tensor, _out_height, _out_width

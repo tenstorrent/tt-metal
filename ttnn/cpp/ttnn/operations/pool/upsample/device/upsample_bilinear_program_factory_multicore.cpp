@@ -15,7 +15,7 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
 
 #include "tt_metal/tt_stl/reflection.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 
@@ -67,7 +67,7 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     const uint32_t scale_factor_w,
     const DeviceComputeKernelConfig compute_kernel_config) {
     Program program = CreateProgram();
-    Device* device = input.device();
+    IDevice* device = input.device();
 
     auto input_shape = input.get_legacy_shape();
     auto output_shape = output.get_legacy_shape();

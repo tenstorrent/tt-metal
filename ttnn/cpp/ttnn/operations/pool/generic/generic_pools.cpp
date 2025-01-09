@@ -5,11 +5,12 @@
 #include "generic_pools.hpp"
 
 #include "impl/buffers/buffer_constants.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/math.hpp"
-#include "ttnn/common/constants.hpp"
 
 #include <limits>
 
@@ -42,14 +43,16 @@ Tensor Pool2DOp<pool_type>::invoke(
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
     const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<const TensorMemoryLayout> applied_shard_scheme) {
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    bool ceil_mode) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
             .input_hw = {input_h, input_w},
             .window_hw = {kernel_size.at(0), kernel_size.at(1)},
             .stride_hw = {stride.at(0), stride.at(1)},
             .pad_hw = {padding.at(0), padding.at(1)},
-            .dilation_hw = {dilation.at(0), dilation.at(1)}
+            .dilation_hw = {dilation.at(0), dilation.at(1)},
+            .ceil_mode = ceil_mode,
     };
     auto output_shape = sliding_window_config.get_output_shape();   // last dim/width is 0
     auto input_tensor_sharded = input_tensor;
@@ -73,20 +76,20 @@ Tensor Pool2DOp<pool_type>::invoke(
                      "Only height, width, or block sharding strategies are supported.");
             shard_layout = applied_shard_scheme.value();
         }
-        parallel_config = conv::conv2d::determine_parallel_config(
-            shard_layout,
-            batch_size,
-            channels,
-            output_shape[1],
-            output_shape[2],
-            channels,
-            input_tensor.device()->compute_with_storage_grid_size(),
-            ShardOrientation::ROW_MAJOR,
-            false,
-            false);
-        num_cores_nhw = conv::conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);
-        num_cores_c = conv::conv2d::get_num_cores_channels_from_parallel_config(parallel_config);
-        auto sharded_mem_config = conv::conv2d::create_sharded_memory_config_from_parallel_config(input_tensor_sharded.shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
+        parallel_config = conv::determine_parallel_config(
+                                            shard_layout,
+                                            batch_size,
+                                            channels,
+                                            output_shape[1],
+                                            output_shape[2],
+                                            channels,
+                                            input_tensor.device()->compute_with_storage_grid_size(),
+                                            ShardOrientation::ROW_MAJOR,
+                                            false,
+                                            false);
+        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
+        num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
+        auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(input_tensor_sharded.shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_sharded, sharded_mem_config, std::nullopt); // this converts interleaved to sharded
         out_memory_config = input_tensor_sharded.memory_config();
     } else {
@@ -99,8 +102,8 @@ Tensor Pool2DOp<pool_type>::invoke(
         parallel_config.grid = shard_grid;
         parallel_config.shard_scheme = shard_scheme;
         parallel_config.shard_orientation = shard_orientation;
-        num_cores_nhw = conv::conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);
-        num_cores_c = conv::conv2d::get_num_cores_channels_from_parallel_config(parallel_config);
+        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
+        num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
     }
 
     // update the shard spec to match the output shape
@@ -122,7 +125,8 @@ Tensor Pool2DOp<pool_type>::invoke(
             .num_cores_nhw = num_cores_nhw,
             .num_cores_c = num_cores_c,
             .core_range_set = parallel_config.grid,
-            .snap_to_tile = false
+            .snap_to_tile = false,
+            .ceil_mode = ceil_mode,
     };
 
     // Call the halo uop

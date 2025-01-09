@@ -17,8 +17,8 @@
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
-#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS or defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
-#include "circular_buffer_init.h"
+#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+#include "remote_circular_buffer_api.h"
 #endif
 
 void kernel_launch(uint32_t kernel_base_addr) {
@@ -36,9 +36,6 @@ void kernel_launch(uint32_t kernel_base_addr) {
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(NOC_INDEX);
-    } else {
-        noc_local_state_init(NOC_0);
-        noc_local_state_init(NOC_1);
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
@@ -47,8 +44,5 @@ void kernel_launch(uint32_t kernel_base_addr) {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         kernel_main();
     }
-#ifdef UPDATE_REMOTE_CB_CONFIGS_IN_L1
-    UPDATE_REMOTE_CB_CONFIGS_IN_L1
-#endif
 #endif
 }

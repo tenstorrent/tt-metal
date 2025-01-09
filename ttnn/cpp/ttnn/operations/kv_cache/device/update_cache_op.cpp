@@ -7,6 +7,8 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::kv_cache {
 
 using namespace tt::constants;
@@ -95,8 +97,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> UpdateCache::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<TensorSpec> UpdateCache::compute_output_specs(const std::vector<Tensor>&) const {
     // Do nothing because it's an in-place operation
     return {};
 }

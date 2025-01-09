@@ -69,10 +69,8 @@ constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SLAVE_NOC_X, DOWNSTREAM_SLAVE_NOC_Y));
-constexpr uint64_t pcie_noc_xy = uint64_t(NOC_XY_PCIE_ENCODING(
-    NOC_0_X(static_cast<uint8_t>(NOC_INDEX), noc_size_x, PCIE_NOC_X),
-    NOC_0_Y(static_cast<uint8_t>(NOC_INDEX), noc_size_y, PCIE_NOC_Y),
-    NOC_INDEX));
+constexpr uint64_t pcie_noc_xy =
+    uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
 constexpr uint32_t dispatch_s_cb_page_size = 1 << dispatch_s_cb_log_page_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + (1 << downstream_cb_log_page_size) * downstream_cb_pages;
@@ -930,6 +928,7 @@ void paged_read_into_cmddat_q(uint32_t read_ptr, PrefetchExecBufState& exec_buf_
     InterleavedAddrGen<true> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
 
     while (pages_at_once != 0) {
+        invalidate_l1_cache();
         uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
         noc_async_read(noc_addr, read_ptr, page_size);
         read_ptr += page_size;
@@ -1458,6 +1457,8 @@ void kernel_main() {
 
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_downstream_cb_sem_id>(downstream_cb_pages);
+
+    noc_async_full_barrier();
 
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": out" << ENDL();
 }

@@ -22,17 +22,17 @@
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "umd/device/tt_soc_descriptor.h"
-#include "umd/device/xy_pair.h"
+#include "umd/device/types/xy_pair.h"
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/common/assert.hpp"
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 inline namespace v0 {
 
-class Device;
+class IDevice;
 
 }  // namespace v0
 
@@ -123,7 +123,7 @@ struct ShardSpecBuffer {
 inline namespace v0 {
 
 struct BufferConfig {
-    Device *device;
+    IDevice *device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
@@ -135,7 +135,7 @@ typedef BufferConfig InterleavedBufferConfig;
 // copied from above instead of using inheritance such that we can use
 // designator constructor
 struct ShardedBufferConfig {
-    Device *device;
+    IDevice *device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type = BufferType::L1;
@@ -168,7 +168,7 @@ class Buffer final {
 
    public:
     static std::shared_ptr<Buffer> create(
-        Device *device,
+        IDevice *device,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
@@ -177,7 +177,7 @@ class Buffer final {
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
-        Device *device,
+        IDevice *device,
         DeviceAddr address,
         DeviceAddr size,
         DeviceAddr page_size,
@@ -192,7 +192,7 @@ class Buffer final {
     Buffer(Buffer &&other) = delete;
     Buffer &operator=(Buffer &&other) = delete;
 
-    Device *device() const { return device_; }
+    IDevice* device() const { return device_; }
     Allocator *allocator() const { return allocator_; }
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
@@ -221,13 +221,9 @@ class Buffer final {
 
     CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
-    CoreCoord noc_coordinates(uint32_t bank_id) const;
-
-    // returns NoC coordinates of first bank buffer is in
-    CoreCoord noc_coordinates() const;
-
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
+    DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const;
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;
@@ -251,7 +247,7 @@ class Buffer final {
     size_t unique_id() const { return unique_id_; }
 
     Buffer(
-        Device *device,
+        IDevice* device,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
@@ -278,7 +274,7 @@ class Buffer final {
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
 
-    Device * const device_;
+    IDevice* const device_;
     const DeviceAddr size_; // Size in bytes
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;

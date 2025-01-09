@@ -22,35 +22,6 @@ namespace tt::tt_metal {
 // One core dispatches commands to worker cores on the device `dispatcher`
 // The `remote_x` cores are used for remote fast dispatch and receive / transmit fast dispatch packets from ethernet cores
 
-struct dispatch_worker_build_settings_t{
-    std::string kernel_file;
-    std::string dispatch_s_kernel_file;
-    std::vector<uint32_t> compile_args;
-    std::vector<tt_cxy_pair> upstream_cores;
-    std::vector<tt_cxy_pair> downstream_cores;
-    tt_cxy_pair worker_physical_core;
-    tt_cxy_pair eth_partner_physical_core;
-    CoreType dispatch_core_type;
-    uint32_t command_queue_start_addr;
-    uint32_t issue_queue_start_addr;
-    uint32_t issue_queue_size;
-    uint32_t completion_queue_start_addr;
-    uint32_t completion_queue_size;
-    std::vector<uint32_t> semaphores;
-    uint32_t producer_semaphore_id;
-    uint32_t consumer_semaphore_id;
-    uint32_t consumer_slave_semaphore_id;
-    tt_cxy_pair dispatch_s_logical_core;
-    tt_cxy_pair dispatch_s_physical_core;
-    uint32_t cb_start_address;
-    uint32_t cb_size_bytes;
-    uint32_t cb_log_page_size;
-    uint32_t cb_pages;
-    uint32_t tunnel_stop;
-    uint32_t num_compute_cores;
-    uint32_t vc_count;
-};
-
 // std::optional is used to determine whether core has been assigned
 // tt_cxy_pair is used over CoreCoord to denote location because remote device command queue interface cores are on the associated MMIO device
 struct dispatch_core_placement_t {
@@ -109,7 +80,7 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord issue_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.prefetcher = tt_cxy_pair(mmio_device_id, issue_queue_coord.x, issue_queue_coord.y);
-        log_debug(tt::LogMetal, "Allocated Prefetch Core: {} for Device {}", assignment.prefetcher.value().str(), device_id);
+        log_dispatch_assignment("Prefetcher", assignment.prefetcher.value(), device_id, channel, cq_id);
         return assignment.prefetcher.value();
     }
 
@@ -134,7 +105,7 @@ class dispatch_core_manager {
         }
         CoreCoord prefetch_d_coord = this->get_next_available_dispatch_core(device_id);
         assignment.prefetcher_d = tt_cxy_pair(device_id, prefetch_d_coord.x, prefetch_d_coord.y);
-        log_debug(tt::LogMetal, "Allocated Prefetch D Core: {} for Device {}", assignment.prefetcher_d.value().str(), device_id);
+        log_dispatch_assignment("Prefetcher D", assignment.prefetcher_d.value(), device_id, channel, cq_id);
         return assignment.prefetcher_d.value();
     }
 
@@ -160,7 +131,7 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord mux_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.mux = tt_cxy_pair(mmio_device_id, mux_coord.x, mux_coord.y);
-        log_debug(tt::LogMetal, "Allocated Mux Core: {} for Device {}", assignment.mux.value().str(), device_id);
+        log_dispatch_assignment("Mux", assignment.mux.value(), device_id, channel, cq_id);
         return assignment.mux.value();
     }
 
@@ -186,7 +157,7 @@ class dispatch_core_manager {
         // mux_d is on remote device
         CoreCoord mux_d_coord = this->get_next_available_dispatch_core(device_id);
         assignment.mux_d = tt_cxy_pair(device_id, mux_d_coord.x, mux_d_coord.y);
-        log_debug(tt::LogMetal, "Allocated Mux D Core: {} for Device {}", assignment.mux_d.value().str(), device_id);
+        log_dispatch_assignment("Mux D", assignment.mux_d.value(), device_id, channel, cq_id);
         return assignment.mux_d.value();
     }
 
@@ -204,7 +175,7 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord demux_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.demux = tt_cxy_pair(mmio_device_id, demux_coord.x, demux_coord.y);
-        log_debug(tt::LogMetal, "Allocated Demux Core: {} for Device {}", assignment.demux.value().str(), device_id);
+        log_dispatch_assignment("Demux", assignment.demux.value(), device_id, channel, cq_id);
         return assignment.demux.value();
     }
 
@@ -229,7 +200,7 @@ class dispatch_core_manager {
         // demux_d is on remote device
         CoreCoord demux_d_coord = this->get_next_available_dispatch_core(device_id);
         assignment.demux_d = tt_cxy_pair(device_id, demux_d_coord.x, demux_d_coord.y);
-        log_debug(tt::LogMetal, "Allocated Demux D Core: {} for Device {}", assignment.demux_d.value().str(), device_id);
+        log_dispatch_assignment("Demux D", assignment.demux_d.value(), device_id, channel, cq_id);
         return assignment.demux_d.value();
     }
 
@@ -249,7 +220,8 @@ class dispatch_core_manager {
         assignment.tunneler = us_core;
         assignment.tunneler_d = ds_core;
 
-        log_debug(tt::LogMetal, "Allocated Tunneler Core: {} for Device {}", us_core.str(), device_id);
+        log_dispatch_assignment("Tunneler Remote", assignment.tunneler.value(), device_id, channel, cq_id, true);
+        log_dispatch_assignment("Tunneler Local", assignment.tunneler_d.value(), device_id, channel, cq_id, true);
         return assignment.tunneler.value();
     }
 
@@ -283,7 +255,7 @@ class dispatch_core_manager {
         assignment.completion_queue_writer = tt_cxy_pair(mmio_device_id, completion_queue_coord.x, completion_queue_coord.y);
         TT_ASSERT(not assignment.dispatcher.has_value(), "Command dispatcher core {} must match completion queue interface core for MMIO device {}", assignment.dispatcher.value().str(), device_id);
         assignment.dispatcher = assignment.completion_queue_writer;
-        log_debug(tt::LogMetal, "Allocated Completion Queue Writer Core: {} for Device {}", assignment.completion_queue_writer.value().str(), device_id);
+        log_dispatch_assignment("Completion Queue Writer", assignment.completion_queue_writer.value(), device_id, channel, cq_id);
         return assignment.completion_queue_writer.value();
     }
 
@@ -310,7 +282,7 @@ class dispatch_core_manager {
         assignment.dispatcher = tt_cxy_pair(mmio_device_id, dispatcher_coord.x, dispatcher_coord.y);
         TT_ASSERT(not assignment.completion_queue_writer.has_value(), "Command dispatcher core must match completion queue interface core for MMIO device {}", device_id);
         assignment.completion_queue_writer = assignment.dispatcher;
-        log_debug(tt::LogMetal, "Allocated Dispatcher Core: {} for Device {}", assignment.dispatcher.value().str(), device_id);
+        log_dispatch_assignment("Dispatcher", assignment.dispatcher.value(), device_id, channel, cq_id);
         return assignment.dispatcher.value();
     }
 
@@ -339,7 +311,7 @@ class dispatch_core_manager {
         }
         CoreCoord dispatcher_d_coord = this->get_next_available_dispatch_core(device_id);
         assignment.dispatcher_d = tt_cxy_pair(device_id, dispatcher_d_coord.x, dispatcher_d_coord.y);
-        log_debug(tt::LogMetal, "Allocated Dispatcher D Core: {} for Device {}", assignment.dispatcher_d.value().str(), device_id);
+        log_dispatch_assignment("Dispatcher D", assignment.dispatcher_d.value(), device_id, channel, cq_id);
         return assignment.dispatcher_d.value();
     }
 
@@ -362,6 +334,7 @@ class dispatch_core_manager {
             dispatcher_s_coord = this->get_next_available_dispatch_core(device_id);
         }
         assignment.dispatcher_s = tt_cxy_pair(device_id, dispatcher_s_coord.x, dispatcher_s_coord.y);
+        log_dispatch_assignment("Dispatcher S", assignment.dispatcher_s.value(), device_id, channel, cq_id);
         return assignment.dispatcher_s.value();
     }
 
@@ -425,6 +398,18 @@ class dispatch_core_manager {
         CoreCoord avail_dispatch_core = this->available_dispatch_cores_by_device.at(device_id).front();
         this->available_dispatch_cores_by_device.at(device_id).pop_front();
         return avail_dispatch_core;
+    }
+
+    void log_dispatch_assignment(std::string name, tt_cxy_pair &cxy, chip_id_t device_id, uint16_t channel, uint8_t cq_id, bool force_ethernet = false) {
+        log_debug(
+            tt::LogMetal,
+            "Allocated {} Core: {}({}) for Device {} Channel {} CQ ID {}",
+            name,
+            cxy.str(),
+            tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(cxy, force_ethernet? CoreType::ETH : get_dispatch_core_type(cxy.chip)).str(),
+            device_id,
+            channel,
+            cq_id);
     }
 
 

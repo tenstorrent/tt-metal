@@ -11,13 +11,16 @@
 #include <optional>
 #include <functional>
 
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 namespace tt::tt_metal::distributed {
 
 // Forward declaration of MeshDevice
 class MeshDevice;
-using MeshShape = std::pair<size_t, size_t>;
+struct MeshShape {
+    size_t num_rows = 0;
+    size_t num_cols = 0;
+};
 
 struct Coordinate {
     size_t row;
@@ -62,8 +65,8 @@ enum class MeshType { RowMajor, Ring, Line };
 
 class MeshDeviceView {
 public:
-    using device_pointer = Device*;
-    using const_device_pointer = const Device*;
+    using device_pointer = IDevice*;
+    using const_device_pointer = const IDevice*;
     using DeviceView = std::vector<device_pointer>;
     using DeviceViews = std::vector<std::vector<device_pointer>>;
     using CoordinateMapper = std::function<std::optional<Coordinate>(int device_id)>;
@@ -72,14 +75,13 @@ public:
     MeshDeviceView(const MeshDevice& mesh, Coordinate top_left, Coordinate bottom_right);
     MeshDeviceView(std::vector<device_pointer> devices, const CoordinateMapper& mapper);
 
-    [[nodiscard]] device_pointer get_device(size_t row, size_t col);
-    [[nodiscard]] const_device_pointer get_device(size_t row, size_t col) const;
+    [[nodiscard]] device_pointer get_device(size_t row, size_t col) const;
 
     // Get devices spanning the rectangular region defined by the top-left and bottom-right coordinates
     // devices are returned in row-major order with start/end coordinates inclusive
-    [[nodiscard]] DeviceView get_devices(const Coordinate& start, const Coordinate& end);
-    [[nodiscard]] DeviceView get_devices(const MeshShape& shape);
-    [[nodiscard]] DeviceView get_devices(MeshType type = MeshType::RowMajor);
+    [[nodiscard]] DeviceView get_devices(const Coordinate& start, const Coordinate& end) const;
+    [[nodiscard]] DeviceView get_devices(const MeshShape& submesh_shape) const;
+    [[nodiscard]] DeviceView get_devices(MeshType type = MeshType::RowMajor) const;
 
     [[nodiscard]] DeviceView get_devices_on_row(size_t row) const;
     [[nodiscard]] DeviceView get_devices_on_column(size_t col) const;
@@ -111,9 +113,9 @@ public:
     [[nodiscard]] static std::vector<Coordinate> get_line_coordinates(
         size_t length, const Coordinate& offset, size_t num_rows, size_t num_cols);
     [[nodiscard]] std::vector<Coordinate> get_ring_coordinates(
-        const MeshShape& ring_shape, const Coordinate& offset, size_t num_rows, size_t num_cols);
-    [[nodiscard]] std::vector<device_pointer> get_ring_devices();
-    [[nodiscard]] std::vector<device_pointer> get_line_devices();
+        const MeshShape& ring_shape, const Coordinate& offset, size_t num_rows, size_t num_cols) const;
+    [[nodiscard]] std::vector<device_pointer> get_ring_devices() const;
+    [[nodiscard]] std::vector<device_pointer> get_line_devices() const;
 
 private:
     std::vector<device_pointer> devices_;
@@ -126,7 +128,7 @@ private:
 };
 
 // Helper function to create a MeshDeviceView
-inline MeshDeviceView make_mesh_device_view(std::vector<Device*> devices, MeshDeviceView::CoordinateMapper mapper) {
+inline MeshDeviceView make_mesh_device_view(std::vector<IDevice*> devices, MeshDeviceView::CoordinateMapper mapper) {
     return MeshDeviceView(std::move(devices), std::move(mapper));
 }
 

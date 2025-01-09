@@ -6,6 +6,7 @@
 #include "common/utils.hpp"
 
 #include "umd/device/device_api_metal.h"
+#include "umd/device/tt_cluster_descriptor.h"
 
 #include <string>
 
@@ -43,11 +44,11 @@ inline std::string get_umd_arch_name() {
         return get_env_arch_name();
     }
 
-    std::vector<chip_id_t> physical_mmio_device_ids = tt::umd::Cluster::detect_available_device_ids();
-    tt::ARCH arch = detect_arch(physical_mmio_device_ids.at(0));
-    for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
-        chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
-        tt::ARCH detected_arch = detect_arch(device_id);
+    auto cluster_desc = tt_ClusterDescriptor::create();
+    const std::unordered_set<chip_id_t> &device_ids = cluster_desc->get_all_chips();
+    tt::ARCH arch = cluster_desc->get_arch(*device_ids.begin());
+    for (auto device_id : device_ids) {
+        tt::ARCH detected_arch = cluster_desc->get_arch(device_id);
         TT_FATAL(
             arch == detected_arch,
             "Expected all devices to be {} but device {} is {}",

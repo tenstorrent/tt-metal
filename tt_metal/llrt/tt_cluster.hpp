@@ -61,6 +61,12 @@ class Cluster {
     ARCH arch() const { return this->arch_; }
 
     const metal_SocDescriptor &get_soc_desc(chip_id_t chip) const;
+    CoreCoord get_virtual_coordinate_from_logical_coordinates(chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const;
+    CoreCoord get_virtual_coordinate_from_physical_coordinates(chip_id_t chip_id, CoreCoord physical_coord, const CoreType& core_type) const;
+    tt_cxy_pair get_virtual_coordinate_from_logical_coordinates(tt_cxy_pair logical_coordinate, const CoreType& core_type) const;
+    const std::unordered_set<CoreCoord>& get_virtual_worker_cores(chip_id_t chip_id) const;
+    const std::unordered_set<CoreCoord>& get_virtual_eth_cores(chip_id_t chip_id) const;
+
     uint32_t get_harvested_rows(chip_id_t chip) const;
     uint32_t get_harvesting_mask(chip_id_t chip) const {
         return this->driver_->get_harvesting_masks_for_soc_descriptors().at(chip);
@@ -90,9 +96,8 @@ class Cluster {
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair &target) const {
         tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
-        const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
-        tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(target);
-        return device->get_tlb_data_from_target(virtual_chip_coord);
+        tt_cxy_pair umd_target = this->virtual_to_umd_coord_mapping_.at(target);
+        return device->get_tlb_data_from_target(umd_target);
     }
 
     std::function<void(uint32_t, uint32_t, const uint8_t *)> get_fast_pcie_static_tlb_write_callable(
@@ -106,9 +111,8 @@ class Cluster {
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack traversals
     tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
         tt::umd::Cluster *device = dynamic_cast<tt::umd::Cluster *>(driver_.get());
-        const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
-        tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
-        return device->get_static_tlb_writer(virtual_target);
+        tt_cxy_pair umd_target = this->virtual_to_umd_coord_mapping_.at(target);
+        return device->get_static_tlb_writer(umd_target);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
@@ -178,7 +182,7 @@ class Cluster {
     //       set_internal_routing_info_for_ethernet_cores(false);
     //       CloseDevice(0)
     //       CloseDevice(1)
-    void set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const;
+    void set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing, const std::vector<chip_id_t>& target_mmio_devices = {}) const;
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
@@ -210,6 +214,12 @@ class Cluster {
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;
 
+    bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) const;
+    bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) const;
+    CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const;
+    const std::unordered_map<int, int>& get_worker_logical_to_virtual_x(chip_id_t chip_id) const { return this->worker_logical_to_virtual_x_.at(this->get_board_type(chip_id)); };
+    const std::unordered_map<int, int>& get_worker_logical_to_virtual_y(chip_id_t chip_id) const { return this->worker_logical_to_virtual_y_.at(this->get_board_type(chip_id)); };
+    const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
    private:
     Cluster();
     ~Cluster();
@@ -226,7 +236,9 @@ class Cluster {
     void get_metal_desc_from_tt_desc(
         const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
         const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
-    tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
+    void generate_virtual_to_umd_coord_mapping();
+    void generate_logical_to_virtual_coord_mapping();
+    void generate_virtual_to_profiler_flat_id_mapping();
 
     // Reserves ethernet cores in cluster for tunneling
     void reserve_ethernet_cores_for_tunneling();
@@ -256,7 +268,14 @@ class Cluster {
     std::unordered_map<chip_id_t, std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device_;
     // Save mapping of device id to associated MMIO device id for fast lookup
     std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
-
+    // Data Structures Tracking Virtual Coordinates
+    std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_eth_cores_;
+    std::unordered_map<BoardType, std::unordered_map<int, int>> worker_logical_to_virtual_x_;
+    std::unordered_map<BoardType, std::unordered_map<int, int>> worker_logical_to_virtual_y_;
+    std::unordered_map<BoardType, std::unordered_map<CoreCoord, CoreCoord>> eth_logical_to_virtual_;
+    std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     bool is_tg_cluster_;
@@ -277,8 +296,6 @@ class Cluster {
 
     // Mapping of each devices' ethernet routing mode
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
-
-    tt_device_l1_address_params l1_address_params;
 
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 };

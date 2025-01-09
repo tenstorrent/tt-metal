@@ -9,7 +9,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "common/bfloat16.hpp"
 #include "ttnn/async_runtime.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include <cmath>
 
@@ -17,7 +17,7 @@ using namespace tt;
 using namespace tt_metal;
 using MultiCommandQueueT3KFixture = ttnn::MultiCommandQueueT3KFixture;
 
-Tensor dispatch_ops_to_device(Device* dev, Tensor input_tensor, uint8_t cq_id) {
+Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, uint8_t cq_id) {
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
 

@@ -85,12 +85,14 @@ void MorehNllLossBackwardDeviceOperation::validate_on_program_cache_hit(
     validate_inputs(attributes, tensor_args);
 }
 
-MorehNllLossBackwardDeviceOperation::shape_return_value_t MorehNllLossBackwardDeviceOperation::compute_output_shapes(
+MorehNllLossBackwardDeviceOperation::spec_return_value_t MorehNllLossBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.input_grad_tensor.has_value()) {
+        return {tensor_args.input_grad_tensor->get_tensor_spec()};
+    }
     // To calculate the output shape, we need the channel_size. However, the required tensors, target and output_grad,
     // do not contain the channel_size information.
-    TT_FATAL(false, "moreh_nll_loss_backward not support create output tensors.");
-    return tensor_args.target_tensor.get_shape();
+    TT_FATAL(false, "moreh_nll_loss_backward not support creating output tensors.");
 }
 
 MorehNllLossBackwardDeviceOperation::tensor_return_value_t MorehNllLossBackwardDeviceOperation::create_output_tensors(
@@ -99,11 +101,8 @@ MorehNllLossBackwardDeviceOperation::tensor_return_value_t MorehNllLossBackwardD
         return {tensor_args.input_grad_tensor.value()};
     }
 
-    auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
-    auto dtype = tensor_args.target_tensor.get_dtype();
-    Layout layout{Layout::TILE};
-    auto device = tensor_args.target_tensor.device();
-    return create_device_tensor(output_shapes, dtype, layout, device, operation_attributes.memory_config);
+    return create_device_tensor(
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.target_tensor.device());
 }
 
 std::tuple<

@@ -44,7 +44,7 @@ protected:
     }
 
     void create_devices(const std::vector<chip_id_t>& device_ids) {
-        const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
         tt::DevicePool::initialize(
             device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         this->devices_ = tt::DevicePool::instance().get_all_active_devices();
@@ -64,7 +64,7 @@ protected:
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
-    void validate_dispatch_mode() {
+    virtual void validate_dispatch_mode() {
         this->slow_dispatch_ = true;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
@@ -83,8 +83,8 @@ protected:
         this->num_devices_ = this->reserved_devices_.size();
     }
 
-    tt::tt_metal::Device* device_;
-    std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
+    tt::tt_metal::IDevice* device_;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
     size_t num_devices_;
 };
 
@@ -99,5 +99,16 @@ protected:
             GTEST_SKIP();
         }
         this->create_devices();
+    }
+};
+
+class DeviceSingleCardFastSlowDispatchFixture : public DeviceSingleCardFixture {
+   protected:
+    void validate_dispatch_mode() override {
+        this->slow_dispatch_ = true;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch) {
+            this->slow_dispatch_ = false;
+        }
     }
 };

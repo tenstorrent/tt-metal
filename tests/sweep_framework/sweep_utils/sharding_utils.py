@@ -6,13 +6,14 @@ import os
 import ttnn
 import itertools
 import random
+import math
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import _gen_reshape_args_from_volume
 
 
-def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
+def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layouts=["TILE_LAYOUT", "ROW_MAJOR_LAYOUT"]):
     # device.compute_with_storage_grid_size()
-    y = 8
-    x = 8
+    Y = 8
+    X = 8
 
     # ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
     sharding_strategy_list = ["BLOCK", "WIDTH", "HEIGHT", "tensor_wh"]
@@ -29,6 +30,10 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=
             tensor_hw_as_shard_shape = False
 
         for _ in range(num_shapes):
+            x = random.randint(1, X)
+            y = random.randint(1, Y)
+            max_tensor_size = max_tensor_size_per_core * x * y
+
             if tensor_hw_as_shard_shape:
                 # Gets stuck:
                 # X 8 Y 8 input_shape [1, 17792, 8] DataType.BFLOAT8_B Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape True
@@ -53,11 +58,6 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=
                     input_shape[-1] *= 2
                     input_shape[-2] //= 2
 
-                if shard_orientation == "COL_MAJOR":
-                    tmp = input_shape[-2]
-                    input_shape[-2] = input_shape[-1]
-                    input_shape[-1] = tmp
-
             elif sharding_strategy == "BLOCK":
                 min_shard_size_y = 32 * y
                 min_shard_size_x = 32 * x
@@ -67,6 +67,11 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=
                 physical_shape = list(physical_shape["reshape_dims"])
                 physical_shape[1] *= min_shard_size_y
                 physical_shape[0] *= min_shard_size_x
+
+                if shard_orientation == "ROW_MAJOR":
+                    tmp = physical_shape[-2]
+                    physical_shape[-2] = physical_shape[-1]
+                    physical_shape[-1] = tmp
 
                 input_shape = random.choice(_gen_reshape_args_from_volume(physical_shape[0], step=1, out_dims=rank - 1))
                 input_shape = list(input_shape["reshape_dims"])
@@ -117,6 +122,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size=4 * 1024 * 1024, layouts=
                     "shard_orientation": shard_orientation,
                     "tensor_hw_as_shard_shape": tensor_hw_as_shard_shape,
                     "input_layout": layout,
+                    "shard_height_mul_of_32": False,
                 }
             )
 
@@ -131,6 +137,7 @@ def parse_sharding_spec(input_spec):
     shard_orientation = input_spec["shard_orientation"]
     tensor_hw_as_shard_shape = input_spec["tensor_hw_as_shard_shape"]
     input_layout = input_spec["input_layout"]
+    shard_height_mul_of_32 = input_spec["shard_height_mul_of_32"]
 
     if sharding_strategy == "HEIGHT":
         sharding_strategy = ttnn.ShardStrategy.HEIGHT
@@ -156,4 +163,27 @@ def parse_sharding_spec(input_spec):
         shard_orientation,
         tensor_hw_as_shard_shape,
         input_layout,
+        shard_height_mul_of_32,
     )
+
+
+def invalidate_vector_sharding(input_spec):
+    input_shape, X, Y, _, shard_orientation, tensor_hw_as_shard_shape, input_layout, _ = input_spec.values()
+    pre_sharded_height = math.prod(input_shape[:-1])
+    pre_sharded_width = input_shape[-1]
+
+    if tensor_hw_as_shard_shape:
+        if input_shape[-2] % 32 != 0 or input_shape[-1] % 32 != 0:
+            return (
+                True,
+                "Last two dimensions must be multiples of tile size when using tensor heght and width as shard shape",
+            )
+
+    if (
+        input_layout == "ROW_MAJOR_LAYOUT"
+        and shard_orientation == "COL_MAJOR"
+        and (input_shape[-1] % input_shape[-2] != 0)
+    ):
+        return True, "Physical size <width, height> must be a multuple of page size <1, width>"
+
+    return False, None

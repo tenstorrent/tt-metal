@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture* fixture, Device* device) {
+static void RunTest(WatcherFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -145,11 +145,16 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} ethnet core(x={:2},y={:2}) phys(x={:2},y={:2}): {},   X,   X,   X,   X  rmsg:* k_id:{}",
-                    device->id(), logical_core.x, logical_core.y, phys_core.x, phys_core.y,
+                    "Device {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},   X,   X,   X,   X  rmsg:* "
+                    "h_id:0 "
+                    "k_id:{}",
+                    device->id(),
+                    logical_core.x,
+                    logical_core.y,
+                    phys_core.x,
+                    phys_core.y,
                     waypoint,
-                    k_id_s
-                );
+                    k_id_s);
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
                 string k_id_s;
@@ -161,11 +166,19 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} worker core(x={:2},y={:2}) phys(x={:2},y={:2}): {},{},{},{},{}  rmsg:***|*** smsg:**** k_ids:{}",
-                    device->id(), logical_core.x, logical_core.y, phys_core.x, phys_core.y,
-                    waypoint, waypoint, waypoint, waypoint, waypoint,
-                    k_id_s
-                );
+                    "Device {} worker core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},{},{},{}  rmsg:***|*** h_id:0 "
+                    "smsg:**** k_ids:{}",
+                    device->id(),
+                    logical_core.x,
+                    logical_core.y,
+                    phys_core.x,
+                    phys_core.y,
+                    waypoint,
+                    waypoint,
+                    waypoint,
+                    waypoint,
+                    waypoint,
+                    k_id_s);
             }
             expected_waypoints.push_back(expected);
         }
@@ -200,7 +213,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TestWatcherWaypoints) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

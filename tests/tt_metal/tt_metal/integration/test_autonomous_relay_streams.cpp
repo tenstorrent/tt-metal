@@ -11,7 +11,7 @@
 #include <tuple>
 
 #include "gtest/gtest.h"
-#include "umd/device/tt_arch_types.h"
+#include "umd/device/types/arch.h"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "impl/device/device.hpp"
@@ -29,7 +29,7 @@
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 
 constexpr uint32_t num_sizes = 8;
 namespace tt {
@@ -63,7 +63,7 @@ constexpr uint32_t noc_word_size = 16;
 
 // Reads data from input
 std::vector<uint32_t> get_sender_reader_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t input_buffer_addr,
     uint32_t page_size_plus_header,
     uint32_t num_messages_to_read,
@@ -76,7 +76,7 @@ std::vector<uint32_t> get_sender_reader_rt_args(
 }
 // sender stream data mover kernel
 std::vector<uint32_t> get_sender_writer_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t num_messages,
     uint32_t relay_done_semaphore,
     CoreCoord const& relay_core,
@@ -117,7 +117,7 @@ std::vector<uint32_t> get_sender_writer_rt_args(
 }
 
 std::vector<uint32_t> get_relay_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t relay_stream_overlay_blob_addr,
     uint32_t relay_done_semaphore,
     CoreCoord const& sender_core,
@@ -161,7 +161,7 @@ std::vector<uint32_t> get_relay_rt_args(
 
 // Receiver stream data mover kernel
 std::vector<uint32_t> get_receiver_reader_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t num_messages,
     uint32_t relay_done_semaphore,
     CoreCoord const& relay_core,
@@ -199,14 +199,14 @@ std::vector<uint32_t> get_receiver_reader_rt_args(
         remote_src_start_phase_id};
 }
 std::vector<uint32_t> get_receiver_writer_rt_args(
-    Device* device, uint32_t output_buffer_addr, uint32_t page_size, uint32_t num_messages_to_read) {
+    IDevice* device, uint32_t output_buffer_addr, uint32_t page_size, uint32_t num_messages_to_read) {
     return std::vector<uint32_t>{output_buffer_addr, page_size, num_messages_to_read};
 }
 
 // TODO: randomize each noc for testing purposes
 void build_and_run_autonomous_stream_test(
     std::vector<Program>& programs,
-    std::vector<Device*> const& devices,
+    std::vector<IDevice*> const& devices,
     std::size_t num_messages,
     std::size_t page_size,
     uint32_t tile_header_buffer_num_messages,
@@ -232,7 +232,7 @@ void build_and_run_autonomous_stream_test(
     uint32_t relay_stream_overlay_blob_size_bytes = 256;
 
     programs.emplace_back();
-    Device* device = devices.at(0);
+    IDevice* device = devices.at(0);
     Program& program = programs.at(0);
     log_trace(tt::LogTest, "Device ID: {}", device->id());
 
@@ -244,23 +244,23 @@ void build_and_run_autonomous_stream_test(
     log_trace(
         tt::LogTest,
         "sender_core: x={}, y={}",
-        device->physical_core_from_logical_core(sender_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(sender_core, CoreType::WORKER).y);
+        device->virtual_core_from_logical_core(sender_core, CoreType::WORKER).x,
+        device->virtual_core_from_logical_core(sender_core, CoreType::WORKER).y);
     log_trace(
         tt::LogTest,
         "first_relay_core: x={}, y={}",
-        device->physical_core_from_logical_core(first_relay_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(first_relay_core, CoreType::WORKER).y);
+        device->virtual_core_from_logical_core(first_relay_core, CoreType::WORKER).x,
+        device->virtual_core_from_logical_core(first_relay_core, CoreType::WORKER).y);
     log_trace(
         tt::LogTest,
         "second_relay_core: x={}, y={}",
-        device->physical_core_from_logical_core(second_relay_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(second_relay_core, CoreType::WORKER).y);
+        device->virtual_core_from_logical_core(second_relay_core, CoreType::WORKER).x,
+        device->virtual_core_from_logical_core(second_relay_core, CoreType::WORKER).y);
     log_trace(
         tt::LogTest,
         "receiver_core: x={}, y={}",
-        device->physical_core_from_logical_core(receiver_core, CoreType::WORKER).x,
-        device->physical_core_from_logical_core(receiver_core, CoreType::WORKER).y);
+        device->virtual_core_from_logical_core(receiver_core, CoreType::WORKER).x,
+        device->virtual_core_from_logical_core(receiver_core, CoreType::WORKER).y);
 
     // Input DRAM buffer creation
     uint32_t buffer_size_bytes = num_messages * page_size;

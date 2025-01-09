@@ -115,13 +115,23 @@ install_llvm() {
     fi
 }
 
+configure_hugepages() {
+    TT_TOOLS_VERSION='1.1-5_all'
+    echo "Installing Tenstorrent Hugepages Service $TT_TOOLS_VERSION..."
+    TEMP_DIR=$(mktemp -d)
+    wget -P $TEMP_DIR https://github.com/tenstorrent/tt-system-tools/releases/download/upstream%2F1.1/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
+    apt-get install $TEMP_DIR/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
+    systemctl enable --now tenstorrent-hugepages.service
+    rm -rf "$TEMP_DIR"
+}
+
 install()
 {
     if [ $FLAVOR == "ubuntu" ]; then
         prep_ubuntu
 
         echo "Installing packages..."
-        apt-get install -y "${UB_LIST[@]}"
+        DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${UB_LIST[@]}"
     fi
 }
 
@@ -130,12 +140,12 @@ if [ "$EUID" -ne 0 ]; then
     usage
 fi
 
-install_llvm
-
 update_package_list
 
 if [ $validate == 1 ]; then
     validate_packages
 else
+    configure_hugepages
+    install_llvm
     install
 fi

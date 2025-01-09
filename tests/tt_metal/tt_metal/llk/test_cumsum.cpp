@@ -49,7 +49,7 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
     return golden;
 }
 
-void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_config) {
+void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_config) {
     Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -71,18 +71,14 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
 
     auto src_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-    auto src_dram_noc_xy = src_dram_buffer->noc_coordinates();
-    tt_metal::CircularBufferConfig l1_src_cb_config =
-        tt_metal::CircularBufferConfig(dram_buffer_size, {{0, tt::DataFormat::Float16_b}})
-            .set_page_size(0, single_tile_size);
+    tt_metal::CircularBufferConfig l1_src_cb_config = tt_metal::CircularBufferConfig(dram_buffer_size, {{0, tt::DataFormat::Float16_b}})
+        .set_page_size(0, single_tile_size);
     auto l1_src_cb = tt_metal::CreateCircularBuffer(program, core, l1_src_cb_config);
 
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-    auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
-    tt_metal::CircularBufferConfig l1_dst_cb_config =
-        tt_metal::CircularBufferConfig(dram_buffer_size, {{16, tt::DataFormat::Float16_b}})
-            .set_page_size(16, single_tile_size);
+    tt_metal::CircularBufferConfig l1_dst_cb_config = tt_metal::CircularBufferConfig(dram_buffer_size, {{16, tt::DataFormat::Float16_b}})
+        .set_page_size(16, single_tile_size);
     auto l1_dst_cb = tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
     string reader_kernel_name, writer_kernel_name;
@@ -126,9 +122,9 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
         core,
         {
             (uint32_t)dram_buffer_src_addr,
-            (uint32_t)src_dram_noc_xy.x,
-            (uint32_t)src_dram_noc_xy.y,
+            (uint32_t)0,                                                // dram bank id
             (uint32_t)test_config.N * test_config.Ht * test_config.Wt,  // Used for non transposing kernel
+            (uint32_t)0,                                                // Unused
             (uint32_t)test_config.N,                                    // Used for transposing kernel
             (uint32_t)test_config.Ht,                                   // Used for transposing kernel
             (uint32_t)test_config.Wt,                                   // Used for transposing kernel
@@ -141,9 +137,9 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
         core,
         {
             (uint32_t)dram_buffer_dst_addr,
-            (uint32_t)dst_dram_noc_xy.x,
-            (uint32_t)dst_dram_noc_xy.y,
+            (uint32_t)0,                                                // dram bank id
             (uint32_t)test_config.N * test_config.Ht * test_config.Wt,  // Used for non transposing kernel
+            (uint32_t)0,                                                // Unused
             (uint32_t)test_config.N,                                    // Used for transposing kernel
             (uint32_t)test_config.Ht,                                   // Used for transposing kernel
             (uint32_t)test_config.Wt,                                   // Used for transposing kernel

@@ -20,7 +20,6 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dev_msgs.h"
 #include "risc_attribs.h"
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "circular_buffer_init.h"
 #include "dataflow_api.h"
@@ -66,6 +65,13 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+// These arrays are stored in local memory of FW, but primarily used by the kernel which shares
+// FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
@@ -306,9 +312,9 @@ inline __attribute__((always_inline)) void reset_ncrisc_with_iram() {
 inline void set_ncrisc_kernel_resume_deassert_address() {
 #ifdef NCRISC_HAS_IRAM
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-    WAYPOINT("INW");
+    WAYPOINT("INRW");
     while (mailboxes->ncrisc_halt.resume_addr == 0);
-    WAYPOINT("IND");
+    WAYPOINT("INRD");
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
 #endif
 }
@@ -332,16 +338,20 @@ inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
 
 inline void wait_ncrisc_trisc() {
     WAYPOINT("NTW");
-    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE);
+    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+        invalidate_l1_cache();
+    }
     WAYPOINT("NTD");
 }
 
 int main() {
-    conditionally_disable_l1_cache();
+    configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
+
+    noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
     mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     noc_index = 0;
@@ -376,6 +386,7 @@ int main() {
         WAYPOINT("GW");
         uint8_t go_message_signal = RUN_MSG_DONE;
         while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
+            invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
@@ -384,9 +395,10 @@ int main() {
                 // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently guaranteed
                 // to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid value.
                 // For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn is not issued.
-                uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                    NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                uint64_t dispatch_addr = NOC_XY_ADDR(
+                    NOC_X(mailboxes->go_message.master_x),
+                    NOC_Y(mailboxes->go_message.master_y),
+                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
                 mailboxes->go_message.signal = RUN_MSG_DONE;
                 // Notify dispatcher that this has been done
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
@@ -397,7 +409,8 @@ int main() {
                     NOC_UNICAST_WRITE_VC,
                     1,
                     31 /*wrap*/,
-                    false /*linked*/);
+                    false /*linked*/,
+                    true /*posted*/);
             }
         }
 
@@ -431,12 +444,15 @@ int main() {
             noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
 
             // re-initialize the NoCs
-            if (prev_noc_mode != noc_mode) {
-                if (noc_mode == DM_DEDICATED_NOC) {
+            if (noc_mode == DM_DEDICATED_NOC) {
+                if (prev_noc_mode != noc_mode) {
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-                } else {
+                }
+            } else {
+                if (prev_noc_mode != noc_mode) {
                     dynamic_noc_init();
                 }
+                dynamic_noc_local_state_init();
             }
             prev_noc_mode = noc_mode;
 
@@ -462,6 +478,13 @@ int main() {
                 (*kernel_address)((uint32_t)kernel_address);
                 RECORD_STACK_USAGE();
             } else {
+#if defined(PROFILE_KERNEL)
+                // This was not initialized in the kernel
+                // Currently FW does not issue a barrier except when using profiler
+                if (noc_mode == DM_DEDICATED_NOC) {
+                    noc_local_state_init(noc_index);
+                }
+#endif
                 // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
                 // So have brisc setup remote cb interfaces even when brisc is not in use
                 if (launch_msg_address->kernel_config.enables) {
@@ -475,15 +498,29 @@ int main() {
 
             wait_ncrisc_trisc();
 
+            if (noc_mode == DM_DYNAMIC_NOC) {
+                // barrier to make sure all writes are finished
+                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(noc_index));
+                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(1 - noc_index));
+            }
+
+#if defined(PROFILE_KERNEL)
+            if (noc_mode == DM_DYNAMIC_NOC) {
+                // re-init for profiler to able to run barrier in dedicated noc mode
+                noc_local_state_init(noc_index);
+            }
+#endif
+
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 // Set launch message to invalid, so that the next time this slot is encountered, kernels are only run if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                        NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                uint64_t dispatch_addr = NOC_XY_ADDR(
+                    NOC_X(mailboxes->go_message.master_x),
+                    NOC_Y(mailboxes->go_message.master_y),
+                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch
@@ -496,7 +533,8 @@ int main() {
                     NOC_UNICAST_WRITE_VC,
                     1,
                     31 /*wrap*/,
-                    false /*linked*/);
+                    false /*linked*/,
+                    true /*posted*/);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
