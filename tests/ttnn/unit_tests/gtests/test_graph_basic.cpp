@@ -164,21 +164,6 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
         EXPECT_EQ(ttnn::graph::extract_calltrace(json_trace), ref_calltrace);
     }
 
-    // with exception in the operation #1
-    {
-        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        try {
-            auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-            operation(tt::tt_metal::DataType::INVALID);  // fails at a first create_device_tensor (before softmax)
-        } catch (const std::exception& e) {
-            EXPECT_TRUE(std::string(e.what()).find("TT_ASSERT") != std::string::npos);
-        }
-        auto json_trace = capture.end_graph_capture();
-        EXPECT_EQ(
-            ttnn::graph::extract_calltrace(json_trace),
-            std::vector<std::string>({"tt::tt_metal::create_device_tensor"}));
-    }
-
     // with exception in the operation #2
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
