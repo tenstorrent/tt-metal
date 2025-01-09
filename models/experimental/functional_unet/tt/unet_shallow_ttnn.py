@@ -148,7 +148,6 @@ class UNetConv2D:
 
     def __call__(self, x):
         conv_kwargs = {
-            "input_layout": x.get_layout(),
             "in_channels": self.in_channels,
             "out_channels": self.out_channels,
             "batch_size": self.batch_size,
@@ -158,7 +157,7 @@ class UNetConv2D:
             "stride": self.stride,
             "padding": self.padding,
             "dilation": [1, 1],
-            "groups": self.groups,
+            "groups": 2,
             "device": self.device,
             "conv_config": self.conv_config,
         }
@@ -168,11 +167,13 @@ class UNetConv2D:
                 weight_tensor=self.weight,
                 weights_format="OIHW",
                 input_memory_config=x.memory_config(),
+                input_layout=x.get_layout(),
                 **conv_kwargs,
             )
             self.bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.bias,
                 input_memory_config=x.memory_config(),
+                input_layout=x.get_layout(),
                 **conv_kwargs,
             )
             self.weight = ttnn.to_device(self.weight, self.device)
@@ -182,19 +183,9 @@ class UNetConv2D:
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
-            device=self.device,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            input_height=self.input_height,
-            input_width=self.input_width,
-            batch_size=self.batch_size,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            conv_config=self.conv_config,
+            **conv_kwargs,
             compute_config=self.compute_config,
             conv_op_cache=self.cache,
-            groups=2,
             return_output_dim=False,
             return_weights_and_bias=True,
         )

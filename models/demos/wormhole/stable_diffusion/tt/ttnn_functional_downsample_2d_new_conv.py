@@ -147,11 +147,11 @@ class downsample_2d:
             conv_config.act_block_h_override = self.conv_config_override["act_block_h"]
 
         conv_kwargs = {
-            "in_channels": in_channels,
+            "in_channels": self.in_channels,
             "out_channels": self.out_channels,
-            "batch_size": hidden_states.shape[0],
-            "input_height": hidden_states.shape[1],
-            "input_width": hidden_states.shape[2],
+            "batch_size": self.batch_size,
+            "input_height": self.input_height,
+            "input_width": self.input_width,
             "kernel_size": (3, 3),
             "stride": (self.stride, self.stride),
             "padding": (1, 1),
@@ -184,18 +184,9 @@ class downsample_2d:
 
         [hidden_states, [self.conv_weights, self.conv_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            kernel_size=(3, 3),
-            stride=(self.stride, self.stride),
-            padding=(1, 1),
-            device=self.device,
-            batch_size=self.batch_size,
-            input_height=self.input_height,
-            input_width=self.input_width,
+            **conv_kwargs,
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
-            conv_config=conv_config,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
             return_output_dim=False,
