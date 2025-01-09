@@ -62,11 +62,15 @@ on:
           - eltwise.unary.elu.elu
           - eltwise.unary.elu.elu_pytorch2
           - eltwise.unary.erfc.erfc
+          - eltwise.unary.erfc.erfc_sharded
           - eltwise.unary.exp.exp
+          - eltwise.unary.exp.exp_sharded
           - eltwise.unary.exp.exp_forge
           - eltwise.unary.exp.exp_pytorch2
           - eltwise.unary.exp2.exp2
+          - eltwise.unary.exp2.exp2_sharded
           - eltwise.unary.expm1.expm1
+          - eltwise.unary.expm1.expm1_sharded
           - eltwise.unary.tanh.tanh
           - eltwise.unary.tanh.tanh_pytorch2
           - eltwise.unary.tanh.tanh_forge
@@ -77,6 +81,7 @@ on:
           - eltwise.unary.deg2rad.deg2rad
           - eltwise.unary.relu6.relu6
           - eltwise.unary.log.log
+          - eltwise.unary.log.log_sharded
           - eltwise.unary.log.log_pytorch2
           - eltwise.unary.log.log_forge
           - eltwise.unary.log1p.log1p
@@ -100,6 +105,7 @@ on:
           - eltwise.unary.neg.neg_forge
           - eltwise.unary.erf.erf
           - eltwise.unary.erfinv.erfinv
+          - eltwise.unary.erfinv.erfinv_sharded
           - eltwise.unary.i0.i0
           - eltwise.unary.silu.silu
           - eltwise.unary.silu.silu_pytorch2
@@ -246,6 +252,7 @@ on:
           - eltwise.unary.hardtanh.hardtanh_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu
           - eltwise.unary.reglu.reglu
+          - eltwise.unary.round.round_sharded
           - eltwise.unary_complex.polar.polar
           - eltwise.unary_complex.angle.angle
           - eltwise.unary_complex.polar_bw.polar_bw
