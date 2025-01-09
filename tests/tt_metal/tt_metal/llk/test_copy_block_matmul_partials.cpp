@@ -27,7 +27,7 @@ struct CopyBlockMatmulPartialsConfig {
 };
 
 void run_single_core_copy_block_matmul_partials(
-    tt_metal::Device* device, const CopyBlockMatmulPartialsConfig& test_config) {
+    tt_metal::IDevice* device, const CopyBlockMatmulPartialsConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////

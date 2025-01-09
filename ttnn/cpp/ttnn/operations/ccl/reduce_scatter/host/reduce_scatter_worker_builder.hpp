@@ -15,7 +15,7 @@ namespace tt_metal {
 inline namespace v0 {
 
 // Forward declarations
-class Device;
+class IDevice;
 
 }  // namespace v0
 }  // namespace tt_metal
@@ -30,7 +30,7 @@ namespace reduce_scatter_detail {
 
 struct ReduceScatterWorkerArgBuilder {
     ReduceScatterWorkerArgBuilder (
-        tt::tt_metal::Device const* device,
+        tt::tt_metal::IDevice const* device,
         ttnn::ccl::CCLOpConfig const& op_config,
         ttnn::ccl::RingTopology const& topology_config,
         ttnn::ccl::InterleavedTensorWorkerSlice const& worker_input_slice,
@@ -70,7 +70,7 @@ struct ReduceScatterWorkerArgBuilder {
 
     std::vector<uint32_t> generate_line_start_sender_kernel_ct_args() const;
 
-    tt::tt_metal::Device const*device;
+    tt::tt_metal::IDevice const*device;
     ttnn::ccl::RingTopology const topology_config;
     ttnn::ccl::CCLOpConfig const op_config;
     ttnn::ccl::InterleavedTensorWorkerSlice const worker_input_slice;

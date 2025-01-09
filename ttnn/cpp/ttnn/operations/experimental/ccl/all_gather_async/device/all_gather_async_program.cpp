@@ -73,7 +73,7 @@ static void print_tensor_slice(const ttnn::ccl::v2::TensorSlice& slice_v2) {
 }
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, Device* device) {
+    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, IDevice* device) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     if (persistent_fabric_mode) {
@@ -136,25 +136,21 @@ static bool can_command_stream_be_lowered_to_noc_commands(const Tensor& input_te
 //   (in other words, disable the "bidirectional" send flag)
 operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
-    std::optional<Device*> forward_device,
-    std::optional<Device*> backward_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::optional<GlobalSemaphore>& semaphore_opt,
+    const GlobalSemaphore semaphore,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
     const bool lower_command_stream_to_noc_commands = can_command_stream_be_lowered_to_noc_commands(input_tensor);
 
-    TT_FATAL(semaphore_opt.has_value(), "Semaphore is required for compile time");
-
-    const auto& semaphore = semaphore_opt.value();
-
-    Device* device = input_tensor.device();
+    IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(

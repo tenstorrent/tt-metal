@@ -8,15 +8,15 @@
 #include <optional>
 #include <vector>
 
-#include "eth_l1_address_map.h"
 #include "ttnn/distributed/types.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/experimental/hal.hpp"
 
 #include <vector>
 #include <unordered_map>
@@ -33,54 +33,53 @@ struct FabricEriscDatamoverConfig {
 
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
-    static constexpr std::size_t handshake_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE/* + 1024*/;
-    static constexpr std::size_t edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
-    static constexpr std::size_t termination_signal_address =
+    std::size_t handshake_addr = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base()/* + 1024*/;
+    std::size_t edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
+    std::size_t termination_signal_address =
         edm_channel_ack_addr + (2 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
 
     // ----------- Sender Channel 0
-    static constexpr std::size_t sender_channel_0_buffer_index_address = termination_signal_address + field_size;
-    static constexpr std::size_t sender_channel_0_worker_connection_info_address =
+    std::size_t sender_channel_0_buffer_index_address = termination_signal_address + field_size;
+    std::size_t sender_channel_0_worker_connection_info_address =
         sender_channel_0_buffer_index_address + field_size;
-    static constexpr std::size_t sender_channel_0_local_flow_control_semaphore_address =
+    std::size_t sender_channel_0_local_flow_control_semaphore_address =
         sender_channel_0_worker_connection_info_address + field_size;
     // persistent mode field
-    static constexpr std::size_t sender_channel_0_connection_semaphore_address =
+    std::size_t sender_channel_0_connection_semaphore_address =
         sender_channel_0_local_flow_control_semaphore_address + field_size;
     // persistent mode field
-    static constexpr std::size_t sender_channel_0_buffer_index_semaphore_address =
+    std::size_t sender_channel_0_buffer_index_semaphore_address =
         sender_channel_0_connection_semaphore_address + field_size;
 
     static_assert(field_size >= sizeof(tt::fabric::EDMChannelWorkerLocationInfo));
 
     // ----------- Sender Channel 1
-    static constexpr std::size_t sender_channel_1_buffer_index_address =
+    std::size_t sender_channel_1_buffer_index_address =
         sender_channel_0_buffer_index_semaphore_address + field_size;
-    static constexpr std::size_t sender_channel_1_worker_connection_info_address =
+    std::size_t sender_channel_1_worker_connection_info_address =
         sender_channel_1_buffer_index_address + field_size;
-    static constexpr std::size_t sender_channel_1_local_flow_control_semaphore_address =
+    std::size_t sender_channel_1_local_flow_control_semaphore_address =
         sender_channel_1_worker_connection_info_address + field_size;
     // persistent mode field
-    static constexpr std::size_t sender_channel_1_connection_semaphore_address =
+    std::size_t sender_channel_1_connection_semaphore_address =
         sender_channel_1_local_flow_control_semaphore_address + field_size;
     // persistent mode field
-    static constexpr std::size_t sender_channel_1_buffer_index_semaphore_address =
+    std::size_t sender_channel_1_buffer_index_semaphore_address =
         sender_channel_1_connection_semaphore_address + field_size;
 
     // ----------- Receiver Channel
-    static constexpr std::size_t receiver_channel_local_buffer_index_address =
+    std::size_t receiver_channel_local_buffer_index_address =
         sender_channel_1_buffer_index_semaphore_address + field_size;
     // persistent mode field
-    static constexpr std::size_t receiver_channel_downstream_flow_control_semaphore_address =
+    std::size_t receiver_channel_downstream_flow_control_semaphore_address =
         receiver_channel_local_buffer_index_address + field_size;
 
     // Channel Allocations
-    static constexpr std::size_t buffer_region_start =
+    std::size_t max_l1_loading_size = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base();
+    std::size_t buffer_region_start =
         (receiver_channel_downstream_flow_control_semaphore_address + field_size + buffer_alignment) & ~(buffer_alignment - 1); // Align
-    static constexpr std::size_t available_channel_buffering_space =
-        eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - buffer_region_start;
-
-    static_assert(sender_channel_1_buffer_index_address != sender_channel_0_buffer_index_address);
+    std::size_t available_channel_buffering_space =
+        max_l1_loading_size - buffer_region_start;
 
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size);
@@ -146,7 +145,7 @@ class FabricEriscDatamoverBuilder {
         bool build_in_worker_connection_mode=false);
 
     static FabricEriscDatamoverBuilder build(
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         CoreCoord const& ethernet_core,
         chip_id_t local_chip_id,
@@ -168,7 +167,7 @@ class FabricEriscDatamoverBuilder {
         // TODO
     }
 
-    void teardown_from_host(Device *d, tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
+    void teardown_from_host(IDevice*d, tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
 //    protected:
    friend class EdmLineFabricOpInterface;
@@ -231,19 +230,19 @@ class EdmLineFabricOpInterface {
 
 
     //   The constructor will assemble/connect the line across the specified device sequence, for all available links.
-    EdmLineFabricOpInterface (std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt, bool build_in_worker_connection_mode = false);
+    EdmLineFabricOpInterface (std::vector<IDevice*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt, bool build_in_worker_connection_mode = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
-    EdmLineFabricOpInterface (Device* local_device, std::optional<Device*> forward_device, std::optional<Device*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links, bool build_in_worker_connection_mode = false);
+    EdmLineFabricOpInterface (IDevice* local_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links, bool build_in_worker_connection_mode = false);
 
-    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(std::vector<Device*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
-    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(Device* local_device, std::optional<Device*> forward_device, std::optional<Device*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
+    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(std::vector<IDevice*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
+    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(IDevice* local_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
 
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique connections
     // than available will result in an error.
-    SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::Device* device, Direction direction);
+    SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::IDevice* device, Direction direction);
 
     // builds the ethernet kernels for all EDMs in the "fabric"
     void build_kernels() const;
@@ -258,14 +257,14 @@ class EdmLineFabricOpInterface {
     std::vector<edm_termination_info_t> generate_ordered_termination_info_farthest_to_nearest() const;
 
     // Generates a list of termination infos for the local chip's EDMs
-    std::vector<edm_termination_info_t> generate_local_chip_fabric_termination_infos(Device *device) const;
+    std::vector<edm_termination_info_t> generate_local_chip_fabric_termination_infos(IDevice*device) const;
 
     // Accessors
     size_t get_num_links() const { return num_links; }
 
     size_t get_device_count() const { return device_sequence.size(); }
 
-    size_t get_index_of_device(Device *device) const {
+    size_t get_index_of_device(IDevice*device) const {
         for (size_t i = 0; i < device_sequence.size(); i++) {
             if (device_sequence[i] == device) {
                 return i;
@@ -291,7 +290,7 @@ class EdmLineFabricOpInterface {
     std::unordered_map<size_t, size_t> next_forward_direction_edm_available;
     std::unordered_map<size_t, size_t> next_backward_direction_edm_available;
 
-    std::vector<Device*> device_sequence;
+    std::vector<IDevice*> device_sequence;
     std::vector<Program*> programs;
 
     size_t num_links;

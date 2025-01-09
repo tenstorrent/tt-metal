@@ -83,8 +83,8 @@ protected:
         this->num_devices_ = this->reserved_devices_.size();
     }
 
-    tt::tt_metal::Device* device_;
-    std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
+    tt::tt_metal::IDevice* device_;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
     size_t num_devices_;
 };
 

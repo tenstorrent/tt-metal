@@ -120,7 +120,7 @@ static Tensor all_gather_local_reduce(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     ttnn::ccl::Topology topology) {
     auto shape = input_tensor.get_logical_shape();
     auto rank = shape.rank();
@@ -168,7 +168,7 @@ static Tensor reduce_scatter_all_gather(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology& topology) {
     auto shape = input_tensor.get_logical_shape();
     auto rank = shape.rank();
@@ -217,7 +217,7 @@ Tensor run_all_reduce(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology& topology) {
     switch (strategy) {
         case AllReduceStrategy::AllGatherLocalReduce:

@@ -7,7 +7,7 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/scoped_timer.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 

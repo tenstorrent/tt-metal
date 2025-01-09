@@ -57,7 +57,7 @@ size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInter
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
 
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
-    const Tensor& input_tensor, const std::vector<Device*>& devices, const ttnn::ccl::Topology& topology) {
+    const Tensor& input_tensor, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology) {
     uint32_t num_devices = devices.size();
     bool is_linear = topology == ttnn::ccl::Topology::Linear;
     uint32_t device_index = 0;  // Initialize device index
@@ -108,7 +108,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
 }
 
 RingTopology::RingTopology(
-    Device const* device,
+    IDevice const* device,
     Topology topology,
     std::optional<uint32_t> sender_device_id,
     std::optional<uint32_t> receiver_device_id,
@@ -207,7 +207,7 @@ std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_co
 
 void generate_edm_kernels_for_ring_or_linear_topology(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     RingTopology const& topology_config,
     std::vector<ccl::EriscDatamoverBuilder> const& clockwise_edm_builders,
     std::vector<ccl::EriscDatamoverBuilder> const& counter_clockwise_edm_builders,
@@ -261,7 +261,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
 template <typename EDMBuilder>
 KernelHandle generate_edm_kernel_impl(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     EDMBuilder const& edm_builder,
     std::string const& kernel_path,
     CoreCoord const& eth_core,
@@ -297,7 +297,7 @@ KernelHandle generate_edm_kernel_impl(
 
 KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     ccl::FabricEriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id) {
@@ -312,7 +312,7 @@ KernelHandle generate_edm_kernel(
 
 KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
     NOC noc_id) {
@@ -326,16 +326,17 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_buffers_per_channel,
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     ccl::EriscDataMoverTerminationMode termination_mode) {
+    ccl::EriscDatamoverConfig config;
     TT_ASSERT(num_channels > 0);
     std::vector<uint32_t> edm_sem_addresses(num_channels, 0);
     std::vector<uint32_t> edm_buffer_addresses(num_channels, 0);
 
-    uint32_t edm_sem_addr = ccl::EriscDatamoverConfig::get_semaphores_base_address(num_channels);
-    uint32_t edm_buffer_addr = ccl::EriscDatamoverConfig::get_buffers_base_address(num_channels);
+    uint32_t edm_sem_addr = config.get_semaphores_base_address(num_channels);
+    uint32_t edm_buffer_addr = config.get_buffers_base_address(num_channels);
     TT_ASSERT(edm_sem_addr > 0);
     TT_ASSERT(edm_buffer_addr > 0);
     const uint32_t channel_buffer_size =
-        ccl::EriscDatamoverConfig::compute_buffer_size(num_channels, num_buffers_per_channel, page_size);
+        config.compute_buffer_size(num_channels, num_buffers_per_channel, page_size);
     for (std::size_t c = 0; c < num_channels; ++c) {
         edm_sem_addresses.at(c) = edm_sem_addr;
         edm_sem_addr += ccl::EriscDatamoverConfig::semaphore_size;
@@ -352,7 +353,7 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
 
     return ccl::EriscDatamoverBuilder(
         channel_buffer_size,
-        ccl::EriscDatamoverConfig::get_edm_handshake_address(),
+        config.get_edm_handshake_address(),
         edm_sem_addresses,
         edm_buffer_addresses,
         buffer_sharing_mode,

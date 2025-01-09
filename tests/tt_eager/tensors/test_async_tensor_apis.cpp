@@ -35,7 +35,7 @@ uint32_t get_device_buffer_address(const Tensor& tensor) {
 TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
     // Sanity test tensor read, write and update paths with synchronous
     // Ensure that tensor data is copied and owned as expected
-    Device* device = this->devices_[0];
+    IDevice* device = this->devices_[0];
     Tensor host_tensor = ttnn::arange(/*start=*/0, /*stop=*/32 * 32 * 4, /*step=*/1, DataType::FLOAT32);
     Tensor readback_tensor(1);
 
@@ -108,7 +108,7 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
 }
 
 TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
-    Device* device = this->devices_[0];
+    IDevice* device = this->devices_[0];
     device->enable_async(true);
     // Populate these in first loop and verify that deallocation worked - addresses should be identical across loops
     std::size_t input_a_addr = 0;
@@ -165,7 +165,7 @@ TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
 Tensor tensor_identity_copy_function(const Tensor& tensor) { return tensor; }
 
 TEST_F(DispatchFixture, TestAsyncRefCountManager) {
-    Device* device = this->devices_[0];
+    IDevice* device = this->devices_[0];
     device->enable_async(true);
 
     log_info(LogTest, "Testing Device tensor copy assignment");
@@ -249,7 +249,7 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
     // 2. Worker -> Main: Create an empty tensor in the mainb thread. Populate it in the worker thread. Ensure that the
     // tensor is correctly
     //                    populated in the main thread once the worker is done.
-    Device* device = this->devices_[0];
+    IDevice* device = this->devices_[0];
     uint32_t tensor_start = 0;
     uint32_t num_tiles = 128;
     uint32_t tensor_stop = TILE_HEIGHT * TILE_WIDTH * num_tiles;

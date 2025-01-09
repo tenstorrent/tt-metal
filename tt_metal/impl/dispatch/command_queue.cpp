@@ -18,7 +18,6 @@
 #include <variant>
 
 #include "dev_msgs.h"
-#include "device/device_handle.hpp"
 #include "llrt/hal.hpp"
 #include "program_command_sequence.hpp"
 #include "tt_metal/command_queue.hpp"
@@ -56,6 +55,19 @@ void SetLazyCommandQueueMode(bool lazy) {
     DispatchStateCheck(true);
     LAZY_COMMAND_QUEUE_MODE = lazy;
 }
+
+// Selects all sub-devices in the sub device stall group if none are specified
+tt::stl::Span<const SubDeviceId> select_sub_device_ids(IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (sub_device_ids.empty()) {
+        return device->get_sub_device_stall_group();
+    } else {
+        for (const auto& sub_device_id : sub_device_ids) {
+            TT_FATAL(sub_device_id.to_index() < device->num_sub_devices(), "Invalid sub-device id specified {}", sub_device_id.to_index());
+        }
+        return sub_device_ids;
+    }
+}
+
 }  // namespace detail
 
 enum DispatchWriteOffsets {
@@ -68,7 +80,7 @@ enum DispatchWriteOffsets {
 
 EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     NOC noc_index,
     Buffer& buffer,
     void* dst,
@@ -128,7 +140,7 @@ void EnqueueReadBufferCommand::process() {
         auto offset_index = this->sub_device_ids[i].to_index();
         uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
         command_sequence.add_dispatch_wait(
-            false, dispatch_message_addr, this->expected_num_workers_completed[offset_index ]);
+            false, dispatch_message_addr, this->expected_num_workers_completed[offset_index]);
 
     }
     auto offset_index = this->sub_device_ids[last_index].to_index();
@@ -153,7 +165,7 @@ void EnqueueReadBufferCommand::process() {
 
 EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     NOC noc_index,
     const Buffer& buffer,
     const void* src,
@@ -322,7 +334,7 @@ void EnqueueWriteBufferCommand::process() {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
-inline uint32_t get_packed_write_max_unicast_sub_cmds(Device* device) {
+inline uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
     return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 }
 
@@ -330,7 +342,7 @@ inline uint32_t get_packed_write_max_unicast_sub_cmds(Device* device) {
 
 EnqueueProgramCommand::EnqueueProgramCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     NOC noc_index,
     Program& program,
     CoreCoord& dispatch_core,
@@ -404,7 +416,7 @@ void EnqueueProgramCommand::process() {
 
 EnqueueRecordEventCommand::EnqueueRecordEventCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     NOC noc_index,
     SystemMemoryManager& manager,
     uint32_t event_id,
@@ -510,7 +522,7 @@ void EnqueueRecordEventCommand::process() {
 
 EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     SystemMemoryManager& manager,
     const Event& sync_event,
     bool clear_count) :
@@ -549,7 +561,7 @@ void EnqueueWaitForEventCommand::process() {
 
 EnqueueTraceCommand::EnqueueTraceCommand(
     uint32_t command_queue_id,
-    Device* device,
+    IDevice* device,
     SystemMemoryManager& manager,
     std::shared_ptr<detail::TraceDescriptor>& descriptor,
     Buffer& buffer,
@@ -656,7 +668,7 @@ void EnqueueTraceCommand::process() {
 }
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
-    uint32_t command_queue_id, Device* device, SystemMemoryManager& manager) :
+    uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager) :
     command_queue_id(command_queue_id), device(device), manager(manager) {}
 
 void EnqueueTerminateCommand::process() {
@@ -689,7 +701,7 @@ void EnqueueTerminateCommand::process() {
 }
 
 // HWCommandQueue section
-HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
+HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index) :
     manager(device->sysmem_manager()), completion_queue_thread{} {
     ZoneScopedN("CommandQueue_constructor");
     this->device = device;
@@ -737,6 +749,18 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
         this->expected_num_workers_completed[i] = 0;
     }
     reset_config_buffer_mgr(dispatch_constants::DISPATCH_MESSAGE_ENTRIES);
+}
+
+uint32_t HWCommandQueue::get_id() const {
+    return this->id;
+}
+
+std::optional<uint32_t> HWCommandQueue::get_tid() const {
+    return this->tid;
+}
+
+SystemMemoryManager& HWCommandQueue::sysmem_manager() {
+    return this->manager;
 }
 
 void HWCommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
@@ -903,9 +927,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     uint32_t unpadded_dst_offset = 0;
     uint32_t src_page_index = 0;
 
-    if (sub_device_ids.empty()) {
-        sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
-    }
+    sub_device_ids = detail::select_sub_device_ids(this->device, sub_device_ids);
 
     if (is_sharded(buffer.buffer_layout())) {
         const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
@@ -1051,9 +1073,7 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
 
     uint32_t dst_page_index = 0;
 
-    if (sub_device_ids.empty()) {
-        sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
-    }
+    sub_device_ids = detail::select_sub_device_ids(this->device, sub_device_ids);
 
     if (is_sharded(buffer.buffer_layout())) {
         const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
@@ -1348,9 +1368,7 @@ void HWCommandQueue::enqueue_record_event(const std::shared_ptr<Event>& event, b
     event->device = this->device;
     event->ready = true;  // what does this mean???
 
-    if (sub_device_ids.empty()) {
-        sub_device_ids = tt::stl::Span<const SubDeviceId>(this->device->get_sub_device_ids());
-    }
+    sub_device_ids = detail::select_sub_device_ids(this->device, sub_device_ids);
 
     auto command = EnqueueRecordEventCommand(
         this->id,
@@ -2021,7 +2039,7 @@ void EnqueueProgramImpl(
     CommandQueue& cq, Program& program, bool blocking) {
     ZoneScoped;
 
-    Device* device = cq.device();
+    IDevice* device = cq.device();
     detail::CompileProgram(device, program);
     program.allocate_circular_buffers(device);
     detail::ValidateCircularBufferRegion(program, device);
@@ -2055,7 +2073,7 @@ void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     cq.hw_command_queue().enqueue_trace(trace_id, blocking);
 }
 
-CommandQueue::CommandQueue(Device* device, uint32_t id, CommandQueueMode mode) :
+CommandQueue::CommandQueue(IDevice* device, uint32_t id, CommandQueueMode mode) :
     device_ptr(device), cq_id(id), mode(mode), worker_state(CommandQueueState::IDLE) {
     if (this->async_mode()) {
         num_async_cqs++;
@@ -2260,11 +2278,11 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
     log_trace(LogDispatch, "{} running {} complete", this->name(), command.type);
 }
 
-v1::CommandQueueHandle v1::GetCommandQueue(DeviceHandle device, std::uint8_t cq_id) {
+v1::CommandQueueHandle v1::GetCommandQueue(IDevice* device, std::uint8_t cq_id) {
     return v1::CommandQueueHandle{device, cq_id};
 }
 
-v1::CommandQueueHandle v1::GetDefaultCommandQueue(DeviceHandle device) { return GetCommandQueue(device, 0); }
+v1::CommandQueueHandle v1::GetDefaultCommandQueue(IDevice* device) { return GetCommandQueue(device, 0); }
 
 void v1::EnqueueReadBuffer(CommandQueueHandle cq, const BufferHandle& buffer, std::byte *dst, bool blocking) {
     v0::EnqueueReadBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, dst, blocking);
@@ -2286,7 +2304,7 @@ void v1::SetLazyCommandQueueMode(bool lazy) {
     detail::SetLazyCommandQueueMode(lazy);
 }
 
-v1::DeviceHandle v1::GetDevice(CommandQueueHandle cq) {
+IDevice* v1::GetDevice(CommandQueueHandle cq) {
     return cq.device;
 }
 

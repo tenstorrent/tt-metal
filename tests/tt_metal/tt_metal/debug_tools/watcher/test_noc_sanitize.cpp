@@ -26,7 +26,7 @@ typedef enum sanitization_features {
     SanitizeZeroL1Write
 } watcher_features_t;
 
-void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature, bool use_ncrisc = false) {
+void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature, bool use_ncrisc = false) {
     // Set up program
     Program program = Program();
     CoreCoord phys_core;
@@ -225,7 +225,7 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     EXPECT_EQ(get_watcher_exception_message(), expected);
 }
 
-static void RunTestEth(WatcherFixture* fixture, Device* device) {
+static void RunTestEth(WatcherFixture* fixture, IDevice* device) {
     // Run on the first ethernet core (if there are any).
     if (device->get_active_ethernet_cores(true).empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
@@ -235,7 +235,7 @@ static void RunTestEth(WatcherFixture* fixture, Device* device) {
     RunTestOnCore(fixture, device, core, true, SanitizeAddress);
 }
 
-static void RunTestIEth(WatcherFixture* fixture, Device* device) {
+static void RunTestIEth(WatcherFixture* fixture, IDevice* device) {
     // Run on the first ethernet core (if there are any).
     if (device->get_inactive_ethernet_cores().empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
@@ -246,7 +246,7 @@ static void RunTestIEth(WatcherFixture* fixture, Device* device) {
 }
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
-void CheckHostSanitization(Device *device) {
+void CheckHostSanitization(IDevice* device) {
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {16, 16};
     uint64_t addr = 0;
@@ -272,7 +272,7 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitize) {
 
     // Only run on device 0 because this test takes down the watcher server.
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAddress);
         },
@@ -284,7 +284,7 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitizeAlignmentL1Write) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1Write);
         },
@@ -296,7 +296,7 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitizeAlignmentL1Read) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1Read);
         },
@@ -308,7 +308,7 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitizeAlignmentL1ReadNCrisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1Read, true);
         },
@@ -321,7 +321,7 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitizeZeroL1Write) {
         GTEST_SKIP();
     }
     this->RunTestOnDevice(
-        [](WatcherFixture* fixture, Device* device) {
+        [](WatcherFixture* fixture, IDevice* device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeZeroL1Write);
         },

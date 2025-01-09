@@ -19,7 +19,7 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-bool test_2d_tensor(Device* device) {
+bool test_2d_tensor(IDevice* device) {
     bool pass = true;
 
     Shape shape = {30, 30};
@@ -32,7 +32,7 @@ bool test_2d_tensor(Device* device) {
     return pass;
 }
 
-bool test_3d_tensor(Device* device) {
+bool test_3d_tensor(IDevice* device) {
     bool pass = true;
 
     Shape shape = {3, 30, 30};
@@ -45,7 +45,7 @@ bool test_3d_tensor(Device* device) {
     return pass;
 }
 
-bool test_4d_tensor(Device* device) {
+bool test_4d_tensor(IDevice* device) {
     bool pass = true;
 
     Shape shape = {2, 3, 30, 30};
@@ -58,7 +58,7 @@ bool test_4d_tensor(Device* device) {
     return pass;
 }
 
-bool test_5d_tensor(Device* device) {
+bool test_5d_tensor(IDevice* device) {
     bool pass = true;
 
     Shape shape = {2, 2, 3, 30, 30};
@@ -71,7 +71,7 @@ bool test_5d_tensor(Device* device) {
     return pass;
 }
 
-bool test_6d_tensor(Device* device) {
+bool test_6d_tensor(IDevice* device) {
     bool pass = true;
 
     Shape shape = {2, 2, 2, 3, 30, 30};
@@ -84,7 +84,7 @@ bool test_6d_tensor(Device* device) {
     return pass;
 }
 
-bool test_7d_tensor(Device* device) {
+bool test_7d_tensor(IDevice* device) {
     bool pass = true;
 
     Shape shape = {2, 2, 2, 2, 3, 30, 30};
@@ -97,7 +97,7 @@ bool test_7d_tensor(Device* device) {
     return pass;
 }
 
-bool test_8d_tensor(Device* device) {
+bool test_8d_tensor(IDevice* device) {
     bool pass = true;
 
     Shape shape = {2, 2, 2, 2, 2, 3, 30, 30};
@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         pass &= test_2d_tensor(device);
         pass &= test_3d_tensor(device);

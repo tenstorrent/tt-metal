@@ -17,7 +17,7 @@ using namespace tt;
 using namespace tt_metal;
 using MultiCommandQueueT3KFixture = ttnn::MultiCommandQueueT3KFixture;
 
-Tensor dispatch_ops_to_device(Device* dev, Tensor input_tensor, uint8_t cq_id) {
+Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, uint8_t cq_id) {
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
 
